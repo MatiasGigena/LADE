@@ -1,0 +1,15 @@
+#!/bin/sh
+# Explicit developer action only. No sudo, profile edits or host service setup.
+set -eu
+cd "$(dirname "$0")/.."
+test "$(uname -sm)" = "Linux x86_64" || { echo 'blocked: supported build host is Linux x86_64' >&2; exit 78; }
+umask 077
+mkdir -p .tools
+curl --fail --location --silent --show-error \
+  https://static.rust-lang.org/rustup/archive/1.29.1/x86_64-unknown-linux-gnu/rustup-init \
+  -o .tools/rustup-init
+printf '%s\n' 'dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71  .tools/rustup-init' | sha256sum --check --status
+chmod 700 .tools/rustup-init
+export CARGO_HOME="$PWD/.tools/cargo"
+export RUSTUP_HOME="$PWD/.tools/rustup"
+exec .tools/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.1 --component rustfmt,clippy

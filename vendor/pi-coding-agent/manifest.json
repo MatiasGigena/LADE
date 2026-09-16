@@ -1,0 +1,15 @@
+{
+  "upstream": "https://github.com/earendil-works/pi",
+  "commit": "d981de1229ef899957bbe968bc8dcda02a21f477",
+  "version": "0.85.1",
+  "source_archive": "https://api.github.com/repos/earendil-works/pi/tarball/d981de1229ef899957bbe968bc8dcda02a21f477",
+  "source_archive_sha256": "959b4b882042e9fee71e9c87b76f5e6c7fc119f0a35e1ed0c08e27c09eed0dd6",
+  "node": "22.23.1",
+  "scope": "coding-agent product fork only; lower agent/provider layers unchanged",
+  "patches": [],
+  "files": {
+    "upstream/LICENSE": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
+    "upstream/package.json": "f1738e4b42203e5f22bcb513f13fb2fb224f1e98d1f129ff042f87048665a94c",
+    "upstream/npm-shrinkwrap.json": "5ff461d87e0a7ccac07e6a9eb3edcd18841d3373d375bed043606b51082f1a26"
+  }
+}

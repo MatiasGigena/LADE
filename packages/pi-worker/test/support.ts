@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
+import { boundedJson, WireError } from "../src/json.ts";
+import { decode } from "../src/protocol.ts";
+import { Decoder, encode } from "../src/framing.ts";
+import type { Framing } from "../src/framing.ts";
+import { Reassembler } from "../src/chunks.ts";
+import { RequestHistory } from "../src/history.ts";
+import type { Scope, Counter } from "../src/dto.ts";
+
+interface Source { value?: unknown; text?: string; hex?: string; depth?: number; array?: number; string?: number; nodes?: boolean; padding?: number; steps?: unknown[] }
+interface Fixture { id: string; mode: string; source: Source; expected: string; framing?: string; owner?: unknown; generation?: string; output_hex?: string }
+export const corpus: Fixture[] = fixtures;
+export function source(s: Source): Buffer {
+  if (s.value !== undefined) return Buffer.from(JSON.stringify(s.value));
+  if (s.text !== undefined) return Buffer.from(s.text);
+  if (s.hex !== undefined) return Buffer.from(s.hex, "hex");
+  if (s.depth !== undefined) return Buffer.from("[".repeat(s.depth) + "0" + "]".repeat(s.depth));
+  if (s.array !== undefined) return Buffer.from(JSON.stringify(Array(s.array).fill(0)));
+  if (s.string !== undefined) return Buffer.from(JSON.stringify("a".repeat(s.string)));
+  if (s.nodes) return Buffer.from(JSON.stringify(Array.from({ length: 16 }, () => Array(1024).fill(0))));
+  if (s.padding !== undefined) return Buffer.from("{}" + " ".repeat(s.padding - 2));
+  throw new Error("unknown fixture recipe");
+}
+function framed(bytes: Buffer, framing: Framing): Buffer {
+  if (framing === "worker") return Buffer.concat([bytes, Buffer.from("\n")]);
+  const head = Buffer.alloc(4); head.writeUInt32BE(bytes.length);
+  return Buffer.concat([head, bytes]);
+}
+function outcome(action: () => void): string {
+  try { action(); return "ok"; } catch (error) { if (error instanceof WireError) return error.code; throw error; }
+}
+function stream(bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
+  const decoder = new Decoder(framing);
+  let count = 0;
+  return outcome(() => {
+    for (let pos = 0; pos < bytes.length; pos += stride) {
+      try {
+        decoder.push(bytes.subarray(pos, pos + stride), message => {
+          count++;
+          const other = new Decoder(framing);
+          other.push(encode(message, framing), decoded => assert.deepEqual(decoded, message));
+          other.finish();
+        });
+      } catch (error) {
+        assert.equal(count, 0, "invalid input must not emit a command");
+        assert.throws(() => decoder.push(Buffer.alloc(0), () => {}), { code: "closed" });
+        throw error;
+      }
+    }
+    decoder.finish();
+    assert.equal(count, expectedCount);
+  });
+}
+export function run(c: Fixture): string {
+  return outcome(() => {
+    switch (c.mode) {
+      case "json": boundedJson(source(c.source)); return;
+      case "frame": {
+        const bytes = source(c.source);
+        let previous: string | undefined;
+        for (const framing of ["client", "worker"] as const) {
+          const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing)]);
+          for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
+            const result = stream(wire, framing, stride, 2);
+            if (previous !== undefined) assert.equal(result, previous);
+            previous = result;
+          }
+        }
+        if (previous !== "ok") throw new WireError(previous ?? "missing_result");
+        return;
+      }
+      case "transport": {
+        const bytes = source(c.source);
+        let previous: string | undefined;
+        for (const stride of [1, 3, 65537, bytes.length]) {
+          const result = stream(bytes, c.framing as Framing, stride, 0);
+          if (previous !== undefined) assert.equal(result, previous);
+          previous = result;
+        }
+        if (previous !== "ok") throw new WireError(previous ?? "missing_result");
+        return;
+      }
+      case "chunks": {
+        const chunks = new Reassembler(c.owner as Scope, c.generation as Counter);
+        const output: Buffer[] = [];
+        for (const step of c.source.steps ?? []) {
+          const message = decode(Buffer.from(JSON.stringify(step)));
+          try {
+            const bytes = chunks.accept(message.body);
+            if (bytes) output.push(bytes);
+          } catch (error) {
+            assert.throws(() => chunks.accept(message.body), { code: "closed" });
+            throw error;
+          }
+        }
+        assert.equal(Buffer.concat(output).toString("hex"), c.output_hex);
+        chunks.close(); return;
+      }
+      case "history": {
+        const history = new RequestHistory();
+        for (const [index, step] of (c.source.steps ?? []).entries()) {
+          const message = decode(Buffer.from(JSON.stringify(step)));
+          assert.deepEqual(history.observe(message.body, { status: "operation", state: index === 0 ? "uncertain" : "completed" }), { status: "operation", state: "uncertain" });
+        }
+        return;
+      }
+      default: throw new Error("unknown fixture mode");
+    }
+  });
+}
