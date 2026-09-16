@@ -10,6 +10,7 @@ python3 scripts/generate-fixtures.py --check
 ./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/check-architecture.py
 npm --prefix packages/pi-worker run lint
+python3 scripts/check-worker-lint.py
 npm --prefix packages/pi-worker run check
 npm --prefix packages/pi-worker test
 python3 scripts/compare-fixtures.py

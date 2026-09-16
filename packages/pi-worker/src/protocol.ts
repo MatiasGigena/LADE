@@ -26,11 +26,11 @@ interface Schema {
 const definitions: Record<string, Schema> = schema.$defs;
 
 export function record(value: JsonValue): value is JsonObject {
-  return value !== null && !Array.isArray(value) && Object(value) === value;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isString(value: JsonValue): value is string {
-  return String(value) === value;
+  return typeof value === "string";
 }
 
 function matches(value: JsonValue, definition: Schema): boolean {

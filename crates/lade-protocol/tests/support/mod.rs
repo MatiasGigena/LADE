@@ -81,7 +81,25 @@ fn stream(
             other.finish()
         }) {
             assert_eq!(count, 0, "invalid input must not emit a command");
-            assert_eq!(decoder.push(b"", |_| Ok(())).unwrap_err().0, "closed");
+            let valid = framed(
+                &serde_json::to_vec(
+                    &json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":{"kind":"hello"}}),
+                )
+                .unwrap(),
+                framing,
+            );
+            assert_eq!(
+                decoder.push(&valid, |_| {
+                    count += 1;
+                    Ok(())
+                }),
+                Err(WireError("closed"))
+            );
+            assert_eq!(decoder.finish(), Err(WireError("closed")));
+            assert_eq!(
+                count, 0,
+                "a failed connection must not deliver later valid messages"
+            );
             return Err(error);
         }
     }
@@ -97,20 +115,28 @@ pub fn run(case: &Value) -> Result<(), WireError> {
         }
         "frame" => {
             let bytes = source(s);
-            let mut outcome = None;
+            let mut outcome = decode(&bytes).map(|message| {
+                assert_eq!(
+                    serde_json::to_value(message).unwrap(),
+                    bounded_json(&bytes).unwrap()
+                );
+            });
+            let valid = serde_json::to_vec(
+                &json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":{"kind":"hello"}}),
+            )
+            .unwrap();
             for framing in [Framing::Client, Framing::Worker] {
                 let mut wire = framed(&bytes, framing);
                 // More than one frame in a read must not lose or concatenate commands.
                 wire.extend(framed(&bytes, framing));
+                wire.extend(framed(&valid, framing));
                 for stride in [1, 2, 3, 7, 65537, wire.len()] {
-                    let result = stream(&wire, framing, stride, 2);
-                    if let Some(previous) = outcome {
-                        assert_eq!(previous, result);
-                    }
-                    outcome = Some(result);
+                    let result = stream(&wire, framing, stride, 3);
+                    assert_eq!(outcome, result);
+                    outcome = result;
                 }
             }
-            outcome.unwrap()?;
+            outcome?;
         }
         "transport" => {
             let bytes = source(s);

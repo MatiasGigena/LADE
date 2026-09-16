@@ -17,7 +17,7 @@ git config core.hooksPath .githooks
 python3 scripts/check-pins.py
 ```
 
-The tracked pre-commit hook runs the worker's anti-slop lint command. Hook activation is an explicit per-clone action; package installation does not modify Git configuration. No package-install scripts, pi loading, providers or repository tools run during these steps. Build scripts/procedural macros of the pinned Rust dependencies are trusted build inputs, not sandboxed worker execution.
+The tracked pre-commit hook runs only the worker's anti-slop lint command against the **working directory**, not an exact snapshot of staging. Partially staged changes can therefore differ from what the hook checks; CI verifies the published content with `scripts/verify`. Hook activation is an explicit per-clone action; package installation does not modify Git configuration. The hook does not stash, stage, autofix, install dependencies or require the whole test suite. No package-install scripts, pi loading, providers or repository tools run during these steps. Build scripts/procedural macros of the pinned Rust dependencies are trusted build inputs, not sandboxed worker execution.
 
 ## Verification
 
@@ -40,6 +40,12 @@ python3 scripts/compare-fixtures.py
 ```
 
 Domain-only tests compile no GTK/SQLite. The fixture corpus is `contracts/v1/fixtures.json`; large stress inputs are generated from bounded recipes. DTOs and corpus are reproducible using `scripts/generate-dtos.py` and `scripts/generate-fixtures.py`; `--check` rejects drift. The JSON Schema uses documented custom formats (`uuid-v4`, `u64`, `sha256`, `chunk-hex`); a generic JSON-Schema implementation must install those formats rather than assume they are annotations. Protocol validators intentionally support only this closed subset.
+
+### Boundary-validator lint
+
+`anti-slop/no-runtime-typeof` remains an error. Only `src/protocol.ts` has an override with `["error", { "allowInTypeGuards": true }]`, supported by pinned Oxlint/@oxlint/plugins 1.83.0 and the unchanged vendored rule. Even there, runtime checks outside a type-predicate function still reject (the plugin's existing `typeof x === "undefined"` existence-probe exemption remains unchanged). Other files retain the default prohibition, including guards. External JSON values are checked at the boundary without coercion; internal code consumes the validated DTOs. No `unknown` rule exception is needed: `JsonValue` honestly represents the output of the bounded parser before schema validation.
+
+`python3 scripts/check-worker-lint.py` exercises the real installed CLI/config on small disposable examples: allowed boundary guards, rejected non-guards/nested callbacks, guards outside the override, and other enabled rules. It runs in `scripts/verify`/CI, not in the lightweight commit hook, and never modifies production files or installs packages.
 
 ## Executables
 

@@ -1250,6 +1250,673 @@
     "expected": "ok"
   },
   {
+    "id": "transfer-id-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": {}
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "transfer-id-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": [
+            {}
+          ]
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "transfer-id-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": []
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "transfer-id-null",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": null
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "transfer-id-boolean",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": true
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "transfer-id-number",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": 7
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "request-id-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": {},
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "request-id-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": [
+            {}
+          ],
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "workspace-id-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": {},
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "workspace-id-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": [
+              {}
+            ],
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "association-revision-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": {}
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "association-revision-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": [
+              {}
+            ]
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": "7",
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "draft-revision-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": {},
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "draft-revision-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "command",
+          "request_id": "00000000-0000-4000-8000-000000000004",
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "expected_service_epoch": "00000000-0000-4000-8000-000000000006",
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "command": {
+            "name": "feedback.submit",
+            "payload": {
+              "batch_id": "00000000-0000-4000-8000-000000000007",
+              "expected_draft_revision": [
+                {}
+              ],
+              "delivery_mode": "follow_up"
+            }
+          }
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "sequence-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "event",
+          "service_epoch": "00000000-0000-4000-8000-000000000006",
+          "sequence": {},
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "state": "uncertain"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "sequence-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "event",
+          "service_epoch": "00000000-0000-4000-8000-000000000006",
+          "sequence": [
+            {}
+          ],
+          "scope": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "operation_id": "00000000-0000-4000-8000-000000000005",
+          "state": "uncertain"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "execution-generation-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": {},
+          "total_bytes": "14",
+          "sha256": "c065ab6caf89d7ba184de4931aec5c1bd70563211fb34fffa01924fd7c73afd6"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "execution-generation-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": [
+            {}
+          ],
+          "total_bytes": "14",
+          "sha256": "c065ab6caf89d7ba184de4931aec5c1bd70563211fb34fffa01924fd7c73afd6"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "total-bytes-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": "4",
+          "total_bytes": {},
+          "sha256": "c065ab6caf89d7ba184de4931aec5c1bd70563211fb34fffa01924fd7c73afd6"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "total-bytes-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": "4",
+          "total_bytes": [
+            {}
+          ],
+          "sha256": "c065ab6caf89d7ba184de4931aec5c1bd70563211fb34fffa01924fd7c73afd6"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "digest-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": "4",
+          "total_bytes": "14",
+          "sha256": {}
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "digest-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.start",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "owner": {
+            "workspace_id": "00000000-0000-4000-8000-000000000001",
+            "objective_id": "00000000-0000-4000-8000-000000000002",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "association_revision": "3"
+          },
+          "execution_generation": "4",
+          "total_bytes": "14",
+          "sha256": [
+            {}
+          ]
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "chunk-index-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.data",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "index": {},
+          "hex": "c3a10d0af09f9880e280a8e280a9"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "chunk-index-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.data",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "index": [
+            {}
+          ],
+          "hex": "c3a10d0af09f9880e280a8e280a9"
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "chunk-hex-object",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.data",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "index": "0",
+          "hex": {}
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "chunk-hex-object-array",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0-imp001",
+        "body": {
+          "kind": "chunk.data",
+          "transfer_id": "00000000-0000-4000-8000-000000000009",
+          "index": "0",
+          "hex": [
+            {}
+          ]
+        }
+      }
+    },
+    "expected": "invalid_schema"
+  },
+  {
+    "id": "bundle-string-invalid-transfer",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": "0.1.0",
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": {}
+        }
+      }
+    },
+    "expected": "version_mismatch"
+  },
+  {
+    "id": "bundle-object-invalid-transfer",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": {},
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": {}
+        }
+      }
+    },
+    "expected": "version_mismatch"
+  },
+  {
+    "id": "bundle-object-array-invalid-transfer",
+    "mode": "frame",
+    "source": {
+      "value": {
+        "protocol": 1,
+        "bundle": [
+          {}
+        ],
+        "body": {
+          "kind": "chunk.end",
+          "transfer_id": {}
+        }
+      }
+    },
+    "expected": "version_mismatch"
+  },
+  {
     "id": "chunk-roundtrip",
     "mode": "chunks",
     "source": {

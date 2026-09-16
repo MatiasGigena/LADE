@@ -76,6 +76,29 @@ data=dict(kind='chunk.data',transfer_id=uid(9),index='0',hex=payload.hex())
 end=dict(kind='chunk.end',transfer_id=uid(9))
 cancel=dict(kind='chunk.cancel',transfer_id=uid(9))
 for name,body in [('start',start),('data',data),('end',end),('cancel',cancel)]: case('chunk-dto-'+name,'frame',val(envelope(body)))
+# Wrong JSON types must reject without coercing null-prototype objects to strings.
+for name,replacement in [('object',{}),('object-array',[{}]),('array',[]),('null',None),('boolean',True),('number',7)]:
+    case('transfer-id-'+name,'frame',val(envelope(dict(end,transfer_id=replacement))),'invalid_schema')
+for name,original,path in [
+ ('request-id',command,['body','request_id']),
+ ('workspace-id',command,['body','scope','workspace_id']),
+ ('association-revision',command,['body','scope','association_revision']),
+ ('draft-revision',command,['body','command','payload','expected_draft_revision']),
+ ('sequence',event,['body','sequence']),
+ ('execution-generation',envelope(start),['body','execution_generation']),
+ ('total-bytes',envelope(start),['body','total_bytes']),
+ ('digest',envelope(start),['body','sha256']),
+ ('chunk-index',envelope(data),['body','index']),
+ ('chunk-hex',envelope(data),['body','hex'])]:
+    for kind,replacement in [('object',{}),('object-array',[{}])]:
+        v=copy.deepcopy(original); p=v
+        for k in path[:-1]: p=p[k]
+        p[path[-1]]=replacement
+        case(name+'-'+kind,'frame',val(v),'invalid_schema')
+# Version rejection takes precedence, even if the body also has an invalid type.
+for name,replacement in [('string','0.1.0'),('object',{}),('object-array',[{}])]:
+    v=envelope(dict(end,transfer_id={})); v['bundle']=replacement
+    case('bundle-'+name+'-invalid-transfer','frame',val(v),'version_mismatch')
 for name,steps,expected in [
  ('chunk-roundtrip',[start,data,end],'ok'),('chunk-cancel',[start,cancel],'ok'),
  ('chunk-unstarted',[data],'chunk_order'),('chunk-repeat-start',[start,start],'chunk_order'),

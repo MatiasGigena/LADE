@@ -88,8 +88,12 @@ function stream(bytes: Buffer, framing: Framing, stride: number, expectedCount: 
           other.finish();
         });
       } catch (error) {
+        assert.ok(error instanceof WireError, "invalid bytes must produce a protocol rejection");
         assert.equal(count, 0, "invalid input must not emit a command");
-        assert.throws(() => decoder.push(Buffer.alloc(0), () => {}), { code: "closed" });
+        const valid = framed(Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body: { kind: "hello" } })), framing);
+        assert.equal(outcome(() => decoder.push(valid, () => { count++; })), "closed");
+        assert.equal(outcome(() => decoder.finish()), "closed");
+        assert.equal(count, 0, "a failed connection must not deliver later valid messages");
         throw error;
       }
     }
@@ -108,20 +112,20 @@ export function run(c: Fixture): string {
         return;
       case "frame": {
         const bytes = source(c.source);
-        let previous: string | undefined;
+        let previous = outcome(() => assert.deepEqual(decode(bytes), boundedJson(bytes)));
+        const valid = Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body: { kind: "hello" } }));
 
         for (const framing of ["client", "worker"] as const) {
-          const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing)]);
+          const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing), framed(valid, framing)]);
 
           for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
-            const result = stream(wire, framing, stride, 2);
-
-            if (previous !== undefined) assert.equal(result, previous);
+            const result = stream(wire, framing, stride, 3);
+            assert.equal(result, previous);
             previous = result;
           }
         }
 
-        if (previous !== "ok") throw new WireError(previous ?? "missing_result");
+        if (previous !== "ok") throw new WireError(previous);
 
         return;
       }
