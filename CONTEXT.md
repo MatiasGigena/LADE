@@ -4,6 +4,8 @@ LADE is a graphical Linux desktop environment for agentic software development: 
 
 Its first release connects human authority, understanding and intervention through Read-only Inspection, Change Set review, and Contextual Feedback. It is local-first: one developer, one Linux machine, one Git-centered Workspace, with concurrent Objectives isolated in worktrees. It includes no embedded editor and makes no new commitment to external-editor integration; future editing is not permanently prohibited. See the [accepted first-release revision](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5691260255), [product vision](docs/product/vision.md), and [workflow contracts](docs/product/first-release-workflow.md).
 
+The selected graphical client is **GTK4 native**, preserving the approved workbench design. Rust remains the authoritative System Layer and pi owns Agent Session behavior behind a pinned SDK adapter. See the [client architecture decision and remaining gates](docs/planning/client-architecture.md); toolkit selection does not authorize production implementation.
+
 ## Language
 
 **Agentic Development Environment (ADE)**:
