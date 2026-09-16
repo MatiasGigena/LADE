@@ -9,7 +9,7 @@ LADE is a local-first Linux Agentic Development Environment centered on Objectiv
 - [CONTEXT.md](CONTEXT.md) — domain vocabulary and first-release boundary.
 - [Product vision](docs/product/vision.md) — authority, understanding and intervention.
 - [First-release workflow](docs/product/first-release-workflow.md) — inspection, versioned feedback, revisions, review and explicit integration.
-- [UI principles](docs/product/ui-principles.md) — approved visual direction, interaction/accessibility obligations and missing reference attachments.
+- [UI principles](docs/product/ui-principles.md) — approved visual direction, original image and supplied skill text, operational-desktop adaptation and interaction/accessibility obligations.
 - [Implementation readiness](docs/planning/implementation-readiness.md) — decisions, evidence from other branches, acceptance matrix, blockers and next increments.
 - [Decision map #1](https://github.com/MatiasGigena/LADE/issues/1) — canonical planning map and issue history.
 

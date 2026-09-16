@@ -50,7 +50,7 @@ This exercise is a **proposal**, not observed product evidence. A polished image
 ## Reading order and status
 
 1. [First-release workflow](first-release-workflow.md): collaboration contracts and failure paths.
-2. [UI principles](ui-principles.md): approved composition, corrections and missing reference attachments.
+2. [UI principles](ui-principles.md): approved composition, corrections, supplied image/skill references and operational-desktop exceptions.
 3. [Implementation readiness](../planning/implementation-readiness.md): evidence, unresolved choices, acceptance matrix and gated increments.
 
 [#1](https://github.com/MatiasGigena/LADE/issues/1) remains the canonical decision map. This consolidation records the developer's approved product/visual direction; it does not approve a toolkit, measured budgets, technical prototype validity, or production implementation. New technical choices are explicitly marked as proposals in the linked documents.

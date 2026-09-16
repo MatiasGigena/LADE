@@ -2,13 +2,20 @@
 
 Status: **developer-approved composition and visual direction**, not a toolkit selection, interaction-validation result or technical guarantee. The [workflow](first-release-workflow.md) controls action semantics; illustrative labels or enabled buttons in a mockup cannot override it.
 
-## Reference provenance and missing attachments
+## Reference provenance and assets
 
-The developer identifies the **last attached image** as the approved conceptual workbench; earlier images are historical iterations. In this documentation task neither that image's binary file nor the complete attached **`scandinavian-design` skill (`SKILL.md` and any referenced assets)** was accessible. No file matching that skill was found in the available skill locations, and no identifiable approved image was available in the repository/consulted branches. This document applies the explicit textual rules supplied by the developer; it does **not** claim to have applied unseen skill instructions or inspected the image.
+The developer supplied the **last approved image** and the full main `scandinavian-design` skill text in the follow-up to the initial consolidation. Earlier images remain historical iterations. The original PNG is preserved without cropping, recoloring or recreation; the skill text is archived as supplied, not installed as a harness skill or made a parallel LADE specification. This resolves the image/main-text availability gap recorded in the first documentation commit and issue comments.
 
-To complete the reference, Matias Gigena supplies the original last approved image and full skill attachment. The documentation maintainer then preserves the original image at `docs/product/assets/lade-approved-workbench.png` (if supplied as PNG; otherwise retain its actual format), adds a relative link/caption identifying it as an **approved conceptual reference, not a running implementation**, and records any skill/text conflicts for resolution. There is deliberately no broken image link or recreated substitute now. This attachment gap does not block the textual specification, but prevents a claim of exact visual-reference matching.
+![Approved conceptual LADE workbench: header, Objectives sidebar, dominant Change Set inspection and right-hand evidence and review panel.](assets/lade-approved-workbench.png)
 
-The composition is not a literal specification of code, labels, fixture data or action availability. Do not copy the office, monitor, plants or background text into the application. Coverage is not a passing test, fixture evidence is not a real execution, and Integrate cannot become available without the authoritative prerequisites.
+*Approved conceptual composition/style reference supplied by Matias Gigena, **not a screenshot of a running LADE implementation**. The depicted surroundings are not part of the application.*
+
+- [Original image](assets/lade-approved-workbench.png): PNG, 1672 × 941; SHA-256 `b152c8a6e8cde3720f3a3db5b639bd10c24ad37f4194226f79741414de87ff83`. Repository copy verified byte-for-byte against the supplied file.
+- [Supplied skill text](assets/scandinavian-design.txt): complete main text including frontmatter, retained as a plain-text reference. Its literal references to `websites.md` and `scripts/{lines,tints,density,bands}.js` describe supporting files **not supplied** here; no substitute helpers were created or executed. They are not required to document this operational-desktop adaptation. Obtain/inspect them if a later authorized task needs that website-only fallback or browser harness.
+
+The image was inspected for composition and compared with the textual requirements. It shows the approved LADE-only wordmark, three working columns, avatar/name and semantic diff colors; it does not prove functional behavior, pixel-level token values or accessible contrast. Perspective, photographic lighting and raster text are not an implementation palette, typography specification or standalone logo/avatar asset.
+
+The composition is not a literal specification of code, labels, fixture data or action availability. Do not copy the office, monitor, plants or background text into the application. In particular, the depicted check beside coverage, “All tests passing”, “Approve review”, “Request reviews” and “Integrate to main” are illustrative: coverage is not a passing test, fixture evidence is not a real execution, approval is candidate/target-bound, and integration requires a separate explicit authorized action. The labels do not introduce multi-user review, new lifecycle states or automatic progression. The supplied portrait does not establish the real avatar's provenance; retain an existing prototype placeholder when necessary rather than inventing a photo or adding authentication.
 
 ## Composition
 
@@ -26,7 +33,22 @@ This supersedes [#9's original](https://github.com/MatiasGigena/LADE/issues/9#is
 
 ## Operational Scandinavian-style rules
 
-Apply the developer-specified design direction to an operational Linux desktop workbench, not a landing page:
+Apply the supplied skill through its operating priority: comprehension/wayfinding, task completion/accessibility, useful hierarchy/density, brand/semantic meaning, then restraint. This is a documentation adaptation for an operational Linux desktop workbench, not a new redesign, three-variant prototype exercise or landing page. Existing approved composition and product contracts take precedence over generic skill defaults.
+
+### Application and explicit exceptions
+
+| Skill guidance | LADE application / boundary |
+| --- | --- |
+| Clear hierarchy before decorative reduction | Keep context, controls, comments, evidence and errors near the task they explain. Left-align labels/prose by default; vertically centering the profile name against its avatar does not mean centering all text. Reuse accessible primitives after the client is selected; no new UI dependency is selected here. |
+| Restrained type and spacing | One sans-serif UI family with monospace for code; use a platform font for a native client unless an established product face is justified. Do not infer Inter, a paid font, exact weights or pixel sizes from the image. Operational rows may need more text styles than editorial defaults. Spacing/radius examples are starting guidance, not fixed layout or performance budgets. |
+| Avoid styled uppercase | **LADE** stays uppercase as expressly approved. Preserve code, paths, acronyms and user content rather than case-transforming them. |
+| Neutral chrome and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs; no decorative accent or tinted chrome. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
+| Quiet boundaries and repeated records | No lateral Objective accent bar, including pseudo-elements or shadows that recreate one. Keep selected/focus states distinct; retain useful column separators and control boundaries when needed for dense simultaneous inspection. Equivalent controls share geometry; avoid pills/boxes added purely for style. |
+| Spacious chapters, media dominance and mobile examples | Marketing/commerce chapters, large editorial margins and mobile scope do not transfer to LADE. The Change Set/task—not a promotional image—is dominant. Preserve useful desktop density, narrow available logical space and 200% scaling. The skill's dark-canvas recipes do not add a dark-mode requirement to the approved white base. |
+| Purposeful motion | Do not add animation for polish or animate frequent/keyboard actions. Any later functional motion must be interruptible, honor reduced motion and preserve state feedback; skill timing examples are not measured LADE responsiveness budgets. |
+| Verification against the real interface | When UI work is authorized, inspect actual rendered controls, computed interaction states (or native equivalents), contrast on real surfaces, keyboard/Orca behavior and clipping at supported desktop sizes/200%. An image inspection cannot satisfy these tests. No browser/application test or UI change is part of this asset/documentation follow-up. |
+
+Operational rules retained from the approved direction:
 
 - White foundation, black ink and **genuinely neutral** grays. No beige, warm, blue-tinted or green-tinted chrome.
 - Clear hierarchy, useful information density, consistent spacing and minimal decoration. A single sans-serif UI family; monospace where code/output requires it. Exact font, metrics and spacing scale remain implementation choices subject to legibility and redistribution checks, not selected by this approval.
@@ -48,6 +70,8 @@ These are starting references, **not measured passing pairs**. Test compositing 
 | Separators | Black at 10% opacity |
 | Hover | Black at 5% opacity over the surface |
 | Pressed | Black at 9% opacity over the surface |
+
+Use alpha colors rather than fading a whole container with `opacity`, which also dims content and states. Preserve distinct functional ink levels; do not collapse them merely to fit a three-band palette. The skill's 44% tertiary ink is **not** a default for functional metadata such as paths, versions, timestamps, verification or disabled-action explanations; choose sufficient contrast over the actual surface. Its suggested stronger rungs are guidance, not measured LADE passes. Existing truly neutral, accessible tokens need not be rewritten solely to change their representation.
 
 A 10% separator is not automatically adequate for a control boundary or focus indicator. Selected and keyboard-focus states need independent discernibility. Proposed implementation: neutral selected fill plus weight/state label, and a sufficiently contrasting full focus outline; do not reintroduce a lateral accent bar. Final combinations must pass testing.
 
@@ -76,4 +100,4 @@ Disabled or unavailable actions retain an accessible explanation and recovery pa
 
 ## Validation boundary
 
-Historical B styling and mock data are not the new design baseline. Its documented accessible-name, reverse-F6, contrast and scaling failures are useful test inputs, not inherited accepted behavior. This task performs no visual rendering, Orca, contrast-on-rendered-surfaces, performance or security validation. The [readiness matrix](../planning/implementation-readiness.md#acceptance-matrix) assigns those tests and their evidence.
+Historical B styling and mock data are not the new design baseline. Its documented accessible-name, reverse-F6, contrast and scaling failures are useful test inputs, not inherited accepted behavior. Inspecting the supplied conceptual image and reading the skill resolves reference availability only: this task performs no application rendering, interaction-state, Orca, contrast-on-rendered-surfaces, performance or security validation. The [readiness matrix](../planning/implementation-readiness.md#acceptance-matrix) assigns those tests and their evidence. The archived skill's generic verification instructions neither authorize production work nor widen LADE's Linux support contract.
