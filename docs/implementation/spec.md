@@ -1,8 +1,8 @@
 # LADE implementation specification and execution backlog
 
-Status: **review draft; no implementation issues have been created by this document**. The developer authorized this specification and the modular architectural direction, not production execution. Approving the documents, publishing the backlog and authorizing an implementation increment are separate actions.
+Status: **approved specification; execution backlog published in [IMP-MAP #21](https://github.com/MatiasGigena/LADE/issues/21)**. Backlog publication does not authorize production implementation. Technical details identified below as implementation proposals remain subject to ratification at their named increments.
 
-Baseline: [PR #19](https://github.com/MatiasGigena/LADE/pull/19) at `60118474b226d1d1d518bd445d25977aa2b6cce3`; [#13 resolution](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698708894); [#14 resolution](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043). Product planning is complete. Do not reopen the old map or repeat client/agent research merely to begin implementation.
+Baseline: [PR #19](https://github.com/MatiasGigena/LADE/pull/19) at `60118474b226d1d1d518bd445d25977aa2b6cce3`; implementation blueprint [PR #20](https://github.com/MatiasGigena/LADE/pull/20); [#13 resolution](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698708894); [#14 resolution](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043). Product planning is complete. Do not reopen the old map or repeat client/agent research merely to begin implementation.
 
 ## 1. Document authority and scope
 
@@ -21,9 +21,9 @@ Scope remains one developer, one Linux machine and one Git Workspace, isolated c
 
 ## 2. Delivery model and authorization
 
-Use one new execution map, provisionally **IMP-MAP: Deliver the first credible LADE release**, referencing the closed decision map #1. Its children below are work items, not one issue per A-row. IDs such as IMP-004 are stable planning keys, not GitHub numbers.
+The execution backlog is published in [IMP-MAP #21: Deliver the first credible LADE release](https://github.com/MatiasGigena/LADE/issues/21), referencing the closed decision map #1. Its children below are work items, not one issue per A-row. IDs such as IMP-004 are stable planning keys, not GitHub numbers.
 
-Publish issues only after the developer approves this backlog. Search for those stable keys before creating anything; map them to real GitHub IDs, link native subissues/dependencies and read back the result. Do not infer issue numbers, silently change existing dependencies, recreate the closed planning issues or let a publishing prompt authorize production work.
+The authoritative stable-key-to-GitHub mapping and native dependency graph live in #21; do not duplicate that mapping here. Search all issue states before any future split or tracker maintenance, reuse matching stable keys and read back native links. Do not infer issue numbers, silently change existing dependencies, recreate the closed planning issues or let backlog publication authorize production work.
 
 The implementation driver produces evidence; Matias approves consequential defaults, changes to accepted contracts, product acceptance and release go/no-go. Work in an isolated branch per reviewable increment. Do not merge prototype branches wholesale. New native production components are built against the accepted contracts, not by promoting permissive fixture brokers.
 
@@ -128,11 +128,11 @@ All dependencies below are prerequisites for the issue's accepted result, not a 
 | IMP-015 | Validate developer comprehension with a seeded-defect exercise | IMP-013 | M3 product acceptance |
 | IMP-016 | Assemble installed release evidence and obtain go/no-go | IMP-013, IMP-014, IMP-015 | M3 release acceptance |
 
-M0 does not certify the app; M1 does not permit shipping a provider subset. M2 includes full accepted compatibility and failure handling. M3 requires all applicable A01–A24 gates. This is 16 proposed implementation issues plus one map, not 24 independent mini-projects.
+M0 does not certify the app; M1 does not permit shipping a provider subset. M2 includes full accepted compatibility and failure handling. M3 requires all applicable A01–A24 gates. The published backlog contains 16 implementation issues plus one map, not 24 independent mini-projects.
 
-## 5. Issue-ready specifications
+## 5. Published issue specifications
 
-The fields below, this spec's common Definition of Done and the linked A-rows form each issue body. First-increment details are deliberately more concrete; later contract details are finalized at their named boundary rather than guessed for the whole application now.
+The fields below, this spec's common Definition of Done and the linked A-rows form the specification for each published child of #21. The real key-to-number mapping remains in #21 rather than being duplicated here. First-increment details are deliberately more concrete; later contract details are finalized at their named boundary rather than guessed for the whole application now.
 
 <a id="imp-001"></a>
 ### IMP-001 — Establish the build boundary and versioned contract fixtures
@@ -349,11 +349,11 @@ No unrelated edits, real credentials, personal source text or raw provider trans
 
 Update the owning contract when its implementation changes; do not fork another spec into an issue comment. UI changes update visual tokens centrally and retain actual native captures. New durable stores, frameworks, security exceptions, APIs or dependencies need a concrete reason and review, not a generic claim of cleanliness. Product-policy changes require Matias; a supported implementation detail can be accepted in its owning technical PR.
 
-After spec approval, the execution map receives the real issue mapping and dependency links. Keep that small mapping in this document or the map, not a second separately maintained backlog. Before choosing work, read the current issue and dependencies. Further splitting is allowed only for a genuinely reviewable result with explicit acceptance; do not create a task for every folder.
+Execution map #21 holds the real issue mapping and native dependency links. Keep that mapping there rather than adding a second separately maintained backlog to this document. Before choosing work, read the current issue and dependencies. Further splitting is allowed only for a genuinely reviewable result with explicit acceptance; do not create a task for every folder.
 
 ## 8. Handoff and next authorized action
 
-First review this spec, the architecture and the proposed visual tokens. Then explicitly authorize issue publication; the [agent handoff](agent-handoff.md) provides a bounded prompt. No issues are created by the documentation PR itself.
+This spec, the architecture and the proposed visual tokens have been reviewed, and the execution backlog is published in #21. The [agent handoff](agent-handoff.md) preserves the boundary between backlog publication and authorization of an implementation increment. Publishing or updating the backlog does not start production work.
 
 Once production implementation is separately authorized, assign a driver to IMP-001 and then IMP-002/003 as their prerequisites permit. No extra broad decision-stage prototype, pi-internals certification project or microservice design phase is required. The hard-limit and containment gates still precede any untrusted execution.
 
