@@ -6,6 +6,7 @@ import { corpus, run } from "./support.ts";
 for (const fixture of corpus) {
   test(fixture.id, () => assert.equal(run(fixture), fixture.expected));
 }
+
 test("Unicode decodes without normalization", () => {
   const text = "á\r\n\t漢字😀é\u2028\u2029";
   assert.equal(boundedJson(Buffer.from(JSON.stringify(text))), text);

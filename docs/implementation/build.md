@@ -13,10 +13,11 @@ Explicit one-time local toolchain setup (downloads checksum-pinned rustup 1.29.1
 ```sh
 ./scripts/bootstrap-rust
 npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
+git config core.hooksPath .githooks
 python3 scripts/check-pins.py
 ```
 
-No package-install scripts, pi loading, providers or repository tools run during these steps. Build scripts/procedural macros of the pinned Rust dependencies are trusted build inputs, not sandboxed worker execution.
+The tracked pre-commit hook runs the worker's anti-slop lint command. Hook activation is an explicit per-clone action; package installation does not modify Git configuration. No package-install scripts, pi loading, providers or repository tools run during these steps. Build scripts/procedural macros of the pinned Rust dependencies are trusted build inputs, not sandboxed worker execution.
 
 ## Verification
 
@@ -24,13 +25,14 @@ No package-install scripts, pi loading, providers or repository tools run during
 ./scripts/verify
 ```
 
-This runs locked workspace build/tests, formatting and Clippy, crate/source architecture checks, TypeScript checking/tests, byte-fragmented common fixtures and cross-language comparison, and executable version/fail-closed smoke checks. Individual commands:
+This runs locked workspace build/tests, formatting and Clippy, crate/source architecture checks, TypeScript linting/checking/tests, byte-fragmented common fixtures and cross-language comparison, and executable version/fail-closed smoke checks. Individual commands:
 
 ```sh
 ./scripts/cargo build --workspace --locked
 ./scripts/cargo test --workspace --locked
 ./scripts/cargo test -p lade-core --locked
 ./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
+npm --prefix packages/pi-worker run lint
 npm --prefix packages/pi-worker run check
 npm --prefix packages/pi-worker test
 python3 scripts/check-architecture.py
