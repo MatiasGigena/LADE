@@ -1,8 +1,8 @@
 # LADE
 
-LADE is a graphical Linux desktop environment for agentic software development, where agents perform development work under human direction and governance.
+LADE is a graphical Linux desktop environment for agentic software development: delegate implementation without delegating understanding or acceptance of the system. Its primary collaboration unit is the Objective and its resulting work, supported by Agent Sessions.
 
-Its first release connects human judgment directly to the resulting work through read-only file inspection, Change Set review, and contextual feedback to Agent Sessions. It does not include an embedded editor. See the [accepted first-release revision](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5691260255).
+Its first release connects human authority, understanding and intervention through Read-only Inspection, Change Set review, and Contextual Feedback. It is local-first: one developer, one Linux machine, one Git-centered Workspace, with concurrent Objectives isolated in worktrees. It includes no embedded editor and makes no new commitment to external-editor integration; future editing is not permanently prohibited. See the [accepted first-release revision](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5691260255), [product vision](docs/product/vision.md), and [workflow contracts](docs/product/first-release-workflow.md).
 
 ## Language
 
@@ -27,7 +27,7 @@ Viewing repository files and Change Sets to understand the work without modifyin
 _Avoid_: Integrated Editor, manual editing
 
 **Contextual Feedback**:
-Developer input tied to inspected code or changes, directed to the owning Agent Session to guide a revision. It is not approval of the Change Set or authorization to integrate it.
+Developer input tied to an Objective and a specific inspected version of code or changes, explicitly directed to an identified Agent Session to guide a revision. A draft is not submitted input; feedback is neither execution permission nor approval of the Change Set or authorization to integrate it.
 _Avoid_: Integration approval, manual patch
 
 **Objective**:
