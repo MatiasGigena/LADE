@@ -31,6 +31,8 @@ The implementation driver produces evidence; Matias approves consequential defau
 
 These decisions make the first increment concrete. They are **implementation proposals for review**, not assertions about existing code. IMP-001 ratifies the wire envelope and toolchain; each storage/security/Git increment ratifies its bounded protocol before effects.
 
+The separately authorized IMP-001 now concretizes the foundational DTO/schema, framing, identities, decoded/chunk bounds, toolchain and admission direction in its [owning contract](imp-001-contract.md), with [build commands](build.md) and [scoped evidence](evidence/imp-001/README.md). Matias approved that implementation direction; independent wire/security sign-off remains pending. The examples below remain illustrative; `contracts/v1/schema.json` specifies the actual envelope. No live IPC authority or later increment is enabled by these foundations.
+
 ### 3.1 Identity and command envelope
 
 Propose protocol major version 1. Use opaque typed IDs with explicit validation; UUIDv4 is the proposed generated-ID representation. Carry integer revisions/sequence values as bounded decimal strings across Rust/TypeScript to avoid numeric precision loss. Do not encode authorization in an ID. Git identities carry the repository object-format algorithm and complete object ID; do not assume every repository uses SHA-1.

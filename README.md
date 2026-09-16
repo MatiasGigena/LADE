@@ -2,7 +2,7 @@
 
 Delegate implementation without delegating understanding or acceptance of the system.
 
-LADE is a local-first Linux Agentic Development Environment centered on Objectives and their resulting work. This repository is currently **planning, research and throwaway prototypes**, not a production application.
+LADE is a local-first Linux Agentic Development Environment centered on Objectives and their resulting work. This repository contains **initial IMP-001 build/contract foundations**, planning and research—not a usable production application.
 
 ## Start here
 
@@ -13,6 +13,10 @@ LADE is a local-first Linux Agentic Development Environment centered on Objectiv
 - [Implementation readiness](docs/planning/implementation-readiness.md) — decisions, evidence from other branches, acceptance matrix, blockers and next increments.
 - [Decision map #1](https://github.com/MatiasGigena/LADE/issues/1) — canonical planning map and issue history.
 
+## Build foundations
+
+See [build and test instructions](docs/implementation/build.md), the [IMP-001 wire/admission contract](docs/implementation/imp-001-contract.md) and [retained evidence and remaining gates](docs/implementation/evidence/imp-001/README.md). The native build shell and fail-closed service entrypoint do not execute agents or access a Workspace.
+
 ## Implementation blueprint
 
 - [System architecture](architecture.md) — modular Rust core, layers, adapters, ownership and design patterns.
@@ -20,7 +24,7 @@ LADE is a local-first Linux Agentic Development Environment centered on Objectiv
 - [Implementation spec and backlog](docs/implementation/spec.md) — concrete first-boundary proposals, 16 issue-ready increments, dependencies and A01–A24 coverage.
 - [Agent handoff](docs/implementation/agent-handoff.md) — separate prompts for authorized issue publication and authorized implementation.
 
-The architectural direction is approved; new technical/token choices and the backlog are submitted for review. These documents do not create issues, start production work or change the accepted product policies.
+The architectural direction and backlog are approved/published. IMP-001 is separately authorized; later increments and their technical/token gates remain bounded by the spec. Documentation alone does not authorize additional production work or change accepted product policies.
 
 The first release has no embedded editor or TODE dependency. Historical editor research/prototypes remain evidence of earlier exploration, not current gates. Rust remains the authoritative System Layer, pi the Intelligence Layer, and the graphical client presentation only. [GTK4 native is the selected graphical client](docs/planning/client-architecture.md), preserving the approved visual direction. [Provisional performance targets and the validation handoff](docs/planning/performance-budgets.md) are accepted. Production measurements, complete native/accessibility validation and production authorization remain open; accepted targets are not runtime guarantees.
 

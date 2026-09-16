@@ -1,0 +1,22 @@
+{
+  "name": "@lade/pi-worker",
+  "version": "0.1.0-imp001",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.23.1",
+    "npm": "10.9.8"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "fixtures": "node --experimental-strip-types test/report.ts"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.83.0",
+    "@types/node": "22.19.15",
+    "oxlint": "1.83.0",
+    "typescript": "5.9.3"
+  }
+}

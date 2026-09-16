@@ -1,0 +1,18 @@
+name: IMP-001 foundations
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  contracts-and-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Native build prerequisites (disposable runner only)
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev build-essential pkg-config
+      - run: ./scripts/bootstrap-rust
+      - run: npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
+      - run: ./scripts/verify
+      # Ubuntu CI is a build/contract check, not the pinned Mint host gate or GTK visual evidence.

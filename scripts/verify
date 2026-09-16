@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+python3 scripts/check-pins.py --portable
+python3 scripts/generate-dtos.py --check
+python3 scripts/generate-fixtures.py --check
+./scripts/cargo fmt --all -- --check
+./scripts/cargo build --workspace --locked
+./scripts/cargo test --workspace --locked
+./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
+python3 scripts/check-architecture.py
+npm --prefix packages/pi-worker run lint
+python3 scripts/check-worker-lint.py
+npm --prefix packages/pi-worker run check
+npm --prefix packages/pi-worker test
+python3 scripts/compare-fixtures.py
+./target/debug/lade-desktop --version
+./target/debug/laded --version
+set +e
+./target/debug/laded
+status=$?
+set -e
+test "$status" = 78 || { echo "service did not fail closed: $status" >&2; exit 1; }

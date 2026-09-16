@@ -93,6 +93,8 @@ This is a target layout, not a requirement to create empty directories. Start wi
 
 **Proposed implementation choices:** Rust/gtk4-rs for the client; TypeScript for the Node adapter; GtkSourceView 5 as the first read-only text-control candidate; VTE's GTK4 variant only as a terminal presentation candidate. No Libadwaita requirement, web engine or custom-drawn whole UI. Pin runtime, bindings and native libraries in IMP-001; validate rich controls in IMP-002 and terminal ownership in IMP-012. These were not selected by #13's C benchmark.
 
+IMP-001 establishes this four-crate boundary with Rust/gtk4-rs, locked build inputs and effect-free protocol fixtures. See its [concrete wire/admission contract](docs/implementation/imp-001-contract.md) and [evidence limits](docs/implementation/evidence/imp-001/README.md); live transport authority and the rich workbench remain later increments.
+
 The narrow coding-agent product fork required by #6 is retained. Do not replace it with floating upstream packages or fork the agent/provider layers without demonstrated need. Record upstream commit, runtime/dependency lockfiles, notices and each necessary patch; do not copy historical prototypes into production.
 
 ## 3. State and concurrency

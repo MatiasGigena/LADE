@@ -1,0 +1,4 @@
+/.tools/
+/target/
+**/node_modules/
+/evidence-local/

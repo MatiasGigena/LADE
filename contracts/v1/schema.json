@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lade.local/contracts/v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol", "bundle", "body"],
+  "properties": {
+    "protocol": {"const": 1},
+    "bundle": {"const": "0.1.0-imp001"},
+    "body": {"$ref": "#/$defs/Body"}
+  },
+  "$defs": {
+    "Id": {"type": "string", "format": "uuid-v4"},
+    "Counter": {"type": "string", "format": "u64"},
+    "Digest": {"type": "string", "format": "sha256"},
+    "Scope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workspace_id", "objective_id", "session_id", "association_revision"],
+      "properties": {
+        "workspace_id": {"$ref": "#/$defs/Id"},
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "session_id": {"$ref": "#/$defs/Id"},
+        "association_revision": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "ErrorCode": {"enum": ["unauthorized", "stale_service", "stale_association", "stale_execution", "stale_reference", "stale_candidate", "stale_target", "invalid_lifecycle", "unsupported_content", "version_mismatch", "durability_failure", "permission_denied", "limit_reached", "interrupted", "unknown_operation", "replay_expired", "duplicate_conflict"]},
+    "SafeAction": {"enum": ["refresh", "inspect_previous", "query_operation", "retry_read", "explicit_continue", "none"]},
+    "OperationState": {"enum": ["accepted", "pending", "completed", "blocked", "uncertain", "unknown"]},
+    "Command": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["name", "payload"], "properties": {
+          "name": {"const": "operation.get"},
+          "payload": {"type": "object", "additionalProperties": false, "required": ["operation_id"], "properties": {"operation_id": {"$ref": "#/$defs/Id"}}}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["name", "payload"], "properties": {
+          "name": {"const": "feedback.submit"},
+          "payload": {"type": "object", "additionalProperties": false, "required": ["batch_id", "expected_draft_revision", "delivery_mode"], "properties": {
+            "batch_id": {"$ref": "#/$defs/Id"},
+            "expected_draft_revision": {"$ref": "#/$defs/Counter"},
+            "delivery_mode": {"enum": ["steering", "follow_up"]}
+          }}
+        }}
+      ]
+    },
+    "Result": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["status", "code", "action"], "properties": {
+          "status": {"const": "rejected"}, "code": {"$ref": "#/$defs/ErrorCode"}, "action": {"$ref": "#/$defs/SafeAction"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["status", "input_id"], "properties": {
+          "status": {"const": "accepted"}, "input_id": {"$ref": "#/$defs/Id"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["status", "state"], "properties": {
+          "status": {"const": "operation"}, "state": {"$ref": "#/$defs/OperationState"}
+        }}
+      ]
+    },
+    "Body": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "hello"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "request_id", "operation_id", "expected_service_epoch", "scope", "command"], "properties": {
+          "kind": {"const": "command"}, "request_id": {"$ref": "#/$defs/Id"}, "operation_id": {"$ref": "#/$defs/Id"},
+          "expected_service_epoch": {"$ref": "#/$defs/Id"}, "scope": {"$ref": "#/$defs/Scope"}, "command": {"$ref": "#/$defs/Command"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "request_id", "operation_id", "result"], "properties": {
+          "kind": {"const": "response"}, "request_id": {"$ref": "#/$defs/Id"}, "operation_id": {"$ref": "#/$defs/Id"}, "result": {"$ref": "#/$defs/Result"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "service_epoch", "sequence", "scope", "operation_id", "state"], "properties": {
+          "kind": {"const": "event"}, "service_epoch": {"$ref": "#/$defs/Id"}, "sequence": {"$ref": "#/$defs/Counter"},
+          "scope": {"$ref": "#/$defs/Scope"}, "operation_id": {"$ref": "#/$defs/Id"}, "state": {"$ref": "#/$defs/OperationState"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "transfer_id", "owner", "execution_generation", "total_bytes", "sha256"], "properties": {
+          "kind": {"const": "chunk.start"}, "transfer_id": {"$ref": "#/$defs/Id"}, "owner": {"$ref": "#/$defs/Scope"},
+          "execution_generation": {"$ref": "#/$defs/Counter"}, "total_bytes": {"$ref": "#/$defs/Counter"}, "sha256": {"$ref": "#/$defs/Digest"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "transfer_id", "index", "hex"], "properties": {
+          "kind": {"const": "chunk.data"}, "transfer_id": {"$ref": "#/$defs/Id"}, "index": {"$ref": "#/$defs/Counter"}, "hex": {"type": "string", "format": "chunk-hex"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "transfer_id"], "properties": {
+          "kind": {"const": "chunk.end"}, "transfer_id": {"$ref": "#/$defs/Id"}
+        }},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "transfer_id"], "properties": {
+          "kind": {"const": "chunk.cancel"}, "transfer_id": {"$ref": "#/$defs/Id"}
+        }}
+      ]
+    }
+  }
+}
