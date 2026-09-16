@@ -30,14 +30,14 @@ The [readiness decision register](../planning/implementation-readiness.md#decisi
 
 ## Success and evaluation
 
-Success is a developer accepting a correct result with sufficient understanding and retained authority. Proposed evaluation against the developer's current workflow:
+Success is a developer accepting a correct result with sufficient understanding and retained authority. Required evaluation against the developer's current workflow, accepted in #14:
 
 1. Use comparable repository tasks, starting state and acceptance criteria; record tool/model versions and task difficulty. Counterbalance task order where feasible to reduce learning effects.
 2. Measure time until a **correct** result is accepted, time to reconstruct context after an interruption, correction iterations, and the developer's explanation of the change, risks and verification limits.
 3. Include a deliberately seeded semantic error that can survive superficial tests. Observe whether the developer finds it through independent inspection, points to the responsible code, requests a correction and verifies the revision. Label the fixture and reveal the seed during debrief; never ship it as real work.
 4. Record false acceptance, unresolved confusion and recovery cost, not just speed. Establish a baseline before setting improvement targets; no numerical success target is approved yet.
 
-This exercise is a **proposal**, not observed product evidence. A polished image, positive prototype preference, coverage percentage, number of agents or generated lines cannot establish success. Coverage is not a passing test; fixture evidence is not a real run.
+This exercise is an **accepted release obligation**, not observed product evidence. A missed seeded defect or false acceptance must be addressed and the exercise repeated; faster completion cannot hide that failure. Establish the baseline before proposing numerical improvement thresholds; no speedup is promised. A polished image, positive prototype preference, coverage percentage, number of agents or generated lines cannot establish success. Coverage is not a passing test; fixture evidence is not a real run.
 
 ## Non-goals for v1
 
@@ -53,4 +53,4 @@ This exercise is a **proposal**, not observed product evidence. A polished image
 2. [UI principles](ui-principles.md): approved composition, corrections, supplied image/skill references and operational-desktop exceptions.
 3. [Implementation readiness](../planning/implementation-readiness.md): evidence, unresolved choices, acceptance matrix and gated increments.
 
-[#1](https://github.com/MatiasGigena/LADE/issues/1) remains the canonical decision map. This consolidation records the developer's approved product/visual direction; it does not approve a toolkit, measured budgets, technical prototype validity, or production implementation. New technical choices are explicitly marked as proposals in the linked documents.
+[#1](https://github.com/MatiasGigena/LADE/issues/1) remains the canonical decision map. The original consolidation records the developer's approved product/visual direction. The subsequent [architecture decision](../planning/client-architecture.md) selects GTK4 native; [provisional performance targets and the evidence handoff](../planning/performance-budgets.md) are now accepted, while production measurements, complete technical validation and production implementation remain unverified or unauthorized. New technical choices are explicitly marked as proposals in the linked documents.

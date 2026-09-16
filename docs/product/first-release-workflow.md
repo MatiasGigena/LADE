@@ -1,6 +1,6 @@
 # First-release collaboration workflow
 
-Status: approved product requirements and derivations of existing contracts, with technical proposals explicitly labeled below. No implemented capability is claimed. See the [vision](vision.md), [UI principles](ui-principles.md), and [readiness gates](../planning/implementation-readiness.md).
+Status: approved product requirements, #14's accepted feedback/reference/draft/comparison policies and derivations of existing contracts, with remaining technical proposals explicitly labeled below. No implemented capability is claimed. See the [vision](vision.md), [UI principles](ui-principles.md), and [readiness gates](../planning/implementation-readiness.md).
 
 ## Authority and lifecycle sources
 
@@ -32,7 +32,7 @@ Read-only browsing of an already identified immutable commit/artifact need not s
 
 ## 3. Minimum versioned reference contract
 
-The **requirement** is a durable, unambiguous reference to what was actually inspected, including uncommitted work. Line numbers alone are insufficient. The following is a **logical schema proposal for #13/#14**, to be ratified before the storage/API increment; field spelling, encoding, digest algorithm and snapshot capture protocol are not selected or existing capabilities.
+The **accepted #14 policy** is a durable, unambiguous reference to what was actually inspected, including uncommitted work. Retain exact inspected context with saved drafts and accepted history; Cleanup cannot silently erase it. Line numbers alone are insufficient. The following remains a **logical schema proposal** to instantiate that policy before the storage/API increment; field spelling, encoding, digest algorithm and snapshot capture protocol are not selected or existing capabilities.
 
 | Reference element | Minimum meaning |
 | --- | --- |
@@ -42,7 +42,7 @@ The **requirement** is a durable, unambiguous reference to what was actually ins
 | Location | Repository-relative path(s), file kind, selected range within those exact bytes, and retained selected text/context. Rename/deletion and an absent side are representable; line/column is a display hint. |
 | Traceability | Feedback item/batch identity, author, capture time, requested correction and source reference; superseding/re-anchored references preserve provenance. |
 
-Proposed implementation direction: Rust-owned immutable content artifacts plus a manifest referencing Git objects where adequate and separate captured bytes otherwise. A working file capture proves only those bytes; a whole candidate requires writer exclusion and a consistent manifest. Finalize handling of modes, symlinks, renames, deletions, untracked/binary files and storage failures in the capture protocol. Do not create development commits merely to make every comment addressable. Retain referenced artifacts with the relevant draft/accepted history; Cleanup must not break accepted review evidence.
+Accepted implementation direction: Rust-owned immutable content artifacts plus a manifest referencing Git objects where adequate and separate captured bytes otherwise. This approves the retention/reference policy, not a concrete capture or storage protocol. A working file capture proves only those bytes; a whole candidate requires writer exclusion and a consistent manifest. Finalize handling of modes, symlinks, renames, deletions, untracked/binary files and storage failures in the capture protocol. Do not create development commits merely to make every comment addressable. Retain referenced artifacts with the relevant draft/accepted history; Cleanup must not break accepted review evidence.
 
 ## 4. Feedback: selection is not submission
 
@@ -59,30 +59,30 @@ An accepted batch is immutable history. Later correction creates a linked input,
 
 ### Changed context and routing
 
-Revalidate at submission and again at dispatch, not only when the draft opens. For v1 prefer explicit stale-context detection to semantic re-anchoring:
+Revalidate at submission and again at dispatch, not only when the draft opens. **Accepted in #14's policy walkthrough:** any stale feedback item blocks its entire batch until the developer explicitly updates/re-anchors or removes that item. Preserve every comment and its original context; never silently relocate comments or send only the unaffected subset. Automatic re-anchoring and historical-context dispatch remain deferred. Reference retention and draft policy were subsequently accepted separately below; concrete protocols remain to be specified.
 
 | Change | Required behavior |
 | --- | --- |
-| File/range changes, moves or disappears | Preserve original reference and text; show stale/missing context and old/current material where available. Block normal dispatch until the developer inspects and explicitly re-anchors, removes the item, or uses an explicit historical-context route if later approved. No automatic semantic relocation is promised. |
-| Batch has a stale item | Proposed minimum: keep the batch intact and blocked, identify affected items; developer edits the batch before resubmission. Never silently drop comments or dispatch only a subset. |
+| File/range changes, moves or disappears | Preserve original reference and text; show stale/missing context and old/current material where available. Block normal dispatch until the developer inspects and explicitly re-anchors or removes the item. No automatic semantic relocation is promised. |
+| Batch has a stale item | Accepted v1 policy: keep the batch intact and blocked, identify affected items; developer explicitly updates/re-anchors or removes affected items before resubmission. Never silently drop comments or dispatch only a subset. |
 | Destination session changes, forks, clones or is replaced | Preserve original destination. No silent redirection to the active session. Developer explicitly selects/confirms a new destination; record a linked replacement and revalidate every reference. Transcript branching does not rewind files. |
 | Execution generation ends/restarts | Historical session identity does not revive grants. Dispatch waits for explicit valid continuation in Ask mode; reconcile accepted input first. |
 | Integration Target changes or advances | Preserve the old comparison basis, mark it stale, recompute the total Change Set and request reconfirmation of feedback in that context. Review approval/verification overrides expire; #10's refresh/recheck/reapproval rules apply. |
 | Context changes after dispatch | Do not pretend to retract already delivered input or instantly cancel tools. Display the old reference and changed context; worker adapter reports the discrepancy, and further clarification is a new explicit input. Inspection catches any incorrect application. |
 
-A historical-context dispatch option is **deferred**, not a v1 escape hatch. The v1 proposal blocks and asks for re-anchoring; strict invalidation can produce false-stale cases but avoids silently applying a correction to a different version.
+A historical-context dispatch option is **deferred**, not a v1 escape hatch. The accepted v1 policy blocks and asks for explicit re-anchoring or removal; strict invalidation can produce false-stale cases but avoids silently applying a correction to a different version.
 
-### Bounded draft persistence proposal
+### Bounded draft persistence policy
 
-**New policy proposal, not an already approved #11 guarantee:** persist drafts through Rust into owned durable storage, distinct from accepted inputs. Track draft identity/revision, Objective/session/reference, content, and save acknowledgement. The client may retain unsaved text in memory but must not invent authoritative acceptance or a second durable product store.
+**Accepted in #14's policy walkthrough, not an implemented durability guarantee:** persist drafts through Rust into owned durable storage, distinct from accepted inputs. Track draft identity/revision, Objective/session/reference, content, and save acknowledgement. The client may retain unsaved text in memory but must not invent authoritative acceptance or a second durable product store.
 
-- Display Saving / Saved / Save failed / Disconnected. Saved means the acknowledged draft revision is durable, not sent. No fixed save/checkpoint lag is approved; #13 must measure it and choose a bound.
+- Display Saving / Saved / Save failed / Disconnected. Saved means the acknowledged draft revision is durable, not sent. [#13's accepted timing targets](../planning/performance-budgets.md) request saves after 300ms quiet or at least every 2s during typing, with a healthy-storage durable acknowledgement target ≤1s after request. These are unverified implementation targets, not a crash-loss guarantee. #14 subsequently accepted the bounded draft/save/close policy; concrete persistence protocols remain an implementation gate.
 - Disconnection allows local in-memory edits with a clear not-saved warning; submission is unavailable. On reconnect, reconcile the draft revision before saving; never overwrite a newer durable revision silently. No guaranteed offline crash recovery is promised for unacknowledged edits.
 - Restore the last durable draft after reopening/restart, including stale/missing references and the original destination. Do not autosend restored drafts. Accepted input must not reappear as a fresh unsent batch after an acknowledgement was lost: query by input/operation identity first.
-- Proposed safe-close rule: flush pending drafts before deliberate close/Exit LADE; on storage failure block normal disposal and offer retry or explicit discard/force-exit loss confirmation. A sudden crash can lose edits since the last acknowledged save. This is feedback text protection, not revival of TODE dirty-buffer requirements.
+- Accepted safe-close rule: flush pending drafts before deliberate close/Exit LADE; on storage failure block normal disposal and offer retry, stay open, or explicit discard/force-exit loss confirmation. Window close still permits authorized background agent work; Exit LADE retains #11's separate safe-stop contract. A sudden crash can lose edits since the last acknowledged save. This is feedback text protection, not revival of TODE dirty-buffer requirements.
 - Keep saved drafts until explicit deletion or successful submission; submission atomically associates the draft revision with accepted input in Rust's store, with referenced artifacts made durable first. Preserve accepted input/history under #11. Cleanup must account for unsent drafts and retain their referenced context or require an explicit disposition; it is not draft deletion.
 
-#14 must ratify this bounded policy (including deliberate-discard behavior), and #13 must test the interactions. Exact SQLite/artifact commit ordering and fault recovery remain a protocol gate. Storage errors never count as accepted input.
+#14's walkthrough accepted save-before-close, explicit confirmation of unsaved-edit loss, Rust-owned separately saved drafts, restore-unsent behavior and the lack of offline crash recovery for unacknowledged edits. #13's fixture interaction evidence is retained, not a durable-storage test. Exact SQLite/artifact commit ordering, atomic submission and fault recovery remain protocol/implementation gates. Storage errors never count as accepted input.
 
 ## 5. Agent revision and comparison
 
@@ -90,7 +90,7 @@ Preserve pi steering, follow-up and abort semantics; do not redesign its loop. S
 
 For frozen work, **Return for revision** is an explicit developer action enforced by Rust before any mutating continuation. It invalidates prior approval/override, preserves the old candidate and evidence as historical, then permits an explicitly requested revision under valid execution authority. A feedback submission cannot mutate the frozen candidate in place. Propose a confirmed combined UI action (return plus submit) only if its two effects and failure phases are visible; separate controls are sufficient for v1.
 
-Minimum comparison proposal, not a universal review platform:
+Accepted #14 minimum comparison policy, not an implemented capability or a universal review platform:
 
 - **Total Change Set:** current candidate versus its exact Integration Target commit, including inherited changes.
 - **Since previous review:** two retained candidate manifests, changed-file list and textual before/after diffs for affected files, additions/deletions, with links from feedback to its old context and current material. Show unchanged-but-commented files too. No inferred semantic resolution or mandatory per-comment patch attribution.
@@ -122,6 +122,21 @@ Developer actions use the controlling client; Rust validates authority and preco
 | Discard / developer confirmation | Correct Objective; abandonment explicit | Abandon without integration; stop owned execution | Cannot retain executable/integration authority | Preserve resources/history on uncertain outcome; not Cleanup |
 | Cleanup / explicit developer action through Rust | Completed/discarded; processes stopped, terminal detached; data-loss confirmation where needed | Remove Objective branch/worktree, retain accepted records/artifacts | Resources no longer executable; not history deletion | Journal/reconcile deletion; never blindly continue uncertain removal; preserve unrelated work |
 | Disconnect / service reconnect; restart / supervisor + Rust | Match components; query authoritative snapshot/operations | Client-only loss permits background work; service loss stops descendants and reconciles | Restart expires prompts, extra grants, YOLO and unconsumed approvals | No blind effect replay, automatic worker resume or expired-approval restoration; explicit Ask-mode continuation |
+
+## Planning examples: references, saves and recovery
+
+These are **normative logical examples reviewed for #14, not executed traces or selected wire schemas**. Symbols name identities, not a chosen encoding. Concrete protocol and fault tests precede the affected code boundary.
+
+| Example | Required sequence and visible outcome |
+| --- | --- |
+| Exact working context | Objective O / session S association generation G inspects artifact W containing uncommitted bytes C at path P, with target T at commit H. A draft references W/C/P and its selected range/context. Further writes produce another capture, never mutate W. Working capture does not prove a whole candidate was atomic. |
+| Save and reconnect | Draft D revision 4 requests save; only Rust's durable acknowledgement for revision 4 permits Saved. Revision 5 typed while disconnected stays visibly unsaved. Reconnect queries D's durable revision before writing; a newer durable revision is not silently overwritten. Crash restores the last durable revision unsent after reconciliation; a lost save acknowledgement may conceal a completed write. |
+| Stale batch | Batch B contains D1–D3; D2's context changes before acceptance or dispatch. Preserve all items, identify D2 and block the whole batch. Explicitly re-anchor/update or remove D2, then revalidate all references and destination. Already accepted B is immutable; a corrected submission is linked new input, not edited accepted history. |
+| Lost acceptance acknowledgement | Submit operation Q identifies an exact draft revision/batch. Required artifacts become durable before Rust atomically records accepted input I and associates the submitted draft revision with it. If the reply is lost, query Q/I before retrying: accepted input must not reappear as a fresh unsent batch or be blindly dispatched twice. Failure before acceptance retains the draft; partial artifact writes do not prove acceptance. |
+| Uncertain dispatch or replacement | Rust has accepted I but cannot prove whether worker execution E received it before failure. Show accepted / delivery uncertain; do not resend automatically. A replacement session association or execution generation cannot inherit routing or authority. Require explicit destination confirmation/Ask continuation as applicable, with reconciliation and reference revalidation. |
+| Frozen return, then failed send | Candidate F1 was approved against H. Explicit Return for revision durably invalidates approval before mutating continuation. If feedback acceptance then fails, show returned / input not accepted and retain the draft. F1 remains historical; no silent re-freeze or restored approval. |
+| Changed target during comparison | F1 used H1; F2 uses H2. Show F2 versus H2 and F1 versus F2, both target identities and target-refresh caveat, including unchanged commented files. Neither agent resolution prose nor this delta proves correction or grants approval. |
+| Storage exhaustion or corrupt state | Failed capture/save/acceptance never becomes Saved/accepted/frozen. Preserve prior durable records and unsaved text where possible; block unsafe actions and stop affected execution when required results cannot be recorded. Reclaim only disposable data under the readiness policy; no automatic history deletion/reset. |
 
 ## 7. Attention and scope
 
