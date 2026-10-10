@@ -36,8 +36,22 @@ npm --prefix packages/pi-worker run lint
 npm --prefix packages/pi-worker run check
 npm --prefix packages/pi-worker test
 python3 scripts/check-architecture.py
+python3 scripts/check-contrast.py
 python3 scripts/compare-fixtures.py
 ```
+
+`scripts/check-contrast.py` (part of `scripts/verify`, no display needed) reads the desktop stylesheet
+`crates/lade-desktop/src/assets/style.css`: it fails on colour literals outside `@define-color` tokens and on viewer
+colours (set from Rust) that are not tokens, and prints the WCAG ratio of each specified ink/fill pair composited on the
+white surface (4.5:1 text, 3:1 control boundaries, focus outline and markers). It is a token computation, not a
+rendered-surface measurement. To sample a real native capture (optional, needs Pillow):
+
+```sh
+python3 scripts/sample-rendered-contrast.py capture.png X,Y,W,H [X,Y,W,H ...]
+```
+
+Each region should contain one text run or indicator on one fill; the script reports the dominant fill, the strongest
+ink covering at least 2 % of the region and their ratio. Neither script replaces an Orca or human visual review.
 
 Domain-only tests compile no GTK/SQLite. The fixture corpus is `contracts/v1/fixtures.json`; large stress inputs are generated from bounded recipes. Schemas, DTOs and corpus are reproducible using `scripts/generate-schema.py` (both `contracts/v1/schema.json` and `worker-schema.json`), `scripts/generate-dtos.py` and `scripts/generate-fixtures.py`; `--check` rejects drift. The JSON Schemas use documented custom formats (`uuid-v4`, `u64`, `sha256`, `chunk-hex`, `git-sha1`, `capability`, `timestamp`, `path-b64`, `page-limit`, `read-limit`; see [protocol-v1.md](protocol-v1.md#formats)); a generic JSON-Schema implementation must install those formats rather than assume they are annotations. Protocol validators intentionally support only this closed subset.
 
@@ -62,7 +76,10 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 
 `laded serve` runs in the foreground until killed (stderr diagnostics only) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` model through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
-`lade-desktop` is the live GTK client: it connects to `laded` over `$RUNTIME/control.sock` (u32-BE frames, `hello` + capability `auth`, single controlling lease), starts a detached sibling `laded serve` when none is running (unless `--no-spawn`), and offers the whole first-release loop — open a Workspace (`--open PATH` or Ctrl+O), create and start Objectives, Activity, Workbench inspection with Contextual Feedback, freeze, service-observed checks, approval, protected integration and cleanup. Every action's availability comes from the service's `available_actions`; the client never grants authority. `lade-desktop --preview` shows labelled fixture data without a service. The worker package is found through `LADE_WORKER_DIR`, else the bundle layout `bin/../lib/lade/pi-worker`, else (debug builds only) this repository's `packages/pi-worker`; `LADE_NODE` selects the node runtime (default: `node` on `PATH`). Installation, the bundle and the systemd user unit are described below and in `packaging/`.
+`lade-desktop` is the live GTK client: it connects to `laded` over `$RUNTIME/control.sock` (u32-BE frames, `hello` + capability `auth`, single controlling lease), starts a detached sibling `laded serve` when none is running (unless `--no-spawn`), and offers the whole first-release loop — open a Workspace (`--open PATH` or Ctrl+O), create and start Objectives, Activity, Workbench inspection with Contextual Feedback, freeze, service-observed checks, approval, protected integration and cleanup. Every action's availability comes from the service's `available_actions`; the client never grants authority. `lade-desktop --preview` shows labelled fixture data without a service. Keyboard shortcut remaps are a client
+presentation preference in `$XDG_CONFIG_HOME/lade/keybindings.json` (else `~/.config/lade/keybindings.json`): JSON
+`{"version": 1, "bindings": {"focus-search": "F8", …}}` with action ids from `DEFAULT_APP_KEYBINDINGS`; the whole
+file is validated with the remapping policy on load and ignored (defaults, plus a visible notice) when invalid. The worker package is found through `LADE_WORKER_DIR`, else the bundle layout `bin/../lib/lade/pi-worker`, else (debug builds only) this repository's `packages/pi-worker`; `LADE_NODE` selects the node runtime (default: `node` on `PATH`). Installation, the bundle and the systemd user unit are described below and in `packaging/`.
 
 ## Native capture
 

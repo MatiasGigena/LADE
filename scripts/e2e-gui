@@ -10,9 +10,10 @@
 # E2E_KEEP=1 keeps the temporary directory.
 #
 # Fragile by nature: there is no window manager, so dialogs open at the top-left corner, and
-# controls are clicked by their position in the 1440x900 layout. Keyboard shortcuts come from
-# DEFAULT_APP_KEYBINDINGS (Ctrl+N new Objective, Ctrl+1 Workbench, Ctrl+2 Activity,
-# Ctrl+Shift+M add feedback, Ctrl+Return send). Every step that changes state is confirmed
+# controls are clicked by their position in the 1440x900 layout. Keyboard shortcuts are the
+# defaults of DEFAULT_APP_KEYBINDINGS (Ctrl+N new Objective, Ctrl+1 Workbench, Ctrl+2 Activity,
+# Ctrl+Shift+M add feedback, Ctrl+Return send); XDG_CONFIG_HOME points into the temporary
+# directory so a user's keybindings.json cannot change them. Every step that changes state is confirmed
 # from Git or the filesystem, not from pixels; the final assertions check the integration.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -85,7 +86,7 @@ sleep 1
 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
 pids="$pids $!"
 wait_for 10 "control socket" test -S "$RUN/control.sock"
-GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" --open "$REPO" >"$T/desktop.log" 2>&1 &
+XDG_CONFIG_HOME=$T/config GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" --open "$REPO" >"$T/desktop.log" 2>&1 &
 pids="$pids $!"
 wait_for 20 "LADE window" xdotool search --onlyvisible --name LADE
 WID=$(xdotool search --onlyvisible --name LADE | head -1)
