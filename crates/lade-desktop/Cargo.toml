@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 lade-protocol.workspace = true
 gtk4.workspace = true
+sourceview5.workspace = true
 
 [lints]
 workspace = true
