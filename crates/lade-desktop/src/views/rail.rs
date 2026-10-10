@@ -23,6 +23,7 @@ pub struct Rail {
     lists: RefCell<Vec<(gtk::ListBox, Vec<ObjectiveId>)>>,
     pub new_button: gtk::Button,
     on_new: RefCell<Option<ButtonHandler>>,
+    on_open: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl Rail {
@@ -41,10 +42,7 @@ impl Rail {
         outer.append(&heading_row);
         let content = vbox(16);
         outer.append(&content);
-        let root = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&outer)
-            .build();
+        let root = widgets::region_scroll(&outer);
         root.add_css_class("rail-scroll");
         set_accessible_label(&root, "Objectives");
         let rail = Rc::new(Self {
@@ -54,6 +52,7 @@ impl Rail {
             lists: RefCell::new(Vec::new()),
             new_button,
             on_new: RefCell::new(None),
+            on_open: RefCell::new(None),
         });
         let this = Rc::downgrade(&rail);
         rail.new_button.connect_clicked(move |b| {
@@ -70,6 +69,11 @@ impl Rail {
 
     pub fn set_on_new(&self, handler: ButtonHandler) {
         *self.on_new.borrow_mut() = Some(handler);
+    }
+
+    /// Called when a row is activated (Enter, click): an explicit request to open the Objective.
+    pub fn set_on_open(&self, handler: Rc<dyn Fn()>) {
+        *self.on_open.borrow_mut() = Some(handler);
     }
 
     pub fn refresh(&self, changes: &[Change]) {
@@ -190,18 +194,16 @@ impl Rail {
             ));
         }
         if !board.archive.is_empty() {
-            let expander = gtk::Expander::new(Some(&format!(
-                "Completed and discarded ({})",
-                board.archive.len()
-            )));
-            expander.add_css_class("archive");
-            expander.set_expanded(state.ui.archive_expanded);
             let list = self.list(&board.archive, "Completed and discarded");
-            expander.set_child(Some(&list));
             let controller = self.controller.clone();
-            expander
-                .connect_expanded_notify(move |e| controller.set_archive_expanded(e.is_expanded()));
-            self.content.append(&expander);
+            let archive = widgets::disclosure(
+                &format!("Completed and discarded ({})", board.archive.len()),
+                state.ui.archive_expanded,
+                &list,
+                move |expanded| controller.set_archive_expanded(expanded),
+            );
+            archive.add_css_class("archive");
+            self.content.append(&archive);
             lists.push((
                 list,
                 board
@@ -213,6 +215,12 @@ impl Rail {
         }
         drop(state);
         for (list, ids) in &lists {
+            let open = self.on_open.borrow().clone();
+            list.connect_row_activated(move |_, _| {
+                if let Some(open) = &open {
+                    open();
+                }
+            });
             let controller = self.controller.clone();
             let ids = ids.clone();
             list.connect_row_selected(move |_, row| {

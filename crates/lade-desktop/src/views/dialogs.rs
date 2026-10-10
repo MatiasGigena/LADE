@@ -57,9 +57,10 @@ pub fn approve_with_override(opener: &impl IsA<gtk::Widget>, controller: &Rc<Con
         "Override reason (recorded with the approval)",
         &["meta"],
     ));
-    dialog.body.append(&widgets::bounded_text(&reason, 96, 200));
     let reason_input = LimitedInput::new(&reason, OVERRIDE_REASON_LIMIT, "the override reason");
-    dialog.body.append(&reason_input.error);
+    dialog
+        .body
+        .append(&reason_input.field(&widgets::bounded_text(&reason, 96, 200)));
     dialog.add_cancel();
     let ok = dialog.add_button("Approve candidate", &["primary"]);
     let window = dialog.window.clone();
@@ -206,9 +207,10 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
         let view = gtk::TextView::new();
         set_accessible_label(&view, name);
         dialog.body.append(&label(name, &["meta"]));
-        dialog.body.append(&widgets::bounded_text(&view, 56, 140));
         let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
-        dialog.body.append(&input.error);
+        dialog
+            .body
+            .append(&input.field(&widgets::bounded_text(&view, 56, 140)));
         input
     };
     let outcome = area("Expected outcome");
@@ -284,10 +286,11 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
         let view = gtk::TextView::new();
         set_accessible_label(&view, name);
         dialog.body.append(&label(name, &["meta"]));
-        dialog.body.append(&widgets::bounded_text(&view, 56, 160));
         let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
         input.set_text(text);
-        dialog.body.append(&input.error);
+        dialog
+            .body
+            .append(&input.field(&widgets::bounded_text(&view, 56, 160)));
         input
     };
     let outcome = area("Expected outcome", &current.outcome);

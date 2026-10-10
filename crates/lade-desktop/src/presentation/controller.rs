@@ -10,6 +10,7 @@ use super::drafts::{DraftEditor, Millis};
 use super::format;
 use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint};
 use super::keys::Keymap;
+use super::layout::{LayoutClass, Region};
 use super::model::{
     ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId,
     Intent as ObjectiveIntent, Load, ModelRef, ObjectiveDetail, ObjectiveId, Reference,
@@ -65,16 +66,17 @@ impl Controller {
 
     pub fn set_view(&self, view: MainView) {
         let objective = self.store.update(|s| {
-            let changed = s.ui.view != view;
-            s.ui.view = view;
-            (
-                s.ui.selected.clone(),
-                if changed {
-                    vec![Change::View]
-                } else {
-                    Vec::new()
-                },
-            )
+            let mut changes = Vec::new();
+            if s.ui.view != view {
+                s.ui.view = view;
+                changes.push(Change::View);
+            }
+            // Choosing Workbench or Activity shows the work area in the compact composition.
+            if s.ui.layout == LayoutClass::Compact && s.ui.compact_region != Region::Main {
+                s.ui.compact_region = Region::Main;
+                changes.push(Change::Layout);
+            }
+            (s.ui.selected.clone(), changes)
         });
         if view == MainView::Activity
             && let Some(id) = objective
@@ -106,6 +108,40 @@ impl Controller {
             }
             s.ui.keymap = keymap;
             ((), vec![Change::Keymap])
+        });
+    }
+
+    /// Records the allocated window width; switches between the wide and compact compositions.
+    pub fn set_layout_width(&self, width: i32) {
+        let class = LayoutClass::for_width(width);
+        self.store.update(|s| {
+            if s.ui.layout == class {
+                return ((), Vec::new());
+            }
+            s.ui.layout = class;
+            ((), vec![Change::Layout])
+        });
+    }
+
+    /// Shows `region` in the compact composition (explicit region switch or F6). The wide
+    /// composition shows every region, so this only remembers the choice there.
+    pub fn show_region(&self, region: Region) {
+        self.store.update(|s| {
+            if s.ui.compact_region == region {
+                return ((), Vec::new());
+            }
+            s.ui.compact_region = region;
+            ((), vec![Change::Layout])
+        });
+    }
+
+    pub fn set_compact_details(&self, expanded: bool) {
+        self.store.update(|s| {
+            if s.ui.compact_details == expanded {
+                return ((), Vec::new());
+            }
+            s.ui.compact_details = expanded;
+            ((), vec![Change::Layout])
         });
     }
 
@@ -442,7 +478,14 @@ impl Controller {
                 DraftEditor::new_local(draft_id.clone(), id.clone(), session.session_id, reference),
             );
             s.ui.inspector_tab = InspectorTab::Feedback;
-            ((), vec![Change::Drafts(id.clone()), Change::InspectorTab])
+            let mut changes = vec![Change::Drafts(id.clone()), Change::InspectorTab];
+            // Explicit opening moves to the requested task: the compact composition shows the
+            // feedback panel holding the new draft.
+            if s.ui.layout == LayoutClass::Compact && s.ui.compact_region != Region::Inspector {
+                s.ui.compact_region = Region::Inspector;
+                changes.push(Change::Layout);
+            }
+            ((), changes)
         });
         Ok(draft_id)
     }
@@ -975,6 +1018,7 @@ impl Controller {
         if let Some(id) = &result.objective_id {
             self.select_objective(id);
         }
+        self.show_region(Region::Main);
         if result.kind == SearchResultKind::Objective {
             return;
         }
@@ -1037,6 +1081,52 @@ mod tests {
         let store = Store::new(state);
         let sink = Rc::new(RecordingSink::default());
         (Controller::new(store, sink.clone()), sink)
+    }
+
+    #[test]
+    fn compact_layout_follows_width_and_explicit_tasks() {
+        let (controller, _) = setup();
+        let changes = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = changes.clone();
+        controller
+            .store
+            .subscribe(move |c| seen.borrow_mut().extend_from_slice(c));
+        controller.set_layout_width(1440);
+        assert!(changes.borrow().is_empty(), "already wide");
+        controller.set_layout_width(800);
+        assert_eq!(controller.store.state().ui.layout, LayoutClass::Compact);
+        assert_eq!(changes.borrow().as_slice(), [Change::Layout]);
+        controller.show_region(Region::Objectives);
+        controller.set_view(MainView::Activity);
+        assert_eq!(controller.store.state().ui.compact_region, Region::Main);
+        // Add feedback opens the feedback panel holding the new draft.
+        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.set_view(MainView::Workbench);
+        let reference = controller
+            .store
+            .state()
+            .drafts
+            .values()
+            .flatten()
+            .next()
+            .map(|d| d.reference.clone())
+            .expect("fixture draft");
+        controller.store.update(|s| {
+            s.objective_ui_mut(&ObjectiveId::new(preview::MAIN_OBJECTIVE))
+                .selection = Some(Ok(reference));
+            ((), Vec::new())
+        });
+        controller
+            .add_feedback(DraftId::new("compact-draft"))
+            .expect("draft created");
+        let state = controller.store.state();
+        assert_eq!(state.ui.compact_region, Region::Inspector);
+        assert_eq!(state.ui.inspector_tab, InspectorTab::Feedback);
+        drop(state);
+        controller.set_compact_details(true);
+        assert!(controller.store.state().ui.compact_details);
+        controller.set_layout_width(1280);
+        assert_eq!(controller.store.state().ui.layout, LayoutClass::Wide);
     }
 
     #[test]

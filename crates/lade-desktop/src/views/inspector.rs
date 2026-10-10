@@ -61,12 +61,9 @@ fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
     content.add_css_class("inspector-page");
     // No horizontal scrolling: content is width-constrained to the column (labels wrap, ids
     // ellipsize with tooltips, drop-downs ellipsize, buttons wrap).
-    let scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .propagate_natural_width(false)
-        .vexpand(true)
-        .child(&content)
-        .build();
+    let scroll = widgets::region_scroll(&content);
+    scroll.set_propagate_natural_width(false);
+    scroll.set_vexpand(true);
     set_accessible_label(&scroll, name);
     (scroll, content)
 }
@@ -730,17 +727,19 @@ impl Inspector {
                 &["meta"],
             ));
             if !v.output_tail.is_empty() {
-                let expander = gtk::Expander::new(Some(if v.truncated {
-                    "Output (last lines; earlier output truncated)"
-                } else {
-                    "Output"
-                }));
                 let output = label(&v.output_tail, &["mono", "output"]);
                 output.set_selectable(true);
                 output.set_wrap_mode(gtk::pango::WrapMode::Char);
-                expander.set_child(Some(&output));
-                expander.set_expanded(v.state == VerificationState::Failed);
-                row.append(&expander);
+                row.append(&widgets::disclosure(
+                    if v.truncated {
+                        "Output (last lines; earlier output truncated)"
+                    } else {
+                        "Output"
+                    },
+                    v.state == VerificationState::Failed,
+                    &output,
+                    |_| {},
+                ));
             }
             set_accessible_label(
                 &row,
@@ -886,9 +885,8 @@ impl Inspector {
         root.append(&stale);
         let view = gtk::TextView::new();
         set_focus_key(&view, &format!("draft:{}", draft_id.as_str()));
-        root.append(&widgets::bounded_text(&view, 88, 200));
         let input = widgets::LimitedInput::new(&view, TEXT_LIMIT, "this feedback draft");
-        root.append(&input.error);
+        root.append(&input.field(&widgets::bounded_text(&view, 88, 200)));
         let status_row = vbox(4);
         let status = label("", &["meta", "save-state"]);
         status.set_hexpand(true);
@@ -1140,11 +1138,37 @@ impl Inspector {
         self.inputs_box.append(&s);
     }
 
-    /// Focuses a draft's text view (after Add feedback), switching to the Feedback tab.
+    /// Focuses a draft's text view (after Add feedback), switching to the Feedback tab, and
+    /// reveals the whole draft (field, error and save state) once it has been allocated. The
+    /// page or compact region may have just been shown, so revealing on idle could use stale
+    /// bounds; a frame callback waits for the first allocated frame instead.
     pub fn focus_draft(&self, draft_id: &DraftId) {
         self.root.set_current_page(Some(2));
-        if let Some(w) = self.drafts.borrow().get(draft_id) {
-            w.view.grab_focus();
-        }
+        let Some((view, draft)) = self
+            .drafts
+            .borrow()
+            .get(draft_id)
+            .map(|w| (w.view.clone(), w.root.clone()))
+        else {
+            return;
+        };
+        view.grab_focus();
+        let viewport = self
+            .root
+            .nth_page(Some(2))
+            .and_downcast::<gtk::ScrolledWindow>()
+            .and_then(|s| s.child())
+            .and_downcast::<gtk::Viewport>();
+        let Some(viewport) = viewport else { return };
+        let allocated = Cell::new(false);
+        view.add_tick_callback(move |view, _| {
+            if !allocated.replace(true) {
+                return gtk::glib::ControlFlow::Continue;
+            }
+            if view.has_focus() {
+                viewport.scroll_to(&draft, None);
+            }
+            gtk::glib::ControlFlow::Break
+        });
     }
 }

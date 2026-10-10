@@ -143,6 +143,15 @@ impl LimitedInput {
         input
     }
 
+    /// The field and its local error area as one unit (no extra spacing while there is no error).
+    pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
+        let unit = vbox(0);
+        unit.append(scroll);
+        self.error.add_css_class("limited-error");
+        unit.append(&self.error);
+        unit
+    }
+
     /// Called with the complete text after each accepted user edit.
     pub fn connect_commit(&self, f: impl Fn(&str) + 'static) {
         *self.on_commit.borrow_mut() = Some(Box::new(f));
@@ -230,10 +239,23 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .min_content_height(min)
         .max_content_height(max)
         .propagate_natural_height(true)
+        .overlay_scrolling(false)
         .child(view)
         .build();
     scroll.add_css_class("text-input");
     scroll
+}
+
+/// A region viewport: vertical scrolling when the content is taller than the window, never a
+/// horizontal scrollbar, and non-overlay scrollbars (GTK's transient overlay sliders produced
+/// unallocated-snapshot warnings in the IMP-002 checkpoint and can hide content under them).
+pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
+    gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .overlay_scrolling(false)
+        .child(child)
+        .build()
 }
 
 fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
@@ -282,6 +304,50 @@ pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
     update(&dropdown);
     dropdown.connect_selected_notify(update);
     dropdown
+}
+
+/// A disclosure: a quiet toggle button whose label wraps, showing or hiding `child` below it. The
+/// child stays rooted while hidden — a collapsed `GtkExpander` caused a `gtk_root_get_focus`
+/// critical during compact Tab traversal in the IMP-002 checkpoint, so it is not used.
+pub fn disclosure(
+    title: &str,
+    expanded: bool,
+    child: &impl IsA<gtk::Widget>,
+    on_toggled: impl Fn(bool) + 'static,
+) -> gtk::Box {
+    let root = vbox(4);
+    root.add_css_class("disclosure");
+    let toggle = gtk::ToggleButton::new();
+    toggle.add_css_class("quiet");
+    toggle.add_css_class("disclosure-toggle");
+    toggle.set_halign(gtk::Align::Start);
+    let text = gtk::Label::new(None);
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_max_width_chars(60);
+    text.set_xalign(0.0);
+    toggle.set_child(Some(&text));
+    set_accessible_label(&toggle, title);
+    let child = child.as_ref().clone();
+    let render = {
+        let title = title.to_owned();
+        let child = child.clone();
+        move |toggle: &gtk::ToggleButton| {
+            let open = toggle.is_active();
+            text.set_text(&format!("{} {title}", if open { "▾" } else { "▸" }));
+            child.set_visible(open);
+            toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+        }
+    };
+    toggle.set_active(expanded);
+    render(&toggle);
+    toggle.connect_toggled(move |t| {
+        render(t);
+        on_toggled(t.is_active());
+    });
+    root.append(&toggle);
+    root.append(&child);
+    root
 }
 
 /// A label for a button that wraps instead of widening its column.
@@ -452,8 +518,8 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(12);
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
-    key_label.set_width_chars(11);
-    key_label.set_max_width_chars(11);
+    key_label.set_width_chars(10);
+    key_label.set_max_width_chars(10);
     row.append(&key_label);
     value.set_hexpand(true);
     row.append(value);

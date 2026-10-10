@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use super::drafts::DraftEditor;
 use super::keys::Keymap;
+use super::layout::{LayoutClass, Region};
 use super::model::{
     ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState, DeliveryMode,
     Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, ObjectiveDetail,
@@ -130,6 +131,7 @@ pub enum Change {
     View,
     InspectorTab,
     Keymap,
+    Layout,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -188,6 +190,11 @@ pub struct UiState {
     pub archive_expanded: bool,
     /// Current keyboard shortcuts (a client preference; see `keys`).
     pub keymap: Keymap,
+    /// Responsive composition (see `layout`): class from the allocated width, the region shown in
+    /// the compact composition and whether its Objective details are expanded.
+    pub layout: LayoutClass,
+    pub compact_region: Region,
+    pub compact_details: bool,
     pub per_objective: HashMap<ObjectiveId, ObjectiveUi>,
 }
 

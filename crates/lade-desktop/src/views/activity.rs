@@ -71,11 +71,9 @@ impl Activity {
         list.add_css_class("transcript");
         list.set_selection_mode(gtk::SelectionMode::None);
         set_accessible_label(&list, "Agent Session transcript");
-        let scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&list)
-            .build();
+        let scroll = widgets::region_scroll(&list);
+        scroll.set_vexpand(true);
+        scroll.set_min_content_height(160);
         root.append(&scroll);
 
         let composer_box = vbox(8);
@@ -83,10 +81,9 @@ impl Activity {
         let composer = gtk::TextView::new();
         set_accessible_label(&composer, "Message to the agent");
         set_focus_key(&composer, "activity:composer");
-        composer_box.append(&widgets::bounded_text(&composer, 64, 160));
         let composer_input =
             widgets::LimitedInput::new(&composer, TEXT_LIMIT, "this message to the agent");
-        composer_box.append(&composer_input.error);
+        composer_box.append(&composer_input.field(&widgets::bounded_text(&composer, 64, 160)));
         let row = hbox(12);
         let mode = gtk::DropDown::from_strings(&["Prompt", "Steer", "Follow-up"]);
         set_accessible_label(&mode, "Delivery mode");

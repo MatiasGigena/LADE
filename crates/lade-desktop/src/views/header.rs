@@ -63,6 +63,9 @@ const SCOPES: [SearchScope; 3] = [
 
 pub struct Header {
     pub root: gtk::Box,
+    /// Bounds the header's minimum width (no visible scrollbar) so the window can always narrow
+    /// into the compact composition; the compact header then fits without clipping.
+    pub viewport: gtk::ScrolledWindow,
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
     activity_tab: gtk::ToggleButton,
@@ -76,8 +79,6 @@ pub struct Header {
     shown_results: RefCell<Vec<SearchResult>>,
     nav: gtk::Box,
     profile_name: gtk::Label,
-    pub details_toggle: gtk::ToggleButton,
-    pub rail_toggle: gtk::ToggleButton,
     pub shortcuts_button: gtk::Button,
     updating: Cell<bool>,
 }
@@ -148,17 +149,6 @@ impl Header {
         status.set_valign(gtk::Align::Center);
         root.append(&status);
 
-        let rail_toggle = gtk::ToggleButton::with_label("Objectives");
-        rail_toggle.set_tooltip_text(Some("Show the Objectives list"));
-        rail_toggle.set_visible(false);
-        rail_toggle.set_valign(gtk::Align::Center);
-        root.append(&rail_toggle);
-        let details_toggle = gtk::ToggleButton::with_label("Details");
-        details_toggle.set_tooltip_text(Some("Show the Overview, Evidence and Feedback panel"));
-        details_toggle.set_visible(false);
-        details_toggle.set_valign(gtk::Align::Center);
-        root.append(&details_toggle);
-
         let search = hbox(0);
         search.add_css_class("search");
         search.set_valign(gtk::Align::Center);
@@ -222,8 +212,15 @@ impl Header {
         profile.append(&name);
         root.append(&profile);
 
+        let viewport = gtk::ScrolledWindow::builder()
+            .child(&root)
+            .hscrollbar_policy(gtk::PolicyType::External)
+            .vscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .build();
         let header = Rc::new(Self {
             root,
+            viewport,
             controller: controller.clone(),
             workbench_tab,
             activity_tab,
@@ -237,8 +234,6 @@ impl Header {
             shown_results: RefCell::new(Vec::new()),
             nav,
             profile_name: name,
-            details_toggle,
-            rail_toggle,
             shortcuts_button,
             updating: Cell::new(false),
         });
@@ -298,13 +293,13 @@ impl Header {
         }
     }
 
-    /// Tightens the header for compact windows; nothing is removed from the header except the
-    /// profile name below ~800 px (the avatar keeps its accessible name).
-    pub fn set_compact(&self, level: u8) {
-        self.root.set_spacing(if level == 0 { 16 } else { 8 });
-        self.nav.set_margin_start(if level == 0 { 64 } else { 8 });
-        self.nav.set_spacing(if level == 0 { 24 } else { 16 });
-        self.profile_name.set_visible(level < 2);
+    /// Tightens the header for the compact composition. Only the profile name is hidden; the
+    /// avatar keeps its accessible name.
+    pub fn set_compact(&self, compact: bool) {
+        self.root.set_spacing(if compact { 8 } else { 16 });
+        self.nav.set_margin_start(if compact { 8 } else { 64 });
+        self.nav.set_spacing(if compact { 16 } else { 24 });
+        self.profile_name.set_visible(!compact);
     }
 
     /// Shows the current bindings where the header offers the action.

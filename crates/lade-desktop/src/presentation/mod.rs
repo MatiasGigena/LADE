@@ -5,6 +5,7 @@ pub mod drafts;
 pub mod format;
 pub mod intents;
 pub mod keys;
+pub mod layout;
 pub mod model;
 pub mod models;
 pub mod preview;

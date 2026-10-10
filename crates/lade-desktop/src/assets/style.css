@@ -183,8 +183,10 @@ popover.menu > contents { padding: 4px; }
 popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
 popover row:selected { background-color: @fill_selected; color: @ink_primary; }
 
-expander title > arrow { color: @ink_metadata; }
-expander title > label { font-size: 13px; color: @ink_secondary; font-weight: 500; }
+button.disclosure-toggle { padding: 2px 6px; margin-left: -6px; }
+button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 500; }
+button.disclosure-toggle:checked { background-color: transparent; }
+button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
 
 scrollbar { background-color: transparent; border: none; }
 scrollbar slider { background-color: rgba(0, 0, 0, 0.28); border-radius: 6px; min-width: 6px; min-height: 6px; border: none; }
@@ -266,6 +268,16 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 }
 .notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
+
+/* Compact composition: explicit region switches below the header. */
+.region-bar {
+  padding: 8px 12px;
+  border-bottom: 1px solid @border_separator;
+  background-color: @surface;
+}
+.region-bar .segmented button { min-height: 28px; padding: 2px 12px; }
+.compact .centre-page, .compact .activity { padding: 16px; }
+.compact .inspector-page { padding: 16px; }
 
 /* Objectives rail -------------------------------------------------------------------------- */
 
@@ -369,12 +381,12 @@ notebook.inspector, notebook.inspector > header {
   box-shadow: none;
 }
 notebook.inspector > header {
-  padding: 0 20px;
+  padding: 0 16px;
   border-bottom: 1px solid @border_separator;
 }
 notebook.inspector > header > tabs > tab {
   padding: 14px 2px 12px 2px;
-  margin: 0 20px 0 0;
+  margin: 0 16px 0 0;
   min-height: 0;
   border: none;
   background-color: transparent;
@@ -390,7 +402,7 @@ notebook.inspector > header > tabs > tab:checked {
 }
 notebook.inspector > stack { background-color: @surface; }
 .inspector-page { padding: 20px; }
-.field-key { min-width: 96px; }
+.field-key { min-width: 88px; }
 .evidence-row { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .output {
   background-color: #F7F7F7;
@@ -449,3 +461,4 @@ notebook.inspector > stack { background-color: @surface; }
 window.lade-dialog { background-color: @surface; border-radius: 8px; }
 .dialog-content { padding: 24px; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
+.limited-error > .error-box { margin-top: 6px; }
