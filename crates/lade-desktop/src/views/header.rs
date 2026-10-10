@@ -1,0 +1,398 @@
+//! Header band: mark + LADE, Workbench/Activity navigation, connection status, global search and
+//! the profile (circular placeholder avatar + name).
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use gtk::prelude::*;
+use gtk4 as gtk;
+
+use super::widgets::{self, hbox, label, set_accessible_label, vbox};
+use crate::presentation::controller::Controller;
+use crate::presentation::format;
+use crate::presentation::model::{ConnectionState, Load, SearchResult, SearchScope};
+use crate::presentation::preview::PREVIEW_LABEL;
+use crate::presentation::store::{Change, MainView};
+
+/// Short header text and the full statement (tooltip, accessible name and preview band).
+pub fn connection_text(connection: &ConnectionState, preview: bool) -> (String, String) {
+    let (short, full) = match connection {
+        ConnectionState::Connecting => (
+            "… Connecting".to_owned(),
+            "Connecting to the service".to_owned(),
+        ),
+        ConnectionState::Connected => (
+            "● Connected".to_owned(),
+            "Connected to the service".to_owned(),
+        ),
+        ConnectionState::Reconnecting { attempt } => (
+            "↻ Reconnecting".to_owned(),
+            format!("Reconnecting to the service (attempt {attempt})"),
+        ),
+        ConnectionState::Disconnected { reason } => (
+            "○ Disconnected".to_owned(),
+            format!("Disconnected — {reason}"),
+        ),
+        ConnectionState::Unavailable { reason } => (
+            "! Unavailable".to_owned(),
+            format!("Service unavailable — {reason}"),
+        ),
+        ConnectionState::LeaseHeld => (
+            "! Not controlling".to_owned(),
+            "Another LADE window controls this service".to_owned(),
+        ),
+    };
+    if !preview {
+        return (short, full);
+    }
+    match connection {
+        ConnectionState::Connected => ("◇ Preview data".to_owned(), PREVIEW_LABEL.to_owned()),
+        _ => (
+            "◇ Preview data".to_owned(),
+            format!("Preview data — {}", full.to_lowercase()),
+        ),
+    }
+}
+
+const SCOPES: [SearchScope; 3] = [
+    SearchScope::Objectives,
+    SearchScope::Files,
+    SearchScope::Content,
+];
+
+pub struct Header {
+    pub root: gtk::Box,
+    controller: Rc<Controller>,
+    workbench_tab: gtk::ToggleButton,
+    activity_tab: gtk::ToggleButton,
+    status: gtk::Label,
+    pub search_entry: gtk::SearchEntry,
+    scope: gtk::DropDown,
+    popover: gtk::Popover,
+    popover_heading: gtk::Label,
+    results: gtk::ListBox,
+    popover_status: gtk::Label,
+    shown_results: RefCell<Vec<SearchResult>>,
+    nav: gtk::Box,
+    profile_name: gtk::Label,
+    pub details_toggle: gtk::ToggleButton,
+    pub rail_toggle: gtk::ToggleButton,
+    updating: Cell<bool>,
+}
+
+fn draw_mark(area: &gtk::DrawingArea) {
+    // The existing LADE triangle mark as a simple symbolic outline (outer and inner triangle).
+    area.set_draw_func(|_, cr, width, height| {
+        let (w, h) = (f64::from(width), f64::from(height));
+        cr.set_source_rgb(0.0, 0.0, 0.0);
+        cr.set_line_join(gtk::cairo::LineJoin::Miter);
+        cr.set_line_width(2.4);
+        cr.move_to(w / 2.0, 2.0);
+        cr.line_to(w - 1.5, h - 1.5);
+        cr.line_to(1.5, h - 1.5);
+        cr.close_path();
+        let _ = cr.stroke();
+        cr.set_line_width(1.8);
+        cr.move_to(w / 2.0, h * 0.45);
+        cr.line_to(w * 0.70, h - 5.5);
+        cr.line_to(w * 0.30, h - 5.5);
+        cr.close_path();
+        let _ = cr.stroke();
+    });
+}
+
+impl Header {
+    pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
+        let root = hbox(16);
+        root.add_css_class("lade-header");
+        set_accessible_label(&root, "Header");
+
+        let brand = hbox(10);
+        brand.add_css_class("brand");
+        let mark = gtk::DrawingArea::new();
+        mark.set_content_width(26);
+        mark.set_content_height(23);
+        mark.set_valign(gtk::Align::Center);
+        draw_mark(&mark);
+        set_accessible_label(&mark, "LADE mark");
+        brand.append(&mark);
+        let wordmark = gtk::Label::new(Some("LADE"));
+        wordmark.add_css_class("wordmark");
+        brand.append(&wordmark);
+        root.append(&brand);
+
+        let nav = hbox(24);
+        nav.add_css_class("nav");
+        nav.set_margin_start(64);
+        let workbench_tab = gtk::ToggleButton::with_label("Workbench");
+        let activity_tab = gtk::ToggleButton::with_label("Activity");
+        activity_tab.set_group(Some(&workbench_tab));
+        for tab in [&workbench_tab, &activity_tab] {
+            tab.add_css_class("nav-tab");
+            nav.append(tab);
+        }
+        workbench_tab.set_active(true);
+        root.append(&nav);
+
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        root.append(&spacer);
+
+        let status = label("", &["connection", "meta"]);
+        status.set_wrap(false);
+        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // Keeps "Preview data" / "Disconnected" readable even when the header is tight.
+        status.set_width_chars(14);
+        status.set_valign(gtk::Align::Center);
+        root.append(&status);
+
+        let rail_toggle = gtk::ToggleButton::with_label("Objectives");
+        rail_toggle.set_tooltip_text(Some("Show the Objectives list"));
+        rail_toggle.set_visible(false);
+        rail_toggle.set_valign(gtk::Align::Center);
+        root.append(&rail_toggle);
+        let details_toggle = gtk::ToggleButton::with_label("Details");
+        details_toggle.set_tooltip_text(Some("Show the Overview, Evidence and Feedback panel"));
+        details_toggle.set_visible(false);
+        details_toggle.set_valign(gtk::Align::Center);
+        root.append(&details_toggle);
+
+        let search = hbox(0);
+        search.add_css_class("search");
+        search.set_valign(gtk::Align::Center);
+        let scope = gtk::DropDown::from_strings(&["Objectives", "Files", "Content"]);
+        scope.add_css_class("search-scope");
+        scope.set_tooltip_text(Some("Search scope"));
+        set_accessible_label(&scope, "Search scope");
+        let search_entry = gtk::SearchEntry::builder()
+            .placeholder_text("Search objectives, files, or content…")
+            .width_chars(12)
+            .max_width_chars(34)
+            .build();
+        search_entry.set_hexpand(false);
+        set_accessible_label(&search_entry, "Global search");
+        search.append(&search_entry);
+        search.append(&scope);
+        root.append(&search);
+
+        let popover = gtk::Popover::new();
+        popover.add_css_class("search-results");
+        popover.set_parent(&search);
+        popover.set_position(gtk::PositionType::Bottom);
+        popover.set_has_arrow(false);
+        let popover_box = vbox(8);
+        popover_box.set_size_request(380, -1);
+        let popover_heading = widgets::heading("", "popover-heading");
+        popover_box.append(&popover_heading);
+        let popover_status = label("", &["meta"]);
+        popover_box.append(&popover_status);
+        let results = gtk::ListBox::new();
+        results.add_css_class("plain-list");
+        results.set_selection_mode(gtk::SelectionMode::None);
+        set_accessible_label(&results, "Search results");
+        let results_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(420)
+            .child(&results)
+            .build();
+        popover_box.append(&results_scroll);
+        popover.set_child(Some(&popover_box));
+
+        let profile = hbox(10);
+        profile.add_css_class("profile");
+        profile.set_valign(gtk::Align::Center);
+        let avatar = gtk::Label::new(Some("MG"));
+        avatar.add_css_class("avatar");
+        avatar.set_valign(gtk::Align::Center);
+        avatar.set_tooltip_text(Some("Placeholder avatar for Matias Gigena"));
+        set_accessible_label(&avatar, "Placeholder avatar for Matias Gigena");
+        profile.append(&avatar);
+        let name = gtk::Label::new(Some("Matias Gigena"));
+        name.add_css_class("profile-name");
+        name.set_valign(gtk::Align::Center);
+        profile.append(&name);
+        root.append(&profile);
+
+        let header = Rc::new(Self {
+            root,
+            controller: controller.clone(),
+            workbench_tab,
+            activity_tab,
+            status,
+            search_entry,
+            scope,
+            popover,
+            popover_heading,
+            results,
+            popover_status,
+            shown_results: RefCell::new(Vec::new()),
+            nav,
+            profile_name: name,
+            details_toggle,
+            rail_toggle,
+            updating: Cell::new(false),
+        });
+        header.connect();
+        header.refresh_connection();
+        header
+    }
+
+    fn connect(self: &Rc<Self>) {
+        for (tab, view) in [
+            (&self.workbench_tab, MainView::Workbench),
+            (&self.activity_tab, MainView::Activity),
+        ] {
+            let this = Rc::downgrade(self);
+            tab.connect_toggled(move |tab| {
+                if let Some(this) = this.upgrade()
+                    && tab.is_active()
+                    && !this.updating.get()
+                {
+                    this.controller.set_view(view);
+                }
+            });
+        }
+        let this = Rc::downgrade(self);
+        self.search_entry.connect_activate(move |entry| {
+            if let Some(this) = this.upgrade() {
+                let scope = SCOPES[this.scope.selected() as usize % SCOPES.len()];
+                this.controller.search(scope, &entry.text());
+                this.popover.popup();
+            }
+        });
+        let entry = self.search_entry.clone();
+        self.popover.connect_closed(move |_| {
+            entry.grab_focus();
+        });
+        let this = Rc::downgrade(self);
+        self.results.connect_row_activated(move |_, row| {
+            if let Some(this) = this.upgrade() {
+                let index = usize::try_from(row.index()).unwrap_or(usize::MAX);
+                let result = this.shown_results.borrow().get(index).cloned();
+                if let Some(result) = result {
+                    this.popover.popdown();
+                    this.controller.open_search_result(&result);
+                }
+            }
+        });
+    }
+
+    pub fn refresh(&self, changes: &[Change]) {
+        for change in changes {
+            match change {
+                Change::Connection => self.refresh_connection(),
+                Change::View => self.refresh_view(),
+                Change::Search => self.refresh_search(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Tightens the header for compact windows; nothing is removed from the header except the
+    /// profile name below ~800 px (the avatar keeps its accessible name).
+    pub fn set_compact(&self, level: u8) {
+        self.root.set_spacing(if level == 0 { 16 } else { 8 });
+        self.nav.set_margin_start(if level == 0 { 64 } else { 8 });
+        self.nav.set_spacing(if level == 0 { 24 } else { 16 });
+        self.profile_name.set_visible(level < 2);
+    }
+
+    pub fn focus_search(&self) {
+        self.search_entry.grab_focus();
+    }
+
+    fn refresh_view(&self) {
+        let view = self.controller.store.state().ui.view;
+        self.updating.set(true);
+        match view {
+            MainView::Workbench => self.workbench_tab.set_active(true),
+            MainView::Activity => self.activity_tab.set_active(true),
+        }
+        self.updating.set(false);
+    }
+
+    fn refresh_connection(&self) {
+        let state = self.controller.store.state();
+        let (short, full) = connection_text(&state.connection, state.is_preview());
+        self.status.set_text(&short);
+        self.status.set_tooltip_text(Some(&full));
+        set_accessible_label(&self.status, &format!("Connection status: {full}"));
+    }
+
+    fn refresh_search(&self) {
+        let state = self.controller.store.state();
+        while let Some(row) = self.results.row_at_index(0) {
+            self.results.remove(&row);
+        }
+        let mut shown = Vec::new();
+        match &state.search {
+            Load::NotLoaded => {
+                self.popover_heading.set_text("Search");
+                self.popover_status.set_text("");
+            }
+            Load::Loading => {
+                self.popover_heading.set_text("Searching…");
+                self.popover_status.set_text("");
+            }
+            Load::Failed(message) => {
+                self.popover_heading.set_text("Search failed");
+                self.popover_status.set_text(message);
+            }
+            Load::Loaded(results) => {
+                self.popover_heading.set_text(&results.scope_label);
+                let count = results.results.len();
+                self.popover_status
+                    .set_text(&match (count, results.truncated) {
+                        (0, _) => format!("No results for “{}”", results.query),
+                        (n, true) => format!(
+                            "First {n} results for “{}” — refine to see more",
+                            results.query
+                        ),
+                        (1, false) => format!("1 result for “{}”", results.query),
+                        (n, false) => format!("{n} results for “{}”", results.query),
+                    });
+                for result in &results.results {
+                    let row = gtk::ListBoxRow::new();
+                    let content = vbox(2);
+                    content.add_css_class("result-row");
+                    let primary = match (&result.path, result.line) {
+                        (Some(path), Some(line)) => format!("{}:{line}", path.display),
+                        (Some(path), None) => path.display.clone(),
+                        _ => result.preview.clone(),
+                    };
+                    content.append(&widgets::line_label(
+                        &primary,
+                        &[],
+                        gtk::pango::EllipsizeMode::Middle,
+                    ));
+                    if result.path.is_some()
+                        && result.kind != crate::presentation::model::SearchResultKind::File
+                    {
+                        content.append(&widgets::line_label(
+                            &result.preview,
+                            &["meta", "mono"],
+                            gtk::pango::EllipsizeMode::End,
+                        ));
+                    }
+                    row.set_child(Some(&content));
+                    set_accessible_label(
+                        &row,
+                        &format!("{primary}, {}", format::scope_label(results.scope)),
+                    );
+                    self.results.append(&row);
+                    shown.push(result.clone());
+                }
+                let focus_in_popover = self
+                    .popover
+                    .root()
+                    .and_then(|r| r.focus())
+                    .is_some_and(|f| f.is_ancestor(&self.popover));
+                if focus_in_popover && let Some(first) = self.results.row_at_index(0) {
+                    first.grab_focus();
+                }
+            }
+        }
+        *self.shown_results.borrow_mut() = shown;
+    }
+}
