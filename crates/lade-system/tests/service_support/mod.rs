@@ -1,0 +1,585 @@
+//! Shared helpers for service integration tests: a real socket client, disposable repositories,
+//! an unsandboxed real-worker launcher (tests only) and a pure fake launcher.
+#![allow(dead_code, unused_imports)]
+
+#[path = "../adapters_support/mod.rs"]
+pub mod adapters_support;
+
+use std::collections::VecDeque;
+use std::fs;
+use std::io::Write;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use lade_protocol::client::{
+    ClientBody, ClientEnvelope, Event, EventFrame, Rejection, Reply, ReplyData, ReplyResult,
+    Request, RequestFrame,
+};
+use lade_protocol::types::{Capability, Id};
+use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
+use lade_protocol::{FrameReader, FrameWriter, Framing};
+use lade_system::service::{self, RunningService, ServiceConfig};
+use lade_system::supervision::{
+    LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,
+};
+
+pub use adapters_support::{TempDir, commit_all, git, init_repo};
+
+pub const TIMEOUT: Duration = Duration::from_secs(30);
+
+pub fn new_id() -> Id {
+    let mut bytes = [0u8; 16];
+    lade_system::service::convert::random_fill(&mut bytes).unwrap();
+    Id::from_random_bytes(bytes)
+}
+
+/// A disposable service environment: state, runtime dir and a repository with `main`.
+pub struct Env {
+    pub root: TempDir,
+    pub repo: PathBuf,
+}
+
+impl Env {
+    pub fn new(tag: &str) -> Self {
+        let root = TempDir::new(tag);
+        let repo = init_repo(root.path(), "sha1");
+        Self { root, repo }
+    }
+
+    pub fn config(&self) -> ServiceConfig {
+        ServiceConfig {
+            state_dir: self.root.path().join("state"),
+            runtime_dir: self.root.path().join("run"),
+        }
+    }
+
+    pub fn start(&self, launcher: Arc<dyn WorkerLauncher>) -> RunningService {
+        service::start(self.config(), launcher).expect("service starts")
+    }
+
+    pub fn capability(&self) -> String {
+        fs::read_to_string(self.root.path().join("run/control.cap")).expect("capability")
+    }
+
+    pub fn socket(&self) -> PathBuf {
+        self.root.path().join("run/control.sock")
+    }
+
+    pub fn connect(&self) -> Client {
+        Client::connect(&self.socket(), &self.capability()).expect("admitted")
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Client.
+
+pub struct Client {
+    writer: FrameWriter<UnixStream>,
+    frames: Receiver<ClientBody>,
+    pub events: VecDeque<EventFrame>,
+    pub service_epoch: Id,
+}
+
+/// Performs `hello` then `auth`; returns the frames receiver after the handshake writes.
+pub fn raw_connect(socket: &Path) -> (FrameWriter<UnixStream>, Receiver<ClientBody>) {
+    let stream = UnixStream::connect(socket).expect("connect");
+    let read = stream.try_clone().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = FrameReader::new(read, Framing::Client);
+        while let Ok(Some(envelope)) = reader.read::<ClientEnvelope>() {
+            if tx.send(envelope.body).is_err() {
+                break;
+            }
+        }
+    });
+    (FrameWriter::new(stream, Framing::Client), rx)
+}
+
+impl Client {
+    pub fn connect(socket: &Path, capability: &str) -> Result<Self, String> {
+        let (mut writer, frames) = raw_connect(socket);
+        writer
+            .write(&ClientEnvelope::new(ClientBody::Hello))
+            .map_err(|e| e.to_string())?;
+        match frames.recv_timeout(TIMEOUT) {
+            Ok(ClientBody::Hello) => {}
+            other => return Err(format!("expected hello: {other:?}")),
+        }
+        writer
+            .write(&ClientEnvelope::new(ClientBody::Auth {
+                capability: Capability::parse(capability.trim()).map_err(|e| e.to_string())?,
+            }))
+            .map_err(|e| e.to_string())?;
+        match frames.recv_timeout(TIMEOUT) {
+            Ok(ClientBody::Welcome { service_epoch, .. }) => Ok(Self {
+                writer,
+                frames,
+                events: VecDeque::new(),
+                service_epoch,
+            }),
+            Ok(ClientBody::Event(event)) => Err(format!("refused: {:?}", event.event)),
+            other => Err(format!("expected welcome: {other:?}")),
+        }
+    }
+
+    fn pump(&mut self, deadline: Instant) -> Option<ClientBody> {
+        let left = deadline.saturating_duration_since(Instant::now());
+        self.frames.recv_timeout(left).ok()
+    }
+
+    pub fn send(&mut self, request: Request, mutating: bool) -> Id {
+        let request_id = new_id();
+        let operation = mutating.then(new_id);
+        self.send_frame(RequestFrame::new(request_id.clone(), operation, request).unwrap());
+        request_id
+    }
+
+    pub fn write_raw(&mut self, bytes: &[u8]) {
+        let mut stream: &UnixStream = self.writer.get_ref();
+        stream.write_all(bytes).expect("write raw");
+    }
+
+    pub fn send_frame(&mut self, frame: RequestFrame) {
+        self.writer
+            .write(&ClientEnvelope::new(ClientBody::Request(frame)))
+            .expect("write request");
+    }
+
+    pub fn wait_reply(&mut self, request_id: &Id) -> Reply {
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            match self.pump(deadline) {
+                Some(ClientBody::Reply(reply)) if reply.request_id == *request_id => return reply,
+                Some(ClientBody::Event(event)) => self.events.push_back(event),
+                Some(_) => {}
+                None => panic!("no reply for {request_id}"),
+            }
+        }
+    }
+
+    /// Sends and waits; `Ok(data)` or `Err(rejection)`.
+    pub fn call(&mut self, request: Request) -> Result<ReplyData, Rejection> {
+        let mutating = request.name().is_mutating();
+        let id = self.send(request, mutating);
+        result(self.wait_reply(&id))
+    }
+
+    pub fn call_op(&mut self, operation: Id, request: Request) -> Result<ReplyData, Rejection> {
+        let request_id = new_id();
+        self.send_frame(RequestFrame::new(request_id.clone(), Some(operation), request).unwrap());
+        result(self.wait_reply(&request_id))
+    }
+
+    /// Waits for an event matching `predicate` (buffered events first).
+    pub fn wait_event(&mut self, what: &str, predicate: impl Fn(&Event) -> bool) -> Event {
+        if let Some(index) = self.events.iter().position(|e| predicate(&e.event)) {
+            return self.events.remove(index).unwrap().event;
+        }
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            match self.pump(deadline) {
+                Some(ClientBody::Event(event)) if predicate(&event.event) => return event.event,
+                Some(ClientBody::Event(event)) => self.events.push_back(event),
+                Some(_) => {}
+                None => panic!("timed out waiting for {what}"),
+            }
+        }
+    }
+
+    /// True when the service closed the link.
+    pub fn closed(&mut self) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match self
+                .frames
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(ClientBody::Event(event)) => self.events.push_back(event),
+                Ok(_) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return true,
+                Err(mpsc::RecvTimeoutError::Timeout) => return false,
+            }
+        }
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        let _ = self.writer.get_ref().shutdown(std::net::Shutdown::Both);
+    }
+}
+
+pub fn result(reply: Reply) -> Result<ReplyData, Rejection> {
+    match reply.result {
+        ReplyResult::Ok(data) => Ok(*data),
+        ReplyResult::Rejected { rejection, .. } => Err(rejection),
+    }
+}
+
+/// Polls `check` until it returns `Some`.
+pub fn eventually<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Some(value) = check() {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "timed out: {what}");
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Unsandboxed real worker (tests only, disposable directories, fixture model).
+
+pub struct NodeLauncher {
+    pub entry: PathBuf,
+}
+
+impl NodeLauncher {
+    pub fn shared() -> Arc<dyn WorkerLauncher> {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../packages/pi-worker/src/worker.ts")
+            .canonicalize()
+            .expect("worker entry");
+        Arc::new(Self { entry })
+    }
+}
+
+struct NodeControl {
+    stdin: Option<FrameWriter<ChildStdin>>,
+    child: Arc<Mutex<Child>>,
+}
+
+impl WorkerControl for NodeControl {
+    fn send(&mut self, body: WorkerBody) -> std::io::Result<()> {
+        let writer = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
+        writer
+            .write(&WorkerEnvelope::new(body))
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+    }
+
+    fn terminate(&mut self) {
+        let _ = self.send(WorkerBody::Shutdown);
+        self.stdin = None;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let done = self
+                .child
+                .lock()
+                .unwrap()
+                .try_wait()
+                .ok()
+                .flatten()
+                .is_some();
+            if done || Instant::now() > deadline {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        let _ = self.child.lock().unwrap().kill();
+    }
+}
+
+impl Drop for NodeControl {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+impl WorkerLauncher for NodeLauncher {
+    fn launch(
+        &self,
+        request: LaunchRequest,
+        events: SyncSender<SupervisorEvent>,
+    ) -> Result<Box<dyn WorkerControl>, LaunchError> {
+        let mut child = Command::new("node")
+            .arg(&self.entry)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", &request.session_dir)
+            .env("LANG", "C.UTF-8")
+            .env("TERM", "dumb")
+            .current_dir(&request.worktree)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(LaunchError::Io)?;
+        let stdout = child.stdout.take().unwrap();
+        let mut stdin = FrameWriter::new(child.stdin.take().unwrap(), Framing::Worker);
+        stdin
+            .write(&WorkerEnvelope::new(request.start.clone()))
+            .map_err(|_| LaunchError::Io(std::io::ErrorKind::BrokenPipe.into()))?;
+        let child = Arc::new(Mutex::new(child));
+        let waiter = Arc::clone(&child);
+        let binding = request.binding.clone();
+        thread::spawn(move || {
+            let mut reader = FrameReader::new(stdout, Framing::Worker);
+            loop {
+                let event = match reader.read::<WorkerEnvelope>() {
+                    Ok(Some(envelope)) if envelope.body.is_from_worker() => {
+                        WorkerEvent::Body(envelope.body)
+                    }
+                    Ok(None) => break,
+                    Ok(Some(_)) | Err(_) => {
+                        let _ = waiter.lock().unwrap().kill();
+                        WorkerEvent::ProtocolViolation("invalid_frame")
+                    }
+                };
+                let violation = matches!(event, WorkerEvent::ProtocolViolation(_));
+                let _ = events.send(SupervisorEvent {
+                    binding: binding.clone(),
+                    event,
+                });
+                if violation {
+                    break;
+                }
+            }
+            let status = loop {
+                if let Ok(Some(status)) = waiter.lock().unwrap().try_wait() {
+                    break status;
+                }
+                thread::sleep(Duration::from_millis(20));
+            };
+            use std::os::unix::process::ExitStatusExt;
+            let _ = events.send(SupervisorEvent {
+                binding,
+                event: WorkerEvent::Exited {
+                    code: status.code(),
+                    signal: status.signal(),
+                },
+            });
+        });
+        Ok(Box::new(NodeControl {
+            stdin: Some(stdin),
+            child,
+        }))
+    }
+}
+
+/// Whether bubblewrap/prlimit sandboxes work on this host.
+pub fn sandbox_works() -> bool {
+    use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
+    SandboxTools::locate().is_ok_and(|tools| sandbox_available(&tools).is_ok())
+}
+
+/// The real sandboxed launcher when the host supports it, else the unsandboxed test launcher.
+pub fn best_launcher(env: &Env) -> (Arc<dyn WorkerLauncher>, bool) {
+    use lade_system::supervision::{LauncherConfig, default_launcher};
+    if sandbox_works()
+        && let Ok(launcher) = LauncherConfig::new(
+            env.root.path().join("state/run"),
+            env.root.path().join("run/g"),
+        )
+        .and_then(default_launcher)
+    {
+        return (Arc::from(launcher), true);
+    }
+    eprintln!("note: sandbox unavailable; using the unsandboxed test launcher");
+    (NodeLauncher::shared(), false)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pure fake worker: ready at once, acknowledges inputs and settles idle.
+
+pub struct FakeLauncher {
+    ack: bool,
+}
+
+impl FakeLauncher {
+    pub fn shared() -> Arc<dyn WorkerLauncher> {
+        Arc::new(Self { ack: true })
+    }
+
+    /// A worker that never acknowledges delivered input (delivery stays dispatched).
+    pub fn silent() -> Arc<dyn WorkerLauncher> {
+        Arc::new(Self { ack: false })
+    }
+}
+
+struct FakeControl {
+    binding: lade_system::supervision::LaunchBinding,
+    events: SyncSender<SupervisorEvent>,
+    alive: bool,
+    ack: bool,
+}
+
+impl FakeControl {
+    fn emit(&self, event: WorkerEvent) {
+        let _ = self.events.send(SupervisorEvent {
+            binding: self.binding.clone(),
+            event,
+        });
+    }
+}
+
+impl WorkerControl for FakeControl {
+    fn send(&mut self, body: WorkerBody) -> std::io::Result<()> {
+        if !self.alive {
+            return Err(std::io::ErrorKind::BrokenPipe.into());
+        }
+        if self.ack
+            && let WorkerBody::Deliver { input_id, .. } = body
+        {
+            self.emit(WorkerEvent::Body(WorkerBody::Received { input_id }));
+            self.emit(WorkerEvent::Body(WorkerBody::TurnState {
+                state: TurnState::Running,
+            }));
+            self.emit(WorkerEvent::Body(WorkerBody::TurnState {
+                state: TurnState::Idle,
+            }));
+        }
+        Ok(())
+    }
+
+    fn terminate(&mut self) {
+        if std::mem::take(&mut self.alive) {
+            self.emit(WorkerEvent::Exited {
+                code: Some(0),
+                signal: None,
+            });
+        }
+    }
+}
+
+impl WorkerLauncher for FakeLauncher {
+    fn launch(
+        &self,
+        request: LaunchRequest,
+        events: SyncSender<SupervisorEvent>,
+    ) -> Result<Box<dyn WorkerControl>, LaunchError> {
+        let control = FakeControl {
+            binding: request.binding,
+            events,
+            alive: true,
+            ack: self.ack,
+        };
+        control.emit(WorkerEvent::Body(WorkerBody::Ready {
+            pi_session_id: "fake-session".into(),
+            session_file: String::new(),
+        }));
+        Ok(Box::new(control))
+    }
+}
+
+/// Writes `bytes` to a raw socket (for malformed-input tests).
+pub fn raw_write(socket: &Path, bytes: &[u8]) -> UnixStream {
+    let mut stream = UnixStream::connect(socket).unwrap();
+    stream.write_all(bytes).unwrap();
+    stream
+}
+
+// ---------------------------------------------------------------------------------------------
+// Domain flow helpers.
+
+use lade_protocol::client::{
+    Basis, ChangeList, ExecutionStartCommand, ExecutionState, FileContent, FileReadQuery, Intent,
+    ObjectiveCreateCommand, ObjectiveDetail, ObjectiveSelector, Side, Start, Workspace,
+    WorkspaceOpenCommand,
+};
+use lade_protocol::types::{Counter, Model, ReadLimit, WirePath};
+
+pub fn open_workspace(client: &mut Client, path: &Path) -> Workspace {
+    match client.call(Request::WorkspaceOpen(WorkspaceOpenCommand {
+        path: WirePath::from_os_str(path.as_os_str()).unwrap(),
+    })) {
+        Ok(ReplyData::WorkspaceOpen(ws)) => ws,
+        other => panic!("workspace.open: {other:?}"),
+    }
+}
+
+pub fn create_objective(client: &mut Client, workspace: &Id, title: &str) -> ObjectiveDetail {
+    match client.call(Request::ObjectiveCreate(ObjectiveCreateCommand {
+        workspace_id: workspace.clone(),
+        title: title.into(),
+        intent: Intent {
+            outcome: format!("{title} outcome"),
+            constraints: String::new(),
+            acceptance: "tests pass".into(),
+        },
+        integration_target: "main".into(),
+        start: Start::Target,
+    })) {
+        Ok(ReplyData::ObjectiveCreate(detail)) => *detail,
+        other => panic!("objective.create: {other:?}"),
+    }
+}
+
+pub fn detail(client: &mut Client, objective: &Id) -> ObjectiveDetail {
+    match client.call(Request::ObjectiveGet(ObjectiveSelector {
+        objective_id: objective.clone(),
+    })) {
+        Ok(ReplyData::ObjectiveGet(detail)) => *detail,
+        other => panic!("objective.get: {other:?}"),
+    }
+}
+
+pub fn start_execution(client: &mut Client, objective: &Id) -> ObjectiveDetail {
+    match client.call(Request::ExecutionStart(ExecutionStartCommand {
+        objective_id: objective.clone(),
+        model: Model {
+            provider: "lade-fixture".into(),
+            id: "scripted".into(),
+        },
+    })) {
+        Ok(ReplyData::ExecutionStart(detail)) => *detail,
+        other => panic!("execution.start: {other:?}"),
+    }
+}
+
+pub fn wait_state(client: &mut Client, objective: &Id, state: ExecutionState) -> ObjectiveDetail {
+    eventually(&format!("execution {state:?}"), || {
+        let d = detail(client, objective);
+        (d.execution.state == state).then_some(d)
+    })
+}
+
+pub fn changes(client: &mut Client, objective: &Id, basis: Basis) -> ChangeList {
+    match client.call(Request::ChangesList(
+        lade_protocol::client::ChangesListQuery {
+            objective_id: objective.clone(),
+            basis,
+        },
+    )) {
+        Ok(ReplyData::ChangesList(list)) => list,
+        other => panic!("changes.list: {other:?}"),
+    }
+}
+
+pub fn read_file(client: &mut Client, objective: &Id, basis: Basis, path: &str) -> FileContent {
+    match client.call(Request::FileRead(FileReadQuery {
+        objective_id: objective.clone(),
+        basis,
+        path: WirePath::from_bytes(path.as_bytes().to_vec()).unwrap(),
+        side: Side::New,
+        offset: Counter::new(0),
+        limit: ReadLimit::parse("262144").unwrap(),
+    })) {
+        Ok(ReplyData::FileRead(content)) => content,
+        other => panic!("file.read: {other:?}"),
+    }
+}
+
+pub fn action_enabled(detail: &ObjectiveDetail, action: lade_protocol::client::ActionName) -> bool {
+    detail
+        .available_actions
+        .iter()
+        .any(|a| a.action == action && a.enabled)
+}
+
+/// The Objective worktree the service provisioned.
+pub fn worktree(env: &Env, objective: &Id) -> PathBuf {
+    env.root
+        .path()
+        .join("state/worktrees")
+        .join(objective.as_str())
+}

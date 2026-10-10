@@ -1,0 +1,685 @@
+//! Read-only inspection: Change Sets, file pages, structured diffs, search and activity pages.
+//! Git reads run on the pool; every byte served by `file.read`/`diff.get` is also retained in the
+//! artifact store so feedback references point at durable content.
+
+use std::sync::Arc;
+
+use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId};
+use lade_protocol::client::{
+    ActivityPage, ActivityPageQuery, Basis, ChangeList, ChangeStatus, ChangedFile,
+    ChangesListQuery, DiffGetQuery, DiffHunk, DiffLine, DiffLineKind, FileContent, FileDiff,
+    FileEncoding, FileReadQuery, Rejection, ReplyData, Request, SearchQuery, SearchResult,
+    SearchResultKind, SearchResults, SearchScope, Side, TargetRef,
+};
+use lade_protocol::types::Digest;
+
+use crate::adapters::artifacts::ArtifactStore;
+use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
+use crate::storage::{self, CaptureRow};
+
+use super::convert::{
+    adapter_git, counter, invalid, not_found, parse_uuid, preview, repo_path, wire_git, wire_id,
+    wire_path,
+};
+use super::execution::wire_activity;
+use super::handlers::{CapturePurpose, Pending, sql};
+use super::jobs::{self, CaptureOut};
+use super::{Flow, JobOutput, ReqCtx, Service};
+
+const MAX_FILES: usize = 1024;
+const MAX_DIFF_LINES: usize = 1800;
+const MAX_DIFF_TEXT: usize = 640 * 1024;
+const MAX_PAGE_JSON: usize = 900 * 1024;
+const MAX_ACTIVITY_BYTES: usize = 768 * 1024;
+
+/// Two trees to compare plus labels.
+#[derive(Clone)]
+struct Resolved {
+    old: GitId,
+    new: GitId,
+    label: String,
+    target: TargetRef,
+    capture_id: Option<lade_core::domain::ids::CaptureId>,
+    candidate_id: Option<CandidateId>,
+}
+
+enum Basis2 {
+    Ready(Box<Resolved>),
+    /// The working basis has no capture yet; take one first.
+    NeedsCapture,
+}
+
+fn wire_status(status: git::ChangeStatus) -> ChangeStatus {
+    match status {
+        git::ChangeStatus::Added | git::ChangeStatus::Copied { .. } => ChangeStatus::Added,
+        git::ChangeStatus::Modified => ChangeStatus::Modified,
+        git::ChangeStatus::Deleted => ChangeStatus::Deleted,
+        git::ChangeStatus::Renamed { .. } => ChangeStatus::Renamed,
+        git::ChangeStatus::TypeChanged => ChangeStatus::TypeChanged,
+    }
+}
+
+fn change_list(resolved: &Resolved, files: &[git::ChangedFile]) -> ChangeList {
+    ChangeList {
+        basis_label: preview(&resolved.label, 256),
+        target: resolved.target.clone(),
+        files: files
+            .iter()
+            .take(MAX_FILES)
+            .map(|f| ChangedFile {
+                path: wire_path(f.path.as_bytes()),
+                status: wire_status(f.status),
+                added: counter(f.added),
+                removed: counter(f.removed),
+                binary: f.binary,
+                old_path: f.old_path.as_ref().map(|p| wire_path(p.as_bytes())),
+            })
+            .collect(),
+        truncated: files.len() > MAX_FILES,
+        total_added: counter(files.iter().map(|f| f.added).sum()),
+        total_removed: counter(files.iter().map(|f| f.removed).sum()),
+        capture_id: resolved.capture_id.map(|c| wire_id(c.uuid())),
+        candidate_id: resolved.candidate_id.map(|c| wire_id(c.uuid())),
+    }
+}
+
+fn capture_label(capture: &CaptureRow) -> String {
+    format!("working capture {}", capture.id.uuid().short())
+}
+
+fn json_cost(text: &str) -> usize {
+    text.chars()
+        .map(|c| match c {
+            '"' | '\\' => 2,
+            c if (c as u32) < 0x20 => 6,
+            c => c.len_utf8(),
+        })
+        .sum()
+}
+
+/// One page of a whole file (already retained as an artifact).
+fn file_page(
+    bytes: &[u8],
+    digest: Digest,
+    query: &FileReadQuery,
+    label: &str,
+) -> Result<FileContent, Rejection> {
+    let total = bytes.len() as u64;
+    let offset = query.offset.value().min(total);
+    let start = usize::try_from(offset).map_err(|_| invalid("offset out of range"))?;
+    let limit = query.limit.value() as usize;
+    let binary = bytes.iter().take(8000).any(|b| *b == 0) || std::str::from_utf8(bytes).is_err();
+    let mut end = start.saturating_add(limit).min(bytes.len());
+    let text = if binary {
+        None
+    } else {
+        let whole = std::str::from_utf8(bytes).map_err(|_| invalid("not utf-8"))?;
+        if !whole.is_char_boundary(start) {
+            return Err(invalid("offset is not at a character boundary"));
+        }
+        while !whole.is_char_boundary(end) {
+            end -= 1;
+        }
+        while end > start && json_cost(&whole[start..end]) > MAX_PAGE_JSON {
+            end = start + (end - start) / 2;
+            while !whole.is_char_boundary(end) {
+                end -= 1;
+            }
+        }
+        Some(whole[start..end].to_string())
+    };
+    Ok(FileContent {
+        artifact_digest: digest,
+        total_bytes: counter(total),
+        offset: counter(offset),
+        length: counter((end - start) as u64),
+        encoding: if binary {
+            FileEncoding::Binary
+        } else {
+            FileEncoding::Utf8
+        },
+        eof: end as u64 >= total,
+        version_label: preview(label, 256),
+        text,
+    })
+}
+
+fn retain(artifacts: &ArtifactStore, bytes: &[u8]) -> Result<Digest, Rejection> {
+    let digest = artifacts
+        .put(bytes)
+        .map_err(|_| super::convert::durability("content could not be retained"))?;
+    Digest::parse(digest.to_hex()).map_err(|_| invalid("digest"))
+}
+
+fn read_file(
+    repo: &Repository,
+    artifacts: &ArtifactStore,
+    resolved: &Resolved,
+    query: &FileReadQuery,
+) -> Result<ReplyData, Rejection> {
+    let path = repo_path(&query.path)?;
+    let tree = match query.side {
+        Side::Old => &resolved.old,
+        Side::New => &resolved.new,
+    };
+    let bytes =
+        jobs::read_whole(repo, tree, &path)?.ok_or_else(|| not_found("path in this version"))?;
+    let digest = retain(artifacts, &bytes)?;
+    let side = match query.side {
+        Side::Old => "old side",
+        Side::New => "new side",
+    };
+    file_page(
+        &bytes,
+        digest,
+        query,
+        &format!("{} ({side})", resolved.label),
+    )
+    .map(ReplyData::FileRead)
+}
+
+fn read_diff(
+    repo: &Repository,
+    artifacts: &ArtifactStore,
+    resolved: &Resolved,
+    query: &DiffGetQuery,
+) -> Result<ReplyData, Rejection> {
+    let path = repo_path(&query.path)?;
+    let git_err = |e: git::GitError| super::convert::git_rejection(&e);
+    let files = repo
+        .diff_numstat(&adapter_git(&resolved.old), &adapter_git(&resolved.new))
+        .map_err(git_err)?;
+    let old_path = files
+        .iter()
+        .find(|f| f.path == path)
+        .and_then(|f| f.old_path.clone());
+    let diff = repo
+        .diff_hunks(
+            &adapter_git(&resolved.old),
+            &adapter_git(&resolved.new),
+            &path,
+            old_path.as_ref(),
+        )
+        .map_err(git_err)?;
+    let side_digest = |tree: &GitId, p: &git::RepoPath| -> Result<Option<Digest>, Rejection> {
+        match jobs::read_whole(repo, tree, p) {
+            Ok(Some(bytes)) => retain(artifacts, &bytes).map(Some),
+            Ok(None) | Err(_) => Ok(None),
+        }
+    };
+    let old_digest = side_digest(&resolved.old, old_path.as_ref().unwrap_or(&path))?;
+    let new_digest = side_digest(&resolved.new, &path)?;
+    let mut truncated = diff.truncated || diff.too_large;
+    let mut lines_left = MAX_DIFF_LINES;
+    let mut text_left = MAX_DIFF_TEXT;
+    let mut hunks = Vec::new();
+    'hunks: for hunk in diff.hunks.iter().take(512) {
+        let mut lines = Vec::new();
+        for line in hunk.lines.iter().take(1024) {
+            let text = String::from_utf8_lossy(&line.text).into_owned();
+            let cost = json_cost(&text) + 64;
+            if lines_left == 0 || cost > text_left {
+                truncated = true;
+                if !lines.is_empty() {
+                    hunks.push(wire_hunk(hunk, lines));
+                }
+                break 'hunks;
+            }
+            lines_left -= 1;
+            text_left -= cost;
+            lines.push(DiffLine {
+                kind: match line.kind {
+                    LineKind::Context => DiffLineKind::Context,
+                    LineKind::Add => DiffLineKind::Add,
+                    LineKind::Del => DiffLineKind::Del,
+                },
+                text,
+                old_no: line.old_no.map(counter),
+                new_no: line.new_no.map(counter),
+                old_byte_start: line.old_byte_start.map(counter),
+                new_byte_start: line.new_byte_start.map(counter),
+            });
+        }
+        truncated |= hunk.lines.len() > 1024;
+        hunks.push(wire_hunk(hunk, lines));
+    }
+    truncated |= diff.hunks.len() > 512;
+    Ok(ReplyData::DiffGet(FileDiff {
+        binary: diff.binary,
+        hunks,
+        truncated,
+        old_digest,
+        new_digest,
+    }))
+}
+
+fn wire_hunk(hunk: &git::Hunk, lines: Vec<DiffLine>) -> DiffHunk {
+    DiffHunk {
+        old_start: counter(hunk.old_start),
+        old_lines: counter(hunk.old_lines),
+        new_start: counter(hunk.new_start),
+        new_lines: counter(hunk.new_lines),
+        lines,
+    }
+}
+
+fn search_tree(
+    repo: &Repository,
+    tree: &GitId,
+    query: &SearchQuery,
+    label: &str,
+) -> Result<ReplyData, Rejection> {
+    let limit = query.limit.value() as usize;
+    let git_err = |e: git::GitError| super::convert::git_rejection(&e);
+    let (results, truncated) = match query.scope {
+        SearchScope::Files => {
+            let needle = query.query.to_lowercase().into_bytes();
+            let entries = repo
+                .ls_tree(&adapter_git(tree), None, true)
+                .map_err(git_err)?;
+            let mut matched: Vec<SearchResult> = entries
+                .iter()
+                .filter(|e| e.kind == ObjectKind::Blob)
+                .filter(|e| {
+                    e.path
+                        .as_bytes()
+                        .to_ascii_lowercase()
+                        .windows(needle.len())
+                        .any(|w| w == needle.as_slice())
+                })
+                .take(limit + 1)
+                .map(|e| SearchResult {
+                    kind: SearchResultKind::File,
+                    preview: preview(&e.path.display(), 1024),
+                    objective_id: query.objective_id.clone(),
+                    path: Some(wire_path(e.path.as_bytes())),
+                    line: None,
+                    byte_start: None,
+                })
+                .collect();
+            let truncated = matched.len() > limit;
+            matched.truncate(limit);
+            (matched, truncated)
+        }
+        SearchScope::Content => {
+            if query.query.contains('\n') {
+                return Err(invalid("content search is a single line"));
+            }
+            let found = repo
+                .grep(
+                    &adapter_git(tree),
+                    &GrepQuery {
+                        text: query.query.clone(),
+                        ignore_case: true,
+                        max_results: limit,
+                    },
+                )
+                .map_err(git_err)?;
+            let results = found
+                .matches
+                .iter()
+                .take(limit)
+                .map(|m| SearchResult {
+                    kind: SearchResultKind::Content,
+                    preview: preview(&String::from_utf8_lossy(&m.preview), 1024),
+                    objective_id: query.objective_id.clone(),
+                    path: Some(wire_path(m.path.as_bytes())),
+                    line: Some(counter(m.line)),
+                    byte_start: None,
+                })
+                .collect();
+            (results, found.truncated)
+        }
+        SearchScope::Objectives => (Vec::new(), false),
+    };
+    let scope = match query.scope {
+        SearchScope::Files => "file paths",
+        _ => "file contents",
+    };
+    Ok(ReplyData::Search(SearchResults {
+        scope_label: preview(&format!("{scope} in {label}"), 256),
+        results,
+        truncated,
+    }))
+}
+
+impl Service {
+    fn resolve(&mut self, oid: ObjectiveId, basis: &Basis) -> Result<Basis2, Rejection> {
+        let st = self.obj(oid)?.clone();
+        let record = st.objective().record();
+        let branch = record.integration_target.as_str().to_string();
+        let candidate = |id: &lade_protocol::types::Id| -> Result<_, Rejection> {
+            let id = CandidateId::new(parse_uuid(id)?);
+            st.review
+                .candidate(id)
+                .cloned()
+                .ok_or_else(|| not_found("candidate"))
+        };
+        Ok(Basis2::Ready(Box::new(match basis {
+            Basis::Working => match (&st.capture, &st.row.worktree) {
+                (Some(capture), _) => Resolved {
+                    old: capture.target_commit.clone(),
+                    new: capture.tree.clone(),
+                    label: capture_label(capture),
+                    target: TargetRef {
+                        branch,
+                        commit: wire_git(&capture.target_commit),
+                    },
+                    capture_id: Some(capture.id),
+                    candidate_id: None,
+                },
+                (None, Some(_)) => return Ok(Basis2::NeedsCapture),
+                (None, None) => {
+                    let target = self
+                        .fresh_target(&st)
+                        .ok_or_else(|| not_found("integration target branch"))?;
+                    Resolved {
+                        old: target.clone(),
+                        new: record.start_commit.clone(),
+                        label: "start commit (no agent work yet)".into(),
+                        target: TargetRef {
+                            branch,
+                            commit: wire_git(&target),
+                        },
+                        capture_id: None,
+                        candidate_id: None,
+                    }
+                }
+            },
+            Basis::Candidate { candidate_id } => {
+                let c = candidate(candidate_id)?;
+                Resolved {
+                    old: c.base_target_commit.clone(),
+                    new: c.tree.clone(),
+                    label: format!("candidate {}", c.ordinal),
+                    target: TargetRef {
+                        branch,
+                        commit: wire_git(&c.base_target_commit),
+                    },
+                    capture_id: None,
+                    candidate_id: Some(c.id),
+                }
+            }
+            Basis::Since {
+                from_candidate_id,
+                to_candidate_id,
+            } => {
+                let from = candidate(from_candidate_id)?;
+                let to = candidate(to_candidate_id)?;
+                let caveat = if from.base_target_commit == to.base_target_commit {
+                    ""
+                } else {
+                    " (target refreshed between them)"
+                };
+                Resolved {
+                    old: from.tree.clone(),
+                    new: to.tree.clone(),
+                    label: format!("candidate {} to {}{caveat}", from.ordinal, to.ordinal),
+                    target: TargetRef {
+                        branch,
+                        commit: wire_git(&to.base_target_commit),
+                    },
+                    capture_id: None,
+                    candidate_id: Some(to.id),
+                }
+            }
+        })))
+    }
+
+    fn repo_of(&self, oid: ObjectiveId) -> Result<Repository, Rejection> {
+        let st = self.obj(oid)?;
+        Ok(self.ws_of(st)?.repo.clone())
+    }
+
+    /// Runs `work` on the pool once the basis is resolved, capturing the worktree first if needed.
+    fn query_on_basis(
+        &mut self,
+        ctx: ReqCtx,
+        oid: Result<ObjectiveId, Rejection>,
+        basis: &Basis,
+        retry: Request,
+        work: impl FnOnce(Repository, Arc<ArtifactStore>, Resolved) -> Result<ReplyData, Rejection>
+        + Send
+        + 'static,
+    ) -> Flow {
+        let resolved = oid.and_then(|oid| Ok((oid, self.resolve(oid, basis)?, self.repo_of(oid)?)));
+        match resolved {
+            Err(rejection) => {
+                self.finish(ctx, Err(rejection));
+                Flow::Done
+            }
+            Ok((oid, Basis2::NeedsCapture, _)) => {
+                let st = &self.objectives[&oid];
+                let input = st
+                    .row
+                    .worktree
+                    .clone()
+                    .ok_or_else(|| not_found("worktree"))
+                    .and_then(|w| self.capture_input(st, w, Self::unsent_references(st)));
+                match input {
+                    Ok(input) => {
+                        self.spawn(
+                            Pending::Capture {
+                                oid,
+                                purpose: CapturePurpose::Retry(ctx, Box::new(retry)),
+                            },
+                            move || JobOutput::Capture(jobs::capture(&input)),
+                        );
+                        Flow::Deferred
+                    }
+                    Err(rejection) => {
+                        self.finish(ctx, Err(rejection));
+                        Flow::Done
+                    }
+                }
+            }
+            Ok((_, Basis2::Ready(resolved), repo)) => {
+                let artifacts = self.artifacts.clone();
+                self.spawn(Pending::Query { ctx }, move || {
+                    JobOutput::Query(work(repo, artifacts, *resolved))
+                });
+                Flow::Deferred
+            }
+        }
+    }
+
+    pub(crate) fn changes_list(&mut self, ctx: ReqCtx, query: ChangesListQuery) -> Flow {
+        let oid = match self.objective_id(&query.objective_id) {
+            Ok(oid) => oid,
+            Err(rejection) => {
+                self.finish(ctx, Err(rejection));
+                return Flow::Done;
+            }
+        };
+        let st = &self.objectives[&oid];
+        if let (Basis::Working, Some(worktree)) = (&query.basis, st.row.worktree.clone()) {
+            match self.capture_input(st, worktree, Self::unsent_references(st)) {
+                Ok(input) => {
+                    self.spawn(
+                        Pending::Capture {
+                            oid,
+                            purpose: CapturePurpose::Changes(ctx),
+                        },
+                        move || JobOutput::Capture(jobs::capture(&input)),
+                    );
+                    return Flow::Deferred;
+                }
+                Err(rejection) => {
+                    self.finish(ctx, Err(rejection));
+                    return Flow::Done;
+                }
+            }
+        }
+        let basis = query.basis.clone();
+        self.query_on_basis(
+            ctx,
+            Ok(oid),
+            &basis,
+            Request::ChangesList(query),
+            |repo, _, resolved| {
+                let files = repo
+                    .diff_numstat(&adapter_git(&resolved.old), &adapter_git(&resolved.new))
+                    .map_err(|e| super::convert::git_rejection(&e))?;
+                Ok(ReplyData::ChangesList(change_list(&resolved, &files)))
+            },
+        )
+    }
+
+    /// The `changes.list` reply for a just-registered working capture.
+    pub(crate) fn working_change_list(
+        &mut self,
+        oid: ObjectiveId,
+        out: &CaptureOut,
+        row: &CaptureRow,
+    ) -> Result<ReplyData, Rejection> {
+        let st = self.obj(oid)?;
+        let resolved = Resolved {
+            old: out.target.clone(),
+            new: out.tree.clone(),
+            label: capture_label(row),
+            target: TargetRef {
+                branch: st
+                    .objective()
+                    .record()
+                    .integration_target
+                    .as_str()
+                    .to_string(),
+                commit: wire_git(&out.target),
+            },
+            capture_id: Some(row.id),
+            candidate_id: None,
+        };
+        Ok(ReplyData::ChangesList(change_list(&resolved, &out.files)))
+    }
+
+    pub(crate) fn file_read(&mut self, ctx: ReqCtx, query: FileReadQuery) -> Flow {
+        let oid = self.objective_id(&query.objective_id);
+        let basis = query.basis.clone();
+        let q = query.clone();
+        self.query_on_basis(
+            ctx,
+            oid,
+            &basis,
+            Request::FileRead(query),
+            move |repo, artifacts, resolved| read_file(&repo, &artifacts, &resolved, &q),
+        )
+    }
+
+    pub(crate) fn diff_get(&mut self, ctx: ReqCtx, query: DiffGetQuery) -> Flow {
+        let oid = self.objective_id(&query.objective_id);
+        let basis = query.basis.clone();
+        let q = query.clone();
+        self.query_on_basis(
+            ctx,
+            oid,
+            &basis,
+            Request::DiffGet(query),
+            move |repo, artifacts, resolved| read_diff(&repo, &artifacts, &resolved, &q),
+        )
+    }
+
+    pub(crate) fn search(&mut self, ctx: ReqCtx, query: SearchQuery) -> Flow {
+        let workspace = match parse_uuid(&query.workspace_id) {
+            Ok(uuid) => lade_core::domain::ids::WorkspaceId::new(uuid),
+            Err(rejection) => {
+                self.finish(ctx, Err(rejection));
+                return Flow::Done;
+            }
+        };
+        let Some(ws) = self.workspaces.get(&workspace).cloned() else {
+            self.finish(ctx, Err(not_found("workspace")));
+            return Flow::Done;
+        };
+        if query.scope == SearchScope::Objectives {
+            let needle = query.query.to_lowercase();
+            let limit = query.limit.value() as usize;
+            let mut results: Vec<SearchResult> = self
+                .objectives
+                .values()
+                .filter(|st| st.objective().record().workspace_id == workspace)
+                .filter(|st| {
+                    let r = st.objective().record();
+                    r.title.as_str().to_lowercase().contains(&needle)
+                        || r.intent.outcome().to_lowercase().contains(&needle)
+                })
+                .take(limit + 1)
+                .map(|st| SearchResult {
+                    kind: SearchResultKind::Objective,
+                    preview: preview(st.objective().record().title.as_str(), 1024),
+                    objective_id: Some(wire_id(st.objective().id().uuid())),
+                    path: None,
+                    line: None,
+                    byte_start: None,
+                })
+                .collect();
+            let truncated = results.len() > limit;
+            results.truncate(limit);
+            let data = ReplyData::Search(SearchResults {
+                scope_label: preview(&format!("objectives in {}", ws.name), 256),
+                results,
+                truncated,
+            });
+            self.finish(ctx, Ok(data));
+            return Flow::Done;
+        }
+        match (&query.objective_id, &query.basis) {
+            (Some(objective_id), basis) => {
+                let oid = self.objective_id(objective_id);
+                let basis = basis.clone().unwrap_or(Basis::Working);
+                let q = query.clone();
+                self.query_on_basis(
+                    ctx,
+                    oid,
+                    &basis,
+                    Request::Search(query),
+                    move |repo, _, resolved| search_tree(&repo, &resolved.new, &q, &resolved.label),
+                )
+            }
+            (None, _) => {
+                let branch = ws.default_branch.clone().unwrap_or_else(|| "main".into());
+                let Some(tree) = self.resolve_target(workspace, &branch) else {
+                    self.finish(ctx, Err(not_found("default branch")));
+                    return Flow::Done;
+                };
+                let label = format!("branch {branch} at {}", &tree.hex()[..12]);
+                let repo = ws.repo.clone();
+                self.spawn(Pending::Query { ctx }, move || {
+                    JobOutput::Query(search_tree(&repo, &tree, &query, &label))
+                });
+                Flow::Deferred
+            }
+        }
+    }
+
+    pub(crate) fn activity_page(&self, query: &ActivityPageQuery) -> Result<ReplyData, Rejection> {
+        let oid = self.objective_id(&query.objective_id)?;
+        let (rows, mut has_more) = sql(storage::activity_page(
+            self.store.conn(),
+            oid,
+            query
+                .before
+                .as_ref()
+                .map(lade_protocol::types::Counter::value),
+            query.limit.value(),
+        ))?;
+        let mut budget = MAX_ACTIVITY_BYTES;
+        let mut items = Vec::new();
+        for mut row in rows.into_iter().rev() {
+            if let Some((text, truncated)) = self.live_text(&row.item_id) {
+                row.text = text.to_string();
+                row.truncated = truncated;
+            }
+            let cost = json_cost(&row.text) + json_cost(&row.title) + 256;
+            if cost > budget {
+                has_more = true;
+                break;
+            }
+            budget -= cost;
+            if let Some(item) = wire_activity(&row) {
+                items.push(item);
+            }
+        }
+        items.reverse();
+        Ok(ReplyData::ActivityPage(ActivityPage { items, has_more }))
+    }
+}
