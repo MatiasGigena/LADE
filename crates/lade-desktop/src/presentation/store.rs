@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::drafts::DraftEditor;
+use super::keys::Keymap;
 use super::model::{
     ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState, DeliveryMode,
     Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, ObjectiveDetail,
@@ -128,6 +129,7 @@ pub enum Change {
     Notices,
     View,
     InspectorTab,
+    Keymap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -184,6 +186,8 @@ pub struct UiState {
     pub inspector_tab: InspectorTab,
     pub selected: Option<ObjectiveId>,
     pub archive_expanded: bool,
+    /// Current keyboard shortcuts (a client preference; see `keys`).
+    pub keymap: Keymap,
     pub per_objective: HashMap<ObjectiveId, ObjectiveUi>,
 }
 

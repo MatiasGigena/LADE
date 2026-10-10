@@ -20,6 +20,7 @@ mod widgets;
 mod workbench;
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -30,8 +31,8 @@ use gtk4 as gtk;
 use crate::presentation::controller::Controller;
 use crate::presentation::intents::IntentSink;
 use crate::presentation::keys::{self, AppAction};
-use crate::presentation::model::{ConnectionState, DraftId, NoticeLevel};
-use crate::presentation::store::{Change, MainView, Store};
+use crate::presentation::model::{ConnectionState, DraftId, NoticeLevel, ServiceNotice};
+use crate::presentation::store::{Change, MainView, Store, StoreUpdate};
 
 const CSS: &str = include_str!("../assets/style.css");
 
@@ -79,6 +80,10 @@ pub struct App {
     draft_timer: RefCell<Option<glib::SourceId>>,
     scheduling: Cell<bool>,
     width_class: Cell<u8>,
+    /// One window-level shortcut per action (Escape excepted: dialogs own it), retargeted in
+    /// place when the keymap changes so there is exactly one dispatch path.
+    shortcuts: RefCell<Vec<(AppAction, gtk::Shortcut)>>,
+    keys_path: Option<PathBuf>,
 }
 
 impl App {
@@ -186,6 +191,8 @@ impl App {
             draft_timer: RefCell::new(None),
             scheduling: Cell::new(false),
             width_class: Cell::new(u8::MAX),
+            shortcuts: RefCell::new(Vec::new()),
+            keys_path: keys::config_path(|name| std::env::var(name).ok()),
         });
         app.connect();
         let weak = Rc::downgrade(&app);
@@ -194,6 +201,7 @@ impl App {
                 app.refresh(changes);
             }
         });
+        app.load_keymap();
         app.render_body();
         app.render_centre();
         app
@@ -273,30 +281,66 @@ impl App {
                 }
             });
         }
+        let weak = Rc::downgrade(self);
+        self.header.shortcuts_button.connect_clicked(move |b| {
+            if let Some(app) = weak.upgrade() {
+                dialogs::shortcuts(b, &app.controller, app.keys_path.clone());
+            }
+        });
         self.install_shortcuts();
     }
 
+    /// Reads the client keybinding preference; an invalid file is ignored with a visible notice.
+    fn load_keymap(&self) {
+        let Some(path) = &self.keys_path else { return };
+        let (keymap, problem) = keys::load(path);
+        self.controller.set_keymap(keymap);
+        if let Some(message) = problem {
+            self.store.apply(StoreUpdate::Notice(ServiceNotice {
+                level: NoticeLevel::Warning,
+                code: "keybindings_ignored".to_owned(),
+                message,
+            }));
+        }
+    }
+
+    /// Installs one capture-phase shortcut per window action on the main window only. Dialogs
+    /// are separate windows, so a remapped window shortcut never captures their field input;
+    /// Escape is installed by each dialog itself.
     fn install_shortcuts(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let keymap = self.store.state().ui.keymap.clone();
+        let mut shortcuts = Vec::new();
         for binding in keys::DEFAULT_APP_KEYBINDINGS {
             if binding.action == AppAction::CloseDialog {
-                continue; // dialogs and popovers install their own
+                continue;
             }
-            for accel in binding.accelerators {
-                let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) else {
-                    continue;
-                };
-                let weak = Rc::downgrade(self);
-                let action = binding.action;
-                let callback = gtk::CallbackAction::new(move |_, _| match weak.upgrade() {
-                    Some(app) => app.run_action(action),
-                    None => glib::Propagation::Proceed,
-                });
-                controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(callback)));
-            }
+            let weak = Rc::downgrade(self);
+            let action = binding.action;
+            let callback = gtk::CallbackAction::new(move |_, _| match weak.upgrade() {
+                Some(app) => app.run_action(action),
+                None => glib::Propagation::Proceed,
+            });
+            let shortcut = gtk::Shortcut::new(
+                gtk::ShortcutTrigger::parse_string(&keymap.gtk(action)),
+                Some(callback),
+            );
+            controller.add_shortcut(shortcut.clone());
+            shortcuts.push((action, shortcut));
         }
         self.window.add_controller(controller);
+        *self.shortcuts.borrow_mut() = shortcuts;
+        self.header.set_shortcut_hints(&keymap);
+    }
+
+    /// Retargets every window shortcut to the current keymap at once.
+    fn apply_keymap(&self) {
+        let keymap = self.store.state().ui.keymap.clone();
+        for (action, shortcut) in self.shortcuts.borrow().iter() {
+            shortcut.set_trigger(gtk::ShortcutTrigger::parse_string(&keymap.gtk(*action)));
+        }
+        self.header.set_shortcut_hints(&keymap);
     }
 
     fn run_action(self: &Rc<Self>, action: AppAction) -> glib::Propagation {
@@ -316,6 +360,11 @@ impl App {
                 dialogs::open_workspace(self.window.upcast_ref(), &self.controller);
             }
             AppAction::ToggleViewerMode => self.controller.toggle_viewer_mode(),
+            AppAction::ShowShortcuts => dialogs::shortcuts(
+                &self.header.shortcuts_button,
+                &self.controller,
+                self.keys_path.clone(),
+            ),
             AppAction::SendMessage => {
                 if !self.activity.composer_has_focus() {
                     return glib::Propagation::Proceed;
@@ -415,6 +464,9 @@ impl App {
         }
         if changes.contains(&Change::Notices) {
             self.render_notice();
+        }
+        if changes.contains(&Change::Keymap) {
+            self.apply_keymap();
         }
         if changes.iter().any(|c| {
             matches!(

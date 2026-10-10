@@ -9,12 +9,17 @@ use crate::presentation::{format, keys};
 
 /// Polite screen-reader announcement. GTK 4.14 calls a missing `announce` implementation (a
 /// NULL vfunc: segfault) when the window's accessibility context is not the AT-SPI backend, e.g.
-/// without a session bus, so other contexts are skipped; the visible text remains.
+/// without a session bus, so other contexts are skipped; the visible text remains. With
+/// `GTK_A11Y=none` GTK creates no context at all (the binding would panic on the NULL), so that
+/// setting skips announcements before asking for one.
 pub fn announce(
     widget: &impl IsA<gtk::Accessible>,
     message: &str,
     priority: gtk::AccessibleAnnouncementPriority,
 ) {
+    if std::env::var_os("GTK_A11Y").is_some_and(|v| v == "none") {
+        return;
+    }
     if widget.at_context().type_().name() == "GtkAtSpiContext" {
         widget.announce(message, priority);
     }
@@ -341,16 +346,16 @@ pub fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
 /// Installs Escape (from the keybinding table) to close a dialog window.
 fn install_close_shortcut(window: &gtk::Window) {
     let controller = gtk::ShortcutController::new();
-    for accel in keys::accelerators(keys::DEFAULT_APP_KEYBINDINGS, keys::AppAction::CloseDialog) {
-        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
-            let action = gtk::CallbackAction::new(|widget, _| {
-                if let Some(window) = widget.downcast_ref::<gtk::Window>() {
-                    window.close();
-                }
-                glib::Propagation::Stop
-            });
-            controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
-        }
+    // Fixed binding: Escape always dismisses the local dialog (see `keys`).
+    let accel = keys::binding(keys::AppAction::CloseDialog).default;
+    if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
+        let action = gtk::CallbackAction::new(|widget, _| {
+            if let Some(window) = widget.downcast_ref::<gtk::Window>() {
+                window.close();
+            }
+            glib::Propagation::Stop
+        });
+        controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
     }
     window.add_controller(controller);
 }
@@ -400,8 +405,16 @@ impl Dialog {
     }
 
     pub fn show_error(&self, message: &str) {
+        self.show_errors(&[message.to_owned()]);
+    }
+
+    /// Replaces the dialog's error area with one error line per message.
+    pub fn show_errors(&self, messages: &[String]) {
         clear(&self.error);
-        self.error.append(&error_line(message));
+        self.error.set_spacing(8);
+        for message in messages {
+            self.error.append(&error_line(message));
+        }
     }
 
     pub fn add_cancel(&self) -> gtk::Button {

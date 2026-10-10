@@ -10,6 +10,7 @@ use gtk4 as gtk;
 use super::widgets::{self, hbox, label, set_accessible_label, vbox};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
+use crate::presentation::keys::{AppAction, Keymap};
 use crate::presentation::model::{ConnectionState, Load, SearchResult, SearchScope};
 use crate::presentation::preview::PREVIEW_LABEL;
 use crate::presentation::store::{Change, MainView};
@@ -77,6 +78,7 @@ pub struct Header {
     profile_name: gtk::Label,
     pub details_toggle: gtk::ToggleButton,
     pub rail_toggle: gtk::ToggleButton,
+    pub shortcuts_button: gtk::Button,
     updating: Cell<bool>,
 }
 
@@ -199,6 +201,12 @@ impl Header {
         popover_box.append(&results_scroll);
         popover.set_child(Some(&popover_box));
 
+        let shortcuts_button = gtk::Button::from_icon_name("input-keyboard-symbolic");
+        shortcuts_button.add_css_class("icon-button");
+        shortcuts_button.set_valign(gtk::Align::Center);
+        set_accessible_label(&shortcuts_button, "Keyboard shortcuts");
+        root.append(&shortcuts_button);
+
         let profile = hbox(10);
         profile.add_css_class("profile");
         profile.set_valign(gtk::Align::Center);
@@ -231,6 +239,7 @@ impl Header {
             profile_name: name,
             details_toggle,
             rail_toggle,
+            shortcuts_button,
             updating: Cell::new(false),
         });
         header.connect();
@@ -296,6 +305,18 @@ impl Header {
         self.nav.set_margin_start(if level == 0 { 64 } else { 8 });
         self.nav.set_spacing(if level == 0 { 24 } else { 16 });
         self.profile_name.set_visible(level < 2);
+    }
+
+    /// Shows the current bindings where the header offers the action.
+    pub fn set_shortcut_hints(&self, keymap: &Keymap) {
+        self.shortcuts_button.set_tooltip_text(Some(&format!(
+            "Keyboard shortcuts ({})",
+            keymap.label(AppAction::ShowShortcuts)
+        )));
+        self.search_entry.set_tooltip_text(Some(&format!(
+            "Global search ({})",
+            keymap.label(AppAction::FocusSearch)
+        )));
     }
 
     pub fn focus_search(&self) {

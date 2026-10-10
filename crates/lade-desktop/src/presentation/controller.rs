@@ -9,6 +9,7 @@ use std::rc::Rc;
 use super::drafts::{DraftEditor, Millis};
 use super::format;
 use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint};
+use super::keys::Keymap;
 use super::model::{
     ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId,
     Intent as ObjectiveIntent, Load, ModelRef, ObjectiveDetail, ObjectiveId, Reference,
@@ -94,6 +95,17 @@ impl Controller {
                     Vec::new()
                 },
             )
+        });
+    }
+
+    /// Installs a validated keymap (see `keys::Keymap::propose`).
+    pub fn set_keymap(&self, keymap: Keymap) {
+        self.store.update(|s| {
+            if s.ui.keymap == keymap {
+                return ((), Vec::new());
+            }
+            s.ui.keymap = keymap;
+            ((), vec![Change::Keymap])
         });
     }
 
