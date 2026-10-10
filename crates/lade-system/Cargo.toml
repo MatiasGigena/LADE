@@ -12,6 +12,10 @@ path = "src/bin/laded.rs"
 [dependencies]
 lade-core.workspace = true
 lade-protocol.workspace = true
+sha2.workspace = true
+serde_json.workspace = true
+rusqlite.workspace = true
+rustix.workspace = true
 
 [lints]
 workspace = true

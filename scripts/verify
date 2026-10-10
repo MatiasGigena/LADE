@@ -2,6 +2,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 python3 scripts/check-pins.py --portable
+python3 scripts/generate-schema.py --check
 python3 scripts/generate-dtos.py --check
 python3 scripts/generate-fixtures.py --check
 ./scripts/cargo fmt --all -- --check
@@ -14,10 +15,27 @@ python3 scripts/check-worker-lint.py
 npm --prefix packages/pi-worker run check
 npm --prefix packages/pi-worker test
 python3 scripts/compare-fixtures.py
+# Packaging scripts: POSIX syntax, then install/rollback/uninstall of a synthetic bundle in a
+# disposable HOME (the real bundle: scripts/bundle && scripts/test-install --bundle dist/lade-0.2.0).
+for script in scripts/bundle scripts/install scripts/uninstall scripts/test-install scripts/verify; do
+    sh -n "$script"
+done
+./scripts/test-install
 ./target/debug/lade-desktop --version
 ./target/debug/laded --version
 set +e
-./target/debug/laded
+./target/debug/laded 2>/dev/null
 status=$?
 set -e
-test "$status" = 78 || { echo "service did not fail closed: $status" >&2; exit 1; }
+test "$status" = 64 || { echo "laded without a command did not print usage: $status" >&2; exit 1; }
+# Fail closed: the service refuses a group/world-accessible runtime directory before listening.
+smoke=$(mktemp -d)
+trap 'rm -rf "$smoke"' EXIT
+mkdir -m 777 "$smoke/run"
+chmod 777 "$smoke/run"
+set +e
+./target/debug/laded serve --state-dir "$smoke/state" --runtime-dir "$smoke/run" 2>/dev/null
+status=$?
+set -e
+test "$status" = 78 || { echo "service did not refuse an unsafe runtime dir: $status" >&2; exit 1; }
+test ! -e "$smoke/run/control.sock" || { echo "service listened on an unsafe runtime dir" >&2; exit 1; }

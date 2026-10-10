@@ -1,0 +1,249 @@
+#!/bin/sh
+# Drives the complete first-release loop in the real GTK client under Xvfb against a real
+# `laded serve`, with the offline `lade-fixture` model inside the real worker sandbox, and
+# captures one screenshot per major step.
+#
+#   scripts/e2e-gui [OUT_DIR]     (default: docs/implementation/evidence/first-release)
+#
+# Requires: a debug build (`./scripts/cargo build --workspace --locked`), Xvfb, xdotool,
+# ImageMagick `import`, git, bubblewrap. Environment: E2E_DISPLAY (default 77),
+# E2E_KEEP=1 keeps the temporary directory.
+#
+# Fragile by nature: there is no window manager, so dialogs open at the top-left corner, and
+# controls are clicked by their position in the 1440x900 layout. Keyboard shortcuts come from
+# DEFAULT_APP_KEYBINDINGS (Ctrl+N new Objective, Ctrl+1 Workbench, Ctrl+2 Activity,
+# Ctrl+Shift+M add feedback, Ctrl+Return send). Every step that changes state is confirmed
+# from Git or the filesystem, not from pixels; the final assertions check the integration.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT=${1:-$ROOT/docs/implementation/evidence/first-release}
+DPY=:${E2E_DISPLAY:-77}
+BIN=$ROOT/target/debug
+W=1440
+H=900
+for tool in Xvfb xdotool import git bwrap; do
+  command -v "$tool" >/dev/null || { echo "e2e-gui: $tool is required" >&2; exit 2; }
+done
+[ -x "$BIN/laded" ] && [ -x "$BIN/lade-desktop" ] || {
+  echo "e2e-gui: build first: ./scripts/cargo build --workspace --locked" >&2
+  exit 2
+}
+mkdir -p "$OUT"
+# Short paths: Unix socket addresses hold 108 bytes.
+T=$(mktemp -d /tmp/le2e.XXXXXX)
+STATE=$T/state
+RUN=$T/run
+REPO=$T/repo
+pids=""
+cleanup() {
+  for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  [ "${E2E_KEEP:-0}" = 1 ] || rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+fail() { echo "e2e-gui: FAILED: $*" >&2; [ -f "$T/laded.log" ] && tail -20 "$T/laded.log" >&2; exit 1; }
+step() { echo "e2e-gui: $*"; }
+
+export DISPLAY=$DPY
+x() { xdotool "$@"; }
+click() { x mousemove "$1" "$2" click 1; sleep "${3:-1}"; }
+key() { x key "$@"; sleep 1; }
+typ() { x type --delay 8 "$1"; }
+park() { x mousemove 700 880; sleep 0.5; }
+shot() { park; import -window root "$OUT/e2e-$1.png"; step "screenshot e2e-$1.png"; }
+scroll_inspector() { x mousemove 1280 600; i=0; while [ $i -lt 12 ]; do x click 5; i=$((i + 1)); done; sleep 1; }
+# wait_for SECONDS DESCRIPTION COMMAND...: polls until COMMAND succeeds.
+wait_for() {
+  limit=$1; what=$2; shift 2
+  n=0
+  while ! "$@" >/dev/null 2>&1; do
+    n=$((n + 1))
+    [ $n -le $((limit * 4)) ] || fail "timed out waiting for $what"
+    sleep 0.25
+  done
+}
+wt() { for d in "$STATE"/worktrees/*; do [ -d "$d" ] && echo "$d" && return 0; done; return 1; }
+wt_file_is() { d=$(wt) && [ "$(cat "$d/hello.txt" 2>/dev/null)" = "$1" ]; }
+branch_has_candidate() { git -C "$REPO" for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q "LADE candidate"; }
+session_ready() { ls "$STATE"/sessions/*/agent >/dev/null 2>&1; }
+main_integrated() { git -C "$REPO" log -1 --format=%s main | grep -q "Greeting file"; }
+cleaned_up() { ! wt && [ -z "$(git -C "$REPO" branch --list 'lade/*')" ]; }
+
+step "repository with main checked out and clean"
+mkdir -p "$REPO" && mkdir -m 700 "$RUN"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.email dev@example.com
+git -C "$REPO" config user.name Developer
+printf '# Demo\n\nA small repository.\n' >"$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m initial
+BASE=$(git -C "$REPO" rev-parse main)
+
+Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+pids="$pids $!"
+sleep 1
+"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
+pids="$pids $!"
+wait_for 10 "control socket" test -S "$RUN/control.sock"
+GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" --open "$REPO" >"$T/desktop.log" 2>&1 &
+pids="$pids $!"
+wait_for 20 "LADE window" xdotool search --onlyvisible --name LADE
+WID=$(xdotool search --onlyvisible --name LADE | head -1)
+x windowmove "$WID" 0 0 windowsize "$WID" $W $H
+sleep 2
+shot 01-workspace-open
+
+step "create an Objective"
+key ctrl+n
+click 280 106 0.3; typ "Greeting file"
+click 280 195 0.3; typ "hello.txt says hi"
+shot 02-new-objective
+click 469 625 2
+
+step "start the agent with the fixture model (sandboxed worker)"
+click 1280 804 1
+wait_for 60 "sandboxed worker started" session_ready
+sleep 4
+shot 03-agent-started
+
+step "Activity: direct instruction"
+key ctrl+2
+click 680 790 0.3
+typ "lade-fixture: write hello.txt hi"
+key ctrl+Return
+wait_for 60 "hello.txt written by the agent" wt_file_is hi
+[ ! -e "$REPO/hello.txt" ] || fail "the shared checkout was written"
+sleep 3
+shot 04-activity
+
+step "Workbench: Change Set shows hello.txt"
+key ctrl+1
+sleep 1
+click 1057 323 2   # Refresh the inspected capture (explicit, never silent)
+click 330 336 2    # hello.txt
+shot 05-change-set
+
+step "select text, add feedback, wait until Saved"
+x mousemove 622 421 click --repeat 2 --delay 80 1
+sleep 1
+key ctrl+shift+m
+typ "Please greet more warmly."
+sleep 3
+shot 06-draft-saved
+
+step "stale reference: the agent changes the file after the draft was saved"
+key ctrl+2
+click 680 790 0.3
+typ "lade-fixture: write hello.txt hello"
+key ctrl+Return
+wait_for 60 "hello.txt rewritten" wt_file_is hello
+sleep 3
+key ctrl+1
+click 1343 78 2    # Feedback tab
+shot 07-stale-batch-blocked
+
+step "remove the stale draft (explicit confirmation)"
+click 1201 523 1
+shot 08-remove-draft-confirm
+click 359 160 2
+
+step "new draft on the current bytes, submitted as steer"
+click 1057 323 2   # Refresh
+click 330 336 2    # hello.txt
+x mousemove 625 421 click --repeat 2 --delay 80 1
+sleep 1
+key ctrl+shift+m
+typ "Greet warmly."
+key shift+Return
+typ "lade-fixture: write hello.txt hello there"
+sleep 3
+click 1279 688 1   # Review and submit
+shot 09-submit-dialog
+click 479 300 1    # Submit 1 item
+wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
+sleep 3
+shot 10-feedback-received
+key ctrl+2
+sleep 1
+shot 11-agent-revision
+key ctrl+1
+
+step "edit the intent"
+click 1175 78 1    # Overview tab
+click 1279 727 1   # Edit intent
+key Tab
+typ "Only touch hello.txt"
+key Tab
+typ "test -f hello.txt passes"
+shot 12-edit-intent
+click 487 440 2
+
+step "freeze for review"
+scroll_inspector
+click 1280 228 1   # Freeze for review
+wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
+sleep 3
+d=$(wt)
+[ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
+click 972 250 1    # inspected version: open the list ...
+key Down           # ... Candidate 1 (current)
+key Return
+sleep 2
+click 330 336 2    # hello.txt in the frozen candidate
+shot 13-frozen
+
+step "Evidence: service-observed check"
+click 1258 78 1    # Evidence tab
+click 1280 446 0.3
+typ 'sh -c "test -f hello.txt"'
+click 1280 494 8   # Run check
+shot 14-check-passed
+
+step "approve the candidate"
+click 1175 78 1    # Overview tab
+scroll_inspector
+shot 15-approve-ready
+click 1280 439 3   # Approve Candidate 1 (checks passed: no override needed)
+scroll_inspector
+shot 16-approved
+
+step "protected integration into main"
+click 1280 642 1   # Integrate into main
+shot 17-integrate-confirm
+key Tab            # Cancel has focus; Tab reaches the confirm button
+key Return
+wait_for 60 "squash commit on main" main_integrated
+sleep 3
+scroll_inspector
+shot 18-integrated
+
+step "verify the integration with Git"
+[ "$(git -C "$REPO" rev-parse main^)" = "$BASE" ] || fail "main is not one squash commit ahead"
+[ "$(git -C "$REPO" rev-list --count "$BASE..main")" = 1 ] || fail "more than one commit integrated"
+[ "$(git -C "$REPO" diff --name-only "$BASE" main)" = hello.txt ] || fail "unexpected integrated files"
+[ "$(cat "$REPO/hello.txt")" = "hello there" ] || fail "main worktree file missing or wrong"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "main checkout not clean"
+
+step "clean up branch and worktree"
+click 1280 861 1   # Clean up branch and worktree
+shot 19-cleanup-confirm
+key Tab            # Cancel has focus; Tab reaches Clean up
+key Return
+wait_for 60 "branch and worktree removed" cleaned_up
+sleep 2
+x mousemove 120 139 click 1   # expand the archive
+sleep 1
+shot 20-cleaned-up
+git -C "$REPO" for-each-ref --format='%(refname)' refs/lade/retain/ | grep -q candidate- ||
+  fail "candidate retention refs missing"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "main checkout not clean after cleanup"
+step "1280x800 composition (window capture)"
+x windowsize "$WID" 1280 800
+sleep 2
+park
+import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
+x mousemove 1150 500; i=0; while [ $i -lt 12 ]; do x click 5; i=$((i + 1)); done; sleep 1
+park
+import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
+step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"
+step "PASSED: squash commit $(git -C "$REPO" rev-parse --short main) on main contains hello.txt; screenshots in $OUT"

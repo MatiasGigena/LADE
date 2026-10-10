@@ -1,6 +1,6 @@
 {
   "name": "@lade/pi-worker",
-  "version": "0.1.0-imp001",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -18,5 +18,10 @@
     "@types/node": "22.19.15",
     "oxlint": "1.83.0",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "undici": "8.9.0"
   }
 }

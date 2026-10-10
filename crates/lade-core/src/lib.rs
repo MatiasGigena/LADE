@@ -1,31 +1,15 @@
-//! Platform-free domain boundary. No lifecycle or execution is implemented in IMP-001.
+//! Platform-free LADE domain core: typed identities, Objective lifecycle, execution generations, Contextual
+//! Feedback, frozen review and approval rules, plus small use cases over narrow ports.
+//!
+//! No I/O, clock, randomness, Git, SQL, GTK or worker types: time and identities are supplied by callers.
 
-/// Domain revisions are distinct from their decimal-string wire representation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Revision(u64);
-
-impl Revision {
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    pub const fn value(self) -> u64 {
-        self.0
-    }
-
-    /// Exhaustion must reject a transition, never wrap to an earlier revision.
-    pub fn next(self) -> Option<Self> {
-        self.0.checked_add(1).map(Self)
-    }
-}
+pub mod application;
+pub mod domain;
+pub mod error;
+pub mod ports;
 
 #[cfg(test)]
-mod tests {
-    use super::Revision;
+mod testing;
 
-    #[test]
-    fn revisions_advance_without_wrapping() {
-        assert_eq!(Revision::new(0).next(), Some(Revision::new(1)));
-        assert_eq!(Revision::new(u64::MAX).next(), None);
-    }
-}
+pub use domain::ids::Revision;
+pub use error::DomainError;

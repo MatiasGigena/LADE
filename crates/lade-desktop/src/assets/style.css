@@ -1,0 +1,451 @@
+/* LADE — the single application stylesheet (design.md tokens).
+ *
+ * Colour tokens are named below; components use only these. Spacing scale: 4, 8, 12, 16, 24, 32.
+ * Radii: 6 (buttons, fields, rows), 8 (popovers, dialogs). Platform fonts only.
+ * GTK 4.14 CSS has no custom properties, so spacing values are written from the scale directly.
+ */
+
+@define-color surface #FFFFFF;
+@define-color ink_primary #000000;
+@define-color ink_secondary rgba(0, 0, 0, 0.64);
+@define-color ink_metadata rgba(0, 0, 0, 0.56);
+@define-color ink_optional rgba(0, 0, 0, 0.44);
+@define-color border_separator rgba(0, 0, 0, 0.10);
+@define-color border_control rgba(0, 0, 0, 0.56);
+@define-color fill_hover rgba(0, 0, 0, 0.05);
+@define-color fill_selected rgba(0, 0, 0, 0.09);
+@define-color focus_ring #000000;
+@define-color scrim rgba(0, 0, 0, 0.44);
+@define-color add_ink #146C43;
+@define-color add_fill #EEF8F1;
+@define-color del_ink #B42318;
+@define-color del_fill #FFF0EF;
+@define-color warn_ink #855000;
+@define-color warn_fill #FFF6DF;
+
+/* Base surfaces ---------------------------------------------------------------------------- */
+
+window, window.background, .lade-root, dialog, stack, notebook > stack, scrolledwindow,
+viewport, list, listview {
+  background-color: @surface;
+  color: @ink_primary;
+}
+
+label { color: inherit; }
+label:disabled { color: @ink_metadata; }
+
+/* GTK sets :focus-visible on the whole window; the focused widget itself is also :focus. */
+/* One focus treatment everywhere: 2 px black outline, offset where space permits. */
+*:focus:focus-visible {
+  outline: 2px solid @focus_ring;
+  outline-offset: 2px;
+}
+row:focus:focus-visible, textview:focus:focus-visible, label:focus:focus-visible {
+  outline-offset: -2px;
+}
+entry:focus-within, scrolledwindow.text-input:focus-within {
+  outline: 2px solid @focus_ring;
+  outline-offset: 1px;
+}
+
+selection, text selection, textview > text > selection, label > selection,
+entry > text > selection {
+  background-color: rgba(0, 0, 0, 0.22);
+  color: @ink_primary;
+}
+textview > text > selection:focus-within, label > selection:focus-within,
+entry > text > selection:focus-within {
+  background-color: rgba(0, 0, 0, 0.22);
+  color: @ink_primary;
+}
+
+/* Typography roles -------------------------------------------------------------------------- */
+
+.wordmark { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
+.objective-heading { font-size: 24px; font-weight: 600; }
+.section-title { font-size: 16px; font-weight: 600; }
+.empty-title { font-size: 24px; font-weight: 600; }
+.empty-heading { font-size: 16px; font-weight: 600; }
+.group-heading { font-size: 13px; font-weight: 500; color: @ink_metadata; margin-top: 4px; }
+.popover-heading { font-size: 13px; font-weight: 600; }
+.meta { font-size: 13px; color: @ink_metadata; }
+.secondary { color: @ink_secondary; }
+.strong { font-weight: 600; }
+.mono { font-family: monospace; font-size: 13px; }
+.numeric { font-feature-settings: "tnum"; font-size: 13px; font-weight: 500; }
+.added { color: @add_ink; }
+.removed { color: @del_ink; }
+.warning-text { color: @warn_ink; }
+
+/* Controls --------------------------------------------------------------------------------- */
+
+button {
+  min-height: 26px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid @border_control;
+  background-color: @surface;
+  background-image: none;
+  box-shadow: none;
+  color: @ink_primary;
+  font-weight: 500;
+  text-shadow: none;
+  -gtk-icon-shadow: none;
+}
+button:hover { background-color: @fill_hover; }
+button:active, button:checked { background-color: @fill_selected; }
+button:disabled {
+  color: @ink_metadata;
+  border-color: rgba(0, 0, 0, 0.20);
+  background-color: @surface;
+}
+button.primary {
+  background-color: @ink_primary;
+  border-color: @ink_primary;
+  color: @surface;
+}
+button.primary label { color: @surface; }
+button.primary:hover { background-color: #262626; }
+button.primary:active { background-color: #3A3A3A; }
+/* Inverse focus treatment for black buttons: white inner ring plus the black outline. */
+button.primary:focus:focus-visible {
+  box-shadow: inset 0 0 0 2px @surface;
+  outline: 2px solid @focus_ring;
+  outline-offset: 2px;
+}
+button.destructive {
+  color: @del_ink;
+  border-color: @del_ink;
+  background-color: @surface;
+}
+button.destructive label { color: @del_ink; }
+button.destructive:hover { background-color: @del_fill; }
+button.destructive:disabled, button.destructive:disabled label {
+  color: @ink_metadata;
+  border-color: rgba(0, 0, 0, 0.20);
+}
+button.quiet, button.icon-button {
+  border-color: transparent;
+  background-color: transparent;
+}
+button.quiet:hover, button.icon-button:hover { background-color: @fill_hover; }
+/* A quiet destructive action: warning ink, never identical to a neutral quiet button. */
+button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
+button.destructive-quiet:hover { background-color: @del_fill; }
+button.icon-button { min-width: 32px; min-height: 32px; padding: 0; }
+
+entry, scrolledwindow.text-input, spinbutton {
+  min-height: 34px;
+  border-radius: 6px;
+  border: 1px solid @border_control;
+  background-color: @surface;
+  background-image: none;
+  box-shadow: none;
+  color: @ink_primary;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+scrolledwindow.text-input { padding: 0; }
+scrolledwindow.text-input textview, scrolledwindow.text-input textview > text {
+  background-color: @surface;
+  color: @ink_primary;
+}
+scrolledwindow.text-input textview:focus:focus-visible { outline: none; }
+entry > image { color: @ink_metadata; }
+
+dropdown > button, dropdown > .dropdown, menubutton > button {
+  border: 1px solid @border_control;
+  border-radius: 6px;
+  background-color: @surface;
+}
+
+checkbutton check {
+  border: 1px solid @border_control;
+  background-color: @surface;
+  background-image: none;
+  border-radius: 4px;
+  min-width: 16px;
+  min-height: 16px;
+  color: @surface;
+}
+checkbutton check:checked { background-color: @ink_primary; border-color: @ink_primary; color: @surface; }
+
+popover > contents {
+  background-color: @surface;
+  color: @ink_primary;
+  border-radius: 8px;
+  border: 1px solid @border_separator;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  padding: 12px;
+}
+popover > arrow { background-color: @surface; border-color: @border_separator; }
+popover.menu > contents { padding: 4px; }
+popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
+popover row:selected { background-color: @fill_selected; color: @ink_primary; }
+
+expander title > arrow { color: @ink_metadata; }
+expander title > label { font-size: 13px; color: @ink_secondary; font-weight: 500; }
+
+scrollbar { background-color: transparent; border: none; }
+scrollbar slider { background-color: rgba(0, 0, 0, 0.28); border-radius: 6px; min-width: 6px; min-height: 6px; border: none; }
+scrollbar slider:hover { background-color: rgba(0, 0, 0, 0.44); }
+
+/* Thin structural divider with an invisible 8 px grab area (as the platform theme does). */
+paned.horizontal > separator {
+  min-width: 1px;
+  background-color: transparent;
+  background-image: image(@border_separator);
+  background-size: 1px 1px;
+  background-repeat: repeat-y;
+  background-position: left;
+  margin: 0 -8px 0 0;
+  padding: 0 8px 0 0;
+  box-shadow: none;
+}
+separator.region-divider { background-color: @border_separator; min-width: 1px; }
+
+/* Header ----------------------------------------------------------------------------------- */
+
+.lade-header {
+  min-height: 56px;
+  padding: 0 20px;
+  border-bottom: 1px solid @border_separator;
+  background-color: @surface;
+}
+.brand { min-width: 0; }
+.compact .lade-header { padding: 0 12px; }
+.nav button.nav-tab {
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  padding: 0 2px;
+  min-height: 54px;
+  color: @ink_secondary;
+  font-weight: 500;
+  box-shadow: none;
+}
+.nav button.nav-tab:hover { color: @ink_primary; background-color: transparent; }
+.nav button.nav-tab:checked {
+  color: @ink_primary;
+  background-color: transparent;
+  box-shadow: inset 0 -2px @ink_primary;
+}
+.nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
+.connection { margin-right: 4px; }
+.search entry { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.search dropdown > button {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-width: 0;
+  min-height: 26px;
+}
+.search-results > contents { padding: 12px; }
+.result-row { padding: 6px 8px; }
+.avatar {
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 9999px;
+  background-color: @fill_selected;
+  font-size: 13px;
+  font-weight: 600;
+}
+.profile-name { font-weight: 500; }
+
+.preview-band {
+  padding: 6px 20px;
+  background-color: #F5F5F5;
+  border-bottom: 1px solid @border_separator;
+  font-size: 13px;
+  color: @ink_secondary;
+}
+
+.notice-bar {
+  padding: 8px 20px;
+  background-color: #F5F5F5;
+  border-bottom: 1px solid @border_separator;
+}
+.notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
+.notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
+
+/* Objectives rail -------------------------------------------------------------------------- */
+
+.rail { padding: 16px 12px; }
+list.objective-list, list.file-list, list.plain-list, list.transcript {
+  background-color: transparent;
+}
+.objective-list > row {
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 1px 0;
+  background-color: transparent;
+  box-shadow: none;
+  border: none;
+}
+.objective-list > row:hover { background-color: @fill_hover; }
+.objective-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
+.objective-list > row:selected .objective-title { font-weight: 700; }
+.objective-title { font-weight: 600; }
+.objective-outcome { font-size: 13px; }
+.archive { margin-top: 8px; }
+
+.pill {
+  border-radius: 9999px;
+  padding: 2px 10px;
+  background-color: @fill_hover;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  font-size: 13px;
+}
+.pill-sign { font-weight: 700; }
+
+/* Centre ----------------------------------------------------------------------------------- */
+
+.centre-page { padding: 24px; }
+.centre-empty, .empty-state { padding: 32px; }
+.empty-state { margin-top: 48px; margin-left: 32px; }
+.breadcrumb-current { font-size: 13px; font-weight: 500; }
+.outcome-line { font-size: 15px; }
+
+.journey { margin-top: 4px; }
+.journey-dot {
+  min-width: 14px;
+  min-height: 14px;
+  border-radius: 9999px;
+  border: 2px solid @ink_primary;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 0;
+}
+.journey-dot.done, .journey-dot.current { background-color: @ink_primary; color: @surface; }
+.journey-dot.upcoming { border-color: @ink_optional; background-color: @surface; }
+.journey-label { color: @ink_secondary; }
+.journey-label.current { color: @ink_primary; font-weight: 600; }
+.journey-connector { min-height: 1px; min-width: 12px; background-color: rgba(0, 0, 0, 0.18); }
+
+.basis-selector > button { min-width: 220px; }
+.version-line { padding: 0; }
+
+.file-scroll { border-right: 1px solid @border_separator; }
+.file-list > row {
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 1px 8px 1px 0;
+  min-height: 32px;
+}
+.file-list > row:hover { background-color: @fill_hover; }
+.file-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
+.file-status { color: @ink_metadata; font-weight: 600; min-width: 12px; }
+.file-name { font-size: 13px; }
+
+.viewer { border: 1px solid @border_separator; border-radius: 6px; }
+.viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
+.viewer-path { font-weight: 500; }
+.selection-line { padding: 4px 12px; border-bottom: 1px solid @border_separator; }
+.viewer-message { padding: 24px; }
+.viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
+.segmented button { border-radius: 0; min-height: 22px; padding: 2px 10px; }
+.segmented button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-left-width: 0; }
+.segmented button:checked { background-color: @fill_selected; font-weight: 600; }
+
+textview.code-view, textview.code-view > text {
+  background-color: @surface;
+  color: @ink_primary;
+  font-family: monospace;
+  font-size: 13px;
+}
+textview.code-view border.left, textview.code-view gutter {
+  background-color: @surface;
+  color: @ink_metadata;
+  border-right: 1px solid @border_separator;
+}
+.gutter-number { color: @ink_metadata; font-family: monospace; font-size: 13px; }
+.gutter-sign { font-family: monospace; font-size: 13px; }
+
+/* Inspector -------------------------------------------------------------------------------- */
+
+notebook.inspector, notebook.inspector > header {
+  background-color: @surface;
+  border: none;
+  box-shadow: none;
+}
+notebook.inspector > header {
+  padding: 0 20px;
+  border-bottom: 1px solid @border_separator;
+}
+notebook.inspector > header > tabs > tab {
+  padding: 14px 2px 12px 2px;
+  margin: 0 20px 0 0;
+  min-height: 0;
+  border: none;
+  background-color: transparent;
+  box-shadow: none;
+  color: @ink_secondary;
+  font-weight: 500;
+  outline-offset: -2px;
+}
+notebook.inspector > header > tabs > tab:hover { color: @ink_primary; box-shadow: none; }
+notebook.inspector > header > tabs > tab:checked {
+  color: @ink_primary;
+  box-shadow: inset 0 -2px @ink_primary;
+}
+notebook.inspector > stack { background-color: @surface; }
+.inspector-page { padding: 20px; }
+.field-key { min-width: 96px; }
+.evidence-row { padding: 8px 0; border-bottom: 1px solid @border_separator; }
+.output {
+  background-color: #F7F7F7;
+  border-radius: 6px;
+  padding: 8px;
+  margin-top: 4px;
+}
+.protected {
+  background-color: #F7F7F7;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 4px 0;
+}
+
+.draft { padding: 12px 0 16px 0; border-bottom: 1px solid @border_separator; }
+.draft-reference { font-weight: 500; }
+.excerpt {
+  background-color: #F7F7F7;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: @ink_secondary;
+}
+.save-state.save-failed { color: @del_ink; font-weight: 600; }
+.save-state.save-warning { color: @warn_ink; font-weight: 600; }
+.save-state.save-ok { color: @add_ink; }
+
+.error-box {
+  background-color: @del_fill;
+  color: @del_ink;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+.warning-box {
+  background-color: @warn_fill;
+  color: @warn_ink;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+/* Activity --------------------------------------------------------------------------------- */
+
+.activity { padding: 24px; }
+.transcript > row.activity-item {
+  padding: 12px 4px;
+  border-bottom: 1px solid @border_separator;
+  background-color: transparent;
+}
+.transcript > row.activity-item:hover { background-color: transparent; }
+.transcript > row.from-user { background-color: #FAFAFA; }
+.role { font-size: 13px; }
+.activity-text { margin-top: 2px; }
+.composer { border-top: 1px solid @border_separator; padding-top: 12px; }
+
+/* Dialogs ---------------------------------------------------------------------------------- */
+
+window.lade-dialog { background-color: @surface; border-radius: 8px; }
+.dialog-content { padding: 24px; }
+.confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }

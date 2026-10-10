@@ -1,0 +1,109 @@
+#!/bin/sh
+# Build a self-contained per-user LADE bundle in dist/lade-<bundle>/.
+#
+#   scripts/bundle [--skip-build] [--out DIR]
+#
+# Layout: install, uninstall, bin/{laded,lade-desktop}, lib/lade/pi-worker/ (production node_modules only),
+# share/{applications,icons,systemd,doc}, VERSION and MANIFEST.sha256 (every other file).
+# The bundle carries checksums only; it is NOT signed (IMP-014). Node is not bundled: the
+# installer requires the host's Node 22 and records its path in the user unit.
+set -eu
+cd "$(dirname "$0")/.."
+root=$PWD
+
+die() { printf 'bundle: %s\n' "$*" >&2; exit 1; }
+
+build=1
+out=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --skip-build) build=0 ;;
+        --out) [ $# -ge 2 ] || die "--out needs a directory"; out=$2; shift ;;
+        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+
+json_field() {
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"
+}
+bundle_version=$(json_field contracts/toolchain.json bundle)
+protocol=$(json_field contracts/toolchain.json protocol)
+node_pin=$(json_field contracts/toolchain.json node)
+rust_pin=$(json_field contracts/toolchain.json rust)
+pi_pin=$(python3 -c 'import json; print(json.load(open("packages/pi-worker/package.json"))["dependencies"]["@earendil-works/pi-coding-agent"])')
+commit=$(git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+if [ "$commit" != unknown ] && [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    commit="$commit-dirty"
+fi
+id="$bundle_version+$commit"
+
+[ -n "$out" ] || out="dist/lade-$bundle_version"
+case $out in /*) ;; *) out="$root/$out" ;; esac
+
+if [ "$build" = 1 ]; then
+    ./scripts/cargo build --release --locked -p lade-system -p lade-desktop
+fi
+for exe in laded lade-desktop; do
+    [ -x "target/release/$exe" ] || die "target/release/$exe missing (build first or drop --skip-build)"
+done
+target/release/laded --version | grep -q "^laded $bundle_version protocol $protocol\$" \
+    || die "target/release/laded does not report bundle $bundle_version protocol $protocol"
+target/release/lade-desktop --version | grep -q "^LADE $bundle_version protocol $protocol\$" \
+    || die "target/release/lade-desktop does not report bundle $bundle_version protocol $protocol"
+
+umask 022
+rm -rf "$out"
+mkdir -p "$out/bin" "$out/lib/lade/pi-worker" \
+    "$out/share/applications" "$out/share/icons/hicolor/scalable/apps" \
+    "$out/share/systemd/user" "$out/share/doc/lade"
+
+install -m 0755 target/release/laded target/release/lade-desktop "$out/bin/"
+# The installer travels with the bundle: <bundle>/install, <installed>/install --rollback, uninstall.
+install -m 0755 scripts/install scripts/uninstall "$out/"
+
+worker="$out/lib/lade/pi-worker"
+cp packages/pi-worker/package.json packages/pi-worker/package-lock.json "$worker/"
+cp -R packages/pi-worker/src "$worker/src"
+# Production dependencies only (TypeScript and the linters are dev-only: Node strips types).
+# No install scripts (as in development) and no .bin symlinks, so the bundle holds regular files only.
+npm --prefix "$worker" ci --omit=dev --ignore-scripts --no-bin-links --no-audit --no-fund >&2
+
+install -m 0644 packaging/desktop/dev.lade.Lade.desktop "$out/share/applications/"
+install -m 0644 packaging/icons/dev.lade.Lade.svg "$out/share/icons/hicolor/scalable/apps/"
+install -m 0644 packaging/systemd/lade.service "$out/share/systemd/user/lade.service.in"
+install -m 0644 docs/user-guide.md docs/implementation/limitations.md "$out/share/doc/lade/"
+install -m 0644 vendor/pi-coding-agent/upstream/LICENSE "$out/share/doc/lade/pi-coding-agent.LICENSE"
+
+# The worker must load with production dependencies only: stdin EOF before worker.start exits 0
+# after every module (pi SDK, undici, the protocol code) has been imported.
+smoke=$(mktemp -d)
+trap 'rm -rf "$smoke"' EXIT
+if ! HOME="$smoke" node "$worker/src/worker.ts" </dev/null >"$smoke/out" 2>"$smoke/err"; then
+    cat "$smoke/err" >&2
+    die "the bundled worker does not start with production dependencies"
+fi
+[ ! -s "$smoke/out" ] || die "the bundled worker wrote to stdout before worker.start"
+
+links=$(find "$out" -type l | head -5)
+[ -z "$links" ] || die "bundle contains symlinks: $links"
+
+cat >"$out/VERSION" <<EOF
+id=$id
+bundle=$bundle_version
+protocol=$protocol
+commit=$commit
+rust=$rust_pin
+node=$node_pin
+pi_coding_agent=$pi_pin
+platform=linux-x86_64
+signed=no
+EOF
+
+(cd "$out" && find . -type f ! -path ./MANIFEST.sha256 -print0 | LC_ALL=C sort -z \
+    | xargs -0 sha256sum -- >MANIFEST.sha256)
+
+files=$(wc -l <"$out/MANIFEST.sha256")
+size=$(du -sh "$out" | cut -f1)
+printf 'bundle: %s (%s files, %s) at %s\n' "$id" "$files" "$size" "$out"

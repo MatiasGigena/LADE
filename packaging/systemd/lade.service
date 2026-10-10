@@ -1,0 +1,38 @@
+# LADE authoritative service (per-user). Template: scripts/install replaces the @…@ placeholders
+# with absolute paths and installs the result to ~/.config/systemd/user/lade.service.
+#
+# Hardening is limited to options that work in a user manager without creating a user or mount
+# namespace around laded: laded must itself create bubblewrap user namespaces for every worker, and
+# options such as ProtectSystem=, PrivateTmp=, ProtectHome= or RestrictNamespaces= in a user unit
+# would either nest laded in a namespace (breaking the worktree paths it hands to Git and bwrap) or
+# forbid the namespaces the sandbox needs. Host security settings are never changed.
+[Unit]
+Description=LADE service (Objectives, Git authority and sandboxed agent workers)
+Documentation=file://@DOCDIR@/user-guide.md
+
+[Service]
+Type=exec
+ExecStart=@LADED@ serve
+# The bundled pi worker package and the Node runtime found at install time (laded locates node on
+# PATH; verification commands resolve argv[0] in /usr/bin and /bin only).
+Environment=LADE_WORKER_DIR=@WORKER_DIR@
+Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
+# The sandboxed workers, their gateways and verification runs are descendants of laded: stopping the
+# service ends the whole control group, so no sandbox outlives it.
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=2
+# 78 = refused to start (unsafe directory, corrupt/newer store, another instance); 64 = usage.
+# Restarting cannot fix either, so do not loop.
+RestartPreventExitStatus=64 78
+UMask=0077
+# bubblewrap is used unprivileged (user namespaces), so no setuid helper is needed.
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=default.target
