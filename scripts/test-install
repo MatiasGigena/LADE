@@ -1,0 +1,179 @@
+#!/bin/sh
+# Exercise scripts/install and scripts/uninstall in a disposable HOME and prefix.
+#
+#   scripts/test-install                 synthetic bundle (stub executables, a few seconds)
+#   scripts/test-install --bundle DIR    a real bundle from scripts/bundle; additionally starts the
+#                                        installed laded with the unit's environment
+#
+# Covers: install, manifest tamper and extra-file refusal, second version + previous, rollback
+# (twice), unit/desktop path substitution (systemd-analyze verify when available), uninstall
+# keeping the state directory, and --purge-data refused without a terminal. Never touches the
+# real HOME, never runs systemctl against a real user manager (enable is not exercised).
+set -eu
+cd "$(dirname "$0")/.."
+root=$PWD
+
+die() { printf 'test-install: FAIL: %s\n' "$*" >&2; exit 1; }
+ok() { printf 'test-install: ok: %s\n' "$*"; }
+
+real=
+case ${1:-} in
+    --bundle) [ $# -eq 2 ] || die "usage: scripts/test-install [--bundle DIR]"; real=$(cd "$2" && pwd) ;;
+    '') ;;
+    *) die "usage: scripts/test-install [--bundle DIR]" ;;
+esac
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+export HOME="$work/home"
+unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME
+mkdir -p "$HOME"
+prefix="$work/prefix"
+libdir="$prefix/lib/lade"
+unit="$HOME/.config/systemd/user/lade.service"
+
+manifest() { # same format as scripts/bundle
+    (cd "$1" && find . -type f ! -path ./MANIFEST.sha256 -print0 | LC_ALL=C sort -z | xargs -0 sha256sum --) >"$work/manifest"
+    mv "$work/manifest" "$1/MANIFEST.sha256"
+}
+
+json_field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
+bv=$(json_field contracts/toolchain.json bundle)
+pv=$(json_field contracts/toolchain.json protocol)
+
+if [ -n "$real" ]; then
+    b1="$work/b1"
+    cp -R "$real" "$b1"
+else
+    b1="$work/b1"
+    mkdir -p "$b1/bin" "$b1/lib/lade/pi-worker/src" "$b1/share/applications" \
+        "$b1/share/icons/hicolor/scalable/apps" "$b1/share/systemd/user" "$b1/share/doc/lade"
+    printf '#!/bin/sh\necho "laded %s protocol %s"\n' "$bv" "$pv" >"$b1/bin/laded"
+    printf '#!/bin/sh\necho "LADE %s protocol %s"\n' "$bv" "$pv" >"$b1/bin/lade-desktop"
+    chmod 755 "$b1/bin/laded" "$b1/bin/lade-desktop"
+    printf '// stub\n' >"$b1/lib/lade/pi-worker/src/worker.ts"
+    cp scripts/install scripts/uninstall "$b1/"
+    cp packaging/desktop/dev.lade.Lade.desktop "$b1/share/applications/"
+    cp packaging/icons/dev.lade.Lade.svg "$b1/share/icons/hicolor/scalable/apps/"
+    cp packaging/systemd/lade.service "$b1/share/systemd/user/lade.service.in"
+    printf 'stub\n' >"$b1/share/doc/lade/user-guide.md"
+    printf 'id=%s+test1\nbundle=%s\nprotocol=%s\nnode=22.23.1\nsigned=no\n' "$bv" "$bv" "$pv" >"$b1/VERSION"
+    manifest "$b1"
+fi
+id1=$(sed -n 's/^id=//p' "$b1/VERSION")
+b2="$work/b2"
+cp -R "$b1" "$b2"
+sed -i "s/^id=.*/id=$id1-second/" "$b2/VERSION"
+manifest "$b2"
+id2="$id1-second"
+
+probe=
+bwrap --unshare-all --die-with-parent --new-session --ro-bind / / --proc /proc --dev /dev true 2>/dev/null \
+    || probe=--no-sandbox-probe
+
+try_install() { "$b1/install" --prefix "$prefix" $probe "$@" >"$work/out" 2>&1; }
+run_install() { try_install "$@" || { cat "$work/out" >&2; return 1; }; }
+
+# 1. Tampered and extended bundles are refused before anything is written.
+bad="$work/bad"
+cp -R "$b1" "$bad"
+printf 'tampered\n' >>"$bad/lib/lade/pi-worker/src/worker.ts"
+if try_install --bundle "$bad"; then die "tampered bundle was installed"; fi
+grep -q 'does not match its MANIFEST' "$work/out" || die "tamper refusal message: $(cat "$work/out")"
+[ ! -e "$libdir" ] || die "tampered bundle left files in $libdir"
+rm -rf "$bad"; cp -R "$b1" "$bad"; printf 'x\n' >"$bad/bin/extra"
+if try_install --bundle "$bad"; then die "bundle with an unlisted file was installed"; fi
+grep -q 'bin/extra' "$work/out" || die "extra-file refusal does not name the file"
+ok "tampered and extended bundles refused, nothing written"
+
+# 2. First install.
+run_install --bundle "$b1" || die "install of $id1 failed"
+[ "$(readlink "$libdir/current")" = "$id1" ] || die "current is not $id1"
+[ ! -e "$libdir/previous" ] || die "previous exists after the first install"
+for exe in laded lade-desktop; do
+    grep -qx "exec '$libdir/current/bin/$exe' \"\$@\"" "$prefix/bin/$exe" || die "$exe launcher target"
+    grep -qx "LADE_WORKER_DIR='$libdir/current/lib/lade/pi-worker'" "$prefix/bin/$exe" || die "$exe launcher worker dir"
+done
+"$prefix/bin/lade-desktop" --version | grep -q "^LADE $bv protocol $pv\$" || die "installed lade-desktop --version"
+"$prefix/bin/laded" --version | grep -q "^laded $bv protocol $pv\$" || die "installed laded --version"
+grep -q '@[A-Z_]*@' "$unit" && die "unresolved placeholder in $unit"
+grep -qx "ExecStart=$libdir/current/bin/laded serve" "$unit" || die "ExecStart in $unit"
+grep -qx "Environment=LADE_WORKER_DIR=$libdir/current/lib/lade/pi-worker" "$unit" || die "LADE_WORKER_DIR in $unit"
+grep -qx 'KillMode=control-group' "$unit" || die "KillMode"
+grep -qx "Exec=$prefix/bin/lade-desktop" "$prefix/share/applications/dev.lade.Lade.desktop" || die "desktop Exec"
+[ -f "$prefix/share/icons/hicolor/scalable/apps/dev.lade.Lade.svg" ] || die "icon"
+grep -q 'next: systemctl --user' "$work/out" || die "next steps not printed"
+ok "install $id1: launchers, unit, desktop entry and icon"
+printf 'mine\n' >"$work/foreign"
+mkdir -p "$work/p2/bin" && cp "$work/foreign" "$work/p2/bin/laded"
+if "$b1/install" --prefix "$work/p2" $probe --bundle "$b1" >"$work/out" 2>&1; then die "replaced a foreign $work/p2/bin/laded"; fi
+cmp -s "$work/foreign" "$work/p2/bin/laded" || die "foreign laded was modified"
+[ ! -e "$work/p2/lib" ] || die "refused install wrote $work/p2/lib"
+ok "a foreign $work/p2/bin/laded is refused before anything is written"
+
+if command -v systemd-analyze >/dev/null 2>&1; then
+    # Offline syntax/semantic check of the generated unit (no user manager needed).
+    # It exits 0 for ignored keys/values, so any diagnostic naming the unit file is a failure.
+    if systemd-analyze verify "$unit" >"$work/verify" 2>&1 && ! grep -q 'lade\.service' "$work/verify"; then
+        ok "systemd-analyze verify $unit"
+    else
+        cat "$work/verify" >&2
+        die "systemd-analyze verify rejected the unit"
+    fi
+else
+    printf 'test-install: skip: systemd-analyze not available\n'
+fi
+
+# 3. Second version keeps the first as previous; rollback switches back and forth.
+run_install --bundle "$b2" || die "install of $id2 failed"
+[ "$(readlink "$libdir/current")" = "$id2" ] && [ "$(readlink "$libdir/previous")" = "$id1" ] \
+    || die "after second install: current=$(readlink "$libdir/current") previous=$(readlink "$libdir/previous")"
+"$libdir/current/install" --rollback --prefix "$prefix" >"$work/out" 2>&1 || { cat "$work/out" >&2; die "rollback"; }
+[ "$(readlink "$libdir/current")" = "$id1" ] && [ "$(readlink "$libdir/previous")" = "$id2" ] || die "after rollback"
+printf 'tampered\n' >>"$libdir/$id2/VERSION"
+if "$libdir/current/install" --rollback --prefix "$prefix" >"$work/out" 2>&1; then die "rollback to a tampered version"; fi
+[ "$(readlink "$libdir/current")" = "$id1" ] || die "failed rollback changed current"
+sed -i '$d' "$libdir/$id2/VERSION"
+"$libdir/current/install" --rollback --prefix "$prefix" >"$work/out" 2>&1 || { cat "$work/out" >&2; die "second rollback"; }
+[ "$(readlink "$libdir/current")" = "$id2" ] || die "after second rollback"
+ok "second version, rollback, tampered rollback refused, roll forward"
+
+# 4. A real bundle: the installed service finds its worker and Node both as the unit starts it
+#    (ExecStart + Environment=) and through the launcher with an otherwise empty environment, which
+#    is how lade-desktop starts it when the unit is not running.
+serve_check() { # label, command...
+    label=$1; shift
+    state="$work/state-$label"; run="$work/run-$label"
+    "$@" serve --state-dir "$state" --runtime-dir "$run" 2>"$work/laded.err" &
+    pid=$!
+    i=0
+    while [ ! -S "$run/control.sock" ] && [ $i -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    [ -S "$run/control.sock" ] || { cat "$work/laded.err" >&2; die "$label: installed laded did not listen"; }
+    if grep -q 'launcher unavailable' "$work/laded.err"; then
+        cat "$work/laded.err" >&2
+        die "$label: installed laded could not construct the sandboxed launcher"
+    fi
+    ok "$label: installed laded serves with the bundled worker and Node"
+}
+if [ -n "$real" ]; then
+    envline() { sed -n "s/^Environment=$1=//p" "$unit"; }
+    serve_check unit env -i HOME="$HOME" LADE_WORKER_DIR="$(envline LADE_WORKER_DIR)" PATH="$(envline PATH)" \
+        "$(sed -n 's/^ExecStart=\(.*\) serve$/\1/p' "$unit")"
+    serve_check launcher env -i HOME="$HOME" PATH=/usr/bin:/bin "$prefix/bin/laded"
+fi
+
+# 5. Uninstall keeps user data; purge without a terminal is refused.
+mkdir -p "$HOME/.local/state/lade"
+printf 'precious\n' >"$HOME/.local/state/lade/lade.db"
+"$libdir/current/uninstall" --prefix "$prefix" >"$work/out" 2>&1 || { cat "$work/out" >&2; die "uninstall"; }
+[ ! -e "$libdir" ] && [ ! -e "$prefix/bin/laded" ] && [ ! -e "$prefix/bin/lade-desktop" ] && [ ! -e "$unit" ] \
+    && [ ! -e "$prefix/share/applications/dev.lade.Lade.desktop" ] || die "uninstall left files"
+[ -f "$HOME/.local/state/lade/lade.db" ] || die "uninstall deleted user data"
+if setsid -w "$root/scripts/uninstall" --prefix "$prefix" --purge-data </dev/null >"$work/out" 2>&1; then
+    die "purge without a terminal succeeded"
+fi
+[ -f "$HOME/.local/state/lade/lade.db" ] || die "refused purge deleted user data"
+ok "uninstall removed the installation and kept $HOME/.local/state/lade; purge without a terminal refused"
+printf 'test-install: all checks passed\n'

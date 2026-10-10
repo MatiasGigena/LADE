@@ -1,0 +1,32 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify-and-bundle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .node-version
+      - name: Native build and sandbox prerequisites (disposable runner only)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev build-essential pkg-config bubblewrap
+      - name: Allow unprivileged user namespaces for bubblewrap (disposable runner only)
+        # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor, which makes the
+        # worker/verification sandbox tests skip. This changes only this throwaway CI VM; LADE itself
+        # never changes host security settings, and its installer fails closed instead.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --unshare-all --die-with-parent --new-session --ro-bind / / --proc /proc --dev /dev true
+      - run: ./scripts/bootstrap-rust
+      - run: npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
+      - run: ./scripts/verify
+      - name: Release bundle
+        run: ./scripts/bundle
+      - name: Install, rollback and uninstall the real bundle in a disposable HOME
+        run: ./scripts/test-install --bundle dist/lade-0.2.0
+      # Ubuntu CI is build/contract/integration evidence on a disposable runner, not the pinned
+      # Mint host gate, GTK visual evidence or installed-release validation (IMP-016).

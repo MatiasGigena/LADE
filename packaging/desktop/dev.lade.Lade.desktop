@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=LADE
+GenericName=Agentic Development Environment
+Comment=Delegate implementation without delegating understanding or acceptance
+Exec=lade-desktop
+TryExec=lade-desktop
+Icon=dev.lade.Lade
+Terminal=false
+Categories=Development;
+Keywords=agent;git;review;objective;
+StartupNotify=true
+StartupWMClass=dev.lade.Desktop

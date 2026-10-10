@@ -1,0 +1,100 @@
+#!/bin/sh
+# Remove a per-user LADE installation made by scripts/install.
+#
+#   uninstall [--prefix DIR] [--purge-data]
+#
+# Stops and disables lade.service (when a user manager is reachable), removes the unit, the
+# PREFIX/bin launchers, the desktop entry, the icon and PREFIX/lib/lade (all installed versions).
+# User data is preserved: the state directory (${XDG_STATE_HOME:-~/.local/state}/lade: database,
+# worktrees, sessions, artifacts), ~/.config/lade/credentials.env and everything LADE created in
+# your repositories (lade/* branches, refs/lade/*). --purge-data additionally deletes the state
+# directory after an interactive confirmation typed on the terminal; it is refused while the
+# service holds the state lock and when no terminal is available.
+set -eu
+
+die() { printf 'uninstall: %s\n' "$*" >&2; exit 1; }
+note() { printf 'uninstall: %s\n' "$*"; }
+
+[ -n "${HOME:-}" ] || die "HOME is not set"
+prefix="$HOME/.local"
+purge=0
+while [ $# -gt 0 ]; do
+    case $1 in
+        --prefix) [ $# -ge 2 ] || die "--prefix needs a directory"; prefix=$2; shift ;;
+        --purge-data) purge=1 ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        *) die "unknown argument: $1" ;;
+    esac
+    shift
+done
+case $prefix in /*) ;; *) die "--prefix must be an absolute path" ;; esac
+prefix=${prefix%/}
+libdir="$prefix/lib/lade"
+
+config_home=${XDG_CONFIG_HOME:-}
+case $config_home in /*) ;; *) config_home="$HOME/.config" ;; esac
+state_home=${XDG_STATE_HOME:-}
+case $state_home in /*) ;; *) state_home="$HOME/.local/state" ;; esac
+state="$state_home/lade"
+unit="$config_home/systemd/user/lade.service"
+
+if [ -f "$unit" ]; then
+    if head -1 "$unit" | grep -q '^# Installed by LADE scripts/install'; then
+        if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+            systemctl --user disable --now lade.service 2>/dev/null || true
+            note "stopped and disabled lade.service"
+        fi
+        rm -f "$unit"
+        command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload 2>/dev/null || true
+        note "removed $unit"
+    else
+        note "leaving $unit: it was not written by the LADE installer"
+    fi
+fi
+
+for exe in laded lade-desktop; do
+    launcher="$prefix/bin/$exe"
+    if [ -f "$launcher" ] && [ ! -L "$launcher" ] \
+            && sed -n 2p "$launcher" | grep -q '^# Installed by LADE scripts/install'; then
+        rm -f "$launcher"
+        note "removed $launcher"
+    elif [ -e "$launcher" ] || [ -L "$launcher" ]; then
+        note "leaving $launcher: it was not written by the LADE installer"
+    fi
+done
+rm -f "$prefix/share/applications/dev.lade.Lade.desktop" \
+    "$prefix/share/icons/hicolor/scalable/apps/dev.lade.Lade.svg"
+command -v update-desktop-database >/dev/null 2>&1 \
+    && update-desktop-database -q "$prefix/share/applications" 2>/dev/null || true
+if [ -d "$libdir" ]; then
+    rm -rf "$libdir"
+    note "removed $libdir"
+fi
+
+if [ "$purge" = 0 ]; then
+    [ ! -d "$state" ] || note "kept your data in $state (delete it with --purge-data)"
+    [ ! -f "$config_home/lade/credentials.env" ] || note "kept $config_home/lade/credentials.env"
+    note "repositories keep their lade/* branches and refs/lade/* retention refs"
+    exit 0
+fi
+
+[ -d "$state" ] || { note "no data directory at $state"; exit 0; }
+if [ -f "$state/lade.lock" ] && command -v flock >/dev/null 2>&1; then
+    flock -n "$state/lade.lock" true 2>/dev/null \
+        || die "a LADE service is using $state; stop it first (systemctl --user stop lade.service)"
+fi
+# Confirmation must come from a person at the terminal, never from a pipe or a script.
+if ! { exec 3</dev/tty; } 2>/dev/null; then
+    die "--purge-data needs an interactive terminal; data in $state was kept"
+fi
+printf 'This permanently deletes %s:\n' "$state" >/dev/tty
+printf '  Objective history, accepted inputs, drafts, candidates, verification evidence,\n' >/dev/tty
+printf '  Agent Session files and Objective worktrees (including unintegrated work).\n' >/dev/tty
+printf 'Type "delete my LADE data" to continue: ' >/dev/tty
+answer=
+IFS= read -r answer <&3 || true
+exec 3<&-
+[ "$answer" = "delete my LADE data" ] || die "not confirmed; data in $state was kept"
+rm -rf "$state"
+note "deleted $state"
+note "repositories may list stale worktrees: run 'git worktree prune' in each Workspace"
