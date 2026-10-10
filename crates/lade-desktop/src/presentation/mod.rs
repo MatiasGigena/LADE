@@ -9,4 +9,5 @@ pub mod model;
 pub mod models;
 pub mod preview;
 pub mod store;
+pub mod text_bound;
 pub mod text_map;

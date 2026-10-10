@@ -7,12 +7,13 @@ use gtk::gio;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, Dialog, label, set_accessible_label, vbox};
+use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, vbox};
 use crate::presentation::controller::{Controller, FeedbackBatch};
 use crate::presentation::format;
 use crate::presentation::intents::StartPoint;
 use crate::presentation::keys::{self, AppAction, Keymap};
 use crate::presentation::model::Intent as ObjectiveIntent;
+use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
 
 /// Generic confirmation; `destructive` uses the destructive treatment for the confirm button.
 pub fn confirm(
@@ -57,21 +58,20 @@ pub fn approve_with_override(opener: &impl IsA<gtk::Widget>, controller: &Rc<Con
         &["meta"],
     ));
     dialog.body.append(&widgets::bounded_text(&reason, 96, 200));
+    let reason_input = LimitedInput::new(&reason, OVERRIDE_REASON_LIMIT, "the override reason");
+    dialog.body.append(&reason_input.error);
     dialog.add_cancel();
     let ok = dialog.add_button("Approve candidate", &["primary"]);
     let window = dialog.window.clone();
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let reason_view = reason.clone();
-    ok.connect_clicked(move |_| {
-        let buffer = reason_view.buffer();
-        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-        match controller.approve(Some(text.to_string())) {
+    ok.connect_clicked(
+        move |_| match controller.approve(Some(reason_input.text())) {
             Ok(()) => window.close(),
             Err(message) => d.show_error(&message),
-        }
-    });
+        },
+    );
     dialog.present();
     reason.grab_focus();
 }
@@ -207,7 +207,9 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
         set_accessible_label(&view, name);
         dialog.body.append(&label(name, &["meta"]));
         dialog.body.append(&widgets::bounded_text(&view, 56, 140));
-        view
+        let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
+        dialog.body.append(&input.error);
+        input
     };
     let outcome = area("Expected outcome");
     let constraints = area("Constraints");
@@ -233,10 +235,7 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let text = |v: &gtk::TextView| {
-        let b = v.buffer();
-        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
-    };
+    let text = |input: &LimitedInput| input.text();
     let title_entry = title.clone();
     ok.connect_clicked(move |_| {
         let branch = branches
@@ -284,10 +283,12 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
     let area = |name: &str, text: &str| {
         let view = gtk::TextView::new();
         set_accessible_label(&view, name);
-        view.buffer().set_text(text);
         dialog.body.append(&label(name, &["meta"]));
         dialog.body.append(&widgets::bounded_text(&view, 56, 160));
-        view
+        let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
+        input.set_text(text);
+        dialog.body.append(&input.error);
+        input
     };
     let outcome = area("Expected outcome", &current.outcome);
     let constraints = area("Constraints", &current.constraints);
@@ -298,11 +299,8 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let text = |v: &gtk::TextView| {
-        let b = v.buffer();
-        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
-    };
-    let first = outcome.clone();
+    let text = |input: &LimitedInput| input.text();
+    let first = outcome.view.clone();
     ok.connect_clicked(move |_| {
         let intent = ObjectiveIntent {
             outcome: text(&outcome),

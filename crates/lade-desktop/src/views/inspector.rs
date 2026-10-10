@@ -24,6 +24,7 @@ use crate::presentation::model::{
 };
 use crate::presentation::models;
 use crate::presentation::store::{Change, InspectorTab};
+use crate::presentation::text_bound::TEXT_LIMIT;
 
 const FEEDBACK_MODES: [DeliveryMode; 2] = [DeliveryMode::Steer, DeliveryMode::FollowUp];
 
@@ -33,9 +34,9 @@ struct DraftWidgets {
     excerpt: gtk::Label,
     stale: gtk::Box,
     view: gtk::TextView,
+    input: Rc<widgets::LimitedInput>,
     status: gtk::Label,
     actions: gtk::Box,
-    applying: Rc<Cell<bool>>,
 }
 
 pub struct Inspector {
@@ -856,12 +857,8 @@ impl Inspector {
                 .collect::<Vec<_>>()
                 .join("\n");
             w.excerpt.set_text(&excerpt);
-            let buffer = w.view.buffer();
-            let current = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-            if current.as_str() != editor.body {
-                w.applying.set(true);
-                buffer.set_text(&editor.body);
-                w.applying.set(false);
+            if w.input.text() != editor.body {
+                w.input.set_text(&editor.body);
             }
             set_accessible_label(
                 &w.view,
@@ -890,6 +887,8 @@ impl Inspector {
         let view = gtk::TextView::new();
         set_focus_key(&view, &format!("draft:{}", draft_id.as_str()));
         root.append(&widgets::bounded_text(&view, 88, 200));
+        let input = widgets::LimitedInput::new(&view, TEXT_LIMIT, "this feedback draft");
+        root.append(&input.error);
         let status_row = vbox(4);
         let status = label("", &["meta", "save-state"]);
         status.set_hexpand(true);
@@ -897,17 +896,11 @@ impl Inspector {
         let actions = hbox(8);
         status_row.append(&actions);
         root.append(&status_row);
-        let applying = Rc::new(Cell::new(false));
         let controller = self.controller.clone();
         let id = draft_id.clone();
-        let flag = applying.clone();
         let this = Rc::downgrade(self);
-        view.buffer().connect_changed(move |buffer| {
-            if flag.get() {
-                return;
-            }
-            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-            controller.edit_draft(&id, &text, widgets::monotonic_ms());
+        input.connect_commit(move |text| {
+            controller.edit_draft(&id, text, widgets::monotonic_ms());
             if let Some(this) = this.upgrade() {
                 let handler = this.on_draft_edit.borrow().clone();
                 if let Some(handler) = handler {
@@ -921,9 +914,9 @@ impl Inspector {
             excerpt,
             stale,
             view,
+            input,
             status,
             actions,
-            applying,
         }
     }
 

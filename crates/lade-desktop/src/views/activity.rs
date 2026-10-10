@@ -14,6 +14,7 @@ use crate::presentation::model::{
     ActionName, ActivityItem, ActivityRole, DeliveryMode, ObjectiveId,
 };
 use crate::presentation::store::{ActivityChange, Change};
+use crate::presentation::text_bound::TEXT_LIMIT;
 
 const MODES: [DeliveryMode; 3] = [
     DeliveryMode::Prompt,
@@ -33,6 +34,7 @@ pub struct Activity {
     text_labels: RefCell<Vec<gtk::Label>>,
     shown_for: RefCell<Option<ObjectiveId>>,
     pub composer: gtk::TextView,
+    composer_input: Rc<widgets::LimitedInput>,
     mode: gtk::DropDown,
     send_area: gtk::Box,
     composer_error: gtk::Box,
@@ -82,6 +84,9 @@ impl Activity {
         set_accessible_label(&composer, "Message to the agent");
         set_focus_key(&composer, "activity:composer");
         composer_box.append(&widgets::bounded_text(&composer, 64, 160));
+        let composer_input =
+            widgets::LimitedInput::new(&composer, TEXT_LIMIT, "this message to the agent");
+        composer_box.append(&composer_input.error);
         let row = hbox(12);
         let mode = gtk::DropDown::from_strings(&["Prompt", "Steer", "Follow-up"]);
         set_accessible_label(&mode, "Delivery mode");
@@ -111,6 +116,7 @@ impl Activity {
             text_labels: RefCell::new(Vec::new()),
             shown_for: RefCell::new(None),
             composer,
+            composer_input,
             mode,
             send_area,
             composer_error,
@@ -134,15 +140,15 @@ impl Activity {
         let this = Rc::downgrade(&activity);
         activity.mode.connect_selected_notify(move |d| {
             set_explain(d);
-            if let Some(this) = this.upgrade() {
+            if let Some(this) = this.upgrade()
+                && !this.updating.get()
+            {
                 this.store_composer();
             }
         });
         let this = Rc::downgrade(&activity);
-        activity.composer.buffer().connect_changed(move |_| {
-            if let Some(this) = this.upgrade()
-                && !this.updating.get()
-            {
+        activity.composer_input.connect_commit(move |_| {
+            if let Some(this) = this.upgrade() {
                 this.store_composer();
             }
         });
@@ -190,10 +196,7 @@ impl Activity {
     }
 
     fn composer_text(&self) -> String {
-        let buffer = self.composer.buffer();
-        buffer
-            .text(&buffer.start_iter(), &buffer.end_iter(), false)
-            .to_string()
+        self.composer_input.text()
     }
 
     fn store_composer(&self) {
@@ -206,9 +209,7 @@ impl Activity {
         widgets::clear(&self.composer_error);
         match self.controller.send_message(&self.composer_text(), mode) {
             Ok(()) => {
-                self.updating.set(true);
-                self.composer.buffer().set_text("");
-                self.updating.set(false);
+                self.composer_input.set_text("");
                 self.store_composer();
             }
             Err(message) => self.composer_error.append(&widgets::error_line(&message)),
@@ -249,8 +250,8 @@ impl Activity {
             .selected_ui()
             .map(|u| (u.composer_text.clone(), u.composer_mode))
             .unwrap_or((String::new(), DeliveryMode::Prompt));
+        self.composer_input.set_text(&text);
         self.updating.set(true);
-        self.composer.buffer().set_text(&text);
         if let Some(index) = MODES.iter().position(|m| *m == mode) {
             self.mode.set_selected(index as u32);
         }
