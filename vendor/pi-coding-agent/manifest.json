@@ -11,5 +11,31 @@
     "upstream/LICENSE": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
     "upstream/package.json": "f1738e4b42203e5f22bcb513f13fb2fb224f1e98d1f129ff042f87048665a94c",
     "upstream/npm-shrinkwrap.json": "5ff461d87e0a7ccac07e6a9eb3edcd18841d3373d375bed043606b51082f1a26"
+  },
+  "npm_distribution": {
+    "consumer": "packages/pi-worker (WP-D worker)",
+    "lockfile": "packages/pi-worker/package-lock.json",
+    "relation": "The worker installs the npm registry tarball of the same 0.85.1 release built from the pinned commit. Its package.json and npm-shrinkwrap.json are byte-identical to upstream/package.json and upstream/npm-shrinkwrap.json (hashes in files), so its nested dependency tree follows the upstream shrinkwrap. Unpatched; only root exports are imported.",
+    "install": "npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund (the skipped install scripts of esbuild, protobufjs and @google/genai are not needed by the worker)",
+    "packages": {
+      "@earendil-works/pi-coding-agent": {
+        "version": "0.85.1",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.1.tgz",
+        "integrity": "sha512-FGRN+OHbWaefBPGaTggAdLjrIHW+s2PzLyglz/5dfLzb9of7uuXMXYC0fJIeZTw+shS32o2cuQ9jF7YSDuL/oQ==",
+        "use": "SDK root exports: createAgentSession, ModelRuntime, SessionManager, SettingsManager, DefaultResourceLoader"
+      },
+      "@earendil-works/pi-ai": {
+        "version": "0.85.1",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.85.1.tgz",
+        "integrity": "sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==",
+        "use": "createAssistantMessageEventStream and stream types for the lade-fixture provider; a second copy beside the shrinkwrapped nested one"
+      },
+      "undici": {
+        "version": "8.9.0",
+        "resolved": "https://registry.npmjs.org/undici/-/undici-8.9.0.tgz",
+        "integrity": "sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==",
+        "use": "global dispatcher tunnelling through the LADE gateway socket; the version pi pins"
+      }
+    }
   }
 }

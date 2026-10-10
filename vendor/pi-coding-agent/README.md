@@ -21,3 +21,14 @@ need. Upgrades are manual coordinated changes, never independent pi self-updates
 No profile/credential import, provider calls, resource loading or package scripts
 were executed to retain these files. Full shipped native/transitive notices belong
 to IMP-014; this MIT notice is not blanket licensing clearance for that bundle.
+
+## npm distribution used by the worker (WP-D)
+
+`packages/pi-worker` installs `@earendil-works/pi-coding-agent@0.85.1` from the npm
+registry (integrity recorded in `manifest.json` → `npm_distribution`, and in
+`packages/pi-worker/package-lock.json`). Its `package.json` and `npm-shrinkwrap.json`
+are byte-identical to `upstream/`, so the installed nested tree follows the upstream
+shrinkwrap. The worker imports root exports only and applies **no patches**. It also
+depends directly on `@earendil-works/pi-ai@0.85.1` (stream factory for the
+`lade-fixture` provider) and `undici@8.9.0` (gateway dispatcher). See
+[docs/implementation/worker.md](../../docs/implementation/worker.md).
