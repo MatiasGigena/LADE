@@ -1,13 +1,14 @@
 use crate::{
     MAX_CHUNK, MAX_TRANSFER, MAX_TRANSFERS, WireError,
-    dto::{Body, Counter, Id, Scope},
+    client::{ClientBody as Body, Scope},
+    types::{Counter, Digest as Sha256Digest, Id},
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 struct Transfer {
     total: usize,
-    digest: String,
+    digest: Sha256Digest,
     next: u64,
     bytes: Vec<u8>,
 }
@@ -112,12 +113,7 @@ impl Reassembler {
                 if t.bytes.len() != t.total {
                     return Err(WireError("chunk_length"));
                 }
-                if Sha256::digest(&t.bytes)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>()
-                    != t.digest
-                {
+                if Sha256Digest::from_bytes(Sha256::digest(&t.bytes).into()) != t.digest {
                     return Err(WireError("chunk_checksum"));
                 }
                 return Ok(Some(t.bytes));

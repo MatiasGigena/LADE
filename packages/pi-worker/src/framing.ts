@@ -1,20 +1,24 @@
-import type { Envelope } from "./dto.ts";
+import type { Envelope, WorkerBody, WorkerEnvelope } from "./dto.ts";
 import { MAX_FRAME, WireError } from "./json.ts";
-import { decode, validate } from "./protocol.ts";
+import { BUNDLE, decode, decodeWorkerFrame, validate, validateWorker, VERSION } from "./protocol.ts";
 
 export type Framing = "client" | "worker";
 
-export class Decoder {
+/** Incremental strict decoder: one body retained, one callback at a time; every error poisons it. */
+export class Decoder<Frame> {
   private readonly framing: Framing;
+  private readonly decodeBody: (bytes: Uint8Array) => Frame;
   private readonly header = Buffer.alloc(4);
   private headerSize = 0;
   private body = Buffer.alloc(0);
   private size = 0;
   private expected: number | undefined;
   private failed = false;
-  constructor(framing: Framing) { this.framing = framing; }
+  constructor(framing: Framing, decodeBody: (bytes: Uint8Array) => Frame) {
+    this.framing = framing; this.decodeBody = decodeBody;
+  }
 
-  push(input: Buffer, emit: (frame: Envelope) => void): void {
+  push(input: Buffer, emit: (frame: Frame) => void): void {
     if (this.failed) throw new WireError("closed");
 
     try {
@@ -41,7 +45,7 @@ export class Decoder {
           this.size += n; pos += n;
 
           if (this.size === this.expected) {
-            const frame = decode(this.body);
+            const frame = this.decodeBody(this.body);
             this.size = 0; this.expected = undefined; this.body = Buffer.alloc(0);
             emit(frame);
           }
@@ -61,7 +65,7 @@ export class Decoder {
           this.size += n; pos = stop;
 
           if (end >= 0) {
-            const frame = decode(this.body.subarray(0, this.size));
+            const frame = this.decodeBody(this.body.subarray(0, this.size));
             this.size = 0; pos++; emit(frame);
           }
         }
@@ -81,13 +85,37 @@ export class Decoder {
   }
 }
 
-export function encode(frame: Envelope, framing: Framing): Buffer {
-  validate(frame); // Closed, bounded fields before JSON.stringify allocates.
-  const body = Buffer.from(JSON.stringify(frame));
-  decode(body);
-
+function framed(body: Buffer, framing: Framing): Buffer {
   if (framing === "worker") return Buffer.concat([body, Buffer.from("\n")]);
   const header = Buffer.alloc(4); header.writeUInt32BE(body.length);
 
   return Buffer.concat([header, body]);
+}
+
+/** Client-contract frame: validated before JSON.stringify allocates, re-decoded as the peer would. */
+export function encode(frame: Envelope, framing: Framing): Buffer {
+  validate(frame);
+  const body = Buffer.from(JSON.stringify(frame));
+  decode(body);
+
+  return framed(body, framing);
+}
+
+/** Worker-contract frame in either framing. */
+export function encodeWorker(frame: WorkerEnvelope, framing: Framing): Buffer {
+  validateWorker(frame);
+  const body = Buffer.from(JSON.stringify(frame));
+  decodeWorkerFrame(body);
+
+  return framed(body, framing);
+}
+
+/** One JSONL line (envelope + LF) for a worker-contract body. */
+export function encodeWorkerBody(body: WorkerBody): Buffer {
+  return encodeWorker({ protocol: VERSION, bundle: BUNDLE, body }, "worker");
+}
+
+/** Strict JSONL decoder for worker-contract frames. */
+export function createWorkerDecoder(): Decoder<WorkerEnvelope> {
+  return new Decoder("worker", decodeWorkerFrame);
 }

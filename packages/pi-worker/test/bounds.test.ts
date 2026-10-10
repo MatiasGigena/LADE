@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Reassembler } from "../src/chunks.ts";
-import { decode, MAX_CHUNK, MAX_TRANSFER, BUNDLE } from "../src/protocol.ts";
-import { Decoder, encode } from "../src/framing.ts";
+import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_TRANSFER, BUNDLE, newId, parseId } from "../src/protocol.ts";
+import { createWorkerDecoder, Decoder, encode, encodeWorkerBody } from "../src/framing.ts";
+import type { WorkerBody } from "../src/dto.ts";
 import { RequestHistory } from "../src/history.ts";
 import { WireError, MAX_FRAME } from "../src/json.ts";
 import type { JsonValue } from "../src/json.ts";
@@ -36,7 +37,7 @@ test("logical content larger than a frame survives at the reassembly limit", () 
 
   for (let index = 0; index < MAX_TRANSFER / MAX_CHUNK; index++) {
     const data = message({ kind: "chunk.data", transfer_id: id(4), index: String(index), hex: "61".repeat(MAX_CHUNK) });
-    const decoder = new Decoder("worker");
+    const decoder = new Decoder("worker", decode);
     decoder.push(encode(data, "worker"), envelope => assert.equal(chunks.accept(envelope.body), undefined));
     decoder.finish();
   }
@@ -58,18 +59,20 @@ test("cancellation releases capacity and disconnect revokes reassembly", () => {
 
 test("correlation overflow never evicts the original outcome", () => {
   const history = new RequestHistory();
-  const command = (n: number) => message({ kind: "command", request_id: id(1000 + n), operation_id: id(2000 + n), expected_service_epoch: id(6), scope, command: { name: "operation.get", payload: { operation_id: id(5) } } });
+  const command = (n: number) => message({ kind: "request", request_id: id(1000 + n), operation_id: id(2000 + n), name: "draft.delete", payload: { draft_id: id(5), expected_revision: "1" } });
+  const original = { status: "rejected", code: "interrupted", action: "query_operation", detail: "" } as const;
+  const later = { status: "rejected", code: "conflict", action: "refresh", detail: "" } as const;
 
-  for (let n = 0; n < 256; n++) history.observe(command(n).body, { status: "operation", state: "uncertain" });
-  assert.throws(() => history.observe(command(256).body, { status: "operation", state: "completed" }), { code: "limit_reached" });
-  assert.deepEqual(history.observe(command(0).body, { status: "operation", state: "completed" }), { status: "operation", state: "uncertain" });
+  for (let n = 0; n < 256; n++) history.observe(command(n).body, original);
+  assert.throws(() => history.observe(command(256).body, later), { code: "limit_reached" });
+  assert.deepEqual(history.observe(command(0).body, later), original);
 });
 
 test("downstream backpressure stops before later frames", () => {
   for (const framing of ["client", "worker"] as const) {
     const hello = encode(message({ kind: "hello" }), framing);
     const wire = Buffer.concat([hello, hello]);
-    const decoder = new Decoder(framing);
+    const decoder = new Decoder(framing, decode);
     let calls = 0;
     assert.throws(() => decoder.push(wire, () => { calls++; throw new WireError("limit_reached"); }), { code: "limit_reached" });
     assert.equal(calls, 1);
@@ -83,4 +86,34 @@ test("oversized outbound content rejects before serialization", () => {
 
   if (data.body.kind === "chunk.data") data.body.hex = "a".repeat(2 * MAX_FRAME);
   assert.throws(() => encode(data, "client"), { code: "invalid_schema" });
+});
+
+test("worker API encodes JSONL lines and decodes them one at a time", () => {
+  const bodies: WorkerBody[] = [
+    { kind: "worker.ready", pi_session_id: "pi-1", session_file: "/session/a.jsonl" },
+    { kind: "activity.item", item_id: newId(), role: "assistant", title: "Reply", text: "a\u2028b\nc", is_error: false, truncated: false },
+    { kind: "turn.state", state: "idle" },
+  ];
+
+  const wire = Buffer.concat(bodies.map(encodeWorkerBody));
+  assert.equal(wire.toString().split("\n").length, bodies.length + 1);
+  const decoder = createWorkerDecoder();
+  const received: WorkerBody[] = [];
+
+  for (const byte of wire) decoder.push(Buffer.from([byte]), frame => received.push(frame.body));
+  decoder.finish();
+  // The bounded parser yields null-prototype objects; compare the wire content.
+  assert.deepEqual(JSON.parse(JSON.stringify(received)), bodies);
+  assert.ok(received.every(isWorkerToService));
+});
+
+test("worker API distinguishes directions and rejects client bodies", () => {
+  const start = decodeWorkerFrame(encodeWorkerBody({ kind: "session.abort" }).subarray(0, -1));
+  assert.ok(isServiceToWorker(start.body));
+  assert.equal(isWorkerToService(start.body), false);
+  assert.throws(() => decodeWorkerFrame(Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body: { kind: "hello" } }))), { code: "invalid_schema" });
+  assert.throws(() => decodeWorkerFrame(Buffer.from(JSON.stringify({ protocol: 1, bundle: "0.1.0-imp001", body: { kind: "session.abort" } }))), { code: "version_mismatch" });
+  assert.throws(() => encodeWorkerBody({ kind: "worker.error", code: "internal", message: "x".repeat(513) }), { code: "invalid_schema" });
+  assert.throws(() => parseId("ABCDEF00-0000-4000-8000-000000000000"), { code: "invalid_schema" });
+  assert.match(newId(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });

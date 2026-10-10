@@ -1,20 +1,23 @@
-use crate::{MAX_FRAME, WireError, decode, dto::Envelope};
+use crate::{MAX_FRAME, Message, WireError};
+use std::marker::PhantomData;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Framing {
+    /// Four-byte unsigned big-endian body length, then the UTF-8 JSON body.
     Client,
+    /// UTF-8 JSON body then one LF byte (JSONL). U+2028/U+2029 are content, not delimiters.
     Worker,
 }
 
-/// One body retained, regardless of input batching. Any error poisons the link.
-pub struct Decoder {
+/// Byte-level frame splitter. Retains at most one partial body; any error poisons it.
+pub struct Deframer {
     framing: Framing,
     header: Vec<u8>,
     body: Vec<u8>,
     expected: Option<usize>,
     failed: bool,
 }
-impl Decoder {
+impl Deframer {
     pub fn new(framing: Framing) -> Self {
         Self {
             framing,
@@ -24,34 +27,35 @@ impl Decoder {
             failed: false,
         }
     }
-    pub fn push(
-        &mut self,
-        input: &[u8],
-        mut emit: impl FnMut(Envelope) -> Result<(), WireError>,
-    ) -> Result<(), WireError> {
+
+    /// Consumes bytes from `input` up to the end of the first complete frame and returns that
+    /// body; unconsumed bytes stay in `input`. Never scans ahead past one frame.
+    pub fn next_frame(&mut self, input: &mut &[u8]) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
             return Err(WireError("closed"));
         }
-        let result = self.consume(input, &mut emit);
+        let result = self.consume(input);
         if result.is_err() {
-            self.failed = true;
-            self.body = Vec::new();
-            self.header.clear();
+            self.poison();
         }
         result
     }
-    fn consume(
-        &mut self,
-        mut input: &[u8],
-        emit: &mut impl FnMut(Envelope) -> Result<(), WireError>,
-    ) -> Result<(), WireError> {
+
+    fn poison(&mut self) {
+        self.failed = true;
+        self.body = Vec::new();
+        self.header.clear();
+        self.expected = None;
+    }
+
+    fn consume(&mut self, input: &mut &[u8]) -> Result<Option<Vec<u8>>, WireError> {
         while !input.is_empty() {
             match self.framing {
                 Framing::Client => {
                     if self.expected.is_none() {
                         let n = (4 - self.header.len()).min(input.len());
                         self.header.extend_from_slice(&input[..n]);
-                        input = &input[n..];
+                        *input = &input[n..];
                         if self.header.len() != 4 {
                             continue;
                         }
@@ -62,18 +66,17 @@ impl Decoder {
                         if size == 0 || size > MAX_FRAME {
                             return Err(WireError("frame_size"));
                         }
+                        // Allocate only after validating the declared length.
                         self.body.reserve_exact(size);
                         self.expected = Some(size);
                     }
                     let size = self.expected.expect("validated length");
                     let n = (size - self.body.len()).min(input.len());
                     self.body.extend_from_slice(&input[..n]);
-                    input = &input[n..];
+                    *input = &input[n..];
                     if self.body.len() == size {
-                        let frame = decode(&self.body)?;
-                        self.body.clear();
                         self.expected = None;
-                        emit(frame)?;
+                        return Ok(Some(std::mem::take(&mut self.body)));
                     }
                 }
                 Framing::Worker => {
@@ -89,27 +92,28 @@ impl Decoder {
                         self.body.reserve_exact(capacity - self.body.len());
                     }
                     self.body.extend_from_slice(&input[..n]);
-                    input = &input[n..];
+                    *input = &input[n..];
                     if end.is_some() {
-                        let frame = decode(&self.body)?;
-                        self.body.clear();
-                        input = &input[1..];
-                        emit(frame)?;
+                        *input = &input[1..];
+                        if self.body.is_empty() {
+                            return Err(WireError("frame_size"));
+                        }
+                        return Ok(Some(std::mem::take(&mut self.body)));
                     }
                 }
             }
         }
-        Ok(())
+        Ok(None)
     }
+
+    /// End of stream: fails if a partial frame remains. The deframer is closed afterwards.
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
             return Err(WireError("closed"));
         }
-        self.failed = true;
         let incomplete =
             !self.header.is_empty() || !self.body.is_empty() || self.expected.is_some();
-        self.body = Vec::new();
-        self.header.clear();
+        self.poison();
         if incomplete {
             Err(WireError("truncated_frame"))
         } else {
@@ -118,19 +122,59 @@ impl Decoder {
     }
 }
 
-pub fn encode(frame: &Envelope, framing: Framing) -> Result<Vec<u8>, WireError> {
-    if frame.protocol != crate::VERSION || frame.bundle != crate::BUNDLE {
+/// Incremental strict decoder: one body retained, one callback at a time, and any framing,
+/// decoding or downstream error poisons the link.
+pub struct Decoder<M> {
+    deframer: Deframer,
+    failed: bool,
+    message: PhantomData<fn() -> M>,
+}
+impl<M: Message> Decoder<M> {
+    pub fn new(framing: Framing) -> Self {
+        Self {
+            deframer: Deframer::new(framing),
+            failed: false,
+            message: PhantomData,
+        }
+    }
+    pub fn push(
+        &mut self,
+        mut input: &[u8],
+        mut emit: impl FnMut(M) -> Result<(), WireError>,
+    ) -> Result<(), WireError> {
+        if self.failed {
+            return Err(WireError("closed"));
+        }
+        let result = (|| {
+            while !input.is_empty() {
+                if let Some(frame) = self.deframer.next_frame(&mut input)? {
+                    emit(M::decode(&frame)?)?;
+                }
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.failed = true;
+            // Drops any retained partial body; later pushes report `closed`.
+            let _ = self.deframer.finish();
+        }
+        result
+    }
+    pub fn finish(&mut self) -> Result<(), WireError> {
+        if self.failed {
+            return Err(WireError("closed"));
+        }
+        self.failed = true;
+        self.deframer.finish()
+    }
+}
+
+/// Serializes within the frame cap, re-validates the bytes as the peer would, then frames them.
+pub fn encode<M: Message>(frame: &M, framing: Framing) -> Result<Vec<u8>, WireError> {
+    if frame.identity() != (crate::VERSION, crate::BUNDLE) {
         return Err(WireError("version_mismatch"));
     }
-    match &frame.body {
-        crate::dto::Body::ChunkData { hex, .. } if !crate::schema::format(hex, "chunk-hex") => {
-            return Err(WireError("invalid_schema"));
-        }
-        crate::dto::Body::ChunkStart { sha256, .. } if !crate::schema::format(sha256, "sha256") => {
-            return Err(WireError("invalid_schema"));
-        }
-        _ => (),
-    }
+    frame.precheck()?;
     struct BoundedWriter(Vec<u8>);
     impl std::io::Write for BoundedWriter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -153,14 +197,14 @@ pub fn encode(frame: &Envelope, framing: Framing) -> Result<Vec<u8>, WireError> 
     let mut writer = BoundedWriter(Vec::new());
     serde_json::to_writer(&mut writer, frame).map_err(|_| WireError("frame_size"))?;
     let body = writer.0;
-    decode(&body)?;
+    M::decode(&body)?;
     let mut result = Vec::with_capacity(body.len() + 4);
     match framing {
         Framing::Client => result.extend_from_slice(&(body.len() as u32).to_be_bytes()),
         Framing::Worker => (),
     }
     result.extend_from_slice(&body);
-    if matches!(framing, Framing::Worker) {
+    if framing == Framing::Worker {
         result.push(b'\n');
     }
     Ok(result)

@@ -1,9 +1,12 @@
 use lade_protocol::{
-    Decoder, Framing, Reassembler, RequestHistory, WireError, bounded_json, decode,
-    dto::{Counter, OperationState, Response, Scope},
+    ClientEnvelope, Decoder, Framing, Message, Reassembler, RequestHistory, WireError,
+    WorkerEnvelope, bounded_json,
+    client::{ClientBody, ErrorCode, Rejection, ReplyResult, SafeAction, Scope},
     encode,
+    types::Counter,
 };
 use serde_json::{Value, json};
+use std::fmt::Debug;
 
 pub fn corpus() -> Vec<Value> {
     serde_json::from_str(include_str!("../../../../contracts/v1/fixtures.json")).unwrap()
@@ -60,20 +63,30 @@ fn framed(bytes: &[u8], framing: Framing) -> Vec<u8> {
         }
     }
 }
-fn stream(
+
+/// A frame of the contract that is always valid, used to prove poisoning.
+pub fn valid_frame<M: Message>() -> Vec<u8> {
+    let body = match M::CONTRACT {
+        lade_protocol::Contract::Client => json!({"kind":"hello"}),
+        lade_protocol::Contract::Worker => json!({"kind":"session.abort"}),
+    };
+    serde_json::to_vec(&json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":body})).unwrap()
+}
+
+fn stream<M: Message + PartialEq + Debug>(
     bytes: &[u8],
     framing: Framing,
     stride: usize,
     expected_count: usize,
 ) -> Result<(), WireError> {
-    let mut decoder = Decoder::new(framing);
+    let mut decoder = Decoder::<M>::new(framing);
     let mut count = 0;
     for part in bytes.chunks(stride) {
         if let Err(error) = decoder.push(part, |message| {
             count += 1;
             // Typed round trip catches schema/DTO drift, not just success flags.
             let encoded = encode(&message, framing)?;
-            let mut other = Decoder::new(framing);
+            let mut other = Decoder::<M>::new(framing);
             other.push(&encoded, |decoded| {
                 assert_eq!(message, decoded);
                 Ok(())
@@ -81,13 +94,7 @@ fn stream(
             other.finish()
         }) {
             assert_eq!(count, 0, "invalid input must not emit a command");
-            let valid = framed(
-                &serde_json::to_vec(
-                    &json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":{"kind":"hello"}}),
-                )
-                .unwrap(),
-                framing,
-            );
+            let valid = framed(&valid_frame::<M>(), framing);
             assert_eq!(
                 decoder.push(&valid, |_| {
                     count += 1;
@@ -107,53 +114,71 @@ fn stream(
     assert_eq!(count, expected_count);
     Ok(())
 }
+
+fn frame_case<M: Message + PartialEq + Debug>(bytes: &[u8]) -> Result<(), WireError> {
+    let mut outcome = M::decode(bytes).map(|message| {
+        // DTOs reproduce the exact wire tree: no dropped, defaulted or coerced field.
+        assert_eq!(
+            serde_json::to_value(message).unwrap(),
+            bounded_json(bytes).unwrap()
+        );
+    });
+    for framing in [Framing::Client, Framing::Worker] {
+        let mut wire = framed(bytes, framing);
+        // More than one frame in a read must not lose or concatenate commands.
+        wire.extend(framed(bytes, framing));
+        wire.extend(framed(&valid_frame::<M>(), framing));
+        for stride in [1, 2, 3, 7, 65537, wire.len()] {
+            let result = stream::<M>(&wire, framing, stride, 3);
+            assert_eq!(outcome, result);
+            outcome = result;
+        }
+    }
+    outcome
+}
+
+fn transport_case<M: Message + PartialEq + Debug>(
+    bytes: &[u8],
+    framing: Framing,
+) -> Result<(), WireError> {
+    let mut outcome = None;
+    for stride in [1, 3, 65537, bytes.len()] {
+        let result = stream::<M>(bytes, framing, stride, 0);
+        if let Some(previous) = outcome {
+            assert_eq!(previous, result);
+        }
+        outcome = Some(result);
+    }
+    outcome.unwrap()
+}
+
+fn rejected(code: ErrorCode) -> ReplyResult {
+    ReplyResult::Rejected {
+        name: None,
+        rejection: Rejection::new(code, SafeAction::QueryOperation, "fixture"),
+    }
+}
+
 pub fn run(case: &Value) -> Result<(), WireError> {
     let s = &case["source"];
+    let worker = case["contract"] == "worker";
     match case["mode"].as_str().unwrap() {
         "json" => {
             bounded_json(&source(s))?;
         }
-        "frame" => {
-            let bytes = source(s);
-            let mut outcome = decode(&bytes).map(|message| {
-                assert_eq!(
-                    serde_json::to_value(message).unwrap(),
-                    bounded_json(&bytes).unwrap()
-                );
-            });
-            let valid = serde_json::to_vec(
-                &json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":{"kind":"hello"}}),
-            )
-            .unwrap();
-            for framing in [Framing::Client, Framing::Worker] {
-                let mut wire = framed(&bytes, framing);
-                // More than one frame in a read must not lose or concatenate commands.
-                wire.extend(framed(&bytes, framing));
-                wire.extend(framed(&valid, framing));
-                for stride in [1, 2, 3, 7, 65537, wire.len()] {
-                    let result = stream(&wire, framing, stride, 3);
-                    assert_eq!(outcome, result);
-                    outcome = result;
-                }
-            }
-            outcome?;
-        }
+        "frame" if worker => frame_case::<WorkerEnvelope>(&source(s))?,
+        "frame" => frame_case::<ClientEnvelope>(&source(s))?,
         "transport" => {
-            let bytes = source(s);
             let framing = if case["framing"] == "client" {
                 Framing::Client
             } else {
                 Framing::Worker
             };
-            let mut outcome = None;
-            for stride in [1, 3, 65537, bytes.len()] {
-                let result = stream(&bytes, framing, stride, 0);
-                if let Some(previous) = outcome {
-                    assert_eq!(previous, result);
-                }
-                outcome = Some(result);
+            if worker {
+                transport_case::<WorkerEnvelope>(&source(s), framing)?
+            } else {
+                transport_case::<ClientEnvelope>(&source(s), framing)?
             }
-            outcome.unwrap()?;
         }
         "chunks" => {
             let owner: Scope = serde_json::from_value(case["owner"].clone()).unwrap();
@@ -161,7 +186,7 @@ pub fn run(case: &Value) -> Result<(), WireError> {
             let mut chunks = Reassembler::new(owner, generation);
             let mut output = Vec::new();
             for step in s["steps"].as_array().unwrap() {
-                let frame = decode(&serde_json::to_vec(step).unwrap())?;
+                let frame = ClientEnvelope::decode(&serde_json::to_vec(step).unwrap())?;
                 match chunks.accept(&frame.body) {
                     Ok(Some(bytes)) => output.extend(bytes),
                     Ok(None) => (),
@@ -177,20 +202,19 @@ pub fn run(case: &Value) -> Result<(), WireError> {
         "history" => {
             let mut history = RequestHistory::default();
             for (index, step) in s["steps"].as_array().unwrap().iter().enumerate() {
-                let frame = decode(&serde_json::to_vec(step).unwrap())?;
-                let outcome = Response::Operation {
-                    state: if index == 0 {
-                        OperationState::Uncertain
-                    } else {
-                        OperationState::Completed
-                    },
+                let frame = ClientEnvelope::decode(&serde_json::to_vec(step).unwrap())?;
+                let ClientBody::Request(request) = frame.body else {
+                    panic!("history fixtures carry requests");
                 };
+                let outcome = rejected(if index == 0 {
+                    ErrorCode::Interrupted
+                } else {
+                    ErrorCode::DurabilityFailure
+                });
                 // A duplicate returns the original uncertain fact, not the new claimed outcome.
                 assert_eq!(
-                    history.observe(&frame.body, outcome)?,
-                    Response::Operation {
-                        state: OperationState::Uncertain
-                    }
+                    history.observe(&request, outcome)?,
+                    rejected(ErrorCode::Interrupted)
                 );
             }
         }

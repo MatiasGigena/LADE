@@ -1,15 +1,25 @@
 import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
 import { boundedJson, WireError } from "../src/json.ts";
-import { BUNDLE, decode } from "../src/protocol.ts";
-import { Decoder, encode } from "../src/framing.ts";
+import { BUNDLE, decode, decodeWorkerFrame } from "../src/protocol.ts";
+import { Decoder, encode, encodeWorker } from "../src/framing.ts";
 import type { Framing } from "../src/framing.ts";
 import { Reassembler } from "../src/chunks.ts";
 import { RequestHistory } from "../src/history.ts";
+import type { ReplyResult } from "../src/history.ts";
+import type { Envelope, WorkerEnvelope } from "../src/dto.ts";
 
 interface Source { value?: unknown; text?: string; hex?: string; depth?: number; array?: number; string?: number; nodes?: boolean; padding?: number; steps?: unknown[] }
 
-interface Fixture { id: string; mode: string; source: Source; expected: string; framing?: string; owner?: unknown; generation?: string; output_hex?: string }
+interface Fixture { id: string; mode: string; source: Source; expected: string; framing?: string; contract?: string; owner?: unknown; generation?: string; output_hex?: string }
+
+interface Codec<Frame> { decode: (bytes: Uint8Array) => Frame; encode: (frame: Frame, framing: Framing) => Buffer; valid: Buffer }
+
+function validFrame(body: { kind: string }): Buffer { return Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body })); }
+
+const clientCodec: Codec<Envelope> = { decode, encode, valid: validFrame({ kind: "hello" }) };
+
+const workerCodec: Codec<WorkerEnvelope> = { decode: decodeWorkerFrame, encode: encodeWorker, valid: validFrame({ kind: "session.abort" }) };
 
 export const corpus: Fixture[] = fixtures;
 
@@ -74,8 +84,8 @@ function reassemblyContext(fixture: Fixture) {
   return { owner: envelope.body.owner, generation: envelope.body.execution_generation };
 }
 
-function stream(bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
-  const decoder = new Decoder(framing);
+function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
+  const decoder = new Decoder(framing, codec.decode);
   let count = 0;
 
   return outcome(() => {
@@ -83,14 +93,14 @@ function stream(bytes: Buffer, framing: Framing, stride: number, expectedCount: 
       try {
         decoder.push(bytes.subarray(pos, pos + stride), message => {
           count++;
-          const other = new Decoder(framing);
-          other.push(encode(message, framing), decoded => assert.deepEqual(decoded, message));
+          const other = new Decoder(framing, codec.decode);
+          other.push(codec.encode(message, framing), decoded => assert.deepEqual(decoded, message));
           other.finish();
         });
       } catch (error) {
         assert.ok(error instanceof WireError, "invalid bytes must produce a protocol rejection");
         assert.equal(count, 0, "invalid input must not emit a command");
-        const valid = framed(Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body: { kind: "hello" } })), framing);
+        const valid = framed(codec.valid, framing);
         assert.equal(outcome(() => decoder.push(valid, () => { count++; })), "closed");
         assert.equal(outcome(() => decoder.finish()), "closed");
         assert.equal(count, 0, "a failed connection must not deliver later valid messages");
@@ -103,6 +113,41 @@ function stream(bytes: Buffer, framing: Framing, stride: number, expectedCount: 
   });
 }
 
+function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
+  // DTOs reproduce the exact wire tree: no dropped, defaulted or coerced field.
+  let previous = outcome(() => assert.deepEqual(codec.decode(bytes), boundedJson(bytes)));
+
+  for (const framing of ["client", "worker"] as const) {
+    // More than one frame in a read must not lose or concatenate commands.
+    const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing), framed(codec.valid, framing)]);
+
+    for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
+      const result = stream(codec, wire, framing, stride, 3);
+      assert.equal(result, previous);
+      previous = result;
+    }
+  }
+
+  return previous;
+}
+
+function transportCase<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing): string {
+  let previous: string | undefined;
+
+  for (const stride of [1, 3, 65537, bytes.length]) {
+    const result = stream(codec, bytes, framing, stride, 0);
+
+    if (previous !== undefined) assert.equal(result, previous);
+    previous = result;
+  }
+
+  return previous ?? "missing_result";
+}
+
+function rejected(code: "interrupted" | "durability_failure"): ReplyResult {
+  return { status: "rejected", code, action: "query_operation", detail: "fixture" };
+}
+
 export function run(c: Fixture): string {
   return outcome(() => {
     switch (c.mode) {
@@ -111,37 +156,17 @@ export function run(c: Fixture): string {
 
         return;
       case "frame": {
-        const bytes = source(c.source);
-        let previous = outcome(() => assert.deepEqual(decode(bytes), boundedJson(bytes)));
-        const valid = Buffer.from(JSON.stringify({ protocol: 1, bundle: BUNDLE, body: { kind: "hello" } }));
+        const result = c.contract === "worker" ? frameCase(workerCodec, source(c.source)) : frameCase(clientCodec, source(c.source));
 
-        for (const framing of ["client", "worker"] as const) {
-          const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing), framed(valid, framing)]);
-
-          for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
-            const result = stream(wire, framing, stride, 3);
-            assert.equal(result, previous);
-            previous = result;
-          }
-        }
-
-        if (previous !== "ok") throw new WireError(previous);
+        if (result !== "ok") throw new WireError(result);
 
         return;
       }
 
       case "transport": {
-        const bytes = source(c.source);
-        let previous: string | undefined;
+        const result = c.contract === "worker" ? transportCase(workerCodec, source(c.source), transportFraming(c)) : transportCase(clientCodec, source(c.source), transportFraming(c));
 
-        for (const stride of [1, 3, 65537, bytes.length]) {
-          const result = stream(bytes, transportFraming(c), stride, 0);
-
-          if (previous !== undefined) assert.equal(result, previous);
-          previous = result;
-        }
-
-        if (previous !== "ok") throw new WireError(previous ?? "missing_result");
+        if (result !== "ok") throw new WireError(result);
 
         return;
       }
@@ -175,7 +200,8 @@ export function run(c: Fixture): string {
 
         for (const [index, step] of (c.source.steps ?? []).entries()) {
           const message = decode(Buffer.from(JSON.stringify(step)));
-          assert.deepEqual(history.observe(message.body, { status: "operation", state: index === 0 ? "uncertain" : "completed" }), { status: "operation", state: "uncertain" });
+          // A duplicate returns the original uncertain fact, not the new claimed outcome.
+          assert.deepEqual(history.observe(message.body, rejected(index === 0 ? "interrupted" : "durability_failure")), rejected("interrupted"));
         }
 
         return;

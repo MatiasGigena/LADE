@@ -1,18 +1,32 @@
 //! Effect-free wire primitives. Parsing an envelope never authenticates a caller.
+//!
+//! Decoding is always: bounded JSON parse -> exact protocol/bundle check -> closed schema
+//! validation -> typed DTO. Encoding serializes within the frame cap and re-validates.
+mod base64;
 mod chunks;
-pub mod dto;
+pub mod client;
 mod framing;
 mod history;
+mod io;
 mod json;
 mod schema;
+pub mod types;
+pub mod worker;
 
 pub use chunks::Reassembler;
-pub use framing::{Decoder, Framing, encode};
+pub use client::{ClientBody, ClientEnvelope};
+pub use framing::{Decoder, Deframer, Framing, encode};
 pub use history::RequestHistory;
+pub use io::{FrameReader, FrameWriter, TransportError};
 pub use json::bounded_json;
+pub use schema::Contract;
+pub use worker::{WorkerBody, WorkerEnvelope};
+
+use serde::{Serialize, de::DeserializeOwned};
+use types::Id;
 
 pub const VERSION: u32 = 1;
-pub const BUNDLE: &str = "0.1.0-imp001";
+pub const BUNDLE: &str = "0.2.0";
 pub const MAX_FRAME: usize = 1024 * 1024;
 pub const MAX_STRING: usize = 256 * 1024;
 pub const MAX_NODES: usize = 16_384;
@@ -32,13 +46,89 @@ impl std::fmt::Display for WireError {
 }
 impl std::error::Error for WireError {}
 
-pub fn decode(bytes: &[u8]) -> Result<dto::Envelope, WireError> {
-    let value = bounded_json(bytes)?;
+/// An envelope of one contract (client or worker schema).
+pub trait Message: Serialize + DeserializeOwned + Sized {
+    const CONTRACT: Contract;
+    fn identity(&self) -> (u32, &str);
+    /// Cheap pre-serialization checks that reject oversized content before allocation.
+    fn precheck(&self) -> Result<(), WireError> {
+        Ok(())
+    }
+    fn decode(bytes: &[u8]) -> Result<Self, WireError> {
+        let value = bounded_json(bytes)?;
+        check_version(&value)?;
+        schema::validate(&value, Self::CONTRACT)?;
+        serde_json::from_value(value).map_err(|_| WireError("invalid_schema"))
+    }
+}
+
+fn check_version(value: &serde_json::Value) -> Result<(), WireError> {
     if value.get("protocol") != Some(&serde_json::json!(VERSION))
         || value.get("bundle").and_then(|v| v.as_str()) != Some(BUNDLE)
     {
         return Err(WireError("version_mismatch"));
     }
-    schema::validate(&value)?;
-    serde_json::from_value(value).map_err(|_| WireError("invalid_schema"))
+    Ok(())
+}
+
+impl Message for ClientEnvelope {
+    const CONTRACT: Contract = Contract::Client;
+    fn identity(&self) -> (u32, &str) {
+        (self.protocol, &self.bundle)
+    }
+    fn precheck(&self) -> Result<(), WireError> {
+        match &self.body {
+            ClientBody::ChunkData { hex, .. } if !schema::format(hex, "chunk-hex") => {
+                Err(WireError("invalid_schema"))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+impl Message for WorkerEnvelope {
+    const CONTRACT: Contract = Contract::Worker;
+    fn identity(&self) -> (u32, &str) {
+        (self.protocol, &self.bundle)
+    }
+}
+
+pub fn decode_client(bytes: &[u8]) -> Result<ClientEnvelope, WireError> {
+    ClientEnvelope::decode(bytes)
+}
+pub fn decode_worker(bytes: &[u8]) -> Result<WorkerEnvelope, WireError> {
+    WorkerEnvelope::decode(bytes)
+}
+
+/// Why a client frame did not decode. `request_id` is set only when the frame was well-formed
+/// (bounded JSON, exact versions, an envelope whose body is a `request` with a valid
+/// `request_id`) and failed only the schema: the service then replies `invalid_request` and
+/// keeps the link. Any other failure must close the link.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameRejection {
+    pub error: WireError,
+    pub request_id: Option<Id>,
+}
+
+pub fn decode_client_frame(bytes: &[u8]) -> Result<ClientEnvelope, FrameRejection> {
+    let fatal = |error| FrameRejection {
+        error,
+        request_id: None,
+    };
+    let value = bounded_json(bytes).map_err(fatal)?;
+    check_version(&value).map_err(fatal)?;
+    let error = match schema::validate(&value, Contract::Client) {
+        Ok(()) => match serde_json::from_value(value.clone()) {
+            Ok(envelope) => return Ok(envelope),
+            Err(_) => WireError("invalid_schema"),
+        },
+        Err(error) => error,
+    };
+    let envelope_shape = value.as_object().is_some_and(|o| o.len() == 3);
+    let body = value.get("body");
+    let request_id = body
+        .filter(|b| envelope_shape && b.get("kind").and_then(|k| k.as_str()) == Some("request"))
+        .and_then(|b| b.get("request_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|id| Id::parse(id).ok());
+    Err(FrameRejection { error, request_id })
 }

@@ -3,20 +3,198 @@ export type Id = string & { readonly __id: unique symbol };
 
 export type Counter = string & { readonly __counter: unique symbol };
 
+export type Model = { "provider": string; "id": string };
+
+export type DeliveryMode = "prompt" | "steer" | "follow_up";
+
+export type ActivityRole = "user" | "assistant" | "thinking" | "tool" | "system";
+
 export type Digest = string;
 
-export type Scope = { "workspace_id": Id; "objective_id": Id; "session_id": Id; "association_revision": Counter };
+export type Timestamp = string;
 
-export type ErrorCode = "unauthorized" | "stale_service" | "stale_association" | "stale_execution" | "stale_reference" | "stale_candidate" | "stale_target" | "invalid_lifecycle" | "unsupported_content" | "version_mismatch" | "durability_failure" | "permission_denied" | "limit_reached" | "interrupted" | "unknown_operation" | "replay_expired" | "duplicate_conflict";
+export type Capability = string;
+
+export type PageLimit = string;
+
+export type ReadLimit = string;
+
+export type GitId = { "algorithm": "sha1"; "hex": string } | { "algorithm": "sha256"; "hex": string };
+
+export type Path = { "b64": string; "display": string };
+
+export type Branch = string;
+
+export type Title = string;
+
+export type ShortText = string;
+
+export type Label = string;
+
+export type Preview = string;
+
+export type Intent = { "outcome": string; "constraints": string; "acceptance": string };
+
+export type Argv = string[];
+
+export type Basis = { "kind": "working" } | { "kind": "candidate"; "candidate_id": Id } | { "kind": "since"; "from_candidate_id": Id; "to_candidate_id": Id };
+
+export type Start = { "kind": "target" } | { "kind": "commit"; "commit": GitId };
+
+export type Side = "old" | "new";
+
+export type Lifecycle = "defined" | "active" | "frozen" | "approved" | "integrated" | "completed_no_changes" | "discarded";
+
+export type ExecutionState = "none" | "starting" | "running" | "idle" | "stopping" | "cancelled" | "failed";
+
+export type Execution = { "state": ExecutionState; "generation": Counter; "reason"?: ShortText };
+
+export type Attention = "needs_attention" | "ready_for_review" | "working" | "idle" | "archived";
+
+export type Badge = "interrupted" | "delivery_uncertain" | "stale_feedback" | "verification_failed" | "verification_missing" | "integration_conflict" | "stale_target" | "limit_reached" | "cleaned_up" | "fixture_model" | "unsent_drafts";
+
+export type ErrorCode = "unauthorized" | "stale_service" | "stale_association" | "stale_execution" | "stale_reference" | "stale_candidate" | "stale_target" | "invalid_lifecycle" | "unsupported_content" | "version_mismatch" | "durability_failure" | "permission_denied" | "limit_reached" | "interrupted" | "unknown_operation" | "replay_expired" | "duplicate_conflict" | "not_found" | "invalid_request" | "conflict" | "execution_unavailable";
 
 export type SafeAction = "refresh" | "inspect_previous" | "query_operation" | "retry_read" | "explicit_continue" | "none";
 
 export type OperationState = "accepted" | "pending" | "completed" | "blocked" | "uncertain" | "unknown";
 
-export type Command = { "name": "operation.get"; "payload": { "operation_id": Id } } | { "name": "feedback.submit"; "payload": { "batch_id": Id; "expected_draft_revision": Counter; "delivery_mode": "steering" | "follow_up" } };
+export type Rejection = { "status": "rejected"; "code": ErrorCode; "action": SafeAction; "detail": ShortText };
 
-export type Result = { "status": "rejected"; "code": ErrorCode; "action": SafeAction } | { "status": "accepted"; "input_id": Id } | { "status": "operation"; "state": OperationState };
+export type Empty = Record<never, never>;
 
-export type Body = { "kind": "hello" } | { "kind": "command"; "request_id": Id; "operation_id": Id; "expected_service_epoch": Id; "scope": Scope; "command": Command } | { "kind": "response"; "request_id": Id; "operation_id": Id; "result": Result } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "scope": Scope; "operation_id": Id; "state": OperationState } | { "kind": "chunk.start"; "transfer_id": Id; "owner": Scope; "execution_generation": Counter; "total_bytes": Counter; "sha256": Digest } | { "kind": "chunk.data"; "transfer_id": Id; "index": Counter; "hex": string } | { "kind": "chunk.end"; "transfer_id": Id } | { "kind": "chunk.cancel"; "transfer_id": Id };
+export type Settings = { "verification_commands": Argv[]; "default_model"?: Model };
 
-export type Envelope = { "protocol": 1; "bundle": "0.1.0-imp001"; "body": Body };
+export type Workspace = { "workspace_id": Id; "path": Path; "name": Label; "branches": Branch[]; "default_branch"?: Branch };
+
+export type TargetRef = { "branch": Branch; "commit": GitId };
+
+export type ObjectiveSummary = { "objective_id": Id; "workspace_id": Id; "title": Title; "outcome": string; "lifecycle": Lifecycle; "execution": Execution; "attention": Attention; "badges": Badge[]; "updated_at": Timestamp; "revision": Counter };
+
+export type SessionInfo = { "session_id": Id; "association_revision": Counter; "execution_generation": Counter; "model": Model };
+
+export type ChangeCounts = { "files": Counter; "added": Counter; "removed": Counter };
+
+export type ActionName = "objective.update_intent" | "execution.start" | "execution.cancel" | "execution.resume" | "message.send" | "feedback.submit" | "review.freeze" | "review.return" | "review.verify" | "review.approve" | "review.refresh" | "review.integrate" | "objective.complete" | "objective.discard" | "objective.cleanup";
+
+export type AvailableAction = { "action": ActionName; "enabled": boolean; "reason"?: ShortText };
+
+export type CandidateSummary = { "candidate_id": Id; "ordinal": Counter; "commit": GitId; "base_target_commit": GitId; "status": "current" | "historical" | "invalidated"; "files": Counter; "added": Counter; "removed": Counter; "created_at": Timestamp };
+
+export type VerificationSummary = { "verification_id": Id; "objective_id": Id; "candidate_id": Id; "command": Argv; "state": "running" | "passed" | "failed" | "interrupted" | "error"; "started_at": Timestamp; "output_tail": string; "truncated": boolean; "provenance": "service_observed"; "exit_code"?: Counter; "ended_at"?: Timestamp };
+
+export type ApprovalSummary = { "approval_id": Id; "candidate_id": Id; "target_commit": GitId; "state": "valid" | "consumed" | "invalidated"; "override_reason"?: string };
+
+export type ObjectiveDetail = { "objective_id": Id; "workspace_id": Id; "title": Title; "outcome": string; "lifecycle": Lifecycle; "execution": Execution; "attention": Attention; "badges": Badge[]; "updated_at": Timestamp; "revision": Counter; "intent": Intent; "intent_revision": Counter; "integration_target": TargetRef; "start_commit": GitId; "branch": Branch; "candidates": CandidateSummary[]; "verifications": VerificationSummary[]; "change_counts": ChangeCounts; "unsent_drafts": Counter; "available_actions": AvailableAction[]; "session"?: SessionInfo; "approval"?: ApprovalSummary };
+
+export type ActivityItem = { "item_id": Id; "seq": Counter; "at": Timestamp; "role": ActivityRole; "title": Preview; "text": string; "is_error": boolean; "truncated": boolean; "tool_name"?: Label };
+
+export type ChangedFile = { "path": Path; "status": "added" | "modified" | "deleted" | "renamed" | "type_changed"; "added": Counter; "removed": Counter; "binary": boolean; "old_path"?: Path };
+
+export type ReferenceVersion = { "kind": "working"; "capture_id": Id } | { "kind": "candidate"; "candidate_id": Id };
+
+export type Reference = { "artifact_digest": Digest; "path": Path; "version": ReferenceVersion; "side": Side; "byte_start": Counter; "byte_end": Counter; "selected_text": string; "line_hint"?: Counter };
+
+export type Draft = { "draft_id": Id; "objective_id": Id; "destination_session_id": Id; "reference": Reference; "body": string; "revision": Counter; "state": "unsent" | "submitted"; "stale": boolean; "input_id"?: Id };
+
+export type InputSummary = { "input_id": Id; "objective_id": Id; "operation_id": Id; "mode": DeliveryMode; "text_preview": Preview; "accepted_at": Timestamp; "delivery": "queued" | "dispatched" | "received" | "uncertain" | "blocked"; "blocked_reason"?: ShortText };
+
+export type DraftRevision = { "draft_id": Id; "revision": Counter };
+
+export type DiffLine = { "kind": "context" | "add" | "del"; "text": string; "old_no"?: Counter; "new_no"?: Counter; "old_byte_start"?: Counter; "new_byte_start"?: Counter };
+
+export type DiffHunk = { "old_start": Counter; "old_lines": Counter; "new_start": Counter; "new_lines": Counter; "lines": DiffLine[] };
+
+export type SearchResult = { "kind": "objective" | "file" | "content"; "preview": Preview; "objective_id"?: Id; "path"?: Path; "line"?: Counter; "byte_start"?: Counter };
+
+export type ObjectiveSelector = { "objective_id": Id };
+
+export type ActivityPageQuery = { "objective_id": Id; "limit": PageLimit; "before"?: Counter };
+
+export type ChangesListQuery = { "objective_id": Id; "basis": Basis };
+
+export type FileReadQuery = { "objective_id": Id; "basis": Basis; "path": Path; "side": Side; "offset": Counter; "limit": ReadLimit };
+
+export type DiffGetQuery = { "objective_id": Id; "basis": Basis; "path": Path };
+
+export type SearchQuery = { "workspace_id": Id; "scope": "objectives" | "files" | "content"; "query": string; "limit": PageLimit; "objective_id"?: Id; "basis"?: Basis };
+
+export type OperationGetQuery = { "operation_id": Id };
+
+export type WorkspaceOpenCommand = { "path": Path };
+
+export type ObjectiveCreateCommand = { "workspace_id": Id; "title": Title; "intent": Intent; "integration_target": Branch; "start": Start };
+
+export type UpdateIntentCommand = { "objective_id": Id; "expected_intent_revision": Counter; "intent": Intent };
+
+export type ExecutionStartCommand = { "objective_id": Id; "model": Model };
+
+export type MessageSendCommand = { "objective_id": Id; "text": string; "mode": DeliveryMode };
+
+export type DraftSaveCommand = { "draft_id": Id; "objective_id": Id; "expected_revision": Counter; "reference": Reference; "body": string };
+
+export type DraftDeleteCommand = { "draft_id": Id; "expected_revision": Counter };
+
+export type FeedbackSubmitCommand = { "objective_id": Id; "destination_session_id": Id; "association_revision": Counter; "drafts": DraftRevision[]; "mode": DeliveryMode; "note"?: string };
+
+export type CandidateCommand = { "objective_id": Id; "candidate_id": Id };
+
+export type ReviewVerifyCommand = { "objective_id": Id; "candidate_id": Id; "command": Argv };
+
+export type ReviewApproveCommand = { "objective_id": Id; "candidate_id": Id; "target_commit": GitId; "override_reason"?: string };
+
+export type ReviewIntegrateCommand = { "objective_id": Id; "approval_id": Id };
+
+export type ObjectiveCleanupCommand = { "objective_id": Id; "confirm_data_loss": boolean };
+
+export type SettingsUpdateCommand = { "default_model"?: Model; "verification_commands"?: Argv[] };
+
+export type SnapshotData = { "service_epoch": Id; "sequence": Counter; "workspaces": Workspace[]; "objectives": ObjectiveSummary[]; "settings": Settings };
+
+export type ActivityPage = { "items": ActivityItem[]; "has_more": boolean };
+
+export type ChangeList = { "basis_label": Label; "target": TargetRef; "files": ChangedFile[]; "truncated": boolean; "total_added": Counter; "total_removed": Counter; "capture_id"?: Id; "candidate_id"?: Id };
+
+export type FileContent = { "artifact_digest": Digest; "total_bytes": Counter; "offset": Counter; "length": Counter; "encoding": "utf8" | "binary"; "eof": boolean; "version_label": Label; "text"?: string };
+
+export type FileDiff = { "binary": boolean; "hunks": DiffHunk[]; "truncated": boolean; "old_digest"?: Digest; "new_digest"?: Digest };
+
+export type SearchResults = { "scope_label": Label; "results": SearchResult[]; "truncated": boolean };
+
+export type DraftList = { "drafts": Draft[] };
+
+export type InputList = { "inputs": InputSummary[] };
+
+export type OperationStatus = { "state": OperationState; "outcome"?: Outcome };
+
+export type ActivityAppended = { "objective_id": Id; "items": ActivityItem[] };
+
+export type ActivityDelta = { "objective_id": Id; "item_id": Id; "append_text": string };
+
+export type WorktreeChanged = { "objective_id": Id; "capture_id": Id };
+
+export type ServiceNotice = { "level": "info" | "warning" | "error"; "code": string; "message": ShortText };
+
+export type Scope = { "workspace_id": Id; "objective_id": Id; "session_id": Id; "association_revision": Counter };
+
+export type Request = { "kind": "request"; "request_id": Id; "name": "snapshot"; "payload": Empty } | { "kind": "request"; "request_id": Id; "name": "objective.get"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "name": "activity.page"; "payload": ActivityPageQuery } | { "kind": "request"; "request_id": Id; "name": "changes.list"; "payload": ChangesListQuery } | { "kind": "request"; "request_id": Id; "name": "file.read"; "payload": FileReadQuery } | { "kind": "request"; "request_id": Id; "name": "diff.get"; "payload": DiffGetQuery } | { "kind": "request"; "request_id": Id; "name": "search"; "payload": SearchQuery } | { "kind": "request"; "request_id": Id; "name": "drafts.list"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "name": "inputs.list"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "name": "operation.get"; "payload": OperationGetQuery } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "workspace.open"; "payload": WorkspaceOpenCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "objective.create"; "payload": ObjectiveCreateCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "objective.update_intent"; "payload": UpdateIntentCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "execution.start"; "payload": ExecutionStartCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "execution.cancel"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "execution.resume"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "message.send"; "payload": MessageSendCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "draft.save"; "payload": DraftSaveCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "draft.delete"; "payload": DraftDeleteCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "feedback.submit"; "payload": FeedbackSubmitCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.freeze"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.return"; "payload": CandidateCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.verify"; "payload": ReviewVerifyCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.approve"; "payload": ReviewApproveCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.refresh"; "payload": CandidateCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "review.integrate"; "payload": ReviewIntegrateCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "objective.complete"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "objective.discard"; "payload": ObjectiveSelector } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "objective.cleanup"; "payload": ObjectiveCleanupCommand } | { "kind": "request"; "request_id": Id; "operation_id": Id; "name": "settings.update"; "payload": SettingsUpdateCommand };
+
+export type Reply = { "kind": "reply"; "request_id": Id; "name": "snapshot"; "result": { "status": "ok"; "data": SnapshotData } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.get"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "activity.page"; "result": { "status": "ok"; "data": ActivityPage } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "changes.list"; "result": { "status": "ok"; "data": ChangeList } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "file.read"; "result": { "status": "ok"; "data": FileContent } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "diff.get"; "result": { "status": "ok"; "data": FileDiff } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "search"; "result": { "status": "ok"; "data": SearchResults } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "drafts.list"; "result": { "status": "ok"; "data": DraftList } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "inputs.list"; "result": { "status": "ok"; "data": InputList } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "operation.get"; "result": { "status": "ok"; "data": OperationStatus } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "workspace.open"; "result": { "status": "ok"; "data": Workspace } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.create"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.update_intent"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "execution.start"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "execution.cancel"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "execution.resume"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "message.send"; "result": { "status": "ok"; "data": InputSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "draft.save"; "result": { "status": "ok"; "data": Draft } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "draft.delete"; "result": { "status": "ok"; "data": Empty } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "feedback.submit"; "result": { "status": "ok"; "data": InputSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.freeze"; "result": { "status": "ok"; "data": CandidateSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.return"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.verify"; "result": { "status": "ok"; "data": VerificationSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.approve"; "result": { "status": "ok"; "data": ApprovalSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.refresh"; "result": { "status": "ok"; "data": CandidateSummary } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "review.integrate"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.complete"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.discard"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "objective.cleanup"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "kind": "reply"; "request_id": Id; "name": "settings.update"; "result": { "status": "ok"; "data": Settings } | Rejection } | { "kind": "reply"; "request_id": Id; "result": Rejection };
+
+export type Outcome = { "name": "workspace.open"; "result": { "status": "ok"; "data": Workspace } | Rejection } | { "name": "objective.create"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "objective.update_intent"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "execution.start"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "execution.cancel"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "execution.resume"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "message.send"; "result": { "status": "ok"; "data": InputSummary } | Rejection } | { "name": "draft.save"; "result": { "status": "ok"; "data": Draft } | Rejection } | { "name": "draft.delete"; "result": { "status": "ok"; "data": Empty } | Rejection } | { "name": "feedback.submit"; "result": { "status": "ok"; "data": InputSummary } | Rejection } | { "name": "review.freeze"; "result": { "status": "ok"; "data": CandidateSummary } | Rejection } | { "name": "review.return"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "review.verify"; "result": { "status": "ok"; "data": VerificationSummary } | Rejection } | { "name": "review.approve"; "result": { "status": "ok"; "data": ApprovalSummary } | Rejection } | { "name": "review.refresh"; "result": { "status": "ok"; "data": CandidateSummary } | Rejection } | { "name": "review.integrate"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "objective.complete"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "objective.discard"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "objective.cleanup"; "result": { "status": "ok"; "data": ObjectiveDetail } | Rejection } | { "name": "settings.update"; "result": { "status": "ok"; "data": Settings } | Rejection };
+
+export type Event = { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "objective.changed"; "payload": ObjectiveSummary } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "objective.detail"; "payload": ObjectiveDetail } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "activity.appended"; "payload": ActivityAppended } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "activity.delta"; "payload": ActivityDelta } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "draft.changed"; "payload": Draft } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "input.changed"; "payload": InputSummary } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "worktree.changed"; "payload": WorktreeChanged } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "verification.changed"; "payload": VerificationSummary } | { "kind": "event"; "service_epoch": Id; "sequence": Counter; "name": "service.notice"; "payload": ServiceNotice };
+
+export type Body = { "kind": "hello" } | { "kind": "auth"; "capability": Capability } | { "kind": "welcome"; "service_epoch": Id; "lease_id": Id } | Request | Reply | Event | { "kind": "chunk.start"; "transfer_id": Id; "owner": Scope; "execution_generation": Counter; "total_bytes": Counter; "sha256": Digest } | { "kind": "chunk.data"; "transfer_id": Id; "index": Counter; "hex": string } | { "kind": "chunk.end"; "transfer_id": Id } | { "kind": "chunk.cancel"; "transfer_id": Id };
+
+export type WorkerErrorCode = "startup_failed" | "session_failed" | "provider_failed" | "delivery_failed" | "protocol_violation" | "limit_reached" | "internal";
+
+export type ServiceToWorker = { "kind": "worker.start"; "objective_id": Id; "session_dir": string; "cwd": string; "model": Model; "resume": boolean; "system_note": string } | { "kind": "input.deliver"; "input_id": Id; "mode": DeliveryMode; "text": string } | { "kind": "session.abort" } | { "kind": "worker.shutdown" };
+
+export type WorkerToService = { "kind": "worker.ready"; "pi_session_id": string; "session_file": string } | { "kind": "input.received"; "input_id": Id } | { "kind": "activity.item"; "item_id": Id; "role": ActivityRole; "title": string; "text": string; "is_error": boolean; "truncated": boolean; "tool_name"?: string } | { "kind": "activity.delta"; "item_id": Id; "append_text": string } | { "kind": "turn.state"; "state": "running" | "idle" } | { "kind": "worker.error"; "code": WorkerErrorCode; "message": string };
+
+export type WorkerBody = ServiceToWorker | WorkerToService;
+
+export type Envelope = { "protocol": 1; "bundle": "0.2.0"; "body": Body };
+
+export type WorkerEnvelope = { "protocol": 1; "bundle": "0.2.0"; "body": WorkerBody };
