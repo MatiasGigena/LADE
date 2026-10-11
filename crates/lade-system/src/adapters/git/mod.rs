@@ -3,7 +3,8 @@
 //! All processes are started through the single hardened builder in [`command`]: inherited
 //! `GIT_*` variables and user/system configuration are dropped, hooks, fsmonitor, pagers, editors,
 //! credential helpers, signing programs and network protocols are disabled, and repository-defined
-//! filter and merge drivers are neutralized per invocation (see [`Repository::driver_overrides`]).
+//! filter drivers, merge drivers and configuration hooks are neutralized for every invocation
+//! (see [`command`]).
 //! Repository configuration is treated as untrusted input; nothing in it executes with the service's
 //! authority. Paths are lossless bytes (`-z` output everywhere).
 
@@ -14,7 +15,6 @@ mod integrate;
 mod tree;
 mod worktree;
 
-use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
@@ -44,6 +44,8 @@ pub type Result<T> = std::result::Result<T, GitError>;
 pub const MIN_GIT_VERSION: GitVersion = GitVersion::new(2, 36, 0);
 /// Minimum Git for [`Repository::merge_tree`] (`merge-tree --write-tree`).
 pub const MIN_MERGE_TREE_VERSION: GitVersion = GitVersion::new(2, 38, 0);
+/// Minimum Git for reading attributes from a tree (`check-attr --source`).
+pub const MIN_CHECK_ATTR_SOURCE_VERSION: GitVersion = GitVersion::new(2, 40, 0);
 /// Namespace of service-owned retention references.
 pub const RETENTION_PREFIX: &str = "refs/lade/retain/";
 
@@ -232,9 +234,19 @@ pub enum InProgress {
 /// A local branch and the commit it points at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Branch {
-    /// Short name (without `refs/heads/`). Branches whose names are not UTF-8 are not listed.
+    /// Short name (without `refs/heads/`) in the lossless text form of
+    /// [`escape_branch_name`]: the name itself when it is UTF-8.
     pub name: String,
+    /// The raw bytes of the short name (authoritative).
+    pub raw: Vec<u8>,
     pub commit: GitId,
+}
+
+impl Branch {
+    /// Whether the name is UTF-8 (only such branches can be named in LADE's requests).
+    pub fn is_utf8(&self) -> bool {
+        std::str::from_utf8(&self.raw).is_ok()
+    }
 }
 
 /// Input to [`Repository::commit_tree`]. Author and committer are always the fixed LADE identity.
@@ -255,6 +267,8 @@ pub struct Repository {
     common_dir: PathBuf,
     format: ObjectFormat,
     version: GitVersion,
+    /// The user's global excludes file applied to captures (see [`Self::with_excludes_file`]).
+    excludes_file: Option<PathBuf>,
 }
 
 impl Repository {
@@ -262,6 +276,7 @@ impl Repository {
     pub fn open(path: &Path) -> Result<Self> {
         let top = path.canonicalize().map_err(|_| GitError::NotRepository)?;
         let version = GitCommand::new("version")
+            .without_config_scan()
             .cwd(&top)
             .arg("version")
             .run()
@@ -328,6 +343,7 @@ impl Repository {
             work_tree: top,
             format,
             version,
+            excludes_file: None,
         })
     }
 
@@ -400,14 +416,13 @@ impl Repository {
             let Some(short) = name.strip_prefix(b"refs/heads/") else {
                 continue;
             };
-            if let Ok(name) = std::str::from_utf8(short) {
-                branches.push(Branch {
-                    name: name.to_owned(),
-                    commit: self.parse_id("for-each-ref", id)?,
-                });
-            }
+            branches.push(Branch {
+                name: escape_branch_name(short),
+                raw: short.to_vec(),
+                commit: self.parse_id("for-each-ref", id)?,
+            });
         }
-        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        branches.sort_by(|a, b| a.raw.cmp(&b.raw));
         Ok(branches)
     }
 
@@ -586,7 +601,23 @@ impl Repository {
     /// Capture the complete working tree content (tracked, untracked-not-ignored, deletions,
     /// renames, modes, symlinks) of `worktree` as a tree object. Uses a temporary index inside
     /// `scratch_dir`; the worktree's real index and files are never written.
-    pub fn capture_working_tree(&self, worktree: &Worktree, scratch_dir: &Path) -> Result<GitId> {
+    ///
+    /// - Modes and symlinks are recorded exactly (`core.fileMode`/`core.symlinks` forced on, case
+    ///   kept): the capture becomes a candidate commit, and the Linux filesystems LADE supports
+    ///   represent both, so a repository setting meant for filesystems that cannot must not hide
+    ///   a mode or symlink change from review.
+    /// - Ignore rules are the repository's `.gitignore` files and `info/exclude` plus the user's
+    ///   own global excludes file when the service configured one ([`Self::with_excludes_file`]);
+    ///   a `core.excludesFile` set in the (untrusted) repository configuration is not honoured,
+    ///   since it could hide new files from review.
+    /// - An untracked nested repository with a checked-out commit is recorded as a gitlink; one
+    ///   without a commit (which Git cannot record) is left out and reported in
+    ///   [`WorkingCapture::skipped_nested`] instead of failing the capture.
+    pub fn capture_working_tree(
+        &self,
+        worktree: &Worktree,
+        scratch_dir: &Path,
+    ) -> Result<WorkingCapture> {
         let index = scratch_dir.join(format!(
             "lade-capture-{}-{}.index",
             std::process::id(),
@@ -595,13 +626,7 @@ impl Repository {
         let mut lock = index.clone().into_os_string();
         lock.push(".lock");
         let _cleanup = RemoveOnDrop(vec![index.clone(), PathBuf::from(lock)]);
-        let overrides = Self::driver_overrides(worktree.admin_dir(), worktree.path())?;
-        let base = |op| {
-            worktree
-                .git(op)
-                .configs(&overrides)
-                .env("GIT_INDEX_FILE", &index)
-        };
+        let base = |op| worktree.git(op).env("GIT_INDEX_FILE", &index);
         let head = worktree
             .git("rev-parse")
             .read_only()
@@ -613,71 +638,188 @@ impl Repository {
         } else {
             base("read-tree").args(["read-tree", "--empty"]).run()?;
         }
-        base("add")
-            .config("core.fileMode", "true")
-            .config("core.symlinks", "true")
-            .config("core.ignoreCase", "false")
-            .config("core.excludesFile", "/dev/null")
-            .config("advice.addEmbeddedRepo", "false")
-            .args(["add", "--all", "--no-ignore-errors"])
-            .run()?;
+        let excludes = self
+            .excludes_file
+            .as_deref()
+            .map_or_else(|| OsStr::new("/dev/null"), Path::as_os_str);
+        let mut skipped_nested: Vec<RepoPath> = Vec::new();
+        loop {
+            let mut add = base("add")
+                .config("core.fileMode", "true")
+                .config("core.symlinks", "true")
+                .config("core.ignoreCase", "false")
+                .config("core.excludesFile", excludes)
+                .config("advice.addEmbeddedRepo", "false")
+                .args(["add", "--all", "--no-ignore-errors"]);
+            if !skipped_nested.is_empty() {
+                // Pathspec magic is needed for exclusions; each path stays literal.
+                add = add.env("GIT_LITERAL_PATHSPECS", "0").arg("--");
+                for path in &skipped_nested {
+                    let mut spec = b":(exclude,literal)".to_vec();
+                    spec.extend_from_slice(path.as_bytes());
+                    add = add.arg(OsStr::from_bytes(&spec));
+                }
+            }
+            let out = add.output()?;
+            if out.status.success() {
+                break;
+            }
+            match nested_without_commit(&out.stderr) {
+                Some(path)
+                    if skipped_nested.len() < MAX_SKIPPED_NESTED
+                        && !skipped_nested.contains(&path) =>
+                {
+                    skipped_nested.push(path);
+                }
+                _ => {
+                    return Err(GitError::Failed {
+                        op: "add",
+                        exit_code: out.status.code(),
+                        stderr: out.stderr,
+                    });
+                }
+            }
+        }
         let out = base("write-tree").arg("write-tree").run()?;
-        self.parse_id("write-tree", &out)
+        Ok(WorkingCapture {
+            tree: self.parse_id("write-tree", &out)?,
+            skipped_nested,
+        })
     }
 
-    /// Command-scope overrides that disable every filter and merge driver defined in the
-    /// (untrusted) configuration visible from `git_dir`, including included files and worktree
-    /// configuration. Filters become no-ops (content passes through unconverted); custom merge
-    /// drivers become `false`, so affected paths report conflicts rather than running code.
-    pub(crate) fn driver_overrides(
-        git_dir: &Path,
-        work_tree: &Path,
-    ) -> Result<Vec<(OsString, OsString)>> {
-        let out = GitCommand::new("config")
-            .git_dir(git_dir)
-            .work_tree(work_tree)
-            .read_only()
-            .args(["config", "--list", "-z", "--name-only"])
-            .stdout_limit(4 << 20)
-            .run()?;
-        let mut filters = BTreeSet::new();
-        let mut merges = BTreeSet::new();
-        for name in out.split(|b| *b == 0).filter(|n| !n.is_empty()) {
-            let split = |rest: &[u8]| {
-                rest.iter()
-                    .rposition(|b| *b == b'.')
-                    .map(|dot| (rest[..dot].to_vec(), rest[dot + 1..].to_ascii_lowercase()))
-            };
-            if let Some((sub, key)) = name.strip_prefix(b"filter.").and_then(split)
-                && matches!(&key[..], b"clean" | b"smudge" | b"process" | b"required")
-            {
-                filters.insert(sub);
-            } else if let Some((sub, key)) = name.strip_prefix(b"merge.").and_then(split)
-                && matches!(&key[..], b"driver" | b"recursive")
-            {
-                merges.insert(sub);
-            }
-        }
-        let key = |section: &[u8], sub: &[u8], name: &[u8]| {
-            OsString::from_vec([section, b".", sub, b".", name].concat())
-        };
-        let mut pairs = Vec::new();
-        for sub in &filters {
-            for (name, value) in [
-                (&b"clean"[..], ""),
-                (b"smudge", ""),
-                (b"process", ""),
-                (b"required", "false"),
-            ] {
-                pairs.push((key(b"filter", sub, name), OsString::from(value)));
-            }
-        }
-        for sub in &merges {
-            pairs.push((key(b"merge", sub, b"driver"), OsString::from("false")));
-            pairs.push((key(b"merge", sub, b"recursive"), OsString::from("binary")));
-        }
-        Ok(pairs)
+    /// Use `path` (the user's own global excludes file, see [`user_excludes_file`]) as
+    /// `core.excludesFile` for captures. `None` (the default) applies no global excludes file.
+    pub fn with_excludes_file(mut self, path: Option<PathBuf>) -> Self {
+        self.excludes_file = path;
+        self
     }
+
+    /// The paths among `paths` whose `filter` attribute in `tree` names a filter driver (Git LFS
+    /// or any `clean`/`smudge`/`process` filter). LADE never runs filters, so such paths are
+    /// stored and compared as raw working-tree bytes: their content is unsupported, and a file
+    /// a filter rewrote on checkout shows as modified. Attributes come from `tree` (Git ≥ 2.40)
+    /// or, with older Git, from the opened work tree.
+    pub fn filtered_paths(&self, tree: &GitId, paths: &[&RepoPath]) -> Result<Vec<RepoPath>> {
+        self.check_id(tree)?;
+        if paths.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut input = Vec::new();
+        for path in paths {
+            input.extend_from_slice(path.as_bytes());
+            input.push(0);
+        }
+        let mut cmd = self
+            .git("check-attr")
+            .read_only()
+            .args(["check-attr", "-z", "--stdin"]);
+        if self.version >= MIN_CHECK_ATTR_SOURCE_VERSION {
+            cmd = cmd.arg(format!("--source={}", tree.hex()));
+        }
+        let out = cmd.args(["filter"]).stdin(input).run()?;
+        let mut fields = out.split(|b| *b == 0);
+        let mut filtered = Vec::new();
+        while let (Some(path), Some(_), Some(info)) = (fields.next(), fields.next(), fields.next())
+        {
+            if !matches!(info, b"unspecified" | b"unset" | b"set") && !path.is_empty() {
+                let path = RepoPath::from_git("check-attr", path)?;
+                if !filtered.contains(&path) {
+                    filtered.push(path);
+                }
+            }
+        }
+        Ok(filtered)
+    }
+}
+
+/// The result of [`Repository::capture_working_tree`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkingCapture {
+    pub tree: GitId,
+    /// Untracked nested repositories without a checked-out commit, left out of `tree` (at most
+    /// [`MAX_SKIPPED_NESTED`]; more fail the capture).
+    pub skipped_nested: Vec<RepoPath>,
+}
+
+/// Most nested commit-less repositories a capture skips before it fails.
+pub const MAX_SKIPPED_NESTED: usize = 64;
+
+/// The path Git names in `error: '<path>/' does not have a commit checked out`.
+fn nested_without_commit(stderr: &Diagnostics) -> Option<RepoPath> {
+    const PREFIX: &[u8] = b"error: '";
+    const SUFFIX: &[u8] = b"' does not have a commit checked out";
+    stderr.as_bytes().split(|b| *b == b'\n').find_map(|line| {
+        let inner = line.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
+        RepoPath::new(inner.strip_suffix(b"/").unwrap_or(inner).to_vec()).ok()
+    })
+}
+
+/// The user's own global Git excludes file, resolved like Git does (`core.excludesFile` in
+/// `$XDG_CONFIG_HOME/git/config` or `~/.gitconfig`, else `$XDG_CONFIG_HOME/git/ignore`), when it
+/// is an existing regular file. Only this one value is read from the user's global
+/// configuration; nothing else in it applies to LADE's Git calls.
+pub fn user_excludes_file() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|h| h.is_absolute())?;
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|x| x.is_absolute())
+        .unwrap_or_else(|| home.join(".config"));
+    let mut configured = None;
+    for file in [xdg.join("git/config"), home.join(".gitconfig")] {
+        if !file.is_file() {
+            continue;
+        }
+        let out = GitCommand::new("config-excludes")
+            .without_config_scan()
+            .read_only()
+            .env("HOME", &home)
+            .args(["config", "--file"])
+            .arg(&file)
+            .args(["--includes", "--type=path", "--get", "core.excludesFile"])
+            .output()
+            .ok()?;
+        if out.status.success() {
+            let value = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+            configured = Some(PathBuf::from(OsString::from_vec(value.to_vec())));
+        }
+    }
+    let path = configured.unwrap_or_else(|| xdg.join("git/ignore"));
+    (path.is_absolute() && path.is_file()).then_some(path)
+}
+
+/// Lossless text form of a branch name: the name itself when it is UTF-8, otherwise each byte
+/// outside valid UTF-8 written as `\xHH`. Git forbids `\` in reference names, so the form is
+/// unambiguous and [`unescape_branch_name`] restores the bytes.
+pub fn escape_branch_name(raw: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in raw.utf8_chunks() {
+        out.push_str(chunk.valid());
+        for byte in chunk.invalid() {
+            out.push_str(&format!("\\x{byte:02x}"));
+        }
+    }
+    out
+}
+
+/// Inverse of [`escape_branch_name`]; `None` for a malformed escape.
+pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
+    let bytes = name.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            let hex = std::str::from_utf8(bytes.get(i + 1..i + 4)?).ok()?;
+            let value = u8::from_str_radix(hex.strip_prefix('x')?, 16).ok()?;
+            out.push(value);
+            i += 4;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(out)
 }
 
 /// Validate a full reference name with a conservative subset of `git check-ref-format`.

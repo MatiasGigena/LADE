@@ -2,8 +2,10 @@
 //! product store or service state: they receive owned inputs and post a result back to the service
 //! queue, where generations and revisions are revalidated before anything is committed.
 
+use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -17,7 +19,7 @@ use lade_protocol::client::Rejection;
 use lade_protocol::types::WirePath;
 use sha2::{Digest as _, Sha256};
 
-use crate::adapters::artifacts::ArtifactStore;
+use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore};
 use crate::adapters::git::{
     self, ChangedFile, CommitSpec, GitError, MergeOutcome, Repository, SquashOutcome, SquashRequest,
 };
@@ -33,6 +35,11 @@ use super::convert::{adapter_git, conflict, core_git, git_rejection, hex, not_fo
 
 /// Files larger than this are not loaded whole (staleness, artifacts, reads).
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
+/// Hard upper bound for inspection: files above [`MAX_WHOLE_FILE`] and up to this size are
+/// streamed into the artifact store and served in bounded chunks; larger ones are refused.
+pub const MAX_CHUNKED_FILE: u64 = 1 << 30;
+/// How many large-blob artifact digests are remembered (so paging does not re-stream).
+const LARGE_BLOB_MEMORY: usize = 8;
 
 type Task = Box<dyn FnOnce() + Send>;
 
@@ -88,6 +95,12 @@ fn git_err(error: &GitError) -> Rejection {
     git_rejection(error)
 }
 
+/// Opens a Workspace repository with the user's own global excludes file applied to captures
+/// (see [`git::user_excludes_file`]).
+pub fn open_repository(path: &Path) -> Result<Repository, GitError> {
+    Repository::open(path).map(|repo| repo.with_excludes_file(git::user_excludes_file()))
+}
+
 pub fn target_commit(repo: &Repository, branch: &str) -> Result<GitId, Rejection> {
     repo.resolve_ref(&format!("refs/heads/{branch}"))
         .map_err(|e| git_err(&e))?
@@ -133,6 +146,82 @@ pub fn read_whole(
     }
 }
 
+fn unsupported(detail: &str) -> Rejection {
+    Rejection::new(
+        lade_protocol::client::ErrorCode::UnsupportedContent,
+        lade_protocol::client::SafeAction::None,
+        detail,
+    )
+}
+
+/// The content of one file version: whole bytes up to [`MAX_WHOLE_FILE`], otherwise the blob to
+/// stream (up to [`MAX_CHUNKED_FILE`]).
+pub enum FileBytes {
+    Whole(Vec<u8>),
+    Large { blob: git::GitId },
+}
+
+/// Like [`read_whole`], but a file above the whole-file bound (up to [`MAX_CHUNKED_FILE`]) is
+/// returned as its blob for streaming instead of being refused.
+pub fn read_file_bytes(
+    repo: &Repository,
+    tree: &GitId,
+    path: &git::RepoPath,
+) -> Result<Option<FileBytes>, Rejection> {
+    let Some(entry) = repo
+        .tree_entry(&adapter_git(tree), path)
+        .map_err(|e| git_err(&e))?
+    else {
+        return Ok(None);
+    };
+    match (entry.kind, entry.size) {
+        (git::ObjectKind::Blob, Some(size)) if size > MAX_CHUNKED_FILE => {
+            Err(unsupported("file exceeds the 1 GiB inspection bound"))
+        }
+        (git::ObjectKind::Blob, Some(size)) if size > MAX_WHOLE_FILE => {
+            Ok(Some(FileBytes::Large { blob: entry.id }))
+        }
+        _ => read_whole(repo, tree, path).map(|bytes| bytes.map(FileBytes::Whole)),
+    }
+}
+
+/// Remembers which artifact holds a large blob, so chunked reads stream it into the store once.
+#[derive(Default)]
+pub struct LargeBlobs(Mutex<VecDeque<(git::GitId, ArtifactDigest)>>);
+
+impl LargeBlobs {
+    /// The artifact holding the whole blob `id`, streamed into the store (never held in memory)
+    /// unless a remembered artifact still exists.
+    pub fn retain(
+        &self,
+        repo: &Repository,
+        artifacts: &ArtifactStore,
+        id: &git::GitId,
+    ) -> Result<ArtifactDigest, Rejection> {
+        let remembered = self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(blob, _)| blob == id)
+            .map(|(_, digest)| *digest);
+        if let Some(digest) = remembered.filter(|d| artifacts.contains(d)) {
+            return Ok(digest);
+        }
+        let digest = repo
+            .with_blob_reader(id, |reader| artifacts.put_reader(reader))
+            .map_err(|e| git_err(&e))?
+            .map_err(|_| super::convert::durability("content could not be retained"))?;
+        let mut memory = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        memory.retain(|(blob, _)| blob != id);
+        memory.push_back((id.clone(), digest));
+        if memory.len() > LARGE_BLOB_MEMORY {
+            memory.pop_front();
+        }
+        Ok(digest)
+    }
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
@@ -147,9 +236,37 @@ pub fn reference_stale(repo: &Repository, old: &GitId, new: &GitId, reference: &
         Side::Old => old,
         Side::New => new,
     };
-    match read_whole(repo, tree, &path) {
+    match read_file_bytes(repo, tree, &path) {
         Ok(None) => reference.staleness(CurrentContent::Missing).is_stale(),
-        Ok(Some(bytes)) => {
+        // The same rule as `Reference::staleness`, without loading the whole file: fresh when
+        // the content digest is unchanged or the selected bytes are still at the same range.
+        Ok(Some(FileBytes::Large { blob })) => {
+            let digest = repo.with_blob_reader(&blob, |reader| {
+                let mut hasher = Sha256::new();
+                let mut buf = vec![0u8; 64 << 10];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break Ok(hex(&hasher.finalize())),
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                        Err(e) => break Err(e),
+                    }
+                }
+            });
+            if matches!(digest, Ok(Ok(ref d)) if *d == reference.artifact_digest().hex()) {
+                return false;
+            }
+            let range = reference.byte_range();
+            let Ok(len) = usize::try_from(range.byte_len()) else {
+                return true;
+            };
+            repo.read_blob(&adapter_git(tree), &path, range.start(), len)
+                .map_or(true, |page| {
+                    page.offset != range.start()
+                        || page.data != reference.selected_text().as_bytes()
+                })
+        }
+        Ok(Some(FileBytes::Whole(bytes))) => {
             let Ok(digest) =
                 lade_core::domain::inspection::ArtifactDigest::parse(&sha256_hex(&bytes))
             else {
@@ -222,6 +339,10 @@ pub struct CaptureOut {
     pub target: GitId,
     pub files: Vec<ChangedFile>,
     pub stale: Vec<(DraftId, bool)>,
+    /// Untracked nested repositories without a commit, left out of the capture.
+    pub skipped_nested: Vec<git::RepoPath>,
+    /// Changed paths whose content goes through a filter driver (LFS etc.), stored raw.
+    pub filtered: Vec<git::RepoPath>,
 }
 
 pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
@@ -229,15 +350,15 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
     let worktree = repo
         .open_worktree(&input.worktree)
         .map_err(|e| git_err(&e))?;
-    let tree = core_git(
-        &repo
-            .capture_working_tree(&worktree, &input.scratch)
-            .map_err(|e| git_err(&e))?,
-    );
+    let captured = repo
+        .capture_working_tree(&worktree, &input.scratch)
+        .map_err(|e| git_err(&e))?;
+    let tree = core_git(&captured.tree);
     let target = target_commit(repo, &input.target_branch)?;
     let files = repo
-        .diff_numstat(&adapter_git(&target), &adapter_git(&tree))
+        .diff_numstat(&adapter_git(&target), &captured.tree)
         .map_err(|e| git_err(&e))?;
+    let filtered = filtered_paths(repo, &captured.tree, &files)?;
     let (capture_id, reused) = match &input.latest {
         Some((id, latest)) if *latest == tree => (*id, true),
         _ => {
@@ -261,7 +382,20 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
         target,
         files,
         stale,
+        skipped_nested: captured.skipped_nested,
+        filtered,
     })
+}
+
+/// Changed paths of `files` (new side in `tree`, old side for deletions) that a filter driver
+/// would convert; see [`Repository::filtered_paths`].
+pub fn filtered_paths(
+    repo: &Repository,
+    tree: &git::GitId,
+    files: &[ChangedFile],
+) -> Result<Vec<git::RepoPath>, Rejection> {
+    let paths: Vec<&git::RepoPath> = files.iter().map(|f| &f.path).collect();
+    repo.filtered_paths(tree, &paths).map_err(|e| git_err(&e))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -297,7 +431,8 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
         .map_err(|e| git_err(&e))?;
     let captured = repo
         .capture_working_tree(&worktree, &input.scratch)
-        .map_err(|e| git_err(&e))?;
+        .map_err(|e| git_err(&e))?
+        .tree;
     let target = target_commit(repo, &input.target_branch)?;
     let commit = repo
         .commit_tree(&CommitSpec {
@@ -354,7 +489,8 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     }
     let again = repo
         .capture_working_tree(&worktree, &input.scratch)
-        .map_err(|e| git_err(&e))?;
+        .map_err(|e| git_err(&e))?
+        .tree;
     Ok(FreezeOut {
         commit: core_git(&commit),
         tree: core_git(&tree),
@@ -561,6 +697,7 @@ pub fn change_set_empty(
             let wt = repo.open_worktree(path).map_err(|e| git_err(&e))?;
             repo.capture_working_tree(&wt, scratch)
                 .map_err(|e| git_err(&e))?
+                .tree
         }
         None => adapter_git(start_commit),
     };
@@ -590,7 +727,8 @@ pub fn cleanup(
                         .map_err(|e| git_err(&e))?;
                     let tree = repo
                         .capture_working_tree(&wt, scratch)
-                        .map_err(|e| git_err(&e))?;
+                        .map_err(|e| git_err(&e))?
+                        .tree;
                     if let Some(head) = head {
                         force = repo
                             .diff_numstat(&head, &tree)
@@ -618,6 +756,18 @@ pub fn cleanup(
         let refname = format!("refs/heads/{branch}");
         if let Some(current) = repo.resolve_ref(&refname).map_err(|e| git_err(&e))? {
             repo.delete_ref_cas(&refname, &current)
+                .map_err(|e| git_err(&e))?;
+        }
+    }
+    Ok(())
+}
+
+/// Deletes each of `refs` that exists (compare-and-swap against its current value). Used only by
+/// the explicit, confirmed `objective.delete_history`.
+pub fn delete_refs(repo: &Repository, refs: &[String]) -> Result<(), Rejection> {
+    for refname in refs {
+        if let Some(current) = repo.resolve_ref(refname).map_err(|e| git_err(&e))? {
+            repo.delete_ref_cas(refname, &current)
                 .map_err(|e| git_err(&e))?;
         }
     }
