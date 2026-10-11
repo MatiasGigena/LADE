@@ -1,16 +1,19 @@
 //! Modal dialogs. Each closes on Escape (keybinding table) and returns focus to its opener.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gtk::gio;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, Dialog, label, set_accessible_label, vbox};
+use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, vbox};
 use crate::presentation::controller::{Controller, FeedbackBatch};
 use crate::presentation::format;
 use crate::presentation::intents::StartPoint;
+use crate::presentation::keys::{self, AppAction, Keymap};
 use crate::presentation::model::Intent as ObjectiveIntent;
+use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
 
 /// Generic confirmation; `destructive` uses the destructive treatment for the confirm button.
 pub fn confirm(
@@ -54,22 +57,22 @@ pub fn approve_with_override(opener: &impl IsA<gtk::Widget>, controller: &Rc<Con
         "Override reason (recorded with the approval)",
         &["meta"],
     ));
-    dialog.body.append(&widgets::bounded_text(&reason, 96, 200));
+    let reason_input = LimitedInput::new(&reason, OVERRIDE_REASON_LIMIT, "the override reason");
+    dialog
+        .body
+        .append(&reason_input.field(&widgets::bounded_text(&reason, 96, 200)));
     dialog.add_cancel();
     let ok = dialog.add_button("Approve candidate", &["primary"]);
     let window = dialog.window.clone();
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let reason_view = reason.clone();
-    ok.connect_clicked(move |_| {
-        let buffer = reason_view.buffer();
-        let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-        match controller.approve(Some(text.to_string())) {
+    ok.connect_clicked(
+        move |_| match controller.approve(Some(reason_input.text())) {
             Ok(()) => window.close(),
             Err(message) => d.show_error(&message),
-        }
-    });
+        },
+    );
     dialog.present();
     reason.grab_focus();
 }
@@ -204,8 +207,11 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
         let view = gtk::TextView::new();
         set_accessible_label(&view, name);
         dialog.body.append(&label(name, &["meta"]));
-        dialog.body.append(&widgets::bounded_text(&view, 56, 140));
-        view
+        let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
+        dialog
+            .body
+            .append(&input.field(&widgets::bounded_text(&view, 56, 140)));
+        input
     };
     let outcome = area("Expected outcome");
     let constraints = area("Constraints");
@@ -231,10 +237,7 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let text = |v: &gtk::TextView| {
-        let b = v.buffer();
-        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
-    };
+    let text = |input: &LimitedInput| input.text();
     let title_entry = title.clone();
     ok.connect_clicked(move |_| {
         let branch = branches
@@ -282,10 +285,13 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
     let area = |name: &str, text: &str| {
         let view = gtk::TextView::new();
         set_accessible_label(&view, name);
-        view.buffer().set_text(text);
         dialog.body.append(&label(name, &["meta"]));
-        dialog.body.append(&widgets::bounded_text(&view, 56, 160));
-        view
+        let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
+        input.set_text(text);
+        dialog
+            .body
+            .append(&input.field(&widgets::bounded_text(&view, 56, 160)));
+        input
     };
     let outcome = area("Expected outcome", &current.outcome);
     let constraints = area("Constraints", &current.constraints);
@@ -296,11 +302,8 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
     let controller = controller.clone();
     let dialog = Rc::new(dialog);
     let d = dialog.clone();
-    let text = |v: &gtk::TextView| {
-        let b = v.buffer();
-        b.text(&b.start_iter(), &b.end_iter(), false).to_string()
-    };
-    let first = outcome.clone();
+    let text = |input: &LimitedInput| input.text();
+    let first = outcome.view.clone();
     ok.connect_clicked(move |_| {
         let intent = ObjectiveIntent {
             outcome: text(&outcome),
@@ -328,4 +331,141 @@ pub fn open_workspace(window: &gtk::Window, controller: &Rc<Controller>) {
             controller.open_workspace(path);
         }
     });
+}
+
+/// Shortcut reference and remapping. Every action is listed with its current binding; remappable
+/// actions take an F-key (or their default), fixed ones explain why. Apply validates the whole
+/// proposal and installs it at once (then saves it as the client preference); Reset only stages
+/// the defaults in the fields.
+pub fn shortcuts(
+    opener: &impl IsA<gtk::Widget>,
+    controller: &Rc<Controller>,
+    path: Option<PathBuf>,
+) {
+    let keymap = controller.store.state().ui.keymap.clone();
+    let dialog = Dialog::new(opener, "Keyboard shortcuts", 620);
+    dialog.body.append(&label(
+        "Each action keeps its default or takes a function key F1–F35, optionally with Shift, Control or Alt (GTK syntax, for example <Control>F8). Other combinations stay with text fields for typing, editing, selection, clipboard and undo. Tab and Shift+Tab move within a region; arrows, Home/End and Enter work in lists.",
+        &["secondary"],
+    ));
+    let grid = gtk::Grid::new();
+    grid.set_row_spacing(8);
+    grid.set_column_spacing(16);
+    grid.set_margin_end(16); // room for the (non-overlay) scrollbar
+    let mut entries: Vec<(AppAction, gtk::Entry)> = Vec::new();
+    for (row, binding) in keys::DEFAULT_APP_KEYBINDINGS.iter().enumerate() {
+        let row = i32::try_from(row).unwrap_or(i32::MAX);
+        let name = label(binding.description, &[]);
+        name.set_hexpand(true);
+        name.set_valign(gtk::Align::Center);
+        grid.attach(&name, 0, row, 1, 1);
+        if let Some(reason) = binding.fixed {
+            let fixed = vbox(2);
+            fixed.append(&label(&keymap.label(binding.action), &["mono", "strong"]));
+            fixed.append(&label(reason, &["meta"]));
+            fixed.set_size_request(240, -1);
+            grid.attach(&fixed, 1, row, 1, 1);
+        } else {
+            let entry = gtk::Entry::builder()
+                .text(keymap.gtk(binding.action))
+                .width_chars(18)
+                .build();
+            entry.add_css_class("mono");
+            entry.set_size_request(240, -1);
+            entry.set_tooltip_text(Some(&format!("Default: {}", binding.default)));
+            set_accessible_label(&entry, &format!("Shortcut for {}", binding.description));
+            widgets::set_accessible_description(
+                &entry,
+                &format!("Currently {}", keymap.label(binding.action)),
+            );
+            grid.attach(&entry, 1, row, 1, 1);
+            entries.push((binding.action, entry));
+        }
+    }
+    let scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(true)
+        .min_content_height(260)
+        .max_content_height(440)
+        .overlay_scrolling(false)
+        .child(&grid)
+        .build();
+    dialog.body.append(&scroll);
+    let status = label("", &["meta", "dialog-status"]);
+    status.set_visible(false);
+    dialog.body.append(&status);
+    let reset = dialog.add_button("Reset to defaults", &[]);
+    let close = dialog.add_button("Close", &[]);
+    let apply = dialog.add_button("Apply", &["primary"]);
+    let window = dialog.window.clone();
+    close.connect_clicked(move |_| window.close());
+    let dialog = Rc::new(dialog);
+    let entries = Rc::new(entries);
+    {
+        let entries = entries.clone();
+        let status = status.clone();
+        let dialog = dialog.clone();
+        reset.connect_clicked(move |_| {
+            for (action, entry) in entries.iter() {
+                entry.set_text(keys::binding(*action).default);
+            }
+            widgets::clear(&dialog.error);
+            status.set_text("Defaults staged in the fields. Choose Apply to use them.");
+            status.set_visible(true);
+        });
+    }
+    let controller = controller.clone();
+    let first = entries.first().map(|(_, e)| e.clone());
+    let shown = dialog.clone();
+    apply.connect_clicked(move |button| {
+        let proposal: Vec<(AppAction, String)> = keys::DEFAULT_APP_KEYBINDINGS
+            .iter()
+            .map(|b| {
+                let text = entries
+                    .iter()
+                    .find(|(a, _)| *a == b.action)
+                    .map_or_else(|| b.default.to_owned(), |(_, e)| e.text().to_string());
+                (b.action, text)
+            })
+            .collect();
+        match Keymap::propose(&proposal) {
+            Err(errors) => {
+                status.set_visible(false);
+                let mut shown = errors.clone();
+                shown.push("Nothing was changed; the current shortcuts still apply.".to_owned());
+                dialog.show_errors(&shown);
+                widgets::announce(
+                    button,
+                    &errors.join(" "),
+                    gtk::AccessibleAnnouncementPriority::Medium,
+                );
+            }
+            Ok(keymap) => {
+                widgets::clear(&dialog.error);
+                for (action, entry) in entries.iter() {
+                    entry.set_text(&keymap.gtk(*action));
+                }
+                let saved = path.as_ref().map(|p| keys::save(p, &keymap).map(|()| p));
+                controller.set_keymap(keymap);
+                let message = match saved {
+                    Some(Ok(p)) => format!("Shortcuts applied and saved to {}.", p.display()),
+                    Some(Err(e)) => format!(
+                        "Shortcuts applied for this window, but they could not be saved: {e}"
+                    ),
+                    None => "Shortcuts applied for this window (no configuration directory: set XDG_CONFIG_HOME or HOME to keep them).".to_owned(),
+                };
+                status.set_text(&message);
+                status.set_visible(true);
+                widgets::announce(
+                    button,
+                    &message,
+                    gtk::AccessibleAnnouncementPriority::Low,
+                );
+            }
+        }
+    });
+    shown.present();
+    if let Some(first) = first {
+        first.grab_focus();
+    }
 }

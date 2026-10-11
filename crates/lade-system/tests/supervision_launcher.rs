@@ -584,7 +584,10 @@ fn unresponsive_worker_is_killed_on_terminate() {
         ),
         "{exited:?}"
     );
-    assert!(pids.iter().all(|p| !alive(*p)));
+    // SIGKILL of bwrap tears the PID namespace down asynchronously; allow the kernel to finish.
+    assert!(wait_until(Duration::from_secs(5), || pids
+        .iter()
+        .all(|p| !alive(*p))));
     assert!(!fx.pidfile(4).exists());
 }
 

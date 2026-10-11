@@ -25,9 +25,15 @@ pub struct Workbench {
     files: gtk::ListBox,
     file_paths: RefCell<Vec<RepoPath>>,
     files_status: gtk::Box,
+    files_scroll: gtk::ScrolledWindow,
     pub viewer: Rc<Viewer>,
     updating: Cell<bool>,
     pub title_label: RefCell<Option<gtk::Label>>,
+    /// Compact composition: collapses the outcome, status details, breadcrumb and journey so
+    /// the Change Set stays dominant. Persistent (not rebuilt) so it keeps focus when toggled.
+    details_toggle: gtk::ToggleButton,
+    details_widgets: RefCell<Vec<gtk::Widget>>,
+    show_details: Cell<bool>,
 }
 
 impl Workbench {
@@ -45,8 +51,18 @@ impl Workbench {
 
         let page = vbox(24);
         page.add_css_class("centre-page");
+        let top = hbox(16);
         let heading = vbox(8);
-        page.append(&heading);
+        heading.set_hexpand(true);
+        top.append(&heading);
+        let details_toggle = gtk::ToggleButton::with_label("Objective details");
+        details_toggle.set_valign(gtk::Align::Start);
+        details_toggle.set_tooltip_text(Some(
+            "Show or hide the outcome, status details and collaboration journey",
+        ));
+        details_toggle.set_visible(false);
+        top.append(&details_toggle);
+        page.append(&top);
 
         let change_set = vbox(12);
         change_set.set_vexpand(true);
@@ -73,11 +89,8 @@ impl Workbench {
         files.add_css_class("file-list");
         files.set_selection_mode(gtk::SelectionMode::Single);
         set_accessible_label(&files, "Changed files");
-        let files_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .child(&files)
-            .build();
+        let files_scroll = widgets::region_scroll(&files);
+        files_scroll.set_vexpand(true);
         files_scroll.set_size_request(192, -1);
         files_scroll.add_css_class("file-scroll");
         file_column.append(&files_scroll);
@@ -100,9 +113,13 @@ impl Workbench {
             files,
             file_paths: RefCell::new(Vec::new()),
             files_status,
+            files_scroll,
             viewer,
             updating: Cell::new(false),
             title_label: RefCell::new(None),
+            details_toggle,
+            details_widgets: RefCell::new(Vec::new()),
+            show_details: Cell::new(true),
         });
         workbench.connect();
         workbench.render_all();
@@ -110,6 +127,14 @@ impl Workbench {
     }
 
     fn connect(self: &Rc<Self>) {
+        let this = Rc::downgrade(self);
+        self.details_toggle.connect_toggled(move |t| {
+            if let Some(this) = this.upgrade()
+                && !this.updating.get()
+            {
+                this.controller.set_compact_details(t.is_active());
+            }
+        });
         let this = Rc::downgrade(self);
         self.basis.connect_selected_notify(move |d| {
             if let Some(this) = this.upgrade()
@@ -172,8 +197,25 @@ impl Workbench {
         self.render_change_set();
     }
 
+    /// Wide: details always shown, no toggle. Compact: the toggle decides.
+    pub fn set_objective_details(&self, shown: bool, toggle_visible: bool) {
+        self.show_details.set(shown);
+        self.details_toggle.set_visible(toggle_visible);
+        self.updating.set(true);
+        self.details_toggle.set_active(shown);
+        self.updating.set(false);
+        for widget in self.details_widgets.borrow().iter() {
+            widget.set_visible(shown);
+        }
+    }
+
+    pub fn set_file_list_width(&self, width: i32) {
+        self.files_scroll.set_size_request(width, -1);
+    }
+
     fn render_heading(&self) {
         widgets::clear(&self.heading);
+        let mut details: Vec<gtk::Widget> = Vec::new();
         let state = self.controller.store.state();
         let Some(summary) = state.selected_summary().cloned() else {
             self.root.set_visible_child_name("none");
@@ -199,6 +241,7 @@ impl Workbench {
         breadcrumb.append(&crumb);
         set_accessible_label(&breadcrumb, &format!("Objectives / {}", summary.title));
         self.heading.append(&breadcrumb);
+        details.push(breadcrumb.upcast());
 
         let title_row = hbox(16);
         let text = vbox(4);
@@ -209,7 +252,9 @@ impl Workbench {
         title.set_selectable(true);
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
-        text.append(&label(&summary.outcome, &["secondary", "outcome-line"]));
+        let outcome = label(&summary.outcome, &["secondary", "outcome-line"]);
+        text.append(&outcome);
+        details.push(outcome.upcast());
         title_row.append(&text);
         let status = vbox(4);
         status.set_halign(gtk::Align::End);
@@ -226,10 +271,12 @@ impl Workbench {
         updated.set_xalign(1.0);
         updated.set_wrap(false);
         status.append(&updated);
+        details.push(updated.upcast());
         if !summary.badges.is_empty() {
             let badges = label(&summary.badge_text(), &["meta"]);
             badges.set_xalign(1.0);
             status.append(&badges);
+            details.push(badges.upcast());
         }
         title_row.append(&status);
         self.heading.append(&title_row);
@@ -261,6 +308,8 @@ impl Workbench {
                 });
                 dot.set_valign(gtk::Align::Center);
                 item.append(&dot);
+                // Non-wrapping: a wrapping label in this row reports inconsistent heights to GTK
+                // (a measure critical, as found in the IMP-002 checkpoint).
                 let text = gtk::Label::new(Some(name));
                 text.add_css_class("journey-label");
                 if step == StepState::Current {
@@ -285,7 +334,13 @@ impl Workbench {
                 "Explains where the collaboration stands; it is not an automatic pipeline.",
             ));
             self.heading.append(&journey);
+            details.push(journey.upcast());
         }
+        let shown = self.show_details.get();
+        for widget in &details {
+            widget.set_visible(shown);
+        }
+        *self.details_widgets.borrow_mut() = details;
     }
 
     fn render_basis(&self) {

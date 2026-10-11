@@ -62,7 +62,18 @@ never resumed automatically).
 
 Keyboard: F6 / Shift+F6 move between regions, Ctrl+1 Workbench, Ctrl+2 Activity, Ctrl+K search, Ctrl+N new
 Objective, Ctrl+O open repository, Ctrl+Shift+M add feedback on the selection, Ctrl+Shift+F switch diff/full file,
-Ctrl+Enter send a message, Escape closes a dialog. Shortcuts cannot be remapped yet.
+Ctrl+Enter send a message, Escape closes a dialog, Ctrl+? (or the keyboard button in the header) lists every
+shortcut. In that dialog each action except F6 / Shift+F6 and Escape can be given a function key F1–F35, optionally
+with Shift, Control or Alt (other combinations stay with text fields for typing, editing and the clipboard); Apply
+checks the whole set, including duplicates, before using it and saves it to
+`$XDG_CONFIG_HOME/lade/keybindings.json` (default `~/.config/lade/keybindings.json`). An invalid file is ignored with
+a notice and the defaults apply; delete the file to return to them.
+
+Below about 1100 pixels of window width (for example 800 × 550, or a 1600 × 1100 screen at 200 % scaling) the
+window shows one region at a time: switch between **Objectives**, **Work area** and **Overview · Evidence ·
+Feedback** with the buttons below the header or F6, and use **Objective details** to show the outcome and journey.
+Text you type or paste into drafts, messages and intents is limited to 256 KiB per field (an override reason to
+2,048 characters); a paste that would exceed it is not inserted and your text stays as it was.
 
 ## 3. Open a repository (Workspace)
 

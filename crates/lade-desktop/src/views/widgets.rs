@@ -4,17 +4,28 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use crate::presentation::model::{ActionAvailability, Attention, Lifecycle};
+use crate::presentation::text_bound::{
+    EditGuard, EndDecision, InsertDecision, Snapshot, TextLimit,
+};
 use crate::presentation::{format, keys};
 
 /// Polite screen-reader announcement. GTK 4.14 calls a missing `announce` implementation (a
 /// NULL vfunc: segfault) when the window's accessibility context is not the AT-SPI backend, e.g.
-/// without a session bus, so other contexts are skipped; the visible text remains.
+/// without a session bus, so other contexts are skipped; the visible text remains. With
+/// `GTK_A11Y=none` GTK creates no context at all (the binding would panic on the NULL), so that
+/// setting skips announcements before asking for one.
 pub fn announce(
     widget: &impl IsA<gtk::Accessible>,
     message: &str,
     priority: gtk::AccessibleAnnouncementPriority,
 ) {
+    if std::env::var_os("GTK_A11Y").is_some_and(|v| v == "none") {
+        return;
+    }
     if widget.at_context().type_().name() == "GtkAtSpiContext" {
         widget.announce(message, priority);
     }
@@ -55,6 +66,164 @@ pub fn line_label(
     label
 }
 
+/// A multi-line input whose user edits are atomic and bounded (`presentation::text_bound`): an
+/// edit that would exceed the limit is stopped before insertion and the previous text, cursor and
+/// selection are restored, with a local error under the field. Focus stays in the field. The model
+/// receives one commit per complete user edit, never GTK's intermediate deletion.
+pub struct LimitedInput {
+    pub view: gtk::TextView,
+    /// Local error area; place it right below the field.
+    pub error: gtk::Box,
+    what: String,
+    guard: RefCell<EditGuard>,
+    programmatic: Cell<bool>,
+    on_commit: RefCell<Option<CommitHandler>>,
+}
+
+type CommitHandler = Box<dyn Fn(&str)>;
+
+impl LimitedInput {
+    pub fn new(view: &gtk::TextView, limit: TextLimit, what: &str) -> Rc<Self> {
+        let input = Rc::new(Self {
+            view: view.clone(),
+            error: vbox(0),
+            what: what.to_owned(),
+            guard: RefCell::new(EditGuard::new(limit)),
+            programmatic: Cell::new(false),
+            on_commit: RefCell::new(None),
+        });
+        let buffer = view.buffer();
+        let this = Rc::downgrade(&input);
+        buffer.connect_begin_user_action(move |buffer| {
+            if let Some(this) = this.upgrade() {
+                let offset = |mark: &gtk::TextMark| buffer.iter_at_mark(mark).offset();
+                this.guard.borrow_mut().begin(Snapshot {
+                    text: text_of(buffer),
+                    cursor: offset(&buffer.get_insert()),
+                    anchor: offset(&buffer.selection_bound()),
+                });
+            }
+        });
+        let this = Rc::downgrade(&input);
+        buffer.connect_insert_text(move |buffer, _, inserted| {
+            let Some(this) = this.upgrade() else { return };
+            if this.programmatic.get() {
+                return;
+            }
+            let decision = this.guard.borrow_mut().insert(&text_of(buffer), inserted);
+            if let InsertDecision::Reject { attempted } = decision {
+                buffer.stop_signal_emission_by_name("insert-text");
+                // Inside a user action the error is shown once the snapshot is restored.
+                if !this.guard.borrow().in_action() {
+                    this.show_rejection(attempted);
+                }
+            }
+        });
+        let this = Rc::downgrade(&input);
+        buffer.connect_end_user_action(move |buffer| {
+            let Some(this) = this.upgrade() else { return };
+            let decision = this.guard.borrow_mut().end();
+            match decision {
+                EndDecision::Commit => this.commit(),
+                EndDecision::Restore {
+                    snapshot,
+                    attempted,
+                } => this.restore(buffer, snapshot, attempted),
+            }
+        });
+        let this = Rc::downgrade(&input);
+        buffer.connect_changed(move |_| {
+            if let Some(this) = this.upgrade()
+                && !this.programmatic.get()
+                && !this.guard.borrow().in_action()
+            {
+                this.commit();
+            }
+        });
+        input
+    }
+
+    /// The field and its local error area as one unit (no extra spacing while there is no error).
+    pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
+        let unit = vbox(0);
+        unit.append(scroll);
+        self.error.add_css_class("limited-error");
+        unit.append(&self.error);
+        unit
+    }
+
+    /// Called with the complete text after each accepted user edit.
+    pub fn connect_commit(&self, f: impl Fn(&str) + 'static) {
+        *self.on_commit.borrow_mut() = Some(Box::new(f));
+    }
+
+    pub fn text(&self) -> String {
+        text_of(&self.view.buffer())
+    }
+
+    /// Replaces the text from the model (no commit, no limit check: model text is bounded).
+    pub fn set_text(&self, text: &str) {
+        self.programmatic.set(true);
+        self.view.buffer().set_text(text);
+        self.programmatic.set(false);
+    }
+
+    fn commit(&self) {
+        clear(&self.error);
+        let text = self.text();
+        if let Some(f) = self.on_commit.borrow().as_ref() {
+            f(&text);
+        }
+    }
+
+    fn show_rejection(&self, attempted: usize) {
+        let message = self.guard.borrow().rejection(&self.what, attempted);
+        clear(&self.error);
+        self.error.append(&error_line(&message));
+        announce(
+            &self.view,
+            &message,
+            gtk::AccessibleAnnouncementPriority::Medium,
+        );
+    }
+
+    /// Restores the snapshot inside GTK's end-user-action emission. `set_text` would start an
+    /// irreversible history action, which is invalid there; a guarded delete/insert joins the
+    /// current action instead. The oriented selection is restored on idle, after the X11 PRIMARY
+    /// release caused by the deletion has been processed, and only if nothing changed meanwhile.
+    fn restore(self: &Rc<Self>, buffer: &gtk::TextBuffer, snapshot: Snapshot, attempted: usize) {
+        self.programmatic.set(true);
+        buffer.delete(&mut buffer.start_iter(), &mut buffer.end_iter());
+        buffer.insert(&mut buffer.start_iter(), &snapshot.text);
+        buffer.place_cursor(&buffer.iter_at_offset(snapshot.cursor));
+        self.programmatic.set(false);
+        self.show_rejection(attempted);
+        let generation = self.guard.borrow().generation();
+        let this = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            let Some(this) = this.upgrade() else { return };
+            let buffer = this.view.buffer();
+            if this.guard.borrow().generation() == generation
+                && this.view.has_focus()
+                && buffer.cursor_position() == snapshot.cursor
+                && !buffer.has_selection()
+                && snapshot.cursor != snapshot.anchor
+            {
+                buffer.select_range(
+                    &buffer.iter_at_offset(snapshot.cursor),
+                    &buffer.iter_at_offset(snapshot.anchor),
+                );
+            }
+        });
+    }
+}
+
+fn text_of(buffer: &gtk::TextBuffer) -> String {
+    buffer
+        .text(&buffer.start_iter(), &buffer.end_iter(), true)
+        .to_string()
+}
+
 /// Multi-line input with a real boundary whose height stays between `min` and `max` px (the text
 /// scrolls beyond that), independent of earlier layout passes.
 pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWindow {
@@ -70,10 +239,23 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .min_content_height(min)
         .max_content_height(max)
         .propagate_natural_height(true)
+        .overlay_scrolling(false)
         .child(view)
         .build();
     scroll.add_css_class("text-input");
     scroll
+}
+
+/// A region viewport: vertical scrolling when the content is taller than the window, never a
+/// horizontal scrollbar, and non-overlay scrollbars (GTK's transient overlay sliders produced
+/// unallocated-snapshot warnings in the IMP-002 checkpoint and can hide content under them).
+pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
+    gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .overlay_scrolling(false)
+        .child(child)
+        .build()
 }
 
 fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
@@ -122,6 +304,50 @@ pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
     update(&dropdown);
     dropdown.connect_selected_notify(update);
     dropdown
+}
+
+/// A disclosure: a quiet toggle button whose label wraps, showing or hiding `child` below it. The
+/// child stays rooted while hidden — a collapsed `GtkExpander` caused a `gtk_root_get_focus`
+/// critical during compact Tab traversal in the IMP-002 checkpoint, so it is not used.
+pub fn disclosure(
+    title: &str,
+    expanded: bool,
+    child: &impl IsA<gtk::Widget>,
+    on_toggled: impl Fn(bool) + 'static,
+) -> gtk::Box {
+    let root = vbox(4);
+    root.add_css_class("disclosure");
+    let toggle = gtk::ToggleButton::new();
+    toggle.add_css_class("quiet");
+    toggle.add_css_class("disclosure-toggle");
+    toggle.set_halign(gtk::Align::Start);
+    let text = gtk::Label::new(None);
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_max_width_chars(60);
+    text.set_xalign(0.0);
+    toggle.set_child(Some(&text));
+    set_accessible_label(&toggle, title);
+    let child = child.as_ref().clone();
+    let render = {
+        let title = title.to_owned();
+        let child = child.clone();
+        move |toggle: &gtk::ToggleButton| {
+            let open = toggle.is_active();
+            text.set_text(&format!("{} {title}", if open { "▾" } else { "▸" }));
+            child.set_visible(open);
+            toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
+        }
+    };
+    toggle.set_active(expanded);
+    render(&toggle);
+    toggle.connect_toggled(move |t| {
+        render(t);
+        on_toggled(t.is_active());
+    });
+    root.append(&toggle);
+    root.append(&child);
+    root
 }
 
 /// A label for a button that wraps instead of widening its column.
@@ -292,8 +518,8 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(12);
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
-    key_label.set_width_chars(11);
-    key_label.set_max_width_chars(11);
+    key_label.set_width_chars(10);
+    key_label.set_max_width_chars(10);
     row.append(&key_label);
     value.set_hexpand(true);
     row.append(value);
@@ -341,16 +567,16 @@ pub fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
 /// Installs Escape (from the keybinding table) to close a dialog window.
 fn install_close_shortcut(window: &gtk::Window) {
     let controller = gtk::ShortcutController::new();
-    for accel in keys::accelerators(keys::DEFAULT_APP_KEYBINDINGS, keys::AppAction::CloseDialog) {
-        if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
-            let action = gtk::CallbackAction::new(|widget, _| {
-                if let Some(window) = widget.downcast_ref::<gtk::Window>() {
-                    window.close();
-                }
-                glib::Propagation::Stop
-            });
-            controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
-        }
+    // Fixed binding: Escape always dismisses the local dialog (see `keys`).
+    let accel = keys::binding(keys::AppAction::CloseDialog).default;
+    if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
+        let action = gtk::CallbackAction::new(|widget, _| {
+            if let Some(window) = widget.downcast_ref::<gtk::Window>() {
+                window.close();
+            }
+            glib::Propagation::Stop
+        });
+        controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(action)));
     }
     window.add_controller(controller);
 }
@@ -400,8 +626,16 @@ impl Dialog {
     }
 
     pub fn show_error(&self, message: &str) {
+        self.show_errors(&[message.to_owned()]);
+    }
+
+    /// Replaces the dialog's error area with one error line per message.
+    pub fn show_errors(&self, messages: &[String]) {
         clear(&self.error);
-        self.error.append(&error_line(message));
+        self.error.set_spacing(8);
+        for message in messages {
+            self.error.append(&error_line(message));
+        }
     }
 
     pub fn add_cancel(&self) -> gtk::Button {

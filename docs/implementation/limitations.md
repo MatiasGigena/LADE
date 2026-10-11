@@ -84,8 +84,9 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 
 | Limitation | Impact | Tracked |
 | --- | --- | --- |
-| Orca speech, 200 % scaling and rendered contrast have **not** been validated on the rendered surfaces (only design tokens and native captures exist) | A17/A18 accessibility gates are open | IMP-002, IMP-010 |
-| Keybindings are defined centrally but cannot be remapped by the user | Fixed shortcuts | IMP-012 |
+| Orca speech has **not** been validated on this client; the IMP-002 (#40) Mint/Orca evidence applied to the superseded fixture component and must be re-run here. 200 % scaling and the compact composition are captured only under Xvfb on the development host (`scale-200-800x550.png`, `compact-800x550.png`), not on Mint/Cinnamon/X11. Contrast is computed for token pairs (`scripts/check-contrast.py`); rendered-surface sampling (`scripts/sample-rendered-contrast.py`) is optional and has no recorded run against the accepted states | A17/A18 accessibility gates are open | IMP-002, IMP-010 |
+| Shortcut remapping is limited by policy: remappable actions take their default or F1–F35 (optionally Shift/Control/Alt); F6/Shift+F6 and Escape are fixed. Remaps are a per-user client preference in `$XDG_CONFIG_HOME/lade/keybindings.json`, not synchronised and not product state | Letter/editing combinations cannot be chosen | IMP-012 |
+| Under Xvfb on the development host (GTK 4.14, a GTK 4 clipboard owner), a paste of more than about 256 KiB never reached the client's buffer, so the 256 KiB size guard was exercised by pasting into existing text; behaviour with other clipboard owners and on Mint is unverified | A very large paste may fail silently at the toolkit level, before LADE can explain it | IMP-010 |
 | Syntax highlighting is off in the file and diff viewer | Plain text only | IMP-010 |
 | Dialogs (new Objective, open repository, submit feedback, approve, cleanup) are not captured as evidence | Their appearance is unverified | IMP-010 |
 | The model list is static on the client side | New pi models or custom providers cannot be chosen | IMP-011 |

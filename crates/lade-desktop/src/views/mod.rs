@@ -20,6 +20,7 @@ mod widgets;
 mod workbench;
 
 use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -30,15 +31,11 @@ use gtk4 as gtk;
 use crate::presentation::controller::Controller;
 use crate::presentation::intents::IntentSink;
 use crate::presentation::keys::{self, AppAction};
-use crate::presentation::model::{ConnectionState, DraftId, NoticeLevel};
-use crate::presentation::store::{Change, MainView, Store};
+use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
+use crate::presentation::model::{ConnectionState, DraftId, NoticeLevel, ServiceNotice};
+use crate::presentation::store::{Change, MainView, Store, StoreUpdate};
 
 const CSS: &str = include_str!("../assets/style.css");
-
-/// Window widths (logical px) for the compact compositions.
-const COMPACT_WIDTH: i32 = 1100;
-const NARROW_WIDTH: i32 = 800;
-const INSPECTOR_WIDTH: i32 = 320;
 
 /// Loads the single application stylesheet. Call once after GTK is initialised.
 pub fn load_css() {
@@ -68,17 +65,26 @@ pub struct App {
     inspector: Rc<inspector::Inspector>,
     body: gtk::Stack,
     centre: gtk::Stack,
+    /// The work area's region viewport: scrolls vertically when the window is short and bounds
+    /// the work area's minimum width so the window can always narrow into compact.
+    centre_region: gtk::ScrolledWindow,
+    region_bar: gtk::Box,
+    region_switches: Vec<(Region, gtk::ToggleButton)>,
     paned: gtk::Paned,
     right: gtk::Paned,
     probe: gtk::DrawingArea,
-    inspector_width: Cell<i32>,
+    sizes: Cell<WideSizes>,
     empty: gtk::Box,
     notice: gtk::Box,
     preview_band: gtk::Label,
     notices_seen: Cell<usize>,
     draft_timer: RefCell<Option<glib::SourceId>>,
     scheduling: Cell<bool>,
-    width_class: Cell<u8>,
+    updating_layout: Cell<bool>,
+    /// One window-level shortcut per action (Escape excepted: dialogs own it), retargeted in
+    /// place when the keymap changes so there is exactly one dispatch path.
+    shortcuts: RefCell<Vec<(AppAction, gtk::Shortcut)>>,
+    keys_path: Option<PathBuf>,
 }
 
 impl App {
@@ -104,7 +110,7 @@ impl App {
 
         let root = widgets::vbox(0);
         root.add_css_class("lade-root");
-        root.append(&header.root);
+        root.append(&header.viewport);
         // Persistent statement in preview mode so fixture data is never mistaken for service state.
         let preview_band = widgets::label("", &["preview-band"]);
         preview_band.set_visible(false);
@@ -114,18 +120,42 @@ impl App {
         notice.set_visible(false);
         root.append(&notice);
 
+        // Compact composition: explicit region switches instead of side-by-side rails.
+        let region_bar = widgets::hbox(0);
+        region_bar.add_css_class("region-bar");
+        region_bar.set_visible(false);
+        let switches = widgets::hbox(0);
+        switches.add_css_class("segmented");
+        widgets::set_accessible_label(&switches, "Region");
+        let mut region_switches = Vec::new();
+        for region in [Region::Objectives, Region::Main, Region::Inspector] {
+            let toggle = gtk::ToggleButton::with_label(region.switch_label());
+            toggle.set_tooltip_text(Some(region.switch_tooltip()));
+            if let Some((_, first)) = region_switches.first() {
+                toggle.set_group(Some(first));
+            }
+            switches.append(&toggle);
+            region_switches.push((region, toggle));
+        }
+        region_bar.append(&switches);
+        root.append(&region_bar);
+
         let centre = gtk::Stack::new();
         centre.add_named(&workbench.root, Some("workbench"));
         centre.add_named(&activity.root, Some("activity"));
         centre.set_hexpand(true);
+        centre.set_vexpand(true);
         centre.add_css_class("centre-stack");
-        widgets::set_accessible_label(&centre, "Main work area");
+        let centre_region = widgets::region_scroll(&centre);
+        centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
+        centre_region.set_hexpand(true);
+        widgets::set_accessible_label(&centre_region, "Main work area");
         // Inspector: adjustable 280–360 px; it may shrink transiently so the window can narrow
-        // into the compact composition, where it becomes an on-demand panel.
+        // into the compact composition, where it becomes a region of its own.
         inspector.root.set_hexpand(false);
         widgets::set_accessible_label(&inspector.root, "Inspector");
         let right = gtk::Paned::new(gtk::Orientation::Horizontal);
-        right.set_start_child(Some(&centre));
+        right.set_start_child(Some(&centre_region));
         right.set_end_child(Some(&inspector.root));
         right.set_resize_start_child(true);
         right.set_resize_end_child(false);
@@ -175,17 +205,22 @@ impl App {
             inspector,
             body,
             centre,
+            centre_region,
+            region_bar,
+            region_switches,
             paned,
             right,
             probe,
-            inspector_width: Cell::new(INSPECTOR_WIDTH),
+            sizes: Cell::new(layout::wide_sizes(1440)),
             empty,
             notice,
             preview_band,
             notices_seen: Cell::new(0),
             draft_timer: RefCell::new(None),
             scheduling: Cell::new(false),
-            width_class: Cell::new(u8::MAX),
+            updating_layout: Cell::new(false),
+            shortcuts: RefCell::new(Vec::new()),
+            keys_path: keys::config_path(|name| std::env::var(name).ok()),
         });
         app.connect();
         let weak = Rc::downgrade(&app);
@@ -194,8 +229,10 @@ impl App {
                 app.refresh(changes);
             }
         });
+        app.load_keymap();
         app.render_body();
         app.render_centre();
+        app.render_layout();
         app
     }
 
@@ -240,63 +277,111 @@ impl App {
             }
         });
         // Keep the inspector width (not the centre width) stable when the window resizes, and
-        // keep a dragged width within 280–360 px.
+        // keep a dragged width within 280–360 px. Only the wide composition has a side inspector.
         let weak = Rc::downgrade(self);
         self.right.connect_max_position_notify(move |p| {
-            if let Some(app) = weak.upgrade() {
-                p.set_position(p.max_position() - app.inspector_width.get());
+            if let Some(app) = weak.upgrade()
+                && app.store.state().ui.layout == LayoutClass::Wide
+            {
+                p.set_position(p.max_position() - app.sizes.get().inspector);
             }
         });
         let weak = Rc::downgrade(self);
         self.right.connect_position_notify(move |p| {
             if let Some(app) = weak.upgrade()
-                && app.inspector.root.is_visible()
+                && app.store.state().ui.layout == LayoutClass::Wide
                 && p.max_position() > 0
             {
                 let width = p.max_position() - p.position();
                 let clamped = width.clamp(280, 360);
-                if app.width_class.get() == 0 {
-                    app.inspector_width.set(clamped);
-                }
                 if clamped != width {
                     p.set_position(p.max_position() - clamped);
                 }
             }
         });
-        for toggle in [&self.header.details_toggle, &self.header.rail_toggle] {
+        for (region, toggle) in &self.region_switches {
             let weak = Rc::downgrade(self);
-            toggle.connect_toggled(move |_| {
-                if let Some(app) = weak.upgrade() {
-                    let width = app.window.default_width();
-                    app.width_class.set(u8::MAX);
-                    app.apply_width(width);
+            let region = *region;
+            toggle.connect_toggled(move |t| {
+                if let Some(app) = weak.upgrade()
+                    && t.is_active()
+                    && !app.updating_layout.get()
+                {
+                    app.controller.show_region(region);
                 }
             });
         }
+        // Opening an Objective (Enter, double-click or click) in the compact Objectives region
+        // moves to its work area.
+        let weak = Rc::downgrade(self);
+        self.rail.set_on_open(Rc::new(move || {
+            if let Some(app) = weak.upgrade()
+                && app.store.state().ui.layout == LayoutClass::Compact
+            {
+                app.controller.show_region(Region::Main);
+                app.focus_region(Region::Main);
+            }
+        }));
+        let weak = Rc::downgrade(self);
+        self.header.shortcuts_button.connect_clicked(move |b| {
+            if let Some(app) = weak.upgrade() {
+                dialogs::shortcuts(b, &app.controller, app.keys_path.clone());
+            }
+        });
         self.install_shortcuts();
     }
 
+    /// Reads the client keybinding preference; an invalid file is ignored with a visible notice.
+    fn load_keymap(&self) {
+        let Some(path) = &self.keys_path else { return };
+        let (keymap, problem) = keys::load(path);
+        self.controller.set_keymap(keymap);
+        if let Some(message) = problem {
+            self.store.apply(StoreUpdate::Notice(ServiceNotice {
+                level: NoticeLevel::Warning,
+                code: "keybindings_ignored".to_owned(),
+                message,
+            }));
+        }
+    }
+
+    /// Installs one capture-phase shortcut per window action on the main window only. Dialogs
+    /// are separate windows, so a remapped window shortcut never captures their field input;
+    /// Escape is installed by each dialog itself.
     fn install_shortcuts(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let keymap = self.store.state().ui.keymap.clone();
+        let mut shortcuts = Vec::new();
         for binding in keys::DEFAULT_APP_KEYBINDINGS {
             if binding.action == AppAction::CloseDialog {
-                continue; // dialogs and popovers install their own
+                continue;
             }
-            for accel in binding.accelerators {
-                let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) else {
-                    continue;
-                };
-                let weak = Rc::downgrade(self);
-                let action = binding.action;
-                let callback = gtk::CallbackAction::new(move |_, _| match weak.upgrade() {
-                    Some(app) => app.run_action(action),
-                    None => glib::Propagation::Proceed,
-                });
-                controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(callback)));
-            }
+            let weak = Rc::downgrade(self);
+            let action = binding.action;
+            let callback = gtk::CallbackAction::new(move |_, _| match weak.upgrade() {
+                Some(app) => app.run_action(action),
+                None => glib::Propagation::Proceed,
+            });
+            let shortcut = gtk::Shortcut::new(
+                gtk::ShortcutTrigger::parse_string(&keymap.gtk(action)),
+                Some(callback),
+            );
+            controller.add_shortcut(shortcut.clone());
+            shortcuts.push((action, shortcut));
         }
         self.window.add_controller(controller);
+        *self.shortcuts.borrow_mut() = shortcuts;
+        self.header.set_shortcut_hints(&keymap);
+    }
+
+    /// Retargets every window shortcut to the current keymap at once.
+    fn apply_keymap(&self) {
+        let keymap = self.store.state().ui.keymap.clone();
+        for (action, shortcut) in self.shortcuts.borrow().iter() {
+            shortcut.set_trigger(gtk::ShortcutTrigger::parse_string(&keymap.gtk(*action)));
+        }
+        self.header.set_shortcut_hints(&keymap);
     }
 
     fn run_action(self: &Rc<Self>, action: AppAction) -> glib::Propagation {
@@ -316,6 +401,11 @@ impl App {
                 dialogs::open_workspace(self.window.upcast_ref(), &self.controller);
             }
             AppAction::ToggleViewerMode => self.controller.toggle_viewer_mode(),
+            AppAction::ShowShortcuts => dialogs::shortcuts(
+                &self.header.shortcuts_button,
+                &self.controller,
+                self.keys_path.clone(),
+            ),
             AppAction::SendMessage => {
                 if !self.activity.composer_has_focus() {
                     return glib::Propagation::Proceed;
@@ -327,38 +417,49 @@ impl App {
         glib::Propagation::Stop
     }
 
-    fn regions(&self) -> Vec<gtk::Widget> {
-        vec![
-            self.header.root.clone().upcast(),
-            self.rail.root.clone().upcast(),
-            self.centre.clone().upcast(),
-            self.inspector.root.clone().upcast(),
-        ]
+    fn region_widget(&self, region: Region) -> gtk::Widget {
+        match region {
+            Region::Header => self.header.root.clone().upcast(),
+            Region::Objectives => self.rail.root.clone().upcast(),
+            Region::Main => self.centre_region.clone().upcast(),
+            Region::Inspector => self.inspector.root.clone().upcast(),
+        }
     }
 
-    /// F6 / Shift+F6: header → Objectives → centre → inspector, skipping hidden regions.
-    fn cycle_regions(&self, forward: bool) {
-        let regions: Vec<gtk::Widget> = self
-            .regions()
-            .into_iter()
-            .filter(|r| r.is_mapped())
-            .collect();
-        if regions.is_empty() {
-            return;
-        }
-        let focus = gtk::prelude::GtkWindowExt::focus(&self.window);
-        let current = focus.and_then(|f| regions.iter().position(|r| f.is_ancestor(r) || &f == r));
-        let n = regions.len();
-        let next = match (current, forward) {
-            (Some(i), true) => (i + 1) % n,
-            (Some(i), false) => (i + n - 1) % n,
-            (None, true) => 0,
-            (None, false) => n - 1,
-        };
-        let target = &regions[next];
+    fn focused_region(&self) -> Option<Region> {
+        let focus = gtk::prelude::GtkWindowExt::focus(&self.window)?;
+        layout::REGION_ORDER.into_iter().find(|region| {
+            let widget = self.region_widget(*region);
+            focus == widget || focus.is_ancestor(&widget)
+        })
+    }
+
+    fn focus_region(&self, region: Region) {
+        let target = self.region_widget(region);
         if !target.child_focus(gtk::DirectionType::TabForward) {
             target.grab_focus();
         }
+    }
+
+    /// F6 / Shift+F6: header → Objectives → work area → inspector. The wide composition skips
+    /// hidden regions; the compact one switches to the region first, so every region stays
+    /// reachable and the escape route always works.
+    fn cycle_regions(&self, forward: bool) {
+        let compact = self.store.state().ui.layout == LayoutClass::Compact;
+        let mut target = layout::next_region(self.focused_region(), forward);
+        if compact {
+            if target != Region::Header {
+                self.controller.show_region(target);
+            }
+        } else {
+            for _ in 0..layout::REGION_ORDER.len() {
+                if self.region_widget(target).is_mapped() {
+                    break;
+                }
+                target = layout::next_region(Some(target), forward);
+            }
+        }
+        self.focus_region(target);
     }
 
     fn add_feedback(&self) {
@@ -415,6 +516,12 @@ impl App {
         }
         if changes.contains(&Change::Notices) {
             self.render_notice();
+        }
+        if changes.contains(&Change::Keymap) {
+            self.apply_keymap();
+        }
+        if changes.contains(&Change::Layout) {
+            self.render_layout();
         }
         if changes.iter().any(|c| {
             matches!(
@@ -545,43 +652,75 @@ impl App {
         );
     }
 
-    /// Compact compositions: narrower rail and an on-demand inspector below ~1100 px; on-demand
-    /// Objectives list below ~800 px. Nothing is removed, only placed behind a visible toggle.
+    /// Records the allocated width; the store decides the layout class (`presentation::layout`).
+    /// Within the wide composition, side widths tighten below 1280 px.
     fn apply_width(&self, width: i32) {
-        let class = if width < NARROW_WIDTH {
-            2
-        } else if width < COMPACT_WIDTH {
-            1
-        } else {
-            0
-        };
-        let toggles_changed = self.width_class.get() == u8::MAX;
-        if self.width_class.replace(class) == class && !toggles_changed {
-            return;
+        let sizes = layout::wide_sizes(width);
+        if self.sizes.replace(sizes) != sizes {
+            self.workbench.set_file_list_width(sizes.file_list);
+            if self.store.state().ui.layout == LayoutClass::Wide {
+                self.place_wide_panes();
+            }
         }
-        let inspector = if class == 0 { INSPECTOR_WIDTH } else { 300 };
-        self.inspector_width.set(inspector);
-        let details = self.header.details_toggle.is_active();
-        let show_rail = self.header.rail_toggle.is_active();
-        self.header.set_compact(class);
-        self.header.details_toggle.set_visible(class >= 1);
-        self.header.rail_toggle.set_visible(class >= 2);
-        self.inspector.root.set_visible(class == 0 || details);
+        self.controller.set_layout_width(width);
+    }
+
+    fn place_wide_panes(&self) {
+        let sizes = self.sizes.get();
+        self.paned.set_position(sizes.rail);
         let right = self.right.clone();
+        let inspector = sizes.inspector;
+        // The max position is known only after the next allocation.
         glib::idle_add_local_once(move || {
             right.set_position(right.max_position() - inspector);
         });
-        // Compact: the inspector opens in place of the Objectives list, keeping the centre usable.
-        self.rail.root.set_visible(match class {
-            0 => true,
-            1 => !details,
-            _ => show_rail && !details,
-        });
-        self.paned.set_position(if class == 0 { 248 } else { 224 });
-        if class >= 1 {
+    }
+
+    /// Applies the composition decided in `presentation::layout`: visible regions, the region
+    /// switches, the header and the Objective details toggle. Nothing is removed in compact; one
+    /// region is shown at a time and the others stay one switch (or F6) away.
+    fn render_layout(&self) {
+        let (class, region, details) = {
+            let state = self.store.state();
+            (
+                state.ui.layout,
+                state.ui.compact_region,
+                state.ui.compact_details,
+            )
+        };
+        let c = layout::composition(class, region, details);
+        let focus_region = self.focused_region();
+        self.rail.root.set_visible(c.rail);
+        self.centre_region.set_visible(c.centre);
+        self.inspector.root.set_visible(c.inspector);
+        // A paned with both children hidden still takes its share: hide it so the shown region
+        // gets the whole width.
+        self.right.set_visible(c.centre || c.inspector);
+        self.region_bar.set_visible(c.region_switches);
+        self.header.set_compact(class == LayoutClass::Compact);
+        self.workbench
+            .set_objective_details(c.objective_details, c.details_toggle);
+        self.updating_layout.set(true);
+        let shown = match region {
+            Region::Header => Region::Main,
+            other => other,
+        };
+        for (r, toggle) in &self.region_switches {
+            toggle.set_active(*r == shown);
+        }
+        self.updating_layout.set(false);
+        if class == LayoutClass::Compact {
             self.window.add_css_class("compact");
         } else {
             self.window.remove_css_class("compact");
+            self.place_wide_panes();
+        }
+        // Focus in a region that was just hidden would be lost; keep it in the shown region.
+        if let Some(previous) = focus_region
+            && previous != Region::Header
+            && !self.region_widget(previous).is_visible()
+        {
+            self.focus_region(shown);
         }
     }
 }

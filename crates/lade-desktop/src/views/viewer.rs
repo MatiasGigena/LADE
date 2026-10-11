@@ -152,10 +152,14 @@ impl Viewer {
         new_numbers.set_width_request(digits + 12);
         signs.set_width_request(GutterRendererTextExt::measure(&signs, "−").0 + 12);
 
+        // A usable minimum: when the window is short the work area scrolls as a whole rather
+        // than squeezing the code to a few lines.
         let scroll = gtk::ScrolledWindow::builder()
             .child(&view)
             .vexpand(true)
             .hexpand(true)
+            .min_content_height(180)
+            .overlay_scrolling(false)
             .build();
         scroll.add_css_class("code-scroll");
         let message = vbox(12);

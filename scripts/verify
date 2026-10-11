@@ -10,6 +10,8 @@ python3 scripts/generate-fixtures.py --check
 ./scripts/cargo test --workspace --locked
 ./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/check-architecture.py
+# Desktop colour tokens: WCAG contrast of the specified pairs (pure computation, no display).
+python3 scripts/check-contrast.py >/dev/null
 npm --prefix packages/pi-worker run lint
 python3 scripts/check-worker-lint.py
 npm --prefix packages/pi-worker run check
