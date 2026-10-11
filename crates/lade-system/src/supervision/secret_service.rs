@@ -197,7 +197,7 @@ impl SecretService {
         ];
         let ran = match self.run(&args, None, true, deadline) {
             Ok(ran) => ran,
-            Err(e) => return Lookup::Unavailable(self.run_error(e)),
+            Err(e) => return Lookup::Unavailable(run_error(e, self.timeout)),
         };
         if !ran.status.success() {
             return match reason_of(&ran.stderr) {
@@ -246,7 +246,7 @@ impl SecretService {
         let deadline = Instant::now() + STORE_TIMEOUT;
         let ran = self
             .run(&args, Some(secret.to_vec()), false, deadline)
-            .map_err(|e| self.run_error(e))?;
+            .map_err(|e| run_error(e, STORE_TIMEOUT))?;
         if ran.status.success() {
             return Ok(());
         }
@@ -264,24 +264,13 @@ impl SecretService {
         let deadline = Instant::now() + STORE_TIMEOUT;
         let ran = self
             .run(&args, None, false, deadline)
-            .map_err(|e| self.run_error(e))?;
+            .map_err(|e| run_error(e, STORE_TIMEOUT))?;
         if ran.status.success() {
             return Ok(true);
         }
         match reason_of(&ran.stderr) {
             None => Ok(false),
             Some(reason) => Err(reason),
-        }
-    }
-
-    fn run_error(&self, error: RunError) -> String {
-        match error {
-            RunError::Spawn(kind) => format!("secret-tool could not be started ({kind})"),
-            RunError::TimedOut => format!(
-                "secret-tool did not answer within {} s (a locked keyring may be waiting for its \
-                 unlock prompt)",
-                self.timeout.as_secs_f32()
-            ),
         }
     }
 
@@ -344,6 +333,18 @@ impl SecretService {
             stdout_overflow,
             stderr,
         })
+    }
+}
+
+/// Why a call failed to run; `bound` is the deadline it ran under.
+fn run_error(error: RunError, bound: Duration) -> String {
+    match error {
+        RunError::Spawn(kind) => format!("secret-tool could not be started ({kind})"),
+        RunError::TimedOut => format!(
+            "secret-tool did not answer within {} s (a locked keyring may be waiting for its \
+             unlock prompt)",
+            bound.as_secs_f32()
+        ),
     }
 }
 
