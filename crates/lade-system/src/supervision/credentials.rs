@@ -24,8 +24,11 @@ pub const FIXTURE_PROVIDER: &str = "lade-fixture";
 
 /// Credential variables per provider, mirroring pi-ai 0.85.1 `env-api-keys.js`
 /// (`getApiKeyEnvVars`). Any one present variable satisfies the provider; all present ones are
-/// released. Providers whose pi authentication is not a plain variable (Bedrock profiles, Vertex
-/// ADC, OAuth logins) are not listed and therefore unavailable.
+/// released. `ANTHROPIC_OAUTH_TOKEN` is a Claude subscription token (for example from
+/// `claude setup-token`) and `KIMI_API_KEY` a Kimi Code subscription key: subscription access that
+/// is a plain variable works like an API key. Providers whose pi authentication is not a plain
+/// variable (Bedrock profiles, Vertex ADC, interactive OAuth logins) are not listed and therefore
+/// unavailable; see `supervision::providers` for the reasons shown to the developer.
 const PROVIDER_VARS: &[(&str, &[&str])] = &[
     (FIXTURE_PROVIDER, &[]),
     (
@@ -46,6 +49,12 @@ const PROVIDER_VARS: &[(&str, &[&str])] = &[
     ("cerebras", &["CEREBRAS_API_KEY"]),
     ("together", &["TOGETHER_API_KEY"]),
     ("fireworks", &["FIREWORKS_API_KEY"]),
+    ("moonshotai", &["MOONSHOT_API_KEY"]),
+    ("huggingface", &["HF_TOKEN"]),
+    ("nvidia", &["NVIDIA_API_KEY"]),
+    ("zai", &["ZAI_API_KEY"]),
+    ("vercel-ai-gateway", &["AI_GATEWAY_API_KEY"]),
+    ("kimi-coding", &["KIMI_API_KEY"]),
 ];
 
 /// The credential variable names pi reads for `provider`, or `None` for an unknown provider.
@@ -57,7 +66,19 @@ pub fn provider_env_vars(provider: &str) -> Option<&'static [&'static str]> {
 }
 
 fn known_var(name: &str) -> bool {
-    PROVIDER_VARS.iter().any(|(_, vars)| vars.contains(&name))
+    PROVIDER_VARS.iter().any(|(_, vars)| vars.contains(&name)) || custom_var(name)
+}
+
+/// Custom providers of the LADE profile reference credentials as `LADE_PROVIDER_*` variables.
+fn custom_var(name: &str) -> bool {
+    name.strip_prefix(crate::adapters::profile::CUSTOM_VAR_PREFIX)
+        .is_some_and(|rest| {
+            !rest.is_empty()
+                && name.len() <= 128
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        })
 }
 
 /// A credential value. `Debug` never shows it.
@@ -96,6 +117,11 @@ pub enum CredentialError {
         provider: String,
         vars: &'static [&'static str],
     },
+    /// A custom provider's referenced variables are not set (names only).
+    MissingCustom {
+        provider: String,
+        vars: Vec<String>,
+    },
     /// The credentials file exists but is not private to the service user.
     InsecureFile {
         path: PathBuf,
@@ -116,6 +142,12 @@ impl fmt::Display for CredentialError {
                 "no credentials for provider {provider}: set {} in the laded environment or the \
                  credentials file",
                 vars.join(" or ")
+            ),
+            Self::MissingCustom { provider, vars } => write!(
+                f,
+                "no credentials for custom provider {provider}: set {} in the laded environment or \
+                 the credentials file",
+                vars.join(" and ")
             ),
             Self::InsecureFile { path, reason } => {
                 write!(f, "credentials file {} refused: {reason}", path.display())
@@ -203,6 +235,46 @@ impl CredentialSource {
             return Err(CredentialError::Missing {
                 provider: provider.to_owned(),
                 vars,
+            });
+        }
+        Ok(released)
+    }
+
+    /// Release exactly `vars` for a custom provider (`LADE_PROVIDER_*` names only). Every listed
+    /// variable must be set; a provider without variables (a keyless local server) releases none.
+    pub fn resolve_custom(
+        &self,
+        provider: &str,
+        vars: &[String],
+    ) -> Result<ReleasedCredentials, CredentialError> {
+        if vars.iter().any(|v| !custom_var(v)) {
+            return Err(CredentialError::UnknownProvider(provider.to_owned()));
+        }
+        if vars.is_empty() {
+            return Ok(ReleasedCredentials::default());
+        }
+        let file_vars = match &self.file {
+            Some(path) => read_file(path)?,
+            None => Vec::new(),
+        };
+        let mut released = ReleasedCredentials::default();
+        let mut missing = Vec::new();
+        for name in vars {
+            let value = self
+                .env
+                .iter()
+                .chain(&file_vars)
+                .find(|(k, v)| k == name && valid_value(v))
+                .map(|(_, v)| v.clone());
+            match value {
+                Some(value) => released.vars.push((name.clone(), Secret(value))),
+                None => missing.push(name.clone()),
+            }
+        }
+        if !missing.is_empty() {
+            return Err(CredentialError::MissingCustom {
+                provider: provider.to_owned(),
+                vars: missing,
             });
         }
         Ok(released)
@@ -328,6 +400,38 @@ mod tests {
                 ("GROQ_API_KEY".to_owned(), OsString::from("g")),
             ]
         );
+    }
+
+    #[test]
+    fn custom_variables_need_the_prefix_and_are_all_required() {
+        let source = CredentialSource::new(
+            [
+                (OsString::from("LADE_PROVIDER_ONE"), OsString::from("v1")),
+                (OsString::from("RANDOM_VAR"), OsString::from("x")),
+            ],
+            None,
+        );
+        assert!(format!("{source:?}").contains("LADE_PROVIDER_ONE"));
+        assert!(!format!("{source:?}").contains("RANDOM_VAR"));
+        let one = vec!["LADE_PROVIDER_ONE".to_string()];
+        assert_eq!(
+            source.resolve_custom("p", &one).unwrap().names(),
+            ["LADE_PROVIDER_ONE"]
+        );
+        let two = vec![
+            "LADE_PROVIDER_ONE".to_string(),
+            "LADE_PROVIDER_TWO".to_string(),
+        ];
+        assert!(matches!(
+            source.resolve_custom("p", &two),
+            Err(CredentialError::MissingCustom { .. })
+        ));
+        assert!(
+            source
+                .resolve_custom("p", &["OPENAI_API_KEY".to_string()])
+                .is_err()
+        );
+        assert!(source.resolve_custom("p", &[]).unwrap().vars.is_empty());
     }
 
     #[test]

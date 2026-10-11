@@ -108,6 +108,13 @@ pub fn default_policies() -> BTreeMap<String, EgressPolicy> {
         ("cerebras", &["api.cerebras.ai"][..]),
         ("together", &["api.together.ai"][..]),
         ("fireworks", &["api.fireworks.ai"][..]),
+        // IMP-011: further plain-variable providers (base URLs from the pinned catalogue).
+        ("moonshotai", &["api.moonshot.ai"][..]),
+        ("huggingface", &["router.huggingface.co"][..]),
+        ("nvidia", &["integrate.api.nvidia.com"][..]),
+        ("zai", &["api.z.ai"][..]),
+        ("vercel-ai-gateway", &["ai-gateway.vercel.sh"][..]),
+        ("kimi-coding", &["api.kimi.com"][..]),
     ]
     .into_iter()
     .map(|(id, hosts)| (id.to_owned(), EgressPolicy::https_hosts(hosts)))

@@ -684,6 +684,9 @@ pub struct LaunchInput {
     pub request: LaunchRequest,
     /// Branch to create when the worktree is not provisioned yet (collisions get a suffix).
     pub provision: Option<(String, GitId)>,
+    /// LADE profile and approved `(name, sha256)` extensions, materialised into the session
+    /// directory before the worker starts.
+    pub profile: Option<(PathBuf, Vec<(String, String)>)>,
 }
 
 pub struct LaunchOut {
@@ -729,6 +732,25 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
             provisioned_branch,
             result: Err(format!("session_dir: {}", e.kind())),
         };
+    }
+    let mut request = request;
+    if let Some((profile, approved)) = &input.profile {
+        let dest = request.session_dir.join("profile");
+        match super::compat::snapshot(profile, &dest, approved) {
+            Ok(snapshot) => {
+                if let lade_protocol::worker::WorkerBody::Start { resources, .. } =
+                    &mut request.start
+                {
+                    *resources = Some(snapshot);
+                }
+            }
+            Err(e) => {
+                return LaunchOut {
+                    provisioned_branch,
+                    result: Err(format!("profile_snapshot: {}", e.kind())),
+                };
+            }
+        }
     }
     let result = input
         .launcher

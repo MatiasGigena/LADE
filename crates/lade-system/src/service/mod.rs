@@ -7,6 +7,7 @@
 //! (socket, capability, lease) lives in [`crate::transport`]; worker processes behind the
 //! [`WorkerLauncher`] contract.
 
+mod compat;
 pub mod convert;
 mod execution;
 mod handlers;
@@ -166,6 +167,9 @@ pub(crate) enum JobOutput {
     Unit(Result<(), Rejection>),
     Flag(Result<bool, Rejection>),
     Query(Result<ReplyData, Rejection>),
+    Catalog(Result<compat::CatalogData, String>),
+    Profile(Result<crate::adapters::profile::ImportReport, String>),
+    Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
     Terminal(Result<crate::supervision::Terminal, Rejection>),
     Storage(Vec<execution::StorageUsage>),
     Done,
@@ -227,6 +231,7 @@ pub(crate) struct Service {
     live: execution::LiveActivity,
     ticks: u64,
     sandbox: OnceLock<Option<SandboxTools>>,
+    compat: compat::CompatState,
     /// Contained terminals of the controlling client, by terminal id (never durable).
     terminals: BTreeMap<String, terminal::TermState>,
     terminals_opening: usize,
@@ -415,6 +420,7 @@ pub fn start(
         live: execution::LiveActivity::default(),
         ticks: 0,
         sandbox: OnceLock::new(),
+        compat: compat::CompatState::default(),
         terminals: BTreeMap::new(),
         terminals_opening: 0,
         stopping: false,
@@ -423,6 +429,7 @@ pub fn start(
         cgroups: config.cgroups.clone(),
     };
     service.load().map_err(StartError::Recovery)?;
+    service.load_compat().map_err(StartError::Recovery)?;
     service.recover().map_err(StartError::Recovery)?;
 
     let capability =
@@ -540,6 +547,7 @@ impl Service {
                         request_ids: HashMap::new(),
                         request_order: VecDeque::new(),
                     });
+                    self.announce_dialogs();
                 } else {
                     out.close();
                 }
@@ -895,6 +903,7 @@ impl Service {
             self.check_storage();
         }
         self.check_timeouts();
+        self.compat_timeouts();
     }
 
     pub(crate) fn sandbox_tools(&self) -> Option<SandboxTools> {

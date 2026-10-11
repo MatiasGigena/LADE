@@ -8,6 +8,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use super::compat::{CompatChange, CompatState, CompatUpdate};
 use super::drafts::DraftEditor;
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
@@ -105,6 +106,8 @@ pub enum StoreUpdate {
         objective_id: ObjectiveId,
         status: Option<ServiceNotice>,
     },
+    /// IMP-011 projections (catalogue, session, resources, dialogs).
+    Compat(CompatUpdate),
     TerminalOpened {
         objective_id: ObjectiveId,
         terminal_id: String,
@@ -163,6 +166,14 @@ pub enum Change {
     InspectorTab,
     Keymap,
     Layout,
+    /// The model catalogue or the picker's choice changed.
+    Catalog,
+    /// An Objective's pi session state, tree or export changed.
+    Session(ObjectiveId),
+    /// The LADE-profile resource inventory changed.
+    Resources,
+    /// Extension dialogs opened or closed.
+    Dialogs,
     Terminal(ObjectiveId),
     /// The service was stopped on request (Exit/logout).
     Lifetime,
@@ -293,6 +304,8 @@ pub struct PresentationState {
     /// Latest command outcome per Objective (rejection, or "Checking outcome…").
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
     pub ui: UiState,
+    /// IMP-011 projections and the model picker's choice.
+    pub compat: CompatState,
     /// Labelled development fixture (`--preview`); never service authority.
     pub preview: bool,
     /// Contained terminals of this window, newest last.
@@ -331,6 +344,7 @@ impl PresentationState {
             notices: Vec::new(),
             command_status: HashMap::new(),
             ui: UiState::default(),
+            compat: CompatState::default(),
             preview: false,
             terminals: Vec::new(),
             service_stopped: false,
@@ -834,6 +848,17 @@ impl PresentationState {
                     Vec::new()
                 }
             }
+            StoreUpdate::Compat(update) => self
+                .compat
+                .apply(update)
+                .into_iter()
+                .map(|change| match change {
+                    CompatChange::Catalog => Change::Catalog,
+                    CompatChange::Session(id) => Change::Session(id),
+                    CompatChange::Resources => Change::Resources,
+                    CompatChange::Dialogs => Change::Dialogs,
+                })
+                .collect(),
             StoreUpdate::TerminalOpened {
                 objective_id,
                 terminal_id,

@@ -1,0 +1,62 @@
+// Model catalogue of the pinned SDK registry, run by laded in a network-less sandbox:
+// `node src/worker/catalog.ts <output.json> [<profile models.json>]`. It writes the providers and
+// models pi itself knows (built-ins, the LADE profile's custom providers and the offline fixture
+// provider) as JSON for the service, which decides availability from its own credential and egress
+// policy. Nothing is fetched: model-catalogue network refresh is disabled.
+import "./stdio.ts";
+import { writeFileSync } from "node:fs";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
+import { FIXTURE_PROVIDER, fixtureProvider } from "./fixture.ts";
+import { installNoNetwork } from "./gateway.ts";
+
+export interface CatalogModel { id: string; name: string; reasoning: boolean; thinking: string[] }
+
+export interface CatalogProvider { id: string; name: string; api_key: boolean; oauth: string | null; subscription: boolean; base_url: string | null; models: CatalogModel[] }
+
+export interface Catalog { sdk_version: string; providers: CatalogProvider[]; error: string | null }
+
+process.env.PI_OFFLINE = "1";
+
+process.env.PI_SKIP_VERSION_CHECK = "1";
+
+process.env.PI_TELEMETRY = "0";
+
+installNoNetwork();
+
+export async function catalog(modelsPath: string | null, scratch: string): Promise<Catalog> {
+  const runtime = await ModelRuntime.create({
+    authPath: `${scratch}/auth.json`,
+    modelsPath,
+    modelsStorePath: `${scratch}/models-store.json`,
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+
+  runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
+
+  const providers = runtime.getProviders().map(provider => ({
+    id: provider.id,
+    name: provider.name,
+    api_key: provider.auth.apiKey !== undefined,
+    oauth: provider.auth.oauth?.name ?? null,
+    subscription: provider.auth.oauth?.isSubscription === true,
+    base_url: provider.baseUrl ?? null,
+    models: runtime.getModels(provider.id).map(model => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+      thinking: getSupportedThinkingLevels(model),
+    })),
+  }));
+
+  return { sdk_version: VERSION, providers, error: runtime.getError() ?? null };
+}
+
+const output = process.argv[2];
+
+if (output !== undefined) {
+  const models = process.argv[3];
+  const scratch = output.slice(0, Math.max(0, output.lastIndexOf("/"))) || ".";
+  writeFileSync(output, JSON.stringify(await catalog(models ?? null, scratch)), { mode: 0o600 });
+}

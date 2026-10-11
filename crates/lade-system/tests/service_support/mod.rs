@@ -298,6 +298,30 @@ impl Drop for NodeControl {
 }
 
 impl WorkerLauncher for NodeLauncher {
+    /// The SDK catalogue, unsandboxed (tests only; the release launcher runs it in bubblewrap).
+    fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
+        let script = self.entry.with_file_name("worker").join("catalog.ts");
+        let output = scratch.join("catalog.json");
+        let mut command = Command::new("node");
+        command
+            .arg(&script)
+            .arg(&output)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", scratch)
+            .env("PI_CODING_AGENT_DIR", scratch)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Some(models) = models {
+            command.arg(models);
+        }
+        let status = command.status().map_err(LaunchError::Io)?;
+        if !status.success() {
+            return Err(LaunchError::Io(std::io::Error::other("catalogue failed")));
+        }
+        std::fs::read(&output).map_err(LaunchError::Io)
+    }
+
     fn launch(
         &self,
         request: LaunchRequest,
@@ -532,6 +556,7 @@ pub fn start_execution(client: &mut Client, objective: &Id) -> ObjectiveDetail {
             provider: "lade-fixture".into(),
             id: "scripted".into(),
         },
+        thinking: None,
     })) {
         Ok(ReplyData::ExecutionStart(detail)) => *detail,
         other => panic!("execution.start: {other:?}"),

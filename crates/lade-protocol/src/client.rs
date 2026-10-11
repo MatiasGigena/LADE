@@ -5,8 +5,9 @@
 use crate::{
     WireError,
     types::{
-        ActivityRole, Capability, Counter, DeliveryMode, Digest, GitId, Id, Model, PageLimit,
-        ReadLimit, Timestamp, WirePath, truncate_chars,
+        ActivityRole, Capability, Counter, DeliveryMode, Digest, ForkPosition, GitId, Id, Model,
+        PageLimit, ReadLimit, SessionChangeReason, ThinkingLevel, Timestamp, TreeEntry, UiAnswer,
+        UiCloseReason, UiPrompt, WirePath, truncate_chars,
     },
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::DeserializeOwned};
@@ -191,6 +192,20 @@ requests! {
     ObjectiveDiscard = "objective.discard", true, ObjectiveSelector => Box<ObjectiveDetail>;
     ObjectiveCleanup = "objective.cleanup", true, ObjectiveCleanupCommand => Box<ObjectiveDetail>;
     SettingsUpdate = "settings.update", true, SettingsUpdateCommand => Settings;
+    // IMP-011 pi compatibility.
+    ModelsList = "models.list", false, ModelsListQuery => ModelCatalog;
+    SessionTree = "session.tree", false, ObjectiveSelector => SessionTree;
+    ResourcesList = "resources.list", false, Empty => ResourceInventory;
+    SessionNavigate = "session.navigate", true, SessionNavigateCommand => SessionState;
+    SessionFork = "session.fork", true, SessionForkCommand => SessionState;
+    SessionImport = "session.import", true, SessionImportCommand => SessionState;
+    SessionExport = "session.export", true, ObjectiveSelector => SessionExport;
+    SessionCompact = "session.compact", true, SessionCompactCommand => SessionState;
+    SessionReload = "session.reload", true, ObjectiveSelector => SessionState;
+    SessionConfigure = "session.configure", true, SessionConfigureCommand => SessionState;
+    ResourceDecide = "resource.decide", true, ResourceDecideCommand => ResourceInventory;
+    ProfileImport = "profile.import", true, ProfileImportCommand => ProfileImportResult;
+    UiRespond = "ui.respond", true, UiRespondCommand => Empty;
     TerminalOpen = "terminal.open", false, TerminalOpenCommand => TerminalInfo;
     TerminalInput = "terminal.input", false, TerminalInputCommand => Empty;
     TerminalResize = "terminal.resize", false, TerminalResizeCommand => Empty;
@@ -537,6 +552,10 @@ events! {
     WorktreeChanged = "worktree.changed", WorktreeChanged;
     VerificationChanged = "verification.changed", VerificationSummary;
     ServiceNotice = "service.notice", ServiceNotice;
+    SessionChanged = "session.changed", SessionState;
+    UiRequest = "ui.request", UiRequest;
+    UiClosed = "ui.closed", UiClosed;
+    ResourcesChanged = "resources.changed", ResourceInventory;
     TerminalOutput = "terminal.output", TerminalOutput;
     TerminalClosed = "terminal.closed", TerminalClosed;
 }
@@ -860,6 +879,8 @@ wire_struct!(SessionInfo {
     association_revision: Counter,
     execution_generation: Counter,
     model: Model,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingLevel>,
 });
 wire_struct!(ChangeCounts {
     files: Counter,
@@ -1132,6 +1153,8 @@ wire_struct!(UpdateIntentCommand {
 wire_struct!(ExecutionStartCommand {
     objective_id: Id,
     model: Model,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingLevel>,
 });
 wire_struct!(MessageSendCommand {
     objective_id: Id,
@@ -1271,6 +1294,156 @@ wire_struct!(ServiceNotice {
     message: String,
 });
 
+// ---------------------------------------------------------------------------------------------
+// IMP-011: model catalogue, session tree operations, LADE-profile resources, extension UI.
+
+wire_enum!(ProviderAuth {
+    None,
+    ApiKey,
+    SubscriptionToken,
+    OauthLogin,
+    CloudCredentials,
+    Custom,
+});
+wire_enum!(ProviderStatus {
+    Available,
+    MissingCredentials,
+    Restricted,
+});
+wire_struct!(ProviderInfo {
+    provider: String,
+    name: String,
+    auth: Vec<ProviderAuth>,
+    status: ProviderStatus,
+    models: Counter,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    variables: Option<Vec<String>>,
+});
+wire_struct!(ModelInfo {
+    provider: String,
+    id: String,
+    name: String,
+    reasoning: bool,
+    thinking_levels: Vec<ThinkingLevel>,
+});
+wire_struct!(ModelsListQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
+});
+wire_struct!(ModelCatalog {
+    sdk_version: String,
+    providers: Vec<ProviderInfo>,
+    models: Vec<ModelInfo>,
+    truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+});
+wire_struct!(SessionTree {
+    objective_id: Id,
+    entries: Vec<TreeEntry>,
+    truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    leaf_id: Option<String>,
+});
+wire_struct!(SessionNavigateCommand {
+    objective_id: Id,
+    entry_id: String,
+});
+wire_struct!(SessionForkCommand {
+    objective_id: Id,
+    entry_id: String,
+    position: ForkPosition,
+});
+wire_struct!(SessionImportCommand {
+    objective_id: Id,
+    path: WirePath,
+});
+wire_struct!(SessionCompactCommand {
+    objective_id: Id,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+});
+wire_struct!(SessionConfigureCommand {
+    objective_id: Id,
+    model: Model,
+    thinking: ThinkingLevel,
+});
+wire_struct!(SessionState {
+    objective_id: Id,
+    generation: Counter,
+    reason: SessionChangeReason,
+    model: Model,
+    thinking: ThinkingLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    association_revision: Option<Counter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pi_session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    leaf_id: Option<String>,
+});
+wire_struct!(SessionExport {
+    objective_id: Id,
+    path: WirePath,
+});
+wire_enum!(ResourceKind {
+    Skill,
+    Prompt,
+    Context,
+    Extension,
+    Models,
+});
+wire_enum!(ResourceState {
+    Active,
+    PendingApproval,
+    Rejected,
+    Refused,
+});
+wire_struct!(ResourceEntry {
+    kind: ResourceKind,
+    name: String,
+    state: ResourceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<Digest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+});
+wire_struct!(ResourceInventory {
+    profile_dir: WirePath,
+    entries: Vec<ResourceEntry>,
+    restrictions: Vec<String>,
+});
+wire_struct!(ResourceDecideCommand {
+    name: String,
+    sha256: Digest,
+    approve: bool,
+});
+wire_struct!(ProfileImportCommand { source: WirePath });
+wire_struct!(ProfileImportResult {
+    copied: Vec<String>,
+    skipped: Vec<String>,
+    inventory: ResourceInventory,
+});
+wire_struct!(UiRequest {
+    objective_id: Id,
+    ui_id: Id,
+    generation: Counter,
+    prompt: UiPrompt,
+});
+wire_struct!(UiClosed {
+    objective_id: Id,
+    ui_id: Id,
+    reason: UiCloseReason,
+});
+wire_struct!(UiRespondCommand {
+    objective_id: Id,
+    ui_id: Id,
+    generation: Counter,
+    answer: UiAnswer,
+});
 // Contained terminal (IMP-012): ephemeral, never journaled.
 wire_struct!(TerminalOpenCommand {
     objective_id: Id,

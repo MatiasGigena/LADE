@@ -113,10 +113,19 @@ impl FakeLink {
             .body
     }
 
+    /// The next request, skipping the catalogue/resource queries a client issues after every
+    /// snapshot (this fake service does not answer them; the client keeps them pending).
     fn request(&mut self) -> wire::RequestFrame {
-        match self.recv() {
-            ClientBody::Request(frame) => frame,
-            other => panic!("expected a request, got {other:?}"),
+        loop {
+            match self.recv() {
+                ClientBody::Request(frame)
+                    if matches!(
+                        frame.request.name(),
+                        wire::RequestName::ModelsList | wire::RequestName::ResourcesList
+                    ) => {}
+                ClientBody::Request(frame) => return frame,
+                other => panic!("expected a request, got {other:?}"),
+            }
         }
     }
 }
@@ -461,6 +470,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
     send(Intent::StartExecution {
         objective_id: objective_id.clone(),
         model: ModelRef::new("lade-fixture", "scripted"),
+        thinking: None,
     });
     wait_for(&updates, "execution started", |u| {
         matches!(u, StoreUpdate::ObjectiveDetail(d)

@@ -13,11 +13,17 @@ export const FIXTURE_API = "lade-fixture-scripted";
 
 export const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
 
+/** Retryable by pi's provider-error classification ("overloaded"); the retry then succeeds. */
+export const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
+
+/** Marker tokens the `system` directive reports from the system prompt (proves loaded context/skills). */
+const MARKER = /LADE-MARKER:[A-Za-z0-9_.-]+/g;
+
 type ProviderRegistration = Parameters<ModelRuntime["registerProvider"]>[1];
 
-interface Script { text: string; calls: ToolCall[]; fail: boolean; delayMs: number }
+interface Script { text: string; calls: ToolCall[]; fail: boolean; delayMs: number; transient?: boolean }
 
-interface Directives { writes: Array<{ path: string; content: string }>; fail: boolean; delayMs: number }
+interface Directives { writes: Array<{ path: string; content: string }>; fail: boolean; delayMs: number; echo: boolean; system: boolean; transient: boolean }
 
 const DIRECTIVE = /^\s*lade-fixture:\s*([a-z]+)(?:[ \t]+(.*))?$/;
 
@@ -26,7 +32,7 @@ function unescape(text: string): string {
 }
 
 function directives(text: string): Directives {
-  const found: Directives = { writes: [], fail: false, delayMs: 0 };
+  const found: Directives = { writes: [], fail: false, delayMs: 0, echo: false, system: false, transient: false };
 
   for (const line of text.split("\n")) {
     const match = DIRECTIVE.exec(line.replace(/\r$/, ""));
@@ -36,6 +42,9 @@ function directives(text: string): Directives {
     const rest = match[2] ?? "";
 
     if (verb === "fail") found.fail = true;
+    else if (verb === "echo") found.echo = true;
+    else if (verb === "system") found.system = true;
+    else if (verb === "transient") found.transient = true;
     else if (verb === "delay") found.delayMs = Math.min(2_000, Math.max(0, Number.parseInt(rest, 10) || 0));
     else if (verb === "write") {
       const space = rest.search(/[ \t]/);
@@ -70,6 +79,13 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/** User messages whose transient failure was already played (each fails exactly once). */
+const transientFailed = new Set<string>();
+
+function transientKey(message: Context["messages"][number] | undefined): string {
+  return message ? `${message.timestamp}:${userText(message)}` : "";
 }
 
 function chunks(text: string): string[] {
@@ -107,6 +123,20 @@ function plan(context: Context): Script {
 
   if (script.fail) return { text: "", calls: [], fail: true, delayMs: script.delayMs };
 
+  if (script.transient && !transientFailed.has(transientKey(latest))) {
+    transientFailed.add(transientKey(latest));
+
+    return { text: "", calls: [], fail: true, delayMs: script.delayMs, transient: true };
+  }
+
+  if (script.echo) return { text: `lade-fixture echo: ${latest ? userText(latest) : ""}`, calls: [], fail: false, delayMs: script.delayMs };
+
+  if (script.system) {
+    const markers = [...new Set(context.systemPrompt?.match(MARKER) ?? [])].sort();
+
+    return { text: `lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`, calls: [], fail: false, delayMs: script.delayMs };
+  }
+
   if (script.writes.length > 0) {
     return {
       text: `lade-fixture: writing ${script.writes.length} file(s) with the write tool.`,
@@ -141,7 +171,7 @@ async function run(model: Model<Api>, context: Context, options: SimpleStreamOpt
 
     if (script.fail) {
       await pause(script.delayMs, signal);
-      throw new Error(FIXTURE_FAILURE);
+      throw new Error(script.transient ? FIXTURE_TRANSIENT : FIXTURE_FAILURE);
     }
 
     const block: TextContent = { type: "text", text: "" };

@@ -124,6 +124,9 @@ impl Service {
             .start_execution(session, model, ts_now())
             .map_err(|e| domain_rejection(&e))?;
         self.preflight(&cmd.model.provider)?;
+        if let Some(thinking) = cmd.thinking {
+            self.record_start_thinking(oid, thinking)?;
+        }
         let data = ReplyData::ExecutionStart(Box::new(self.detail_of(&st)));
         let association = st.objective().execution().session().cloned();
         let now = now_ms();
@@ -248,6 +251,7 @@ impl Service {
             )
         });
         let session_dir = self.paths.sessions.join(oid.to_string());
+        let (thinking, session_file) = self.start_extras(oid);
         let model = Model {
             provider: session.model.provider().to_string(),
             id: session.model.id().to_string(),
@@ -262,6 +266,10 @@ impl Service {
                 "LADE Objective: {}. Work only inside the current directory; the developer reviews and integrates the result.",
                 preview(record.title.as_str(), 200)
             ),
+            thinking,
+            // Filled in by the launch job once the profile snapshot is materialised.
+            resources: None,
+            session_file: if resume { session_file } else { None },
         };
         let input = LaunchInput {
             repo: ws.repo.clone(),
@@ -279,6 +287,7 @@ impl Service {
                 start,
             },
             provision,
+            profile: Some((self.profile_dir(), self.approved_extensions())),
         };
         self.rt(oid).launching = Some(generation);
         self.spawn(Pending::Launch { oid, generation }, move || {
@@ -522,15 +531,23 @@ impl Service {
                 );
                 self.system_item(oid, &format!("Worker error ({code})"), &message, true);
             }
+            body @ (WorkerBody::SessionChanged { .. }
+            | WorkerBody::CommandResult { .. }
+            | WorkerBody::ResourcesLoaded { .. }
+            | WorkerBody::UiRequest { .. }
+            | WorkerBody::UiClosed { .. }) => self.on_compat_body(oid, generation, body),
             WorkerBody::Start { .. }
             | WorkerBody::Deliver { .. }
             | WorkerBody::Abort
-            | WorkerBody::Shutdown => {}
+            | WorkerBody::Shutdown
+            | WorkerBody::Command { .. }
+            | WorkerBody::UiRespond { .. } => {}
         }
     }
 
     fn on_worker_exit(&mut self, oid: ObjectiveId, code: Option<i32>, signal: Option<i32>) {
         self.rt(oid).control = None;
+        self.compat_worker_gone(oid);
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
@@ -585,7 +602,7 @@ impl Service {
     /// Dispatches queued inputs strictly in acceptance order. Feedback inputs are revalidated
     /// against current content first unless `checked` names an input validated a moment ago.
     pub(crate) fn dispatch_queued(&mut self, oid: ObjectiveId, checked: Option<InputId>) {
-        if self.rt(oid).dispatching {
+        if self.rt(oid).dispatching || self.command_pending(oid) {
             return;
         }
         loop {

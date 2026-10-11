@@ -326,7 +326,8 @@ frame('worker-request-rejected', requests['snapshot'], 'invalid_schema', contrac
 deliver = sample(variants('worker', 'ServiceToWorker')[1], 'worker', False)
 frame('worker-deliver-empty-text', dict(deliver, text=''), 'invalid_schema', contract='worker')
 frame('worker-deliver-bad-mode', dict(deliver, mode='followUp'), 'invalid_schema', contract='worker')
-error_body = sample(variants('worker', 'WorkerToService')[-1], 'worker', False)
+error_body = sample(next(v for v in variants('worker', 'WorkerToService') if const_of(v, 'kind') == 'worker.error'),
+                    'worker', False)
 frame('worker-error-message-512', dict(error_body, message='😀' * 512), contract='worker')
 frame('worker-error-message-513', dict(error_body, message='😀' * 513), 'invalid_schema', contract='worker')
 frame('worker-error-unknown-code', dict(error_body, code='crashed'), 'invalid_schema', contract='worker')

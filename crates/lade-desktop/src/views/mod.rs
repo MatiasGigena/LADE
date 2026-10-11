@@ -16,6 +16,7 @@ mod header;
 mod inspector;
 pub mod notify;
 mod rail;
+mod session;
 mod terminal;
 mod viewer;
 mod widgets;

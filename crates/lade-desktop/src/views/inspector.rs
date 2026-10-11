@@ -12,6 +12,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::dialogs;
+use super::session;
 use super::widgets::{
     self, action_row, field, hbox, label, set_accessible_label, set_focus_key, vbox,
 };
@@ -22,7 +23,6 @@ use crate::presentation::model::{
     ActionAvailability, ActionName, CandidateStatus, DeliveryMode, DraftId, NoticeLevel,
     ObjectiveDetail, Timestamp, VerificationState,
 };
-use crate::presentation::models;
 use crate::presentation::store::{Change, InspectorTab};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -53,7 +53,8 @@ pub struct Inspector {
     check_entry: gtk::Entry,
     updating: Cell<bool>,
     on_draft_edit: RefCell<Option<Rc<dyn Fn()>>>,
-    pub model_choice: RefCell<Option<gtk::DropDown>>,
+    /// Extension dialogs of the live sessions (IMP-011), answered only by the developer.
+    dialogs: session::DialogHost,
 }
 
 fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
@@ -116,7 +117,7 @@ impl Inspector {
             check_entry,
             updating: Cell::new(false),
             on_draft_edit: RefCell::new(None),
-            model_choice: RefCell::new(None),
+            dialogs: session::DialogHost::default(),
         });
         let this = Rc::downgrade(&inspector);
         inspector.root.connect_switch_page(move |_, _, index| {
@@ -173,6 +174,9 @@ impl Inspector {
                     overview = true;
                 }
                 Change::InspectorTab => self.sync_tab(),
+                Change::Catalog | Change::Resources => overview = true,
+                Change::Session(id) if mine(id) => overview = true,
+                Change::Dialogs => self.dialogs.sync(&self.root, &self.controller),
                 _ => {}
             }
         }
@@ -356,45 +360,37 @@ impl Inspector {
         }
         // Agent session.
         let start = detail.availability(ActionName::ExecutionStart);
+        let stopped = detail.session.is_some()
+            && !matches!(
+                detail.summary.execution.state,
+                crate::presentation::model::ExecutionState::Running
+                    | crate::presentation::model::ExecutionState::Starting
+            );
+        if start != ActionAvailability::NotOffered || stopped {
+            // Provider, model and thinking from the service's SDK catalogue; restricted providers
+            // stay listed with their reason. The same choice applies to "Apply model and thinking".
+            let picker = session::model_picker(&self.controller);
+            picker.set_visible(start == ActionAvailability::Enabled || stopped);
+            actions.append(&picker);
+        }
         if start != ActionAvailability::NotOffered {
-            let (models, default_model) = {
-                let state = self.controller.store.state();
-                (
-                    state.settings.available_models.clone(),
-                    state.settings.default_model.clone(),
-                )
-            };
-            let names: Vec<String> = models.iter().map(models::display_label).collect();
-            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-            let choice = widgets::dropdown(&refs);
-            if let Some(index) = default_model
-                .and_then(|d| models.iter().position(|m| m == &d))
-                .and_then(|i| u32::try_from(i).ok())
-            {
-                choice.set_selected(index);
-            }
-            set_accessible_label(&choice, "Model for the agent");
-            let model_block = vbox(4);
-            model_block.append(&label("Model for the agent", &["meta"]));
-            model_block.append(&choice);
-            // The picker only matters while a start is possible.
-            model_block.set_visible(start == ActionAvailability::Enabled);
-            actions.append(&model_block);
             let this = Rc::downgrade(self);
-            let picker = choice.clone();
             actions.append(&action_row(
                 "Start agent",
                 &start,
                 &["primary"],
                 move |_| {
-                    if let Some(this) = this.upgrade()
-                        && let Some(model) = models.get(picker.selected() as usize).cloned()
-                    {
-                        this.report(this.controller.start_execution(model));
+                    if let Some(this) = this.upgrade() {
+                        let result =
+                            this.controller
+                                .chosen_model()
+                                .and_then(|(model, thinking)| {
+                                    this.controller.start_execution(model, Some(thinking))
+                                });
+                        this.report(result);
                     }
                 },
             ));
-            *self.model_choice.borrow_mut() = Some(choice);
         }
         let this = Rc::downgrade(self);
         actions.append(&action_row(
@@ -582,6 +578,18 @@ impl Inspector {
             },
         ));
         self.overview.append(&actions);
+        if detail.session.is_some() {
+            let this = Rc::downgrade(self);
+            let report: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
+                if let Some(this) = this.upgrade() {
+                    this.report(result);
+                }
+            });
+            self.overview
+                .append(&session::session_section(&self.controller, &detail, report));
+        }
+        self.overview
+            .append(&session::resources_section(&self.controller));
     }
 
     fn render_evidence(self: &Rc<Self>) {

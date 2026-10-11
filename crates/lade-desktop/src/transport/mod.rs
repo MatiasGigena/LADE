@@ -4,6 +4,7 @@
 //! dedicated driver thread owns the Unix-socket link, a reader thread decodes frames, and every
 //! result reaches the presentation store as a `StoreUpdate` through the bounded `UpdateSender`.
 
+pub mod compat;
 pub mod connection;
 pub mod convert;
 pub mod core;

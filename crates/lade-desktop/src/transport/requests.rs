@@ -6,7 +6,9 @@
 use lade_protocol::client::{self as wire, Rejection, ReplyData, Request};
 use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 
+use super::compat as compat_wire;
 use super::convert::{self, Invalid, id, to_basis, to_path};
+use crate::presentation::compat::CompatUpdate;
 use crate::presentation::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::model::{
     self as view, Basis, DraftId, NoticeLevel, ObjectiveId, RepoPath, SearchScope, ServiceNotice,
@@ -39,6 +41,10 @@ pub enum Context {
         objective_id: Option<ObjectiveId>,
         basis: Option<Basis>,
     },
+    /// `models.list` for all providers (`None`) or one provider's models.
+    Models(Option<String>),
+    Tree(ObjectiveId),
+    Resources,
     /// Terminal interaction for an Objective; outcomes are shown in its terminal pane.
     Terminal(ObjectiveId, &'static str),
     /// `service.stop` (Exit / logout).
@@ -65,8 +71,12 @@ impl Context {
 
     pub fn objective_id(&self) -> Option<&ObjectiveId> {
         match self {
-            Self::Snapshot | Self::Search { .. } | Self::Stop => None,
-            Self::Terminal(o, _) => Some(o),
+            Self::Snapshot
+            | Self::Search { .. }
+            | Self::Models(_)
+            | Self::Resources
+            | Self::Stop => None,
+            Self::Tree(o) | Self::Terminal(o, _) => Some(o),
             Self::Objective(o)
             | Self::Activity(o)
             | Self::Changes(o, _)
@@ -89,6 +99,9 @@ impl Context {
             Self::Drafts(_) => "Load drafts",
             Self::Inputs(_) => "Load inputs",
             Self::Search { .. } => "Search",
+            Self::Models(_) => "Load models",
+            Self::Tree(_) => "Load session tree",
+            Self::Resources => "Load profile resources",
             Self::Command { label, .. } | Self::Terminal(_, label) => label,
             Self::Stop => "Exit and stop the service",
         }
@@ -275,10 +288,12 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
         I::StartExecution {
             objective_id,
             model,
+            thinking,
         } => (
             Request::ExecutionStart(wire::ExecutionStartCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 model: convert::to_model(model),
+                thinking: thinking.map(compat_wire::to_thinking),
             }),
             Context::command(intent.label(), Some(objective_id)),
         ),
@@ -502,8 +517,211 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::Stop,
         ),
+        _ => return compat_request(intent).map(Some),
     };
     Ok(Some(mapped))
+}
+
+/// IMP-011 intents (model catalogue, session operations, profile resources, dialogs).
+fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use Intent as I;
+    let command = |objective_id: &ObjectiveId| Context::command(intent.label(), Some(objective_id));
+    let text = |value: &str, what: &str| {
+        if value.is_empty() || value.chars().count() > 256 {
+            Err(Invalid(format!("{what} must be 1 to 256 characters")))
+        } else {
+            Ok(value.to_owned())
+        }
+    };
+    let path = |path: &std::path::Path| {
+        lade_protocol::types::WirePath::from_os_str(path.as_os_str())
+            .map_err(|_| Invalid("the path cannot be sent (empty or over 4096 bytes)".into()))
+    };
+    Ok(match intent {
+        I::LoadModels { provider } => (
+            Request::ModelsList(wire::ModelsListQuery {
+                provider: provider.clone(),
+            }),
+            Context::Models(provider.clone()),
+        ),
+        I::LoadSessionTree { objective_id } => (
+            Request::SessionTree(selector(objective_id)?),
+            Context::Tree(objective_id.clone()),
+        ),
+        I::NavigateSession {
+            objective_id,
+            entry_id,
+        } => (
+            Request::SessionNavigate(wire::SessionNavigateCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                entry_id: text(entry_id, "the entry id")?,
+            }),
+            command(objective_id),
+        ),
+        I::ForkSession {
+            objective_id,
+            entry_id,
+            position,
+        } => (
+            Request::SessionFork(wire::SessionForkCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                entry_id: text(entry_id, "the entry id")?,
+                position: compat_wire::to_fork(*position),
+            }),
+            command(objective_id),
+        ),
+        I::ImportSession {
+            objective_id,
+            path: file,
+        } => (
+            Request::SessionImport(wire::SessionImportCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                path: path(file)?,
+            }),
+            command(objective_id),
+        ),
+        I::ExportSession { objective_id } => (
+            Request::SessionExport(selector(objective_id)?),
+            command(objective_id),
+        ),
+        I::CompactSession { objective_id } => (
+            Request::SessionCompact(wire::SessionCompactCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                instructions: None,
+            }),
+            command(objective_id),
+        ),
+        I::ReloadSession { objective_id } => (
+            Request::SessionReload(selector(objective_id)?),
+            command(objective_id),
+        ),
+        I::ConfigureSession {
+            objective_id,
+            model,
+            thinking,
+        } => (
+            Request::SessionConfigure(wire::SessionConfigureCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                model: convert::to_model(model),
+                thinking: compat_wire::to_thinking(*thinking),
+            }),
+            command(objective_id),
+        ),
+        I::LoadResources => (Request::ResourcesList(wire::Empty {}), Context::Resources),
+        I::DecideResource {
+            name,
+            sha256,
+            approve,
+        } => (
+            Request::ResourceDecide(wire::ResourceDecideCommand {
+                name: text(name, "the extension name")?,
+                sha256: lade_protocol::types::Digest::parse(sha256.clone())
+                    .map_err(|_| Invalid("the extension hash is not a sha256 digest".into()))?,
+                approve: *approve,
+            }),
+            Context::command(intent.label(), None),
+        ),
+        I::ImportProfile { source } => (
+            Request::ProfileImport(wire::ProfileImportCommand {
+                source: path(source)?,
+            }),
+            Context::command(intent.label(), None),
+        ),
+        I::RespondDialog {
+            objective_id,
+            ui_id,
+            generation,
+            answer,
+        } => (
+            Request::UiRespond(wire::UiRespondCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                ui_id: id(ui_id, "dialog id")?,
+                generation: Counter::new(*generation),
+                answer: compat_wire::to_answer(answer),
+            }),
+            command(objective_id),
+        ),
+        _ => return Err(Invalid("not an IMP-011 intent".into())),
+    })
+}
+
+/// IMP-011 reply data; `true` when `data` was one of them.
+fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) -> bool {
+    let updates = &mut effects.updates;
+    match data {
+        ReplyData::ModelsList(catalog) => {
+            updates.push(StoreUpdate::Compat(CompatUpdate::Catalog(
+                compat_wire::catalog(catalog),
+            )));
+            if let Context::Models(Some(provider)) = context {
+                updates.push(StoreUpdate::Compat(CompatUpdate::Models {
+                    provider: provider.clone(),
+                    models: compat_wire::models(catalog),
+                }));
+            }
+        }
+        ReplyData::SessionTree(tree) => {
+            if let Context::Tree(objective_id) = context {
+                updates.push(StoreUpdate::Compat(CompatUpdate::Tree {
+                    objective_id: objective_id.clone(),
+                    tree: compat_wire::tree(tree),
+                }));
+            }
+        }
+        ReplyData::SessionNavigate(state)
+        | ReplyData::SessionFork(state)
+        | ReplyData::SessionImport(state)
+        | ReplyData::SessionCompact(state)
+        | ReplyData::SessionReload(state)
+        | ReplyData::SessionConfigure(state) => {
+            let (objective_id, session) = compat_wire::session(state);
+            updates.push(StoreUpdate::Compat(CompatUpdate::Session {
+                objective_id: objective_id.clone(),
+                session,
+            }));
+            // A navigation or fork changes the tree; the detail shows a rebound session.
+            effects.follow_ups.push(Intent::LoadSessionTree {
+                objective_id: objective_id.clone(),
+            });
+            effects.follow_ups.push(refresh_objective(&objective_id));
+        }
+        ReplyData::SessionExport(export) => {
+            updates.push(StoreUpdate::Compat(CompatUpdate::Exported {
+                objective_id: ObjectiveId::new(export.objective_id.as_str()),
+                path: export.path.display().to_owned(),
+            }));
+        }
+        ReplyData::ResourcesList(inventory) | ReplyData::ResourceDecide(inventory) => {
+            updates.push(StoreUpdate::Compat(CompatUpdate::Inventory(
+                compat_wire::inventory(inventory),
+            )));
+        }
+        ReplyData::ProfileImport(result) => {
+            updates.push(StoreUpdate::Compat(CompatUpdate::Inventory(
+                compat_wire::inventory(&result.inventory),
+            )));
+            updates.push(StoreUpdate::Notice(ServiceNotice {
+                level: NoticeLevel::Info,
+                code: "profile_import".into(),
+                message: format!(
+                    "Imported {} item(s) into the LADE profile{}. Extensions still need approval.",
+                    result.copied.len(),
+                    if result.skipped.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; skipped: {}", result.skipped.join("; "))
+                    }
+                ),
+            }));
+            // Custom providers may have changed.
+            effects
+                .follow_ups
+                .push(Intent::LoadModels { provider: None });
+        }
+        ReplyData::UiRespond(_) => {}
+        _ => return false,
+    }
+    true
 }
 
 /// What a successful reply does: store updates plus follow-up queries to issue.
@@ -533,12 +751,22 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             status: None,
         });
     }
+    if compat_effects(context, &data, &mut effects) {
+        return effects;
+    }
+    let updates = &mut effects.updates;
     match (context, data) {
-        (_, ReplyData::Snapshot(s)) => updates.push(StoreUpdate::Snapshot {
-            workspaces: s.workspaces.iter().map(convert::workspace).collect(),
-            objectives: s.objectives.iter().map(convert::summary).collect(),
-            settings: convert::settings(&s.settings),
-        }),
+        (_, ReplyData::Snapshot(s)) => {
+            updates.push(StoreUpdate::Snapshot {
+                workspaces: s.workspaces.iter().map(convert::workspace).collect(),
+                objectives: s.objectives.iter().map(convert::summary).collect(),
+                settings: convert::settings(&s.settings),
+            });
+            // The catalogue and the profile inventory are service authority, loaded on connect.
+            effects
+                .follow_ups
+                .extend([Intent::LoadModels { provider: None }, Intent::LoadResources]);
+        }
         (_, ReplyData::WorkspaceOpen(w)) => {
             updates.push(StoreUpdate::WorkspaceOpened(convert::workspace(&w)));
         }
@@ -685,6 +913,23 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             | ReplyData::InputsList(_)
             | ReplyData::DraftDelete(_),
         ) => {}
+        // Handled by `compat_effects` above.
+        (
+            _,
+            ReplyData::ModelsList(_)
+            | ReplyData::SessionTree(_)
+            | ReplyData::ResourcesList(_)
+            | ReplyData::SessionNavigate(_)
+            | ReplyData::SessionFork(_)
+            | ReplyData::SessionImport(_)
+            | ReplyData::SessionExport(_)
+            | ReplyData::SessionCompact(_)
+            | ReplyData::SessionReload(_)
+            | ReplyData::SessionConfigure(_)
+            | ReplyData::ResourceDecide(_)
+            | ReplyData::ProfileImport(_)
+            | ReplyData::UiRespond(_),
+        ) => {}
     }
     effects
 }
@@ -740,7 +985,13 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             code,
             message,
         })),
-        Context::Snapshot | Context::Activity(_) | Context::Drafts(_) | Context::Inputs(_) => {
+        Context::Snapshot
+        | Context::Activity(_)
+        | Context::Drafts(_)
+        | Context::Inputs(_)
+        | Context::Models(_)
+        | Context::Tree(_)
+        | Context::Resources => {
             updates.push(StoreUpdate::Notice(ServiceNotice {
                 level: NoticeLevel::Warning,
                 code,
