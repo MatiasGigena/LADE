@@ -6,6 +6,7 @@
 //! newer-than-known database refuses to start; it is never reset. No secret (capability,
 //! credential) is ever stored.
 
+mod compat;
 mod rows;
 
 use std::fs::OpenOptions;
@@ -15,10 +16,11 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
+pub use compat::*;
 pub use rows::*;
 
 /// Ordered schema migrations. Never edit an applied entry; append a new one.
-const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2)];
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE settings (

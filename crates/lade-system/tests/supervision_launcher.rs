@@ -129,6 +129,9 @@ impl Fixture {
                 },
                 resume: false,
                 system_note: String::new(),
+                thinking: None,
+                resources: None,
+                session_file: None,
             },
         }
     }
