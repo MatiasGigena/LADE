@@ -142,6 +142,8 @@ pairs += [
     ('focus_ring', ['del_fill'], NON_TEXT, 'focus outline'),
     ('surface', ['ink_primary'], NON_TEXT, 'inverse focus ring on black buttons'),
     ('ink_optional', ['surface'], NON_TEXT, 'upcoming journey marker'),
+    ('ink_secondary', ['surface'], NON_TEXT, 'done journey marker'),
+    ('surface', ['ink_secondary'], NON_TEXT, 'check sign on a done journey marker'),
     ('ink_primary', ['surface'], NON_TEXT, 'checked tab / nav underline'),
 ]
 results = []

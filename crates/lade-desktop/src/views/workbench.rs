@@ -8,10 +8,11 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::viewer::Viewer;
-use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, vbox};
+use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
 use crate::presentation::controller::Controller;
 use crate::presentation::format::{self, JOURNEY_STEPS, StepState};
-use crate::presentation::model::{Basis, CandidateStatus, ChangedFile, Load, RepoPath, Timestamp};
+use crate::presentation::model::{Basis, ChangedFile, Load, RepoPath};
+use crate::presentation::panel;
 use crate::presentation::store::Change;
 
 pub struct Workbench {
@@ -34,13 +35,15 @@ pub struct Workbench {
     details_toggle: gtk::ToggleButton,
     details_widgets: RefCell<Vec<gtk::Widget>>,
     show_details: Cell<bool>,
+    compact: Cell<bool>,
+    compact_status: RefCell<Option<gtk::Widget>>,
 }
 
 impl Workbench {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = gtk::Stack::new();
         root.add_css_class("centre");
-        let none = vbox(12);
+        let none = vbox(space::GROUP);
         none.add_css_class("centre-empty");
         none.append(&widgets::heading("Select an Objective", "empty-heading"));
         none.append(&label(
@@ -49,25 +52,23 @@ impl Workbench {
         ));
         root.add_named(&none, Some("none"));
 
-        let page = vbox(24);
+        let page = vbox(space::PAGE);
         page.add_css_class("centre-page");
-        let top = hbox(16);
-        let heading = vbox(8);
+        let top = hbox(space::SECTION);
+        let heading = vbox(space::ITEM);
         heading.set_hexpand(true);
         top.append(&heading);
         let details_toggle = gtk::ToggleButton::with_label("Objective details");
         details_toggle.set_valign(gtk::Align::Start);
-        details_toggle.set_tooltip_text(Some(
-            "Show or hide the outcome, status details and collaboration journey",
-        ));
+        details_toggle.set_tooltip_text(Some("Show or hide the collaboration journey"));
         details_toggle.set_visible(false);
         top.append(&details_toggle);
         page.append(&top);
 
-        let change_set = vbox(12);
+        let change_set = vbox(space::GROUP);
         change_set.set_vexpand(true);
-        let change_row = hbox(16);
-        let change_heading = hbox(12);
+        let change_row = hbox(space::SECTION);
+        let change_heading = hbox(space::GROUP);
         change_heading.set_hexpand(true);
         change_row.append(&change_heading);
         let basis = gtk::DropDown::from_strings(&["Working inspection"]);
@@ -77,13 +78,13 @@ impl Workbench {
         basis.set_valign(gtk::Align::Center);
         change_row.append(&basis);
         change_set.append(&change_row);
-        let version = vbox(8);
+        let version = vbox(space::ITEM);
         change_set.append(&version);
 
-        let body = hbox(16);
+        let body = hbox(space::SECTION);
         body.set_vexpand(true);
-        let file_column = vbox(8);
-        let files_status = vbox(8);
+        let file_column = vbox(space::ITEM);
+        let files_status = vbox(space::ITEM);
         file_column.append(&files_status);
         let files = gtk::ListBox::new();
         files.add_css_class("file-list");
@@ -120,6 +121,8 @@ impl Workbench {
             details_toggle,
             details_widgets: RefCell::new(Vec::new()),
             show_details: Cell::new(true),
+            compact: Cell::new(false),
+            compact_status: RefCell::new(None),
         });
         workbench.connect();
         workbench.render_all();
@@ -197,9 +200,14 @@ impl Workbench {
         self.render_change_set();
     }
 
-    /// Wide: details always shown, no toggle. Compact: the toggle decides.
+    /// Wide: details always shown, no toggle. Compact: the toggle decides, and the work area also
+    /// shows the Objective's status (the Overview is then another region).
     pub fn set_objective_details(&self, shown: bool, toggle_visible: bool) {
         self.show_details.set(shown);
+        self.compact.set(toggle_visible);
+        if let Some(status) = self.compact_status.borrow().as_ref() {
+            status.set_visible(toggle_visible);
+        }
         self.details_toggle.set_visible(toggle_visible);
         self.updating.set(true);
         self.details_toggle.set_active(shown);
@@ -229,63 +237,29 @@ impl Workbench {
             .is_some_and(|i| !i.is_empty());
         drop(state);
 
-        let breadcrumb = hbox(6);
-        breadcrumb.add_css_class("breadcrumb");
-        breadcrumb.append(&label("Objectives", &["meta"]));
-        breadcrumb.append(&label("/", &["meta"]));
-        let crumb = widgets::line_label(
-            &summary.title,
-            &["breadcrumb-current"],
-            gtk::pango::EllipsizeMode::End,
-        );
-        breadcrumb.append(&crumb);
-        set_accessible_label(&breadcrumb, &format!("Objectives / {}", summary.title));
-        self.heading.append(&breadcrumb);
-        details.push(breadcrumb.upcast());
-
-        let title_row = hbox(16);
-        let text = vbox(4);
-        text.set_hexpand(true);
+        let text = vbox(space::TIGHT);
         let title = widgets::heading(&summary.title, "objective-heading");
         set_focus_key(&title, "centre:title");
         title.set_focusable(true);
         title.set_selectable(true);
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
-        let outcome = label(&summary.outcome, &["secondary", "outcome-line"]);
-        text.append(&outcome);
-        details.push(outcome.upcast());
-        title_row.append(&text);
-        let status = vbox(4);
-        status.set_halign(gtk::Align::End);
-        let pill = widgets::status_pill(summary.lifecycle, summary.attention);
-        pill.set_halign(gtk::Align::End);
-        status.append(&pill);
-        let updated = label(
-            &format!(
-                "Updated {}",
-                format::relative_time(Timestamp(widgets::now_ms()), summary.updated_at)
-            ),
-            &["meta"],
-        );
-        updated.set_xalign(1.0);
-        updated.set_wrap(false);
-        status.append(&updated);
-        details.push(updated.upcast());
-        if !summary.badges.is_empty() {
-            let badges = label(&summary.badge_text(), &["meta"]);
-            badges.set_xalign(1.0);
-            status.append(&badges);
-            details.push(badges.upcast());
-        }
-        title_row.append(&status);
-        self.heading.append(&title_row);
+        self.heading.append(&text);
+        // The status and its reasons live in the Objectives list (the outcome in the Overview's
+        // intent). The compact composition shows one
+        // region at a time, so the work area then carries it as one line of its own.
+        let (sign, status_text) = panel::status_line(&summary);
+        let status = widgets::sign_text(sign, &status_text);
+        status.add_css_class("meta");
+        set_accessible_label(&status, &format!("Status: {status_text}"));
+        status.set_visible(self.compact.get());
+        self.heading.append(&status);
+        *self.compact_status.borrow_mut() = Some(status.upcast());
 
         if let Some(detail) = detail {
             let steps = format::journey(&detail, has_inputs);
-            let journey = hbox(8);
+            let journey = hbox(space::ITEM);
             journey.add_css_class("journey");
-            journey.set_margin_top(8);
             let mut spoken = Vec::new();
             for (index, (name, step)) in JOURNEY_STEPS.iter().zip(steps).enumerate() {
                 if index > 0 {
@@ -295,7 +269,7 @@ impl Workbench {
                     connector.set_hexpand(true);
                     journey.append(&connector);
                 }
-                let item = hbox(8);
+                let item = hbox(6);
                 let dot = gtk::Label::new(Some(match step {
                     StepState::Done => "✓",
                     StepState::Current | StepState::Upcoming => "",
@@ -432,7 +406,7 @@ impl Workbench {
             Load::Loaded(_) => {}
         }
         let Load::Loaded(list) = changes else { return };
-        let summary = hbox(12);
+        let summary = hbox(space::GROUP);
         summary.set_valign(gtk::Align::Center);
         let n = list.files.len();
         let files_label = label(
@@ -444,37 +418,26 @@ impl Workbench {
         summary.append(&widgets::counts(list.total_added, list.total_removed));
         self.change_heading.append(&summary);
 
-        let line = hbox(8);
-        line.add_css_class("version-line");
-        let kind = match &ui.basis {
-            Basis::Working => "working capture — may change",
-            Basis::Candidate { candidate_id } => {
-                match detail
-                    .as_ref()
-                    .and_then(|d| {
-                        d.candidates
-                            .iter()
-                            .find(|c| &c.candidate_id == candidate_id)
-                    })
-                    .map(|c| c.status)
-                {
-                    Some(CandidateStatus::Historical) => "frozen candidate — historical",
-                    Some(CandidateStatus::Invalidated) => "frozen candidate — invalidated",
-                    _ => "frozen candidate",
-                }
-            }
-            Basis::Since { .. } => "comparing two frozen candidates",
+        // The inspected version once, concise; the service's version label and the exact target
+        // commit are the tooltip and accessible name.
+        let status = match &ui.basis {
+            Basis::Candidate { candidate_id } => detail
+                .as_ref()
+                .and_then(|d| {
+                    d.candidates
+                        .iter()
+                        .find(|c| &c.candidate_id == candidate_id)
+                })
+                .map(|c| c.status),
+            _ => None,
         };
-        let version_text = format!(
-            "{} · {kind} · compared with {}",
-            list.basis_label,
-            list.target.label()
-        );
-        let version_label = label(&version_text, &["meta", "version-label"]);
+        let (short, full) =
+            format::version_line(&ui.basis, &list.basis_label, status, &list.target);
+        let version_label = label(&short, &["meta", "version-label"]);
         version_label.set_hexpand(true);
-        line.append(&version_label);
-        set_accessible_label(&line, &format!("Inspected version: {version_text}"));
-        self.version.append(&line);
+        version_label.set_tooltip_text(Some(&full));
+        set_accessible_label(&version_label, &format!("Inspected version: {full}"));
+        self.version.append(&version_label);
         if matches!(ui.basis, Basis::Since { .. }) {
             self.version.append(&label(
                 "The revision delta may include target refresh effects; it does not attribute lines to feedback.",
@@ -482,7 +445,7 @@ impl Workbench {
             ));
         }
         if working_updated && ui.basis == Basis::Working {
-            let row = hbox(12);
+            let row = hbox(space::GROUP);
             row.append(&widgets::warning_line(
                 "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
             ));
@@ -537,7 +500,7 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     let row = gtk::ListBoxRow::new();
     row.add_css_class("file-row");
     set_focus_key(&row, &format!("file:{}", file.path.display));
-    let content = hbox(8);
+    let content = hbox(space::ITEM);
     let (symbol, status) = crate::presentation::format::file_status(file.status);
     let symbol_label = gtk::Label::new(Some(symbol));
     symbol_label.add_css_class("file-status");
@@ -545,7 +508,7 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     symbol_label.set_valign(gtk::Align::Start);
     symbol_label.set_tooltip_text(Some(status));
     content.append(&symbol_label);
-    let text = vbox(2);
+    let text = vbox(space::TIGHT);
     let path = label(&file.path.display, &["file-name"]);
     text.append(&path);
     let detail = if file.binary {

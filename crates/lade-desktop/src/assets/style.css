@@ -1,8 +1,22 @@
 /* LADE — the single application stylesheet (design.md tokens).
  *
- * Colour tokens are named below; components use only these. Spacing scale: 4, 8, 12, 16, 24, 32.
- * Radii: 6 (buttons, fields, rows), 8 (popovers, dialogs). Platform fonts only.
- * GTK 4.14 CSS has no custom properties, so spacing values are written from the scale directly.
+ * Colour tokens are named below; components use only these. Radii: 6 (buttons, fields, rows),
+ * 8 (popovers, dialogs). Platform fonts only. GTK 4.14 CSS has no custom properties, so the
+ * spacing and type tokens are written from these scales directly:
+ *
+ * Spacing (px): 4 tight · 8 item · 12 group · 16 section · 24 page · 32 empty-state margin.
+ *   Gaps between widgets come from `views::widgets::space` (the same 4–24 scale); paddings here.
+ *   No one-off margins: a negative margin only aligns a quiet button's text with the column.
+ *
+ * Type (one platform sans family, monospace for code):
+ *   title    20px / 600  .objective-heading, .empty-title       page and Objective titles
+ *   heading  15px / 600  .section-title, .empty-heading, .popover-heading
+ *   body     platform size / 400 (plain labels; .strong = 600 for emphasis by weight)
+ *   meta     13px / 400  .meta (.group-heading: 600)             secondary text and metadata
+ *   mono     13px         .mono                                   code, paths, ids, commands
+ *
+ * Boundaries: separators only where they aid scanning (columns, lists, toolbars); no boxes or
+ * pills for grouping; semantic fills only with a sign or text (errors, warnings, diff lines).
  */
 
 @define-color surface #FFFFFF;
@@ -26,7 +40,6 @@
 @define-color primary_hover #262626;
 @define-color primary_pressed #3A3A3A;
 @define-color border_disabled rgba(0, 0, 0, 0.20);
-@define-color border_pill rgba(0, 0, 0, 0.14);
 @define-color journey_connector rgba(0, 0, 0, 0.18);
 @define-color scrollbar_slider rgba(0, 0, 0, 0.28);
 @define-color scrollbar_slider_hover rgba(0, 0, 0, 0.44);
@@ -78,12 +91,9 @@ entry > text > selection:focus-within {
 /* Typography roles -------------------------------------------------------------------------- */
 
 .wordmark { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
-.objective-heading { font-size: 24px; font-weight: 600; }
-.section-title { font-size: 16px; font-weight: 600; }
-.empty-title { font-size: 24px; font-weight: 600; }
-.empty-heading { font-size: 16px; font-weight: 600; }
-.group-heading { font-size: 13px; font-weight: 500; color: @ink_metadata; margin-top: 4px; }
-.popover-heading { font-size: 13px; font-weight: 600; }
+.objective-heading, .empty-title { font-size: 20px; font-weight: 600; }
+.section-title, .empty-heading, .popover-heading { font-size: 15px; font-weight: 600; }
+.group-heading { font-size: 13px; font-weight: 600; color: @ink_metadata; }
 .meta { font-size: 13px; color: @ink_metadata; }
 .secondary { color: @ink_secondary; }
 .strong { font-weight: 600; }
@@ -148,6 +158,7 @@ button.quiet:hover, button.icon-button:hover { background-color: @fill_hover; }
 /* A quiet destructive action: warning ink, never identical to a neutral quiet button. */
 button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
 button.destructive-quiet:hover { background-color: @del_fill; }
+button.destructive-quiet:disabled, button.destructive-quiet:disabled label { color: @ink_metadata; }
 button.icon-button { min-width: 32px; min-height: 32px; padding: 0; }
 
 entry, scrolledwindow.text-input, spinbutton {
@@ -199,10 +210,23 @@ popover.menu > contents { padding: 4px; }
 popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
 popover row:selected { background-color: @fill_selected; color: @ink_primary; }
 
-button.disclosure-toggle { padding: 2px 6px; margin-left: -6px; }
-button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 500; }
+/* Disclosures and list actions: quiet buttons whose text aligns with the column. */
+button.disclosure-toggle, button.list-action-button {
+  padding: 4px 8px;
+  margin-left: -8px;
+  min-height: 24px;
+}
+button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 600; }
 button.disclosure-toggle:checked { background-color: transparent; }
 button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
+button.list-action-button label { font-weight: 500; }
+.list-action-reason { padding-bottom: 4px; }
+separator.list-separator {
+  min-height: 1px;
+  background-color: @border_separator;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
 
 scrollbar { background-color: transparent; border: none; }
 scrollbar slider { background-color: @scrollbar_slider; border-radius: 6px; min-width: 6px; min-height: 6px; border: none; }
@@ -226,7 +250,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 
 .lade-header {
   min-height: 56px;
-  padding: 0 20px;
+  padding: 0 16px;
   border-bottom: 1px solid @border_separator;
   background-color: @surface;
 }
@@ -249,7 +273,8 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
   box-shadow: inset 0 -2px @ink_primary;
 }
 .nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
-.connection { margin-right: 4px; }
+/* Connection status: small text with a sign, no box. */
+.connection { font-size: 13px; }
 .search entry { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .search dropdown > button {
   border-top-left-radius: 0;
@@ -258,7 +283,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
   min-height: 26px;
 }
 .search-results > contents { padding: 12px; }
-.result-row { padding: 6px 8px; }
+.result-row { padding: 4px 8px; }
 .avatar {
   min-width: 32px;
   min-height: 32px;
@@ -270,7 +295,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 .profile-name { font-weight: 500; }
 
 .preview-band {
-  padding: 6px 20px;
+  padding: 6px 16px;
   background-color: @fill_band;
   border-bottom: 1px solid @border_separator;
   font-size: 13px;
@@ -278,7 +303,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 }
 
 .notice-bar {
-  padding: 8px 20px;
+  padding: 8px 16px;
   background-color: @fill_band;
   border-bottom: 1px solid @border_separator;
 }
@@ -303,7 +328,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 }
 .objective-list > row {
   border-radius: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   margin: 1px 0;
   background-color: transparent;
   box-shadow: none;
@@ -313,39 +338,32 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .objective-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
 .objective-list > row:selected .objective-title { font-weight: 700; }
 .objective-title { font-weight: 600; }
-.objective-outcome { font-size: 13px; }
-.archive { margin-top: 8px; }
 
-.pill {
-  border-radius: 9999px;
-  padding: 2px 10px;
-  background-color: @fill_hover;
-  border: 1px solid @border_pill;
-  font-size: 13px;
-}
-.pill-sign { font-weight: 700; }
+/* Status: a sign and text (no pill box); the sign carries the state without colour. */
+.status-sign { font-weight: 700; }
 
 /* Centre ----------------------------------------------------------------------------------- */
 
 .centre-page { padding: 24px; }
-.centre-empty, .empty-state { padding: 32px; }
-.empty-state { margin-top: 48px; margin-left: 32px; }
+.centre-empty { padding: 32px; }
+.empty-state { padding: 64px 32px 32px 64px; }
 .breadcrumb-current { font-size: 13px; font-weight: 500; }
-.outcome-line { font-size: 15px; }
 
-.journey { margin-top: 4px; }
+/* Journey: small and secondary; the current step stands out by weight and ink, not a box. */
+.journey { padding-top: 4px; }
 .journey-dot {
-  min-width: 14px;
-  min-height: 14px;
+  min-width: 12px;
+  min-height: 12px;
   border-radius: 9999px;
-  border: 2px solid @ink_primary;
-  font-size: 9px;
+  border: 2px solid @ink_secondary;
+  font-size: 8px;
   font-weight: 700;
   padding: 0;
 }
-.journey-dot.done, .journey-dot.current { background-color: @ink_primary; color: @surface; }
+.journey-dot.done { background-color: @ink_secondary; border-color: transparent; color: @surface; }
+.journey-dot.current { background-color: @ink_primary; border-color: @ink_primary; }
 .journey-dot.upcoming { border-color: @ink_optional; background-color: @surface; }
-.journey-label { color: @ink_secondary; }
+.journey-label { color: @ink_secondary; font-size: 13px; }
 .journey-label.current { color: @ink_primary; font-weight: 600; }
 .journey-connector { min-height: 1px; min-width: 12px; background-color: @journey_connector; }
 
@@ -367,7 +385,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .viewer { border: 1px solid @border_separator; border-radius: 6px; }
 .viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
 .viewer-path { font-weight: 500; }
-.selection-line { padding: 4px 12px; border-bottom: 1px solid @border_separator; }
+.selection-line { padding: 4px 12px 0 12px; min-height: 18px; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
 .segmented button { border-radius: 0; min-height: 22px; padding: 2px 10px; }
@@ -417,7 +435,7 @@ notebook.inspector > header > tabs > tab:checked {
   box-shadow: inset 0 -2px @ink_primary;
 }
 notebook.inspector > stack { background-color: @surface; }
-.inspector-page { padding: 20px; }
+.inspector-page { padding: 16px 16px 24px 16px; }
 .field-key { min-width: 88px; }
 .evidence-row { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .output {
@@ -425,12 +443,6 @@ notebook.inspector > stack { background-color: @surface; }
   border-radius: 6px;
   padding: 8px;
   margin-top: 4px;
-}
-.protected {
-  background-color: @fill_inset;
-  border-radius: 6px;
-  padding: 12px;
-  margin: 4px 0;
 }
 
 .draft { padding: 12px 0 16px 0; border-bottom: 1px solid @border_separator; }

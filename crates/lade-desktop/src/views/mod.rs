@@ -153,7 +153,7 @@ impl App {
         let preview_band = widgets::label("", &["preview-band"]);
         preview_band.set_visible(false);
         root.append(&preview_band);
-        let notice = widgets::hbox(12);
+        let notice = widgets::hbox(widgets::space::GROUP);
         notice.add_css_class("notice-bar");
         notice.set_visible(false);
         root.append(&notice);
@@ -224,7 +224,7 @@ impl App {
         probe.set_focusable(false);
         root.prepend(&probe);
 
-        let empty = widgets::vbox(12);
+        let empty = widgets::vbox(widgets::space::GROUP);
         empty.add_css_class("empty-state");
         let body = gtk::Stack::new();
         body.set_vexpand(true);

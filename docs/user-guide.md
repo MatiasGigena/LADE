@@ -99,8 +99,8 @@ opening a second one (and the service accepts only one controlling window anyway
 - **Notifications.** When an Objective starts to need you, or becomes ready for review, while the window is not in
   front, LADE shows a desktop notification. Clicking it brings the window forward on that Objective (its Evidence
   for a review) — it never approves or sends anything. The Objectives list always shows the same attention, so if
-  your desktop has no notification service, nothing is lost: the window says once that notifications are
-  unavailable.
+  your desktop has no notification service, nothing is lost: one quiet line under the Objectives list says
+  *Desktop notifications unavailable* (its tooltip gives the reason).
 
 Keyboard: F6 / Shift+F6 move between regions, Ctrl+1 Workbench, Ctrl+2 Activity, Ctrl+3 Terminal (and focus it),
 Ctrl+Shift+E leave the terminal, Ctrl+K search, Ctrl+N new Objective, Ctrl+O open repository, Ctrl+Shift+M add
@@ -111,9 +111,28 @@ checks the whole set, including duplicates, before using it and saves it to
 `$XDG_CONFIG_HOME/lade/keybindings.json` (default `~/.config/lade/keybindings.json`). An invalid file is ignored with
 a notice and the defaults apply; delete the file to return to them.
 
+**Where things are.** Each piece of information and each action has one place.
+- **Objectives list.** Objectives are grouped by attention. A row adds one line only for what its group heading does not say: the attention reasons (`! check failed · unsent drafts`) or a closed lifecycle.
+- **Workbench.** It shows the title, the collaboration journey and the Change Set. Its version line says only what the version selector does not: `Captured · may change · vs main@…` or `Frozen · vs main@…`.
+- **Overview** (right panel):
+  - the approval state;
+  - the **one next review step** the service currently allows, such as *Freeze for review*, *Approve Candidate N*, *Integrate into main* or, once the Objective is closed, *Clean up branch and worktree*, with the reason in one line when it is blocked;
+  - **More actions**: every other review decision (Return for revision, Refresh, Complete without changes and, last and separated, Discard, Clean up and Delete Git history), each with its reason when unavailable;
+  - the intent, with *Edit intent*;
+  - **Details**: lifecycle, last update, branch and start commit.
+- **Activity** is the Agent Session's place:
+  - its state line: model, execution state, session and generation;
+  - **Start agent**, **Cancel agent** and **Resume agent**;
+  - **Accepted inputs and delivery**. An uncertain or blocked delivery is stated above it;
+  - the transcript and the composer;
+  - under **Model, Agent Session and profile**: the model and thinking, the session tools and the LADE profile resources.
+
+When the Objective waits for the agent to be started or resumed, the Overview says so in one line, with **Open Activity**.
+
 Below about 1100 pixels of window width (for example 800 × 550, or a 1600 × 1100 screen at 200 % scaling) the
 window shows one region at a time: switch between **Objectives**, **Work area** and **Overview · Evidence ·
-Feedback** with the buttons below the header or F6, and use **Objective details** to show the outcome and journey.
+Feedback** with the buttons below the header or F6. In this layout the work area also shows the Objective's status,
+and **Objective details** shows or hides the journey.
 Text you type or paste into drafts, messages and intents is limited to 256 KiB per field (an override reason to
 2,048 characters); a paste that would exceed it is not inserted and your text stays as it was.
 
@@ -144,8 +163,9 @@ specific commit). The intent stays editable until approval. Nothing runs yet: th
 
 ## 5. Choose a model and provide credentials
 
-Pick a model when starting execution. `lade-fixture / scripted` is an **offline test model** (always labelled as
-such): it writes files only when told `lade-fixture: write <path> <content>` and is useful for trying the workflow.
+Pick a model when starting execution: in Activity, while *Start agent* is available, the state line names the
+model and thinking level it will use; change them under *Model, Agent Session and profile*. `lade-fixture / scripted` is an **offline test model** (always labelled as such): it
+writes files only when told `lade-fixture: write <path> <content>` and is useful for trying the workflow.
 
 Real providers need an API key. The recommended place is your **keyring** (GNOME Keyring, through the Secret
 Service; needs `sudo apt install libsecret-tools`):
@@ -203,9 +223,17 @@ processes; started by hand, LADE logs `cgroup limits unavailable (…)` and uses
 
 - **Activity** (Ctrl+2) shows the transcript: assistant text, thinking, tool calls and results, system notes.
 - The composer sends a **prompt**, a **steer** (delivered after the current tool calls) or a **follow-up**
-  (delivered when the agent would stop). Every message is durably accepted before it is delivered; its state
-  (queued, dispatched, received, uncertain, blocked) is shown. An *uncertain* message is never resent automatically.
-- **Cancel** stops the agent and keeps its work and session; **Resume** continues the same session.
+  (delivered when the agent would stop). Every message — and every submitted feedback batch — is durably accepted
+  before it is delivered; its state (queued, dispatched, received, uncertain, blocked) is listed under **Accepted
+  inputs and delivery**, and an uncertain or blocked one is stated above that list. An *uncertain* message is never
+  resent automatically.
+- **Start agent**, **Cancel** (stops the agent and keeps its work and session) and **Resume** (continues the same
+  session) are at the top of Activity; an unavailable one names its reason in its tooltip, and the state line next
+  to them says why.
+- **Model, Agent Session and profile** (collapsed, at the top of Activity) holds the model and thinking pickers,
+  the Agent Session tools — *Show session tree* (go to, fork or clone an entry), *Apply model and thinking*,
+  *Compact context*, *Reload session resources*, *Export session*, *Import session…* — and the LADE profile
+  resources with the approval of executable extensions.
 
 ### Terminal
 
@@ -229,7 +257,9 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 ## 7. Inspect, give feedback, review and integrate
 
 1. **Inspect.** The Workbench lists the changed files of the Change Set with a diff or full-file view. Each view
-   names its version (working copy capture or a frozen candidate). Ctrl+K searches Objectives, paths or content;
+   names its version: the selector (*Working inspection*, *Candidate N (current)*, …) and one line with what it
+   does not say — *Captured · may change · vs main@…* or *Frozen · vs main@…* — with the exact capture and target
+   commit in its tooltip. Ctrl+K searches Objectives, paths or content;
    opening a content result shows the full file with the first match selected, ready for *Add feedback*. Files
    larger than 64 MiB (up to 1 GiB) open in chunks of up to 256 KiB — *Load more* continues; larger files cannot be
    inspected. Syntax is highlighted for languages GtkSourceView recognises by file name; text over 2 MiB or 40,000
@@ -261,7 +291,8 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 - **Clean up** — after integration, completion or discard, removes the Objective's worktree and branch. If the
   worktree holds work not in the branch, LADE asks you to confirm the data loss. Records, history, retention refs
   (`refs/lade/retain/*`) and artifacts stay.
-- **Delete Git history** — only after Clean up, and only when you confirm the dialog: deletes the Objective's retention
+- **Delete Git history** (under *More actions*, never suggested as the next step) — only after Clean up, and only
+  when you confirm the dialog: deletes the Objective's retention
   refs (and its `lade/*` branch if one is left), so Git may later garbage-collect its captures and candidates; they can
   then no longer be inspected. Integrated commits, the Objective record, accepted inputs, review evidence and stored
   artifacts stay. LADE never does this on its own.

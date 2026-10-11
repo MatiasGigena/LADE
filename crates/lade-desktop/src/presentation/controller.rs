@@ -1284,18 +1284,33 @@ impl Controller {
         connected
     }
 
-    /// Execution label for the status line.
-    pub fn execution_line(&self) -> Option<String> {
+    /// Activity's status line — the one home of the agent's model, execution state and Agent
+    /// Session identity — and its full statement (tooltip and accessible description).
+    pub fn execution_line(&self) -> Option<(String, String)> {
         self.with_detail(|d| {
             let execution = format::execution_label_for(d);
             match &d.session {
-                Some(s) => format!(
-                    "{} · {} · generation {}",
-                    s.model.label(),
-                    execution,
-                    s.execution_generation
+                Some(s) => (
+                    format!(
+                        "{} · {} · Session {} · generation {}",
+                        s.model.label(),
+                        execution,
+                        s.session_id.short(),
+                        s.execution_generation
+                    ),
+                    format!(
+                        "Agent Session {} · association r{} · execution generation {} · model {} · {}",
+                        s.session_id.as_str(),
+                        s.association_revision,
+                        s.execution_generation,
+                        s.model.label(),
+                        execution
+                    ),
                 ),
-                None => format!("No Agent Session · {execution}"),
+                None => {
+                    let line = format!("No Agent Session yet · {execution}");
+                    (line.clone(), line)
+                }
             }
         })
     }

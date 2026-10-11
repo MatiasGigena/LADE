@@ -10,6 +10,7 @@ pub mod intents;
 pub mod keys;
 pub mod layout;
 pub mod model;
+pub mod panel;
 pub mod preview;
 pub mod store;
 pub mod syntax;

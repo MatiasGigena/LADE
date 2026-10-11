@@ -7,7 +7,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, hbox, label, set_accessible_label, vbox};
+use super::widgets::{self, hbox, label, set_accessible_label, space, vbox};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::keys::{AppAction, Keymap};
@@ -109,11 +109,11 @@ fn draw_mark(area: &gtk::DrawingArea) {
 
 impl Header {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let root = hbox(16);
+        let root = hbox(space::SECTION);
         root.add_css_class("lade-header");
         set_accessible_label(&root, "Header");
 
-        let brand = hbox(10);
+        let brand = hbox(space::ITEM);
         brand.add_css_class("brand");
         let mark = gtk::DrawingArea::new();
         mark.set_content_width(26);
@@ -127,9 +127,9 @@ impl Header {
         brand.append(&wordmark);
         root.append(&brand);
 
-        let nav = hbox(24);
+        let nav = hbox(space::PAGE);
         nav.add_css_class("nav");
-        nav.set_margin_start(64);
+        nav.set_margin_start(2 * space::PAGE);
         let workbench_tab = gtk::ToggleButton::with_label("Workbench");
         let activity_tab = gtk::ToggleButton::with_label("Activity");
         activity_tab.set_group(Some(&workbench_tab));
@@ -177,7 +177,7 @@ impl Header {
         popover.set_parent(&search);
         popover.set_position(gtk::PositionType::Bottom);
         popover.set_has_arrow(false);
-        let popover_box = vbox(8);
+        let popover_box = vbox(space::ITEM);
         popover_box.set_size_request(380, -1);
         let popover_heading = widgets::heading("", "popover-heading");
         popover_box.append(&popover_heading);
@@ -207,7 +207,7 @@ impl Header {
         set_accessible_label(&exit_button, "Exit LADE and stop its agents");
         root.append(&exit_button);
 
-        let profile = hbox(10);
+        let profile = hbox(space::ITEM);
         profile.add_css_class("profile");
         profile.set_valign(gtk::Align::Center);
         let avatar = gtk::Label::new(Some("MG"));
@@ -309,9 +309,15 @@ impl Header {
     /// Tightens the header for the compact composition. Only the profile name is hidden; the
     /// avatar keeps its accessible name.
     pub fn set_compact(&self, compact: bool) {
-        self.root.set_spacing(if compact { 8 } else { 16 });
-        self.nav.set_margin_start(if compact { 8 } else { 64 });
-        self.nav.set_spacing(if compact { 16 } else { 24 });
+        self.root
+            .set_spacing(if compact { space::ITEM } else { space::SECTION });
+        self.nav.set_margin_start(if compact {
+            space::ITEM
+        } else {
+            2 * space::PAGE
+        });
+        self.nav
+            .set_spacing(if compact { space::SECTION } else { space::PAGE });
         self.profile_name.set_visible(!compact);
     }
 
@@ -356,6 +362,8 @@ impl Header {
         self.status.set_text(&short);
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
+        // In preview the band below the header is the one statement of the data source.
+        self.status.set_visible(!state.is_preview());
     }
 
     fn refresh_search(&self) {
@@ -392,7 +400,7 @@ impl Header {
                     });
                 for result in &results.results {
                     let row = gtk::ListBoxRow::new();
-                    let content = vbox(2);
+                    let content = vbox(space::TIGHT);
                     content.add_css_class("result-row");
                     let primary = match (&result.path, result.line) {
                         (Some(path), Some(line)) => format!("{}:{line}", path.display),

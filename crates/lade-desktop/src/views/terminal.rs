@@ -16,7 +16,9 @@ use gtk::prelude::*;
 use gtk::{gdk, glib};
 use gtk4 as gtk;
 
-use super::widgets::{self, hbox, label, set_accessible_description, set_accessible_label, vbox};
+use super::widgets::{
+    self, hbox, label, set_accessible_description, set_accessible_label, space, vbox,
+};
 use crate::presentation::controller::Controller;
 use crate::presentation::keys::{AppAction, Keymap};
 use crate::presentation::model::{Lifecycle, ObjectiveId};
@@ -77,10 +79,10 @@ fn term_key(key: gdk::Key) -> Option<TermKey> {
 
 impl TerminalPane {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let root = vbox(12);
+        let root = vbox(space::GROUP);
         root.add_css_class("terminal-pane");
-        let head = hbox(16);
-        let titles = vbox(4);
+        let head = hbox(space::SECTION);
+        let titles = vbox(space::TIGHT);
         titles.set_hexpand(true);
         let title = widgets::heading("Terminal", "objective-heading");
         title.set_focusable(true);
@@ -88,21 +90,26 @@ impl TerminalPane {
         let status = label("", &["meta"]);
         titles.append(&status);
         head.append(&titles);
-        let controls = hbox(8);
+        let controls = hbox(space::ITEM);
         controls.set_valign(gtk::Align::Start);
         let open_button = widgets::button("Open terminal", &["primary"]);
-        let close_button = widgets::button("Close terminal", &["secondary"]);
+        let close_button = widgets::button("Close terminal", &[]);
         controls.append(&open_button);
         controls.append(&close_button);
         head.append(&controls);
         root.append(&head);
+        // The scope in one line; the full statement is its tooltip and accessible description.
+        let full_scope = "A shell in this Objective's sandbox: its worktree only, no network, no \
+             credentials, the same limits as the agent. Read-only while a Change Set is frozen for \
+             review. Closing the window or losing the connection ends it; nothing restarts on its \
+             own.";
         let scope = label(
-            "A shell in this Objective's sandbox: its worktree only, no network, no credentials, \
-             the same limits as the agent. Read-only while a Change Set is frozen for review. \
-             Closing the window or losing the connection ends it; nothing restarts on its own.",
-            &["secondary"],
+            "Sandboxed: this worktree only · no network · no credentials · ends with the window",
+            &["meta"],
         );
-        root.append(&scope);
+        scope.set_tooltip_text(Some(full_scope));
+        set_accessible_description(&scope, full_scope);
+        titles.append(&scope);
         let problem = vbox(0);
         root.append(&problem);
 

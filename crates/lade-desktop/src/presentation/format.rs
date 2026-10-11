@@ -170,6 +170,16 @@ pub fn mode_label(mode: DeliveryMode) -> &'static str {
     }
 }
 
+/// What a delivery mode means — written once; Activity's composer shows it, the Feedback tab's
+/// delivery choice carries it as tooltip and accessible description.
+pub fn mode_explanation(mode: DeliveryMode) -> &'static str {
+    match mode {
+        DeliveryMode::Prompt => "Starts a turn when the agent is idle.",
+        DeliveryMode::Steer => "Delivered after the current tools finish; not an instant stop.",
+        DeliveryMode::FollowUp => "Delivered after the agent finishes its current work.",
+    }
+}
+
 pub fn role_label(role: ActivityRole, tool_name: Option<&str>) -> String {
     match role {
         ActivityRole::User => "User".to_owned(),
@@ -228,6 +238,39 @@ pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
             "Since previous review (Candidate {} → {})",
             ordinal(from_candidate_id),
             ordinal(to_candidate_id)
+        ),
+    }
+}
+
+/// The inspected version's line beside the version selector: only what the selector does not
+/// say — whether the content may change (working capture) or is frozen, and the comparison
+/// target — and the full statement (service version label, candidate status, exact target
+/// commit) for the tooltip and accessible name.
+pub fn version_line(
+    basis: &Basis,
+    service_label: &str,
+    candidate_status: Option<CandidateStatus>,
+    target: &super::model::TargetRef,
+) -> (String, String) {
+    let short_target = target.label();
+    let full_target = format!("{} at {}", target.branch, target.commit.hex);
+    match basis {
+        Basis::Working => (
+            format!("Captured · may change · vs {short_target}"),
+            format!(
+                "{service_label}: working capture of ongoing work — may change. Compared with {full_target}."
+            ),
+        ),
+        Basis::Candidate { .. } => (
+            format!("Frozen · vs {short_target}"),
+            format!(
+                "{service_label}: frozen candidate ({}). Compared with {full_target}.",
+                candidate_status.map_or("frozen", self::candidate_status)
+            ),
+        ),
+        Basis::Since { .. } => (
+            format!("Revision delta · vs {short_target}"),
+            format!("{service_label}: comparing two frozen candidates. Target {full_target}."),
         ),
     }
 }
@@ -460,6 +503,36 @@ mod tests {
             relative_time(now, Timestamp(now.0 - 2 * 3_600_000)),
             "2 hours ago"
         );
+    }
+
+    #[test]
+    fn version_line_adds_only_what_the_selector_does_not_say() {
+        use crate::presentation::model::{CandidateId, GitId, TargetRef};
+        let target = TargetRef {
+            branch: "main".into(),
+            commit: GitId::sha1("86fc063aaaabbbbccccddddeeeeffff000011112"),
+        };
+        let (short, full) =
+            version_line(&Basis::Working, "working capture bfe258b0", None, &target);
+        assert_eq!(short, "Captured · may change · vs main@86fc063");
+        assert!(full.contains("working capture bfe258b0"));
+        assert!(full.contains(&target.commit.hex));
+        let candidate = Basis::Candidate {
+            candidate_id: CandidateId::new("c1"),
+        };
+        for status in [
+            CandidateStatus::Current,
+            CandidateStatus::Historical,
+            CandidateStatus::Invalidated,
+        ] {
+            let (short, full) =
+                version_line(&candidate, "Candidate 2 — frozen", Some(status), &target);
+            // The selector names the candidate and its status; the line only says frozen.
+            assert_eq!(short, "Frozen · vs main@86fc063");
+            assert!(!short.contains("Candidate"));
+            assert!(full.contains("Candidate 2 — frozen"));
+            assert!(full.contains(candidate_status(status)));
+        }
     }
 
     #[test]

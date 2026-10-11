@@ -574,6 +574,53 @@ mod tests {
         assert_eq!(keymap.label(AppAction::Exit), "Ctrl+Q");
     }
 
+    /// The calm-UI presentation work moved actions behind disclosures but no shortcut: the table
+    /// (and so the shortcuts dialog and user guide) is unchanged and every non-fixed action stays
+    /// remappable to a function key.
+    #[test]
+    fn default_table_is_stable_and_remappable() {
+        let table: Vec<(&str, &str)> = DEFAULT_APP_KEYBINDINGS
+            .iter()
+            .map(|b| (b.id, b.default))
+            .collect();
+        assert_eq!(
+            table,
+            [
+                ("next-region", "F6"),
+                ("previous-region", "<Shift>F6"),
+                ("show-workbench", "<Control>1"),
+                ("show-activity", "<Control>2"),
+                ("focus-search", "<Control>k"),
+                ("add-feedback", "<Control><Shift>m"),
+                ("new-objective", "<Control>n"),
+                ("open-workspace", "<Control>o"),
+                ("toggle-viewer-mode", "<Control><Shift>f"),
+                ("send-message", "<Control>Return"),
+                ("show-shortcuts", "<Control>question"),
+                ("show-terminal", "<Control>3"),
+                ("leave-terminal", "<Control><Shift>e"),
+                ("terminal-copy", "<Control><Shift>c"),
+                ("terminal-paste", "<Control><Shift>v"),
+                ("exit", "<Control>q"),
+                ("close-dialog", "Escape"),
+            ]
+        );
+        let remappable: Vec<&KeyBinding> = DEFAULT_APP_KEYBINDINGS
+            .iter()
+            .filter(|b| b.fixed.is_none())
+            .collect();
+        let changes: Vec<(AppAction, String)> = remappable
+            .iter()
+            .zip(1..)
+            .map(|(b, n)| (b.action, format!("<Alt>F{n}")))
+            .collect();
+        let refs: Vec<(AppAction, &str)> = changes.iter().map(|(a, s)| (*a, s.as_str())).collect();
+        let keymap = Keymap::propose(&with(&refs)).expect("every action remaps to a function key");
+        for (action, accel) in &changes {
+            assert_eq!(&keymap.gtk(*action), accel);
+        }
+    }
+
     #[test]
     fn terminal_escape_routes_are_configurable_and_reach_the_window() {
         // Both directions can be remapped (default or function keys, like every remappable action)…

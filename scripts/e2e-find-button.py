@@ -8,6 +8,9 @@ Prints the vertical centre of the first match from the top; exit status 1 if the
 
 - `black`: a band in which every pixel row is black (≤ 40 in each channel) at both x = X1 and
   x = X2 for at least 20 rows — a filled primary button such as "Start agent".
+- `box`: `box X_MIN X_MAX Y_MIN Y_MAX` — the first filled black button anywhere in that area (at
+  least 50 black pixels on each of 20 consecutive rows), printed as "X Y" (its centre),
+  for a black button whose horizontal position varies, such as Activity's "Start agent".
 - `label`: an exact pixel match of TEMPLATE (any image ImageMagick reads, a crop of an *enabled*
   button's label band from an earlier capture under the same Xvfb, font and scale) with its left
   edge at x = X. A disabled button draws its label in another ink and does not match.
@@ -69,11 +72,37 @@ def find_label(width, height, pixels, template, x, y_min, y_max):
     return None
 
 
+def find_box(width, height, pixels, x_min, x_max, y_min, y_max):
+    """The first filled black box (at least 50 black pixels, white label glyphs between them,
+    on at least 20 consecutive rows) in the area; its centre as "X Y"."""
+    def run(y):
+        black = [x for x in range(x_min, min(x_max, width))
+                 if max(pixels[(y * width + x) * 3:(y * width + x) * 3 + 3]) <= 40]
+        return (black[0], black[-1] - black[0] + 1) if len(black) >= 50 else None
+
+    rows = []
+    for y in range(y_min, min(y_max, height)):
+        found = run(y)
+        if found:
+            rows.append((y, found))
+            continue
+        if len(rows) >= 20:
+            break
+        rows = []
+    if len(rows) < 20:
+        return None
+    y = rows[len(rows) // 2][0]
+    start, length = rows[len(rows) // 2][1]
+    return f'{start + length // 2} {y}'
+
+
 def main():
     args = sys.argv[1:]
     width, height, pixels = read_ppm(sys.stdin.buffer.read())
     if len(args) == 5 and args[0] == 'black':
         found = find_black(width, height, pixels, *map(int, args[1:]))
+    elif len(args) == 5 and args[0] == 'box':
+        found = find_box(width, height, pixels, *map(int, args[1:]))
     elif len(args) == 5 and args[0] == 'label':
         ppm = subprocess.run(['convert', args[1], '-depth', '8', 'ppm:-'], check=True,
                              capture_output=True).stdout

@@ -7,11 +7,11 @@ use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::presentation::model::{ActionAvailability, Attention, Lifecycle};
+use crate::presentation::keys;
+use crate::presentation::model::ActionAvailability;
 use crate::presentation::text_bound::{
     EditGuard, EndDecision, InsertDecision, Snapshot, TextLimit,
 };
-use crate::presentation::{format, keys};
 
 /// Polite screen-reader announcement. GTK 4.14 calls a missing `announce` implementation (a
 /// NULL vfunc: segfault) when the window's accessibility context is not the AT-SPI backend, e.g.
@@ -33,6 +33,21 @@ pub fn announce(
 
 /// Widget names starting with this prefix are stable keys used to restore focus after rebuilds.
 pub const FOCUS_KEY_PREFIX: &str = "k:";
+
+/// Spacing tokens (logical px), the only gaps the views use between widgets. The stylesheet's
+/// paddings use the same scale (`assets/style.css`, "Spacing").
+pub mod space {
+    /// Lines that belong to one item (a label and its reason, a title and its secondary line).
+    pub const TIGHT: i32 = 4;
+    /// Items of a group; controls in a row.
+    pub const ITEM: i32 = 8;
+    /// Groups within a section.
+    pub const GROUP: i32 = 12;
+    /// Sections of a panel.
+    pub const SECTION: i32 = 16;
+    /// Blocks of a page.
+    pub const PAGE: i32 = 24;
+}
 
 pub fn label(text: &str, classes: &[&str]) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
@@ -315,12 +330,13 @@ pub fn disclosure(
     child: &impl IsA<gtk::Widget>,
     on_toggled: impl Fn(bool) + 'static,
 ) -> gtk::Box {
-    let root = vbox(4);
+    let root = vbox(space::TIGHT);
     root.add_css_class("disclosure");
     let toggle = gtk::ToggleButton::new();
     toggle.add_css_class("quiet");
     toggle.add_css_class("disclosure-toggle");
-    toggle.set_halign(gtk::Align::Start);
+    // The whole row is the target (text left-aligned), not only the words.
+    toggle.set_halign(gtk::Align::Fill);
     let text = gtk::Label::new(None);
     text.set_wrap(true);
     text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -328,6 +344,7 @@ pub fn disclosure(
     text.set_xalign(0.0);
     toggle.set_child(Some(&text));
     set_accessible_label(&toggle, title);
+    set_focus_key(&toggle, &format!("disclosure:{title}"));
     let child = child.as_ref().clone();
     let render = {
         let title = title.to_owned();
@@ -416,28 +433,26 @@ pub fn heading(text: &str, class: &str) -> gtk::Label {
     title
 }
 
-/// Compact status pill: sign plus text, never color alone.
-pub fn status_pill(lifecycle: Lifecycle, attention: Attention) -> gtk::Box {
-    let (sign, text) = format::status_pill(lifecycle, attention);
-    pill(sign, text)
-}
-
-pub fn pill(sign: &str, text: &str) -> gtk::Box {
-    let pill = hbox(6);
-    pill.add_css_class("pill");
-    pill.set_halign(gtk::Align::Start);
-    pill.set_valign(gtk::Align::Center);
+/// A sign followed by its (wrapping) text, never colour alone and no pill box (an Objective's
+/// status: `presentation::panel::status_line`); the accessible name is the text.
+pub fn sign_text(sign: &str, text: &str) -> gtk::Box {
+    let row = hbox(6);
+    row.add_css_class("status-text");
+    row.set_valign(gtk::Align::Center);
     let sign_label = gtk::Label::new(Some(sign));
-    sign_label.add_css_class("pill-sign");
-    pill.append(&sign_label);
-    pill.append(&gtk::Label::new(Some(text)));
-    set_accessible_label(&pill, text);
-    pill
+    sign_label.add_css_class("status-sign");
+    sign_label.set_valign(gtk::Align::Start);
+    row.append(&sign_label);
+    let text_label = label(text, &[]);
+    text_label.set_hexpand(true);
+    row.append(&text_label);
+    set_accessible_label(&row, text);
+    row
 }
 
 /// Signed change counts "+N −M" with semantic ink (and the signs as text equivalents).
 pub fn counts(added: u64, removed: u64) -> gtk::Box {
-    let row = hbox(8);
+    let row = hbox(space::ITEM);
     let add = gtk::Label::new(Some(&format!("+{added}")));
     add.add_css_class("added");
     add.add_css_class("numeric");
@@ -461,7 +476,7 @@ pub fn action_row(
     classes: &[&str],
     on_click: impl Fn(&gtk::Button) + 'static,
 ) -> gtk::Box {
-    let row = vbox(4);
+    let row = vbox(space::TIGHT);
     let button = wrapping_button(text, classes);
     set_accessible_label(&button, text);
     set_focus_key(&button, &format!("action:{text}"));
@@ -487,9 +502,69 @@ pub fn action_row(
     row
 }
 
+/// A secondary action in a list (More actions): a quiet, left-aligned button with the same
+/// availability rules as [`action_row`] — a disabled one keeps its place and its reason is visible
+/// below it, in the tooltip and as accessible description; a not-offered one is hidden.
+/// `destructive` uses the destructive ink (never the primary treatment).
+pub fn list_action_row(
+    text: &str,
+    availability: &ActionAvailability,
+    destructive: bool,
+    on_click: impl Fn(&gtk::Button) + 'static,
+) -> gtk::Box {
+    let row = vbox(0);
+    row.add_css_class("list-action");
+    let button = gtk::Button::new();
+    let child = label(text, &[]);
+    button.set_child(Some(&child));
+    button.add_css_class("quiet");
+    button.add_css_class("list-action-button");
+    if destructive {
+        button.add_css_class("destructive-quiet");
+    }
+    set_accessible_label(&button, text);
+    set_focus_key(&button, &format!("action:{text}"));
+    button.connect_clicked(on_click);
+    row.append(&button);
+    match availability {
+        ActionAvailability::Enabled => {}
+        ActionAvailability::Disabled { reason } => {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(reason));
+            set_accessible_description(&button, reason);
+            row.append(&label(reason, &["meta", "list-action-reason"]));
+        }
+        ActionAvailability::NotOffered => row.set_visible(false),
+    }
+    row
+}
+
+/// A compact action whose disabled reason is its tooltip and accessible description, for places
+/// where a visible status line beside it already states why (the Activity header).
+pub fn compact_action(
+    text: &str,
+    availability: &ActionAvailability,
+    on_click: impl Fn(&gtk::Button) + 'static,
+) -> gtk::Button {
+    let button = button(text, &[]);
+    set_accessible_label(&button, text);
+    set_focus_key(&button, &format!("action:{text}"));
+    button.connect_clicked(on_click);
+    match availability {
+        ActionAvailability::Enabled => {}
+        ActionAvailability::Disabled { reason } => {
+            button.set_sensitive(false);
+            button.set_tooltip_text(Some(reason));
+            set_accessible_description(&button, reason);
+        }
+        ActionAvailability::NotOffered => button.set_visible(false),
+    }
+    button
+}
+
 /// Local error line near the control that failed.
 pub fn error_line(text: &str) -> gtk::Box {
-    let row = hbox(8);
+    let row = hbox(space::ITEM);
     row.add_css_class("error-box");
     let sign = gtk::Label::new(Some("✕"));
     row.append(&sign);
@@ -501,7 +576,7 @@ pub fn error_line(text: &str) -> gtk::Box {
 }
 
 pub fn warning_line(text: &str) -> gtk::Box {
-    let row = hbox(8);
+    let row = hbox(space::ITEM);
     row.add_css_class("warning-box");
     let sign = gtk::Label::new(Some("⚠"));
     sign.set_valign(gtk::Align::Start);
@@ -515,7 +590,7 @@ pub fn warning_line(text: &str) -> gtk::Box {
 
 /// Key/value row for the inspector.
 pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
-    let row = hbox(12);
+    let row = hbox(space::GROUP);
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
     key_label.set_width_chars(10);
@@ -601,14 +676,14 @@ impl Dialog {
             .build();
         window.set_transient_for(parent.as_ref());
         window.add_css_class("lade-dialog");
-        let outer = vbox(16);
+        let outer = vbox(space::SECTION);
         outer.add_css_class("dialog-content");
         outer.append(&section_title(title));
-        let body = vbox(12);
+        let body = vbox(space::GROUP);
         outer.append(&body);
         let error = vbox(0);
         outer.append(&error);
-        let buttons = hbox(8);
+        let buttons = hbox(space::ITEM);
         buttons.set_halign(gtk::Align::End);
         outer.append(&buttons);
         window.set_child(Some(&outer));
@@ -632,7 +707,7 @@ impl Dialog {
     /// Replaces the dialog's error area with one error line per message.
     pub fn show_errors(&self, messages: &[String]) {
         clear(&self.error);
-        self.error.set_spacing(8);
+        self.error.set_spacing(space::ITEM);
         for message in messages {
             self.error.append(&error_line(message));
         }

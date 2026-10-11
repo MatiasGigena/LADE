@@ -102,6 +102,15 @@ click_inspector() {
   click 1280 "$y" 1
 }
 click_primary() { click_inspector "$1" black; }
+# Activity's Start agent (Agent Session control): its filled black button in the Activity header.
+click_start() {
+  key ctrl+2
+  tries=0
+  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260); do
+    tries=$((tries + 1)); [ $tries -le 40 ] || fail "no Start agent button"; sleep 0.5
+  done
+  click ${XY% *} ${XY#* } 1
+}
 wait_for() {
   limit=$1; what=$2; shift 2
   n=0
@@ -192,7 +201,7 @@ click 469 625 2
 
 step "start the agent (sandboxed worker, fixture model) and let it write hello.txt"
 sleep 2
-click_primary "Start agent"
+click_start
 wait_for 60 "sandboxed worker started" session_ready
 inspector_top
 key ctrl+2
@@ -203,9 +212,9 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 
 step "IMP-005: a draft save the service refuses stays visibly unsaved with Retry"
 key ctrl+1
-click 1057 323 2   # Refresh the inspected capture
-click 330 336 2    # hello.txt
-x mousemove 622 421 click --repeat 2 --delay 80 1
+click 1057 249 2   # Refresh the inspected capture
+click 330 262 2    # hello.txt
+x mousemove 622 342 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"            # refuse every draft.save
 key ctrl+shift+m
@@ -217,7 +226,7 @@ shot "$OUT5" r-01-save-failed
 
 step "Retry while the service holds the write: Saving…, not Saved, until the acknowledgement"
 echo "delay 4000" >"$FAULTS/draft.save"
-click 1169 509 1   # Retry (beside the failed draft)
+click 1169 500 1   # Retry (beside the failed draft)
 sleep 1
 no_drafts || fail "the held save was written early"
 grep "draft " "$T/trace.log" | tail -1 | grep -q "Saving…" || fail "the draft is not shown as saving"
@@ -281,7 +290,7 @@ shot "$OUT5" r-07-after-discard
 
 step "IMP-010: the service is killed in the middle of an agent run"
 key ctrl+2
-click 946 98 3     # Resume agent (the run was interrupted by the kills above)
+click 1050 98 3     # Resume agent (the run was interrupted by the kills above)
 wait_for 60 "worker resumed" worker_alive
 click 680 790 0.3
 typ "lade-fixture: delay 2000"
@@ -307,7 +316,7 @@ wt_file_is hi || fail "the interrupted run wrote hello.txt"
 step "input delivery state after the restart: $(sql "select d.state from input_delivery d join accepted_inputs a on a.id = d.input_id order by a.rowid desc limit 1")"
 shot "$OUT10" e-03-interrupted
 step "the developer continues: Resume and a new instruction"
-click 946 98 3
+click 1050 98 3    # Resume agent
 wait_for 60 "worker resumed" worker_alive
 click 680 790 0.3
 typ "lade-fixture: write hello.txt hello"
@@ -317,13 +326,13 @@ sleep 3
 shot "$OUT10" e-04-continued
 
 step "a draft save fails during the loop; Retry; submit"
-click 1201 523 1   # Remove draft… (the stale draft would block the whole batch)
+click 1201 516 1   # Remove draft… (the stale draft would block the whole batch)
 click 359 160 2    # Remove draft (confirmation)
 wait_for 10 "the stale draft removed" no_drafts
 key ctrl+1
-click 1057 323 2   # Refresh (the worktree changed after the inspected capture)
-click 330 336 2    # hello.txt
-x mousemove 625 421 click --repeat 2 --delay 80 1
+click 1057 249 2   # Refresh (the worktree changed after the inspected capture)
+click 330 262 2    # hello.txt
+x mousemove 625 342 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"
 mark=$(wc -l <"$T/trace.log")
@@ -336,7 +345,7 @@ sleep 1
 no_drafts || fail "a refused save was written"
 shot "$OUT10" e-05-loop-save-failed
 rm "$FAULTS/draft.save"
-click 1169 509 1   # Retry
+click 1169 500 1   # Retry
 wait_for 15 "the retried save" has_drafts
 DRAFT=$(latest_draft)
 wait_for 10 "Saved r1" draft_is "$DRAFT" 1 "Greet warmly.
@@ -351,10 +360,10 @@ sleep 3
 
 step "freeze, then approve with an override reason (no check was run)"
 click 1175 78 1    # Overview tab
-click_inspector "Freeze for review" freeze-for-review
+click_primary "Freeze for review"   # the next action
 wait_for 60 "candidate commit on the Objective branch" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3
-click_primary "Approve Candidate 1"
+click_inspector "Approve Candidate 1" approve-candidate-1   # neutral: an override reason is required
 typ "Reviewed the one-line change by hand; no check configured."
 shot "$OUT10" d-04-approve-override
 click 382 299 3    # Approve candidate
@@ -379,6 +388,7 @@ sleep 2
 
 step "dialog: delete Git history (explicit acknowledgement)"
 git -C "$REPO" for-each-ref refs/lade/retain/ | grep -q . || fail "retention refs missing before deletion"
+click_inspector "More actions" more-actions   # collapsed by default; Delete Git history is there
 click_inspector "Delete Git history" delete-git-history
 click 37 204 0.5   # I understand this history cannot be restored by LADE
 shot "$OUT10" d-07-delete-history

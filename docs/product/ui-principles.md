@@ -105,3 +105,18 @@ Disabled or unavailable actions retain an accessible explanation and recovery pa
 ## Validation boundary
 
 Historical B styling and mock data are not the new design baseline. Its documented accessible-name, reverse-F6, contrast and scaling failures are useful test inputs, not inherited accepted behavior. Inspecting the supplied conceptual image and reading the skill resolves reference availability only: the original asset/documentation task performed no application rendering, interaction-state, Orca, contrast-on-rendered-surfaces, performance or security validation. Subsequent interaction and minimal client evidence is linked from the [architecture decision](../planning/client-architecture.md), with its limitations preserved. The [readiness matrix](../planning/implementation-readiness.md#acceptance-matrix) assigns those tests and their evidence. The archived skill's generic verification instructions neither authorize production work nor widen LADE's Linux support contract.
+
+## Implemented tokens (GTK client, calm-UI pass)
+
+Appended record of what the native client implements; it does not change the approved direction above. Colour tokens and their measured pairs stay in `crates/lade-desktop/src/assets/style.css` and `scripts/check-contrast.py`.
+
+| Kind | Token | Value | Use |
+| --- | --- | --- | --- |
+| Spacing | tight / item / group / section / page | 4 / 8 / 12 / 16 / 24 px (32 for empty-state margins) | `views::widgets::space` for gaps between widgets; the same scale for CSS paddings |
+| Type | title | 20px, 600 | Objective and page titles (`.objective-heading`, `.empty-title`) |
+| Type | heading | 15px, 600 | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
+| Type | body | platform size, 400 (600 for emphasis by weight) | Plain labels |
+| Type | meta | 13px, 400, metadata ink (600 for group headings) | Secondary text, reasons, identities |
+| Type | mono | 13px monospace | Code, paths, ids, commands |
+
+Presentation rules applied with these tokens: every fact and action has one home surface ([surface inventory](../implementation/evidence/calm-ui/surface-inventory.md); `presentation::panel::home`), other surfaces get at most a one-line pointer with a jump. Status is a sign plus text (no pill box) in the Objectives list; the right panel's Overview shows the approval state, the one next review action the service enables for the lifecycle step (its reason in one line when blocked), then *More actions* (destructive actions last, separated) and *Details*, both collapsed; Activity owns Agent Session control (state, Start/Cancel/Resume, accepted inputs and delivery, model and thinking, session tools, profile resources). Disabled actions keep their visible reason where they are shown, plus tooltip and accessible description.

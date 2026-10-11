@@ -13,7 +13,9 @@ use gtk::glib;
 use gtk4 as gtk;
 use sourceview5::prelude::*;
 
-use super::widgets::{self, hbox, label, set_accessible_description, set_accessible_label, vbox};
+use super::widgets::{
+    self, hbox, label, set_accessible_description, set_accessible_label, space, vbox,
+};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{FileEncoding, Load, Side};
@@ -22,6 +24,7 @@ use crate::presentation::syntax::{self, Highlight};
 use crate::presentation::text_map::{self, TextPos, ViewLine, ViewLineKind};
 
 const CODE_SCHEME: &str = include_str!("../assets/code-scheme.xml");
+const SELECTION_HINT: &str = "Select text in the viewer to add feedback on exact bytes.";
 const CODE_SCHEME_ID: &str = "lade-code";
 
 /// The LADE code scheme. GtkSourceView reads schemes only from files, so the embedded scheme is
@@ -67,6 +70,8 @@ pub struct Viewer {
     on_add_feedback: RefCell<Option<Rc<dyn Fn()>>>,
     /// Whether the last shown text is highlighted, plain, or plain because it is too large.
     highlight: Cell<Highlight>,
+    /// A selection was made in this window: the how-to hint is no longer shown.
+    hint_seen: Cell<bool>,
 }
 
 fn number_renderer(
@@ -112,7 +117,7 @@ impl Viewer {
         let root = vbox(0);
         root.add_css_class("viewer");
 
-        let toolbar = hbox(12);
+        let toolbar = hbox(space::GROUP);
         toolbar.add_css_class("viewer-toolbar");
         let path_label = widgets::line_label(
             "",
@@ -203,7 +208,7 @@ impl Viewer {
             .overlay_scrolling(false)
             .build();
         scroll.add_css_class("code-scroll");
-        let message = vbox(12);
+        let message = vbox(space::GROUP);
         message.add_css_class("viewer-message");
         message.set_valign(gtk::Align::Start);
         let stack = gtk::Stack::new();
@@ -211,7 +216,7 @@ impl Viewer {
         stack.add_named(&message, Some("message"));
         stack.set_vexpand(true);
         root.append(&stack);
-        let footer = hbox(12);
+        let footer = hbox(space::GROUP);
         footer.add_css_class("viewer-footer");
         root.append(&footer);
 
@@ -236,6 +241,7 @@ impl Viewer {
             updating: Rc::new(Cell::new(false)),
             on_add_feedback: RefCell::new(None),
             highlight: Cell::new(Highlight::NoLanguage),
+            hint_seen: Cell::new(false),
         });
         viewer.connect();
         viewer.render();
@@ -584,19 +590,30 @@ impl Viewer {
         let state = self.controller.store.state();
         let detail = state.selected_detail();
         let has_session = detail.is_some_and(|d| d.session.is_some());
-        let (text, enabled) = match state.selected_ui().and_then(|u| u.selection.clone()) {
-            None => (
-                "Select text in the viewer to add feedback on exact bytes.".to_owned(),
-                false,
-            ),
+        let selection = state.selected_ui().and_then(|u| u.selection.clone());
+        // The how-to hint shows until the first selection in this window; afterwards the line
+        // appears only for a selection or a reason it cannot be used. Add feedback always keeps
+        // the hint as its tooltip and accessible description.
+        if matches!(selection, Some(Ok(_))) {
+            self.hint_seen.set(true);
+        }
+        let (text, enabled) = match selection {
+            None => (SELECTION_HINT.to_owned(), false),
             Some(Err(reason)) => (reason, false),
             Some(Ok(reference)) => (
                 format!("Selection: {}", format::reference_label(&reference, detail)),
                 has_session,
             ),
         };
-        self.selection_label.set_text(&text);
-        self.selection_label.set_tooltip_text(Some(&text));
+        // The line keeps its height (style.css) so the code never moves under the pointer.
+        let shown = if text == SELECTION_HINT && self.hint_seen.get() {
+            ""
+        } else {
+            text.as_str()
+        };
+        self.selection_label.set_text(shown);
+        self.selection_label
+            .set_tooltip_text((!shown.is_empty()).then_some(shown));
         self.add_feedback.set_sensitive(enabled);
         let reason = if enabled {
             "Create a feedback draft for the selected bytes".to_owned()
