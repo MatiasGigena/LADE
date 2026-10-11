@@ -5,7 +5,7 @@
 // policy. Nothing is fetched: model-catalogue network refresh is disabled.
 import "./stdio.ts";
 import { writeFileSync } from "node:fs";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "./pi-ai.ts";
 import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { FIXTURE_PROVIDER, fixtureProvider } from "./fixture.ts";
 import { installNoNetwork } from "./gateway.ts";
