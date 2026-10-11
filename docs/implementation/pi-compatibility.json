@@ -39,7 +39,7 @@
         "ANTHROPIC_AUTH_TOKEN"
       ],
       "restricted_auth": {
-        "oauth_login": "Anthropic (Claude Pro/Max): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+        "oauth_login": "Anthropic (Claude Pro/Max): interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
       }
     },
     {
@@ -119,7 +119,7 @@
         "oauth_login"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for https://api.individual.githubcopilot.com; GitHub Copilot: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      "reason": "no reviewed egress policy in this LADE build for https://api.individual.githubcopilot.com; GitHub Copilot: interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
     },
     {
       "id": "google",
@@ -176,7 +176,7 @@
         "KIMI_API_KEY"
       ],
       "restricted_auth": {
-        "oauth_login": "Kimi Code (subscription): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+        "oauth_login": "Kimi Code (subscription): interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
       }
     },
     {
@@ -257,7 +257,7 @@
         "oauth_login"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for https://chatgpt.com/backend-api; OpenAI (ChatGPT Plus/Pro): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      "reason": "no reviewed egress policy in this LADE build for https://chatgpt.com/backend-api; OpenAI (ChatGPT Plus/Pro): interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
     },
     {
       "id": "opencode",
@@ -289,7 +289,7 @@
         "OPENROUTER_API_KEY"
       ],
       "restricted_auth": {
-        "oauth_login": "OpenRouter OAuth: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+        "oauth_login": "OpenRouter OAuth: interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
       }
     },
     {
@@ -327,7 +327,7 @@
         "oauth_login"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for an account-specific endpoint; Radius: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      "reason": "no reviewed egress policy in this LADE build for an account-specific endpoint; Radius: interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
     },
     {
       "id": "together",
@@ -363,7 +363,7 @@
         "XAI_API_KEY"
       ],
       "restricted_auth": {
-        "oauth_login": "xAI (Grok/X subscription): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+        "oauth_login": "xAI (Grok/X subscription): interactive OAuth login and refresh-token storage are restricted (no refresh-token custody: open product decision #43)"
       }
     },
     {

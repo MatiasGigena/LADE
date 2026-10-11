@@ -19,6 +19,9 @@ host (the installer checks each and refuses to install with a list of what is mi
 | Node.js 22 (tested 22.23.1) on `PATH`, or pass `--node` | NodeSource or an official Node 22 tarball |
 | GTK ≥ 4.14 and GtkSourceView ≥ 5.12 runtime libraries | `libgtk-4-1`, `libgtksourceview-5-0` |
 
+Optional: `libsecret-tools` (`secret-tool`) to keep provider keys in your keyring (§5); the installer does not
+check it.
+
 From a source checkout (see [build.md](implementation/build.md) for the toolchain bootstrap):
 
 ```sh
@@ -119,10 +122,28 @@ specific commit). The intent stays editable until approval. Nothing runs yet: th
 Pick a model when starting execution. `lade-fixture / scripted` is an **offline test model** (always labelled as
 such): it writes files only when told `lade-fixture: write <path> <content>` and is useful for trying the workflow.
 
-Real providers read API keys from `laded`'s environment or from `~/.config/lade/credentials.env`, which must be a
-regular file owned by you with mode 0600 (`chmod 600 ~/.config/lade/credentials.env`); LADE refuses it otherwise.
-Format: `NAME=value` lines, `#` comments, optional `export `. The environment wins over the file; it is re-read at
-each start of execution; only the selected provider's variables reach the sandbox.
+Real providers need an API key. The recommended place is your **keyring** (GNOME Keyring, through the Secret
+Service; needs `sudo apt install libsecret-tools`):
+
+```sh
+laded credentials set openai            # asks for OPENAI_API_KEY without echoing it
+printf '%s\n' "$KEY" | laded credentials set groq   # or pipe it in
+laded credentials set anthropic --variable ANTHROPIC_OAUTH_TOKEN   # a provider's other variable
+laded credentials clear openai          # remove LADE's keyring items for a provider
+```
+
+The key travels only on standard input, never as an argument. If the keyring cannot be used (no `secret-tool`, no
+desktop session bus, a locked keyring), the command says why and exits without storing anything; use the file below
+instead. A custom provider's key is stored with `--variable LADE_PROVIDER_<NAME>`.
+
+Alternatively, put the key in `~/.config/lade/credentials.env`, which must be a regular file owned by you with mode
+0600 (`chmod 600 ~/.config/lade/credentials.env`); LADE refuses it otherwise. Format: `NAME=value` lines, `#`
+comments, optional `export `.
+
+For each variable LADE uses the first of: `laded`'s environment, the keyring, `credentials.env`. They are read at
+each start of execution, and only the selected provider's variables reach the sandbox. The keyring is read only
+when execution starts, so the model picker shows a provider whose key is only in the keyring as *needs
+credentials*; starting works. LADE never copies a key from the keyring into a file.
 
 | Provider | Variables |
 | --- | --- |
@@ -138,9 +159,12 @@ each start of execution; only the selected provider's variables reach the sandbo
 | `together` | `TOGETHER_API_KEY` |
 | `fireworks` | `FIREWORKS_API_KEY` |
 
-Subscription logins (OAuth), AWS Bedrock and Vertex are not available. The agent's tools can read the key inside
-the sandbox, and the agent can reach only the provider's API host (HTTPS port 443) through LADE's gateway; a proxy in
-`HTTPS_PROXY` of the service is honoured. No credential is stored by LADE.
+Subscription logins (OAuth) and their token refresh, AWS Bedrock and Vertex are not available; a subscription
+token that the provider accepts as a plain variable (`ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY`) works like a key and
+is never refreshed by LADE. The agent's tools can read the key inside the sandbox (the keyring protects it at rest,
+not from the agent), and the agent can reach only the provider's API host (HTTPS port 443) through LADE's gateway;
+a proxy in `HTTPS_PROXY` of the service is honoured. LADE stores a key only when you run `laded credentials set`,
+and only in your keyring.
 
 ## 6. Run, watch and steer
 
@@ -221,7 +245,7 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 | --- | --- |
 | Database, artifacts, Objective worktrees, Agent Session files, verification copies | `~/.local/state/lade/` (`$XDG_STATE_HOME/lade`) |
 | Control socket and capability (private, rotated at every start) | `$XDG_RUNTIME_DIR/lade/` |
-| Credentials (optional, yours) | `~/.config/lade/credentials.env` |
+| Credentials (optional, yours) | your keyring (items `service=lade provider=…`, see `laded credentials`) or `~/.config/lade/credentials.env` |
 | Service diagnostics | the user journal: `journalctl --user -u lade.service` (codes and ids, no prompts, source or keys) |
 | In your repositories | branches `lade/*`, retention refs `refs/lade/retain/*`, registered worktrees |
 
@@ -251,6 +275,9 @@ other project data; its history is kept until you delete it. Retention refs in y
 - **"Another window controls the service."** Only one window may control LADE at a time. Close the other window (or
   its process); the control is released as soon as it disconnects.
 - **Provider unavailable.** The selected provider's API key is missing (see §5), `credentials.env` has the wrong
-  owner/mode, or the provider is not supported. The message names the missing variables, never their values.
+  owner/mode, or the provider is not supported. The message names the missing variables, never their values, and
+  says why the keyring could not be asked when it could not ("Secret Service unavailable: …"). A **locked keyring**
+  is reported as such: unlock it (for example in *Passwords and Keys*) and start again. Under the systemd unit the
+  keyring needs the desktop session's bus (`DBUS_SESSION_BUS_ADDRESS`, normally provided by the user manager).
 - **Integration refused.** The checked-out target branch has uncommitted changes or a merge/rebase in progress, or
   the target moved since approval (refresh, verify and approve again).
