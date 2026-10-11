@@ -223,10 +223,11 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   by a changed `pi_session_id`.
 - **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4: WP-A's schema must type
   `pi_session_id` as a bounded string.
-- **Network coverage**: only undici and global `fetch` traffic is routed. Provider SDKs that use
-  `node:http(s)` directly (e.g. the AWS Bedrock SDK) or WebSocket transports bypass the dispatcher
-  and therefore have no network in the sandbox. HTTPS through the gateway is exercised only with a
-  plain-HTTP origin in tests (TLS uses undici's unmodified connector).
+- **Network coverage**: undici/global `fetch` traffic and `node:http(s)` clients that use the global
+  agents are routed through the gateway (`src/worker/gateway.ts`). SDKs that bring their own agent
+  (or `agent: false`), raw sockets and other runtimes have no network in the sandbox. TLS through the
+  real gateway is tested against a local origin with a test-generated certificate, for both `fetch`
+  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`).
 - **Tool output isolation**: pi's `bash` tool spawns children with piped stdout, but nothing in the
   worker stops a hostile process from writing to the worker's inherited fd 1 via `/proc`; the
   service must treat every frame as untrusted (it does: closed schema validation).

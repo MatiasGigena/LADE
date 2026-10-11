@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use lade_system::adapters::sandbox::{OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup};
 use lade_system::diagnostics;
 use lade_system::service::{self, ServiceConfig, StartError};
 use lade_system::storage::{self, backup};
@@ -59,12 +60,43 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
         .create(&run_dir)
         .map_err(LaunchError::Io)
         .and_then(|()| LauncherConfig::new(run_dir, socket_dir))
-        .and_then(default_launcher);
+        .and_then(|launcher| {
+            default_launcher(LauncherConfig {
+                cgroups: config.cgroups.clone(),
+                ..launcher
+            })
+        });
     match built {
         Ok(launcher) => Arc::from(launcher),
         Err(e) => {
             eprintln!("laded: worker launcher unavailable ({e}); execution is blocked");
             Arc::new(Unavailable(e.to_string()))
+        }
+    }
+}
+
+/// Per-Objective cgroup limits when systemd delegated a subtree to this service; otherwise an
+/// explicit diagnostic and the `prlimit` limits only (never a refusal to start).
+fn delegated_cgroups() -> Option<Arc<SandboxCgroups>> {
+    match cgroup::detect(OBJECTIVE_CGROUP_LIMITS) {
+        Ok(cgroups) => {
+            let swept = cgroups.sweep();
+            eprintln!(
+                "laded: cgroup v2 delegated; sandboxes run in {} with per-Objective limits{}",
+                cgroups.root().display(),
+                if swept > 0 {
+                    format!(" ({swept} stale sandbox cgroup(s) removed)")
+                } else {
+                    String::new()
+                }
+            );
+            Some(Arc::new(cgroups))
+        }
+        Err(reason) => {
+            eprintln!(
+                "laded: cgroup limits unavailable ({reason}); sandboxes use the prlimit limits only"
+            );
+            None
         }
     }
 }
@@ -146,6 +178,10 @@ fn serve(parsed: &Args) -> ExitCode {
             eprintln!("laded: persistent diagnostics unavailable: {}", e.kind());
             None
         }
+    };
+    let config = ServiceConfig {
+        cgroups: delegated_cgroups(),
+        ..config
     };
     let launcher = make_launcher(&config);
     let code = match service::start(config, launcher) {

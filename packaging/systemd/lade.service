@@ -25,6 +25,11 @@ Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
 # The sandboxed workers, their gateways and verification runs are descendants of laded: stopping the
 # service ends the whole control group, so no sandbox outlives it.
 KillMode=control-group
+# laded manages its own cgroup subtree: it moves itself into <unit>/service and runs each
+# Objective's sandboxes in <unit>/sandboxes/<objective>/<leaf> with memory.max/pids.max/cpu.max
+# (crates/lade-system/src/adapters/sandbox/limits.rs). Without these controllers it logs why and
+# falls back to the prlimit limits. Systemd still kills the whole subtree on stop.
+Delegate=memory pids cpu
 KillSignal=SIGTERM
 TimeoutStopSec=15
 Restart=on-failure
@@ -47,7 +52,9 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # Calls no LADE component, worker or verification needs; denied with EPERM rather than a kill.
 # Deliberately not denied: unshare/clone/mount/pivot_root (bwrap user namespaces), seccomp/prctl
-# (bwrap --seccomp filters) and ordinary file I/O (writes into a delegated cgroup subtree).
+# (bwrap installs the sandbox filter read from its --seccomp pipe), pipes and file I/O (the filter
+# and launch-gate pipes, writes into the delegated cgroup subtree). The sandbox filter stacks on
+# top of this one and denies more inside the sandbox.
 SystemCallFilter=~@clock @cpu-emulation @module @obsolete @raw-io @reboot @swap
 SystemCallErrorNumber=EPERM
 

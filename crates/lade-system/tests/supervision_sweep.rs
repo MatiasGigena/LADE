@@ -10,8 +10,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use adapters_support::TempDir;
-use lade_system::adapters::sandbox::{Limits, SandboxTools, VerificationLaunch, verification_spec};
-use lade_system::supervision::sweep::{PidRecord, read_pidfile, sweep_stale, write_pidfile};
+use lade_system::adapters::sandbox::{
+    Limits, SandboxCommand, SandboxTools, VerificationLaunch, verification_spec,
+};
+use lade_system::supervision::sweep::{
+    PidRecord, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
+};
 
 fn stat_fields(pid: u32) -> Option<Vec<String>> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -76,7 +80,10 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
         limits: Limits::VERIFICATION,
     })
     .unwrap();
-    let mut sandbox = spec.command(&tools).stdout(Stdio::null()).spawn().unwrap();
+    let mut cmd = spec.command(&tools).unwrap();
+    cmd.command_mut().stdout(Stdio::null());
+    let (mut sandbox, mut gate) = cmd.spawn().unwrap();
+    gate.open().unwrap();
     let outer = sandbox.id();
     assert!(wait_until(Duration::from_secs(10), || sleepers(&marker) == 1));
     let init = child_of(outer).expect("namespace init");
@@ -115,5 +122,91 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     assert_eq!(
         sweep_stale(Path::new("/nonexistent/lade-run")).unwrap(),
         Default::default()
+    );
+}
+
+/// The sandbox command as one shell command line.
+fn shell_line(cmd: &SandboxCommand) -> String {
+    let quote = |arg: &std::ffi::OsStr| {
+        format!(
+            "'{}'",
+            arg.to_str().expect("utf-8 argument").replace('\'', "'\\''")
+        )
+    };
+    let cmd = cmd.get_command();
+    std::iter::once(quote(cmd.get_program()))
+        .chain(cmd.get_args().map(quote))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Forced supervisor-loss races: a stand-in supervisor (`sh`) spawns the sandbox and is killed
+/// in the same instant, before any pidfile exists and usually before bwrap armed its
+/// parent-death signal. In half the runs the launch gate was never opened (the supervisor died
+/// before recording the sandbox): those sandboxes end by themselves without running anything.
+/// In the other half the gate was opened, so the program may keep running unsupervised: the
+/// startup sweep finds those by their marker. Afterwards nothing survives.
+#[test]
+fn forced_supervisor_loss_races_leave_no_survivors() {
+    const RUNS: usize = 40;
+    let Ok(tools) = SandboxTools::locate() else {
+        eprintln!("skipping race test: bubblewrap/prlimit not installed");
+        return;
+    };
+    let tmp = TempDir::new("sweep-race");
+    let run = tmp.path().join("run");
+    fs::create_dir(&run).unwrap();
+    let base = 9000 + std::process::id() % 1000;
+    let sleep_marker = |i: usize| format!("{base}.{:04}{i:02}", std::process::id() % 10_000);
+    for i in 0..RUNS {
+        let mut spec = verification_spec(&VerificationLaunch {
+            work_dir: tmp.path().to_path_buf(),
+            argv: vec!["/bin/sleep".into(), sleep_marker(i).into()],
+            extra_ro: Vec::new(),
+            env: Vec::new(),
+            limits: Limits::VERIFICATION,
+        })
+        .unwrap();
+        spec.marker(&sandbox_marker(&run)).unwrap();
+        let cmd = spec.command(&tools).unwrap();
+        let mut supervisor = Command::new("/bin/sh");
+        supervisor
+            .arg("-c")
+            .arg(format!(
+                "{} </dev/null >/dev/null 2>&1 & kill -KILL $$",
+                shell_line(&cmd)
+            ))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut supervisor, mut gate) = cmd.spawn_via(supervisor).unwrap();
+        if i % 2 == 0 {
+            gate.open().unwrap();
+        } else {
+            drop(gate);
+        }
+        let _ = supervisor.wait();
+    }
+    // Let every orphaned sandbox get past its setup.
+    thread::sleep(Duration::from_millis(1500));
+    let alive: Vec<usize> = (0..RUNS)
+        .filter(|i| sleepers(&sleep_marker(*i)) > 0)
+        .collect();
+    eprintln!(
+        "{} of {RUNS} forced races left a running program before the sweep: {alive:?}",
+        alive.len()
+    );
+    assert!(
+        alive.iter().all(|i| i % 2 == 0),
+        "a sandbox whose gate was never opened ran its program: {alive:?}"
+    );
+    let report = sweep_stale(&run).unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || (0..RUNS)
+            .all(|i| sleepers(&sleep_marker(i)) == 0)),
+        "survivors after the sweep: {report:?}"
+    );
+    assert!(
+        kill_marked(&sandbox_marker(&run)).is_empty(),
+        "marked sandbox processes are left"
     );
 }

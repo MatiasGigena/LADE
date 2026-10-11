@@ -51,6 +51,7 @@ impl Fixture {
                 rows: 24,
                 run_dir: self.root.path().join("run"),
                 limits: TERMINAL_LIMITS,
+                cgroups: None,
             },
         )
         .expect("terminal opens")
@@ -153,6 +154,42 @@ fn shell_runs_on_a_pty_inside_the_sandbox_with_worker_quotas() {
         &terminal,
         &format!("ls {host}/run >/dev/null 2>&1 || echo HIDDEN_$((3+4))"),
         "HIDDEN_7",
+    );
+}
+
+#[test]
+fn seccomp_refuses_terminal_input_injection_and_pwd_is_the_shells_own() {
+    let Some(fx) = Fixture::new("term-seccomp") else {
+        return;
+    };
+    if !std::path::Path::new("/usr/bin/python3").is_file() {
+        eprintln!("skipping TIOCSTI test: /usr/bin/python3 not installed");
+        return;
+    }
+    let terminal = fx.open(true);
+    // TIOCSTI on the shell's own PTY: EPERM (1) from the filter; without it the kernel either
+    // injects (success) or, with dev.tty.legacy_tiocsti=0, refuses with EIO (5).
+    let out = run(
+        &terminal,
+        "python3 -I -c 'import fcntl, termios\ntry:\n    fcntl.ioctl(0, termios.TIOCSTI, b\" \"); print(\"TI_\" + \"ok\")\nexcept OSError as e:\n    print(\"TI_%d_\" % e.errno)'",
+        "TI_",
+    );
+    let deadline = Instant::now() + TIMEOUT;
+    let mut seen = out;
+    while !seen.contains("TI_1_") && !seen.contains("TI_ok") && !seen.contains("TI_5_") {
+        assert!(Instant::now() < deadline, "{seen:?}");
+        seen.push_str(&String::from_utf8_lossy(&terminal.drain(64 << 10).bytes));
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        seen.contains("TI_1_"),
+        "TIOCSTI was not refused with EPERM: {seen:?}"
+    );
+    // The shell sets its own PWD; bwrap's export was removed before it started.
+    run(
+        &terminal,
+        "echo P_$((6*7))_$(pwd | sed 's,.*/,,')",
+        "P_42_worktree",
     );
 }
 

@@ -300,6 +300,8 @@ else
     problem "bubblewrap (bwrap) not found: install the 'bubblewrap' package"
 fi
 find_tool prlimit >/dev/null || problem "prlimit not found: install 'util-linux'"
+# The sandbox launch gate runs /usr/bin/bash or /bin/bash inside every sandbox.
+[ -x /usr/bin/bash ] || [ -x /bin/bash ] || problem "bash not found in /usr/bin or /bin: install 'bash' (the sandbox launch gate needs it)"
 if git=$(find_tool git); then
     gv=$("$git" --version | sed -n 's/^git version \([0-9][0-9.]*\).*/\1/p')
     version_ge "${gv:-0}" 2.38 || problem "git ${gv:-unknown} is too old: 2.38 or newer is required"

@@ -81,13 +81,16 @@ fn serve_keeps_private_redacted_logs_and_export_is_private() {
     let log = logs.join("laded.log");
     assert_eq!(mode(&log), 0o600);
     let text = fs::read_to_string(&log).expect("log");
-    let record: serde_json::Value =
-        serde_json::from_str(text.lines().next().expect("a record")).expect("json record");
-    assert_eq!(record["source"], "laded");
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("json record"))
+        .collect();
     assert!(
-        record["line"]
-            .as_str()
-            .is_some_and(|l| l.starts_with("laded: serving epoch="))
+        records.iter().any(|r| r["source"] == "laded"
+            && r["line"]
+                .as_str()
+                .is_some_and(|l| l.starts_with("laded: serving epoch="))),
+        "{text}"
     );
 
     // A second instance refuses; its refusal is logged with the home directory redacted.

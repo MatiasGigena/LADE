@@ -1,5 +1,11 @@
-import { connect } from "node:net";
+import http from "node:http";
+import type { ClientRequestArgs } from "node:http";
+import https from "node:https";
+import { connect, isIP } from "node:net";
 import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
+import { connect as connectTls } from "node:tls";
+import type { ConnectionOptions } from "node:tls";
 import { Agent, buildConnector, install, setGlobalDispatcher } from "undici";
 
 const MAX_CONNECT_RESPONSE = 16 * 1024;
@@ -61,9 +67,89 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
   });
 }
 
+type Connected = (error: Error | null, stream?: Duplex) => void;
+
+/** `host:port` for CONNECT, bracketing IPv6 literals. */
+function authorityOf(host: string, port: number | string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+function hostOf(options: ClientRequestArgs): string {
+  return options.hostname ?? options.host ?? "localhost";
+}
+
 /**
- * Route every undici connection (and therefore global fetch) through the LADE gateway. TLS is
- * negotiated end-to-end with the origin over the tunnel; the gateway only sees the authority.
+ * `node:http` global agent: each connection is a gateway tunnel (the gateway allows only its
+ * policy's destinations, so plain HTTP works only where a rule names the port).
+ */
+class GatewayHttpAgent extends http.Agent {
+  readonly socketPath: string;
+
+  constructor(socketPath: string) {
+    super({ keepAlive: true });
+    this.socketPath = socketPath;
+  }
+
+  override createConnection(options: ClientRequestArgs, callback: Connected): undefined {
+    tunnel(this.socketPath, authorityOf(hostOf(options), options.port ?? 80)).then(
+      socket => callback(null, socket),
+      (error: Error) => callback(error),
+    );
+  }
+}
+
+/**
+ * `node:https` global agent: TLS (with the request's own TLS options and SNI) runs end-to-end with
+ * the origin over a gateway tunnel, exactly like the undici connector.
+ */
+class GatewayHttpsAgent extends https.Agent {
+  readonly socketPath: string;
+
+  constructor(socketPath: string) {
+    super({ keepAlive: true });
+    this.socketPath = socketPath;
+  }
+
+  override createConnection(options: https.RequestOptions, callback: Connected): undefined {
+    const host = hostOf(options);
+    const servername = options.servername ?? (isIP(host) === 0 ? host : undefined);
+
+    tunnel(this.socketPath, authorityOf(host, options.port ?? 443)).then(socket => {
+      // The request's TLS options (ca, client certificates, verification), not its address; a
+      // custom checkServerIdentity is replaced by Node's default (stricter) check.
+      const { host: _host, hostname: _hostname, port: _port, path: _path, checkServerIdentity: _check, ...request } = options;
+      // `host` names the identity the certificate is checked against (IP literals have no SNI).
+      const tlsOptions: ConnectionOptions = { ...request, socket, host };
+
+      if (servername !== undefined) tlsOptions.servername = servername;
+      const secure = connectTls(tlsOptions);
+
+      const failed = (error: Error): void => callback(error);
+
+      secure.once("error", failed);
+      secure.once("secureConnect", () => { secure.removeListener("error", failed); callback(null, secure); });
+    }, (error: Error) => callback(error));
+  }
+}
+
+/** Global agents that refuse every connection: the sandbox has no other network. */
+class NoNetworkHttpAgent extends http.Agent {
+  override createConnection(_options: ClientRequestArgs, callback: Connected): undefined {
+    queueMicrotask(() => callback(new GatewayError("network_unavailable", "network disabled: no LADE gateway socket")));
+  }
+}
+
+class NoNetworkHttpsAgent extends https.Agent {
+  override createConnection(_options: https.RequestOptions, callback: Connected): undefined {
+    queueMicrotask(() => callback(new GatewayError("network_unavailable", "network disabled: no LADE gateway socket")));
+  }
+}
+
+/**
+ * Route every undici connection (and therefore global fetch) and the `node:http`/`node:https`
+ * global agents through the LADE gateway. TLS is negotiated end-to-end with the origin over the
+ * tunnel; the gateway only sees the authority. Clients that bring their own agent (or
+ * `agent: false`) bypass the global agents and have no network at all.
  */
 export function installGateway(socketPath: string): void {
   const tls = buildConnector({ timeout: CONNECT_TIMEOUT_MS });
@@ -80,6 +166,8 @@ export function installGateway(socketPath: string): void {
   setGlobalDispatcher(new Agent({ allowH2: false, connect: connector }));
   // Node's bundled fetch and npm undici keep separate implementations; use one for both.
   install();
+  http.globalAgent = new GatewayHttpAgent(socketPath);
+  https.globalAgent = new GatewayHttpsAgent(socketPath);
 }
 
 /** Without a gateway socket the worker has no network: fail every connection with a clear reason. */
@@ -90,4 +178,6 @@ export function installNoNetwork(): void {
 
   setGlobalDispatcher(new Agent({ connect: connector }));
   install();
+  http.globalAgent = new NoNetworkHttpAgent();
+  https.globalAgent = new NoNetworkHttpsAgent();
 }

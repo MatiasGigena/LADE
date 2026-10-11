@@ -15,6 +15,7 @@ host (the installer checks each and refuses to install with a list of what is mi
 | --- | --- |
 | bubblewrap, working unprivileged user namespaces | `bubblewrap` |
 | `prlimit` | `util-linux` |
+| `bash` in `/usr/bin` or `/bin` (sandbox launch gate) | `bash` |
 | Git ≥ 2.38 | `git` |
 | Node.js 22 (tested 22.23.1) on `PATH`, or pass `--node` — not needed when the bundle carries its own Node | NodeSource or an official Node 22 tarball |
 | GTK ≥ 4.14 and GtkSourceView ≥ 5.12 runtime libraries | `libgtk-4-1`, `libgtksourceview-5-0` |
@@ -168,6 +169,11 @@ the sandbox, and the agent can reach only the provider's API host (HTTPS port 44
 **Start** runs a pi Agent Session in a bubblewrap sandbox that can write only the Objective's worktree and its
 session directory. If the sandbox cannot be created, execution is refused — LADE never runs an agent unsandboxed.
 
+Limits: the worktree plus the session directory may use 2 GiB of disk; LADE checks every few seconds and, above
+that, stops the agent with **limit reached** (free space, then **Resume**; the limit is never raised by itself).
+Under the systemd unit each Objective's agent, terminals and checks also share 4 GiB of memory and 512
+processes; started by hand, LADE logs `cgroup limits unavailable (…)` and uses per-process limits only.
+
 - **Activity** (Ctrl+2) shows the transcript: assistant text, thinking, tool calls and results, system notes.
 - The composer sends a **prompt**, a **steer** (delivered after the current tool calls) or a **follow-up**
   (delivered when the agent would stop). Every message is durably accepted before it is delivered; its state
@@ -253,6 +259,9 @@ other project data; its history is kept until you delete it. Retention refs in y
   AppArmor's `kernel.apparmor_restrict_unprivileged_userns=1`), allow bubblewrap through your distribution's
   supported mechanism; LADE does not change host security settings. Inspection and review keep working without the
   sandbox, but agents and checks do not run.
+- **"cgroup limits unavailable (…)" in the journal.** The per-Objective memory/process limits need the systemd unit
+  (`Delegate=memory pids cpu`) on a cgroup v2 system; the reason names what is missing. LADE keeps working with
+  per-process limits; `LADE_CGROUPS=off` disables the cgroup limits explicitly.
 - **"Worker package not found" / "node runtime not found" in the journal.** The unit sets `LADE_WORKER_DIR` and a
   `PATH` containing the Node 22 recorded at install time. If you moved or upgraded Node, re-run the installer
   (optionally with `--node /path/to/node`). The launchers `~/.local/bin/laded` and `~/.local/bin/lade-desktop`

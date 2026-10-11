@@ -156,8 +156,9 @@ change the session need an idle session; a command that does not finish within 1
 
 ## Not covered here
 
-- No live provider has been exercised (credentials are never used in tests); HTTPS through the gateway is tested only
-  against plain-HTTP origins.
+- No live provider has been exercised (credentials are never used in tests); HTTPS through the gateway is tested
+  against a local TLS origin with a test certificate
+  ([execution-safety.md](execution-safety.md#egress-gateway)), not against real provider hosts.
 - Nothing has run on the supported Mint 22.3 / Cinnamon / X11 host; the new dialogs and picker have no Orca or
   keyboard walk-through.
 - Exhaustive recertification of upstream reasoning/compaction internals is excluded by the spec.

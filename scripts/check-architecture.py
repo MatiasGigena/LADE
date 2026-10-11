@@ -49,7 +49,8 @@ for path in (root/'crates/lade-core/src').rglob('*.rs'):
 worker_src = root/'packages/pi-worker/src'
 # Reviewed for the WP-D worker entry (src/worker.ts, src/worker/**) only; see docs/implementation/worker.md.
 worker_packages = {'@earendil-works/pi-coding-agent', '@earendil-works/pi-ai', 'undici'}
-worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:net', 'node:path', 'node:stream'}
+# node:http/node:https/node:tls: gateway.ts installs the global agents that tunnel through the gateway.
+worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:tls'}
 for path in worker_src.rglob('*.ts'):
     text = path.read_text()
     if re.search(r'\bany\b|import\s*\(', text):
