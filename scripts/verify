@@ -10,6 +10,8 @@ python3 scripts/generate-fixtures.py --check
 ./scripts/cargo test --workspace --locked
 ./scripts/cargo clippy --workspace --all-targets --locked -- -D warnings
 python3 scripts/check-architecture.py
+# Every shipped Rust crate and production npm package has license information (offline metadata).
+python3 scripts/license-inventory.py --check
 # Desktop colour tokens: WCAG contrast of the specified pairs (pure computation, no display).
 python3 scripts/check-contrast.py >/dev/null
 npm --prefix packages/pi-worker run lint
@@ -19,7 +21,7 @@ npm --prefix packages/pi-worker test
 python3 scripts/compare-fixtures.py
 # Packaging scripts: POSIX syntax, then install/rollback/uninstall of a synthetic bundle in a
 # disposable HOME (the real bundle: scripts/bundle && scripts/test-install --bundle dist/lade-0.2.0).
-for script in scripts/bundle scripts/install scripts/uninstall scripts/test-install scripts/verify; do
+for script in scripts/bundle scripts/sign-bundle scripts/install scripts/uninstall scripts/test-install scripts/verify; do
     sh -n "$script"
 done
 ./scripts/test-install

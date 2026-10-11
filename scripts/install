@@ -1,8 +1,9 @@
 #!/bin/sh
 # Per-user LADE installation (no sudo, no network).
 #
-#   install [--prefix DIR] [--bundle DIR] [--node PATH] [--enable] [--no-sandbox-probe]
-#   install --rollback [--prefix DIR] [--enable]
+#   install [--prefix DIR] [--bundle DIR] [--node PATH] [--allowed-signers FILE] [--allow-unsigned]
+#           [--enable] [--no-sandbox-probe]
+#   install --rollback [--prefix DIR] [--allowed-signers FILE] [--yes] [--enable]
 #
 # Installs a bundle built by scripts/bundle into PREFIX (default ~/.local):
 #   PREFIX/lib/lade/<id>/            verified copy of the bundle (MANIFEST.sha256 checked)
@@ -15,11 +16,21 @@
 # Services are started only with --enable. User data (~/.local/state/lade) is never touched.
 #
 # --bundle      bundle directory (default: the bundle containing this script, else dist/lade-*)
-# --node        Node 22 executable to record in the unit (default: node on PATH)
+# --node        Node 22 executable to record in the unit (default: the bundle's lib/lade/node when
+#               present, else node on PATH)
+# --allowed-signers FILE  ssh-keygen allowed-signers trust root (default:
+#               ${XDG_CONFIG_HOME:-~/.config}/lade/allowed_signers when it exists). With a trust root
+#               a bundle must carry a valid MANIFEST.sha256.sig (namespace lade-release) by a listed
+#               key; a bad, foreign or missing signature is refused before anything is written
+# --allow-unsigned  accept an unsigned bundle although a trust root is configured (warns)
 # --enable      systemctl --user daemon-reload, enable --now (or restart) lade.service
 # --no-sandbox-probe  skip the functional bubblewrap probe (execution then fails closed at run
 #                     time if the sandbox does not work; inspection still works)
-# --rollback    switch current/previous and keep both directories
+# --rollback    switch current/previous and keep both directories. When the newer version already
+#               migrated the database past the schema the previous version understands, its
+#               pre-migration backup is restored first (after a typed confirmation, or --yes); the
+#               newer database is kept under the state directory's backups/
+# --yes         confirm the database restore of --rollback without a terminal
 set -eu
 
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
@@ -32,15 +43,21 @@ node=
 enable=0
 probe=1
 rollback=0
+allowed_signers=
+allow_unsigned=0
+yes=0
 while [ $# -gt 0 ]; do
     case $1 in
         --prefix) [ $# -ge 2 ] || die "--prefix needs a directory"; prefix=$2; shift ;;
         --bundle) [ $# -ge 2 ] || die "--bundle needs a directory"; bundle=$2; shift ;;
         --node) [ $# -ge 2 ] || die "--node needs a path"; node=$2; shift ;;
+        --allowed-signers) [ $# -ge 2 ] || die "--allowed-signers needs a file"; allowed_signers=$2; shift ;;
+        --allow-unsigned) allow_unsigned=1 ;;
         --enable) enable=1 ;;
         --no-sandbox-probe) probe=0 ;;
         --rollback) rollback=1 ;;
-        -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
+        --yes) yes=1 ;;
+        -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
     shift
@@ -56,6 +73,12 @@ case $config_home in /*) ;; *) config_home="$HOME/.config" ;; esac
 unit_dir="$config_home/systemd/user"
 unit="$unit_dir/lade.service"
 libdir="$prefix/lib/lade"
+state_home=${XDG_STATE_HOME:-}
+case $state_home in /*) ;; *) state_home="$HOME/.local/state" ;; esac
+state="$state_home/lade"
+if [ -z "$allowed_signers" ] && [ -f "$config_home/lade/allowed_signers" ]; then
+    allowed_signers="$config_home/lade/allowed_signers"
+fi
 umask 022
 
 # --- helpers ---------------------------------------------------------------------------------
@@ -67,13 +90,114 @@ verify_manifest() {
     [ -f "$1/MANIFEST.sha256" ] && [ -f "$1/VERSION" ] || { printf 'no MANIFEST.sha256/VERSION in %s\n' "$1" >&2; return 1; }
     (cd "$1" && sha256sum --check --strict --quiet MANIFEST.sha256) >&2 || return 1
     listed=$(sed 's/^[0-9a-f]\{64\}  //' "$1/MANIFEST.sha256" | LC_ALL=C sort)
-    present=$(cd "$1" && find . ! -type d ! -path ./MANIFEST.sha256 | LC_ALL=C sort)
+    present=$(cd "$1" && find . ! -type d ! -path ./MANIFEST.sha256 ! -path ./MANIFEST.sha256.sig | LC_ALL=C sort)
     [ "$listed" = "$present" ] && return 0
     printf 'files present but not in the manifest of %s:\n' "$1" >&2
-    printf '%s\n' "$present" | while IFS= read -r f; do
-        printf '%s\n' "$listed" | grep -Fxq -- "$f" || printf '  %s\n' "$f" >&2
-    done
+    lists=$(mktemp -d)
+    printf '%s\n' "$listed" >"$lists/listed"
+    printf '%s\n' "$present" >"$lists/present"
+    LC_ALL=C comm -13 "$lists/listed" "$lists/present" | sed 's/^/  /' >&2
+    rm -rf "$lists"
     return 1
+}
+
+# Check DIR's detached signature over MANIFEST.sha256 against the allowed-signers trust root.
+# $2 = install: an unsigned bundle with a trust root is refused (unless --allow-unsigned);
+# $2 = rollback: an unsigned, already installed version is accepted with a note.
+verify_signature() {
+    sig="$1/MANIFEST.sha256.sig"
+    if [ -z "$allowed_signers" ]; then
+        if [ -f "$sig" ]; then
+            note "WARNING: $1 is signed but no trust root is configured: the signature was NOT verified (pass --allowed-signers FILE or create $config_home/lade/allowed_signers)"
+        elif [ "$2" = install ]; then
+            note "WARNING: this bundle is NOT signed; only its checksums were verified. Install only bundles you built or obtained from a trusted source"
+        fi
+        return 0
+    fi
+    [ -f "$allowed_signers" ] && [ ! -L "$allowed_signers" ] || { printf 'trust root %s is not a regular file\n' "$allowed_signers" >&2; return 1; }
+    owner_mode=$(stat -c '%u %a' "$allowed_signers")
+    [ "${owner_mode%% *}" = "$(id -u)" ] || { printf 'trust root %s is not owned by you\n' "$allowed_signers" >&2; return 1; }
+    perm=${owner_mode#* }
+    case $perm in
+        *[2367]?|*[2367]) printf 'trust root %s is writable by group or others\n' "$allowed_signers" >&2; return 1 ;;
+    esac
+    if [ ! -f "$sig" ]; then
+        if [ "$2" = rollback ]; then
+            note "$1 is not signed (it was accepted unsigned when installed)"
+            return 0
+        fi
+        if [ "$allow_unsigned" = 1 ]; then
+            note "WARNING: installing an UNSIGNED bundle although $allowed_signers is configured (--allow-unsigned)"
+            return 0
+        fi
+        printf 'bundle is not signed but a trust root is configured (%s); pass --allow-unsigned to accept it anyway\n' "$allowed_signers" >&2
+        return 1
+    fi
+    command -v ssh-keygen >/dev/null 2>&1 || { printf 'ssh-keygen is needed to verify the signature (install openssh-client)\n' >&2; return 1; }
+    principals=$(ssh-keygen -Y find-principals -s "$sig" -f "$allowed_signers" 2>/dev/null) || principals=
+    for principal in $principals; do
+        if ssh-keygen -Y verify -f "$allowed_signers" -I "$principal" -n lade-release -s "$sig" \
+                <"$1/MANIFEST.sha256" >/dev/null 2>&1; then
+            note "signature verified: $principal ($(version_field "$1" signer))"
+            return 0
+        fi
+    done
+    if [ -z "$principals" ]; then
+        printf 'MANIFEST.sha256.sig of %s is not by a key in %s\n' "$1" "$allowed_signers" >&2
+    else
+        printf 'BAD signature: MANIFEST.sha256 of %s does not match its signature\n' "$1" >&2
+    fi
+    return 1
+}
+
+# Ask for a typed confirmation on the terminal (never from a pipe), unless --yes.
+confirm() { # phrase, what
+    [ "$yes" = 1 ] && return 0
+    # Probe in a subshell: a failed `exec` redirection would end this shell without a message.
+    if ! (exec 3</dev/tty) 2>/dev/null; then
+        die "$2 needs confirmation: run the installer at a terminal or pass --yes; nothing changed"
+    fi
+    exec 3</dev/tty
+    printf 'Type "%s" to continue: ' "$1" >/dev/tty
+    answer=
+    IFS= read -r answer <&3 || true
+    exec 3<&-
+    [ "$answer" = "$1" ] || die "not confirmed; nothing changed"
+}
+
+# Before rolling back from $1 to $2 (bundle ids): when the database is at a newer schema than $2
+# understands, restore $2's pre-migration backup with $1's laded (which wrote the backup).
+restore_for_rollback() {
+    prev_schema=$(version_field "$libdir/$2" schema)
+    [ -n "$prev_schema" ] || return 0
+    newer="$libdir/$1/bin/laded"
+    [ -x "$newer" ] || return 0
+    info=$("$newer" store info) || die "could not read the state of the LADE database with $newer; nothing changed"
+    db_schema=$(printf '%s\n' "$info" | sed -n 's/^database_schema=//p')
+    case $db_schema in ''|absent) return 0 ;; esac
+    [ "$db_schema" -gt "$prev_schema" ] || return 0
+    found=$(printf '%s\n' "$info" | grep "^backup schema=$prev_schema " | tail -1) || found=
+    [ -n "$found" ] || die "the database in $state was migrated to schema $db_schema by $1 and has no pre-migration backup of schema $prev_schema, so $2 cannot open it; nothing changed (stay on $1, or restore a backup of $state by hand)"
+    taken=$(printf '%s\n' "$found" | sed -n 's/.* taken=\([^ ]*\) .*/\1/p')
+    note "the database in $state is at schema $db_schema (written by $1); $2 understands schema $prev_schema"
+    note "rolling back restores the pre-migration backup taken $taken"
+    note "everything recorded since then (Objectives, drafts, inputs, reviews) is NOT in that backup; the current database is kept under $state/backups and is never deleted"
+    confirm restore "restoring the pre-migration backup"
+    if systemctl_user is-active --quiet lade.service 2>/dev/null; then
+        systemctl_user stop lade.service || die "could not stop lade.service; nothing changed"
+        note "stopped lade.service for the restore"
+    fi
+    set +e
+    "$newer" store restore --schema "$prev_schema"
+    rc=$?
+    set -e
+    case $rc in
+        0) ;;
+        75) die "a LADE service still uses $state (started by hand or by the window?); stop it and retry; nothing changed" ;;
+        *) die "restoring the backup failed (status $rc); nothing changed" ;;
+    esac
+    printf '%s restore schema %s (database was %s) for rollback %s -> %s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$prev_schema" "$db_schema" "$1" "$2" >>"$libdir/install.log"
 }
 
 # Replace symlink $2 by one pointing at $1 atomically (rename over the old link).
@@ -117,12 +241,13 @@ if [ "$rollback" = 1 ]; then
     old=$(readlink "$libdir/current") || die "no current version in $libdir"
     prev=$(readlink "$libdir/previous")
     [ -d "$libdir/$prev" ] || die "previous version directory $libdir/$prev is missing"
+    verify_signature "$libdir/$prev" rollback || die "previous version $prev fails its signature; refusing to activate it"
     verify_manifest "$libdir/$prev" || die "previous version $prev fails its manifest; refusing to activate it"
+    restore_for_rollback "$old" "$prev"
     set_link "$prev" "$libdir/current"
     set_link "$old" "$libdir/previous"
     printf '%s rollback %s -> %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$old" "$prev" >>"$libdir/install.log"
     note "rolled back: current = $prev, previous = $old"
-    note "a database already migrated by the newer version is refused by the older service (exit 78) and left untouched"
     activate_service
     exit 0
 fi
@@ -141,6 +266,7 @@ if [ -z "$bundle" ]; then
 fi
 [ -d "$bundle" ] || die "bundle $bundle is not a directory"
 bundle=$(cd "$bundle" && pwd)
+verify_signature "$bundle" install || die "bundle $bundle fails signature verification; refusing to install"
 verify_manifest "$bundle" || die "bundle $bundle does not match its MANIFEST.sha256; refusing to install"
 id=$(version_field "$bundle" id)
 bundle_version=$(version_field "$bundle" bundle)
@@ -181,10 +307,20 @@ else
     problem "git not found"
 fi
 
-if [ -z "$node" ]; then
+# Node: --node, else the bundle's own runtime (part of the matched set), else node on PATH.
+bundled_node=0
+if [ -z "$node" ] && [ -f "$bundle/lib/lade/node/bin/node" ]; then
+    bundled_node=1
+    node="$bundle/lib/lade/node/bin/node"
+    nv=$("$node" --version 2>/dev/null | sed 's/^v//') || nv=
+    [ "$nv" = "$node_pin" ] || problem "the bundled Node reports ${nv:-nothing}, not the pinned $node_pin"
+    node_dir="$libdir/current/lib/lade/node/bin"
+elif [ -z "$node" ]; then
     node=$(command -v node 2>/dev/null) || node=
 fi
-if [ -n "$node" ] && [ -x "$node" ]; then
+if [ "$bundled_node" = 1 ]; then
+    :
+elif [ -n "$node" ] && [ -x "$node" ]; then
     node=$(readlink -f "$node")
     nv=$("$node" --version 2>/dev/null | sed 's/^v//')
     case $nv in
@@ -300,6 +436,7 @@ command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q
 command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -f "$prefix/share/icons/hicolor/index.theme" ] \
     && gtk-update-icon-cache -q "$prefix/share/icons/hicolor" 2>/dev/null || true
 
+[ "$bundled_node" = 0 ] || node="$node_dir/node (bundled)"
 note "installed $id (node $node, worker $current/lib/lade/pi-worker)"
 [ -z "$prev" ] || note "previous version $prev kept; scripts/install --rollback switches back"
 note "unit: $unit"

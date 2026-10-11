@@ -24,9 +24,15 @@ jobs:
       - run: ./scripts/bootstrap-rust
       - run: npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
       - run: ./scripts/verify
-      - name: Release bundle
-        run: ./scripts/bundle
-      - name: Install, rollback and uninstall the real bundle in a disposable HOME
-        run: ./scripts/test-install --bundle dist/lade-0.2.0
+      - name: Throwaway signing key (this runner only; the release key and trust bootstrap are pending)
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/keys"
+          ssh-keygen -q -t ed25519 -N '' -C ci -f "$RUNNER_TEMP/keys/ci"
+          printf 'ci@lade namespaces="lade-release" %s\n' "$(cat "$RUNNER_TEMP/keys/ci.pub")" >"$RUNNER_TEMP/keys/allowed"
+          chmod 600 "$RUNNER_TEMP/keys/allowed"
+      - name: Release bundle (bundled Node runtime, signed with the throwaway key)
+        run: ./scripts/bundle --with-node "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")" --sign "$RUNNER_TEMP/keys/ci"
+      - name: Install, verify the signature, rollback and uninstall the real bundle in a disposable HOME
+        run: ./scripts/test-install --bundle dist/lade-0.2.0 --allowed-signers "$RUNNER_TEMP/keys/allowed"
       # Ubuntu CI is build/contract/integration evidence on a disposable runner, not the pinned
       # Mint host gate, GTK visual evidence or installed-release validation (IMP-016).
