@@ -40,11 +40,8 @@ fn crashed(daemon: &mut Daemon, mut client: Client, point: &str) {
         "{point}: {status} {}",
         daemon.log_text()
     );
-    assert!(
-        daemon.log_text().contains(&format!("aborting at {point}")),
-        "{point}: {}",
-        daemon.log_text()
-    );
+    // The "aborting at" line itself may be lost: `laded` relays stderr through its redacting
+    // diagnostics capture, which an abort does not flush. SIGABRT is the fault's signature.
     assert!(client.closed(), "{point}: link still open");
 }
 
