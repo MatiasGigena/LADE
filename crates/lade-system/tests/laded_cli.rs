@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 
 use adapters_support::TempDir;
 use lade_system::storage::{Store, backup};
-use sha2::{Digest as _, Sha256};
 
 fn laded() -> Command {
     Command::new(env!("CARGO_BIN_EXE_laded"))
@@ -169,72 +168,77 @@ fn info(state: &Path) -> String {
     String::from_utf8(output.stdout).expect("utf-8")
 }
 
-/// A schema-1 store as written by this build, its journaled backup, then the database moved to
-/// a schema-2 layout as a newer build would after taking that backup.
-fn migrated_store(state: &Path) -> PathBuf {
-    private_dir(state);
-    let db = state.join(backup::DATABASE);
-    let store = Store::open(&db).expect("store");
-    store
-        .conn()
-        .execute(
-            "INSERT INTO workspaces (id, path, name, opened_at) VALUES ('11111111-1111-4111-8111-111111111111', X'62', 'w', 0)",
-            [],
-        )
-        .expect("insert");
-    drop(store);
-    let backups = state.join(backup::BACKUP_DIR);
-    private_dir(&backups);
-    let name = "lade.db.schema-1.1700000000000.bak";
-    fs::copy(&db, backups.join(name)).expect("backup copy");
-    fs::set_permissions(backups.join(name), fs::Permissions::from_mode(0o600)).expect("chmod");
-    let sha: String = Sha256::digest(fs::read(backups.join(name)).expect("read"))
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    fs::write(
-        backups.join(backup::JOURNAL),
-        format!(
-            "1700000000000\tbackup\t1\t2\t{name}\t{sha}\t0.3.0\n1700000000001\tapplied\t1\t2\n"
-        ),
+const BEFORE: &str = "11111111-1111-4111-8111-111111111111";
+const AFTER: &str = "22222222-2222-4222-8222-222222222222";
+
+fn add_workspace(db: &Path, id: &str) {
+    let conn = rusqlite::Connection::open(db).expect("open");
+    conn.execute(
+        "INSERT INTO workspaces (id, path, name, opened_at) VALUES (?1, CAST(?1 AS BLOB), 'w', 0)",
+        [id],
     )
-    .expect("journal");
-    let conn = rusqlite::Connection::open(&db).expect("open");
-    conn.execute_batch(
-        "CREATE TABLE added_in_v2 (id INTEGER PRIMARY KEY);
-         INSERT INTO schema_migrations (version, applied_at) VALUES (2, 1700000000001);
-         INSERT INTO workspaces (id, path, name, opened_at) VALUES ('22222222-2222-4222-8222-222222222222', X'61', 'w', 0);",
-    )
-    .expect("newer schema");
-    db
+    .expect("insert");
+}
+
+fn restore(state: &Path, schema: &str) -> Output {
+    run(&[
+        "store",
+        "restore",
+        "--schema",
+        schema,
+        "--state-dir",
+        state.to_str().expect("utf-8"),
+    ])
 }
 
 #[test]
-fn rollback_restore_lets_the_older_schema_start_and_keeps_the_newer_database() {
+fn rollback_restore_after_the_real_migrations_lets_a_schema_1_store_start() {
     let root = TempDir::new("laded-restore");
     let state = root.path().join("state");
     let run_dir = root.path().join("run");
-    let db = migrated_store(&state);
+    private_dir(&state);
+    let db = state.join(backup::DATABASE);
 
+    // A store as the first release (schema 1) left it.
+    drop(Store::open_as_schema(&db, 1).expect("schema-1 store"));
+    add_workspace(&db, BEFORE);
+    assert!(info(&state).contains("database_schema=1\n"));
+
+    // This build migrates it through every real migration (1 -> 3) after a journaled backup.
+    let child = serve(&state, &run_dir, root.path());
+    stop(child);
+    add_workspace(&db, AFTER);
     let text = info(&state);
-    assert!(text.contains("supported_schema=1\n"), "{text}");
-    assert!(text.contains("database_schema=2\n"), "{text}");
+    let latest = lade_system::storage::SCHEMA_VERSION;
+    const { assert!(lade_system::storage::SCHEMA_VERSION >= 3) };
     assert!(
-        text.lines()
-            .any(|l| l.starts_with("backup schema=1 to=2 taken=2023-11-14T22:13:20.000Z file=")),
+        text.contains(&format!("supported_schema={latest}\n")),
         "{text}"
     );
-
-    // This (older, schema-1) build refuses the migrated database and leaves it untouched.
-    let refused = laded()
-        .args(["serve", "--state-dir"])
-        .arg(&state)
-        .arg("--runtime-dir")
-        .arg(&run_dir)
-        .output()
-        .expect("serve");
-    assert_eq!(refused.status.code(), Some(78));
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("schema 2 is newer"));
+    assert!(
+        text.contains(&format!("database_schema={latest}\n")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with(&format!("backup schema=1 to={latest} taken="))),
+        "{text}"
+    );
+    let journal =
+        fs::read_to_string(state.join(backup::BACKUP_DIR).join(backup::JOURNAL)).expect("journal");
+    assert!(
+        journal
+            .lines()
+            .any(|l| l.ends_with(&format!("\tapplied\t1\t{latest}")))
+    );
+    for entry in fs::read_dir(state.join(backup::BACKUP_DIR)).expect("dir") {
+        assert_eq!(mode(&entry.expect("entry").path()), 0o600);
+    }
+    // A schema-1 build refuses the migrated database and leaves it untouched.
+    assert!(matches!(
+        Store::open_as_schema(&db, 1),
+        Err(lade_system::storage::StoreError::NewerSchema(v)) if v == latest
+    ));
 
     // A running service blocks the restore.
     let blocker = fs::OpenOptions::new()
@@ -246,69 +250,51 @@ fn rollback_restore_lets_the_older_schema_start_and_keeps_the_newer_database() {
         rustix::fs::FlockOperation::NonBlockingLockExclusive,
     )
     .expect("flock");
-    let busy = run(&[
-        "store",
-        "restore",
-        "--schema",
-        "1",
-        "--state-dir",
-        state.to_str().expect("utf-8"),
-    ]);
+    let busy = restore(&state, "1");
     assert_eq!(busy.status.code(), Some(75), "{busy:?}");
     drop(blocker);
 
-    let restored = run(&[
-        "store",
-        "restore",
-        "--schema",
-        "1",
-        "--state-dir",
-        state.to_str().expect("utf-8"),
-    ]);
+    let restored = restore(&state, "1");
     assert!(restored.status.success(), "{restored:?}");
     let stdout = String::from_utf8_lossy(&restored.stdout);
     assert!(stdout.contains("restored schema 1"), "{stdout}");
     assert_eq!(mode(&db), 0o600);
     assert!(info(&state).contains("database_schema=1\n"));
+    let prefix = format!("lade.db.newer-schema-{latest}.");
     let kept: Vec<PathBuf> = fs::read_dir(state.join(backup::BACKUP_DIR))
         .expect("dir")
         .map(|e| e.expect("entry").path())
         .filter(|p| {
             p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with("lade.db.newer-schema-2."))
+                .is_some_and(|n| n.to_string_lossy().starts_with(&prefix))
         })
         .collect();
     assert_eq!(kept.len(), 1, "{kept:?}");
     let newer = rusqlite::Connection::open(&kept[0]).expect("kept opens");
     let after: i64 = newer
         .query_row(
-            "SELECT COUNT(*) FROM workspaces WHERE id = '22222222-2222-4222-8222-222222222222'",
-            [],
+            "SELECT COUNT(*) FROM workspaces WHERE id = ?1",
+            [AFTER],
             |row| row.get(0),
         )
         .expect("count");
     assert_eq!(after, 1, "post-migration data is kept");
 
-    // The older schema starts again with its own data.
-    let child = serve(&state, &run_dir, root.path());
-    stop(child);
-    let store = Store::open(&db).expect("reopen");
-    let ids: i64 = store
+    // The schema-1 build starts again with its own data.
+    let older = Store::open_as_schema(&db, 1).expect("schema-1 store starts after the restore");
+    assert_eq!(older.schema_version().expect("version"), 1);
+    let ids: i64 = older
         .conn()
         .query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))
         .expect("count");
     assert_eq!(ids, 1);
+    drop(older);
 
-    // Nothing left to restore.
-    let again = run(&[
-        "store",
-        "restore",
-        "--schema",
-        "1",
-        "--state-dir",
-        state.to_str().expect("utf-8"),
-    ]);
-    assert_eq!(again.status.code(), Some(1));
+    // Nothing left to restore; rolling forward migrates again (with a new backup).
+    assert_eq!(restore(&state, "1").status.code(), Some(1));
+    let child = serve(&state, &run_dir, root.path());
+    stop(child);
+    assert!(info(&state).contains(&format!("database_schema={latest}\n")));
 }
 
 #[test]

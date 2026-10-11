@@ -138,8 +138,11 @@ export class Worker {
 
   async start(box: Sandbox, resume = false): Promise<JsonObject> {
     this.send(startBody(box, resume));
+    const ready = await this.waitFor(frame => frame.kind === "worker.ready");
+    // Startup ends with the first generation's session.changed and resources.loaded reports.
+    await this.waitFor(frame => frame.kind === "resources.loaded");
 
-    return this.waitFor(frame => frame.kind === "worker.ready");
+    return ready;
   }
 
   async shutdown(): Promise<number | null> {

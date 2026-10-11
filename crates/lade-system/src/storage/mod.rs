@@ -8,6 +8,7 @@
 //! journaled ([`backup`]); a migration never runs without it.
 
 pub mod backup;
+mod compat;
 mod rows;
 
 use std::fs::OpenOptions;
@@ -17,10 +18,16 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
+pub use compat::*;
 pub use rows::*;
 
 /// Ordered schema migrations. Never edit an applied entry; append a new one.
-const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2), (3, SCHEMA_V3)];
+
+/// v3: the Objective's Git history (retention refs, branch) was deleted on explicit request.
+const SCHEMA_V3: &str = r"
+ALTER TABLE objectives ADD COLUMN history_deleted INTEGER NOT NULL DEFAULT 0;
+";
 
 /// Schema version this build creates and understands (the last migration).
 pub const SCHEMA_VERSION: i64 = latest(MIGRATIONS);
@@ -268,6 +275,15 @@ impl Store {
         Self::open_with(path, MIGRATIONS)
     }
 
+    /// Opens like an older build that knows only the migrations up to `version`: creates or
+    /// migrates to at most `version` and refuses a newer database. Tests of rollback across real
+    /// migrations use it to stand in for a previous release.
+    #[doc(hidden)]
+    pub fn open_as_schema(path: &Path, version: i64) -> Result<Self, StoreError> {
+        let known = MIGRATIONS.iter().take_while(|(v, _)| *v <= version).count();
+        Self::open_with(path, &MIGRATIONS[..known])
+    }
+
     fn open_with(path: &Path, migrations: &[(i64, &str)]) -> Result<Self, StoreError> {
         if !path.exists() {
             OpenOptions::new()
@@ -472,6 +488,33 @@ mod tests {
             backup::restore(&state, 1),
             Err(backup::BackupError::NotNeeded { .. })
         ));
+        let _ = fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn real_migrations_back_up_from_v1_and_restore_lets_v1_start() {
+        let state = temp_state("real");
+        let db = state.join(backup::DATABASE);
+        let v1 = Store::open_as_schema(&db, 1).expect("v1 store");
+        assert_eq!(v1.schema_version().expect("version"), 1);
+        add_workspace(&v1, "before-upgrade");
+        drop(v1);
+        let current = Store::open(&db).expect("current build migrates");
+        assert_eq!(current.schema_version().expect("version"), SCHEMA_VERSION);
+        const { assert!(SCHEMA_VERSION >= 3) };
+        drop(current);
+        let list = backup::backups(&state).expect("journal");
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].from, list[0].to), (1, SCHEMA_VERSION));
+        assert!(matches!(
+            Store::open_as_schema(&db, 1),
+            Err(StoreError::NewerSchema(v)) if v == SCHEMA_VERSION
+        ));
+        backup::restore(&state, 1).expect("restore");
+        let v1 = Store::open_as_schema(&db, 1).expect("v1 starts after restore");
+        assert_eq!(v1.schema_version().expect("version"), 1);
+        assert_eq!(workspaces(&v1), 1);
+        drop(v1);
         let _ = fs::remove_dir_all(state);
     }
 

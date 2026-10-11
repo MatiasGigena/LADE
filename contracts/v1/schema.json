@@ -20,6 +20,103 @@
     },
     "DeliveryMode": {"enum": ["prompt", "steer", "follow_up"]},
     "ActivityRole": {"enum": ["user", "assistant", "thinking", "tool", "system"]},
+    "ThinkingLevel": {"enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"]},
+    "EntryId": {"type": "string", "minLength": 1, "maxLength": 64},
+    "TreeEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry_id", "kind", "label"],
+      "properties": {
+        "entry_id": {"$ref": "#/$defs/EntryId"},
+        "kind": {
+          "enum": [
+            "user",
+            "assistant",
+            "tool_result",
+            "custom_message",
+            "compaction",
+            "branch_summary",
+            "model_change",
+            "thinking_change",
+            "label",
+            "session_info",
+            "custom",
+            "other"
+          ]
+        },
+        "label": {"type": "string", "maxLength": 200},
+        "parent_id": {"$ref": "#/$defs/EntryId"},
+        "bookmark": {"type": "string", "maxLength": 200}
+      }
+    },
+    "UiPrompt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "title", "message"],
+          "properties": {
+            "kind": {"const": "confirm"},
+            "title": {"type": "string", "maxLength": 512},
+            "message": {"type": "string", "maxLength": 4096}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "title", "options"],
+          "properties": {
+            "kind": {"const": "select"},
+            "title": {"type": "string", "maxLength": 512},
+            "options": {"type": "array", "items": {"type": "string", "maxLength": 512}, "maxItems": 64, "minItems": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "title", "placeholder"],
+          "properties": {
+            "kind": {"const": "input"},
+            "title": {"type": "string", "maxLength": 512},
+            "placeholder": {"type": "string", "maxLength": 512}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "title", "prefill"],
+          "properties": {
+            "kind": {"const": "editor"},
+            "title": {"type": "string", "maxLength": 512},
+            "prefill": {"type": "string", "maxLength": 65536}
+          }
+        }
+      ]
+    },
+    "UiAnswer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "confirmed"],
+          "properties": {"kind": {"const": "confirm"}, "confirmed": {"type": "boolean"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "value"}, "value": {"type": "string", "maxLength": 65536}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"const": "cancel"}}
+        }
+      ]
+    },
+    "UiCloseReason": {"enum": ["timeout", "aborted", "replaced", "answered"]},
+    "SessionChangeReason": {"enum": ["start", "navigate", "fork", "import", "reload", "compact", "configure"]},
     "Digest": {"type": "string", "format": "sha256"},
     "Timestamp": {"type": "string", "format": "timestamp"},
     "Capability": {"type": "string", "format": "capability"},
@@ -236,7 +333,8 @@
         "session_id": {"$ref": "#/$defs/Id"},
         "association_revision": {"$ref": "#/$defs/Counter"},
         "execution_generation": {"$ref": "#/$defs/Counter"},
-        "model": {"$ref": "#/$defs/Model"}
+        "model": {"$ref": "#/$defs/Model"},
+        "thinking": {"$ref": "#/$defs/ThinkingLevel"}
       }
     },
     "ChangeCounts": {
@@ -265,7 +363,8 @@
         "review.integrate",
         "objective.complete",
         "objective.discard",
-        "objective.cleanup"
+        "objective.cleanup",
+        "objective.delete_history"
       ]
     },
     "AvailableAction": {
@@ -381,7 +480,8 @@
         "unsent_drafts": {"$ref": "#/$defs/Counter"},
         "available_actions": {"type": "array", "items": {"$ref": "#/$defs/AvailableAction"}, "maxItems": 32},
         "session": {"$ref": "#/$defs/SessionInfo"},
-        "approval": {"$ref": "#/$defs/ApprovalSummary"}
+        "approval": {"$ref": "#/$defs/ApprovalSummary"},
+        "history_deleted": {"type": "boolean"}
       }
     },
     "ActivityItem": {
@@ -410,7 +510,18 @@
         "added": {"$ref": "#/$defs/Counter"},
         "removed": {"$ref": "#/$defs/Counter"},
         "binary": {"type": "boolean"},
-        "old_path": {"$ref": "#/$defs/Path"}
+        "old_path": {"$ref": "#/$defs/Path"},
+        "filtered": {"type": "boolean"}
+      }
+    },
+    "ContentNotice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {"enum": ["nested_repository", "filtered_content"]},
+        "message": {"$ref": "#/$defs/ShortText"},
+        "path": {"$ref": "#/$defs/Path"}
       }
     },
     "ReferenceVersion": {
@@ -516,7 +627,9 @@
         "objective_id": {"$ref": "#/$defs/Id"},
         "path": {"$ref": "#/$defs/Path"},
         "line": {"$ref": "#/$defs/Counter"},
-        "byte_start": {"$ref": "#/$defs/Counter"}
+        "byte_start": {"$ref": "#/$defs/Counter"},
+        "column": {"$ref": "#/$defs/Counter"},
+        "byte_end": {"$ref": "#/$defs/Counter"}
       }
     },
     "ObjectiveSelector": {
@@ -611,7 +724,11 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["objective_id", "model"],
-      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "model": {"$ref": "#/$defs/Model"}}
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "model": {"$ref": "#/$defs/Model"},
+        "thinking": {"$ref": "#/$defs/ThinkingLevel"}
+      }
     },
     "MessageSendCommand": {
       "type": "object",
@@ -693,6 +810,12 @@
       "required": ["objective_id", "confirm_data_loss"],
       "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "confirm_data_loss": {"type": "boolean"}}
     },
+    "ObjectiveHistoryDeleteCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "confirm_history_loss"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "confirm_history_loss": {"type": "boolean"}}
+    },
     "SettingsUpdateCommand": {
       "type": "object",
       "additionalProperties": false,
@@ -735,7 +858,8 @@
         "total_added": {"$ref": "#/$defs/Counter"},
         "total_removed": {"$ref": "#/$defs/Counter"},
         "capture_id": {"$ref": "#/$defs/Id"},
-        "candidate_id": {"$ref": "#/$defs/Id"}
+        "candidate_id": {"$ref": "#/$defs/Id"},
+        "notices": {"type": "array", "items": {"$ref": "#/$defs/ContentNotice"}, "maxItems": 64}
       }
     },
     "FileContent": {
@@ -750,7 +874,8 @@
         "encoding": {"enum": ["utf8", "binary"]},
         "eof": {"type": "boolean"},
         "version_label": {"$ref": "#/$defs/Label"},
-        "text": {"type": "string"}
+        "text": {"type": "string"},
+        "chunked": {"type": "boolean"}
       }
     },
     "FileDiff": {
@@ -909,6 +1034,205 @@
       "additionalProperties": false,
       "required": ["reason"],
       "properties": {"reason": {"enum": ["exit", "logout"]}}
+    },
+    "ProviderAuth": {"enum": ["none", "api_key", "subscription_token", "oauth_login", "cloud_credentials", "custom"]},
+    "ProviderStatus": {"enum": ["available", "missing_credentials", "restricted"]},
+    "ProviderInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name", "auth", "status", "models"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "name": {"$ref": "#/$defs/Label"},
+        "auth": {"type": "array", "items": {"$ref": "#/$defs/ProviderAuth"}, "maxItems": 8},
+        "status": {"$ref": "#/$defs/ProviderStatus"},
+        "models": {"$ref": "#/$defs/Counter"},
+        "reason": {"$ref": "#/$defs/ShortText"},
+        "variables": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}, "maxItems": 8}
+      }
+    },
+    "ModelInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "id", "name", "reasoning", "thinking_levels"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "name": {"$ref": "#/$defs/Label"},
+        "reasoning": {"type": "boolean"},
+        "thinking_levels": {"type": "array", "items": {"$ref": "#/$defs/ThinkingLevel"}, "maxItems": 8}
+      }
+    },
+    "ModelsListQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [],
+      "properties": {"provider": {"type": "string", "minLength": 1, "maxLength": 128}}
+    },
+    "ModelCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdk_version", "providers", "models", "truncated"],
+      "properties": {
+        "sdk_version": {"type": "string", "minLength": 1, "maxLength": 64},
+        "providers": {"type": "array", "items": {"$ref": "#/$defs/ProviderInfo"}, "maxItems": 128},
+        "models": {"type": "array", "items": {"$ref": "#/$defs/ModelInfo"}, "maxItems": 512},
+        "truncated": {"type": "boolean"},
+        "error": {"$ref": "#/$defs/ShortText"}
+      }
+    },
+    "SessionTree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "entries", "truncated"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/TreeEntry"}, "maxItems": 1024},
+        "truncated": {"type": "boolean"},
+        "leaf_id": {"$ref": "#/$defs/EntryId"}
+      }
+    },
+    "SessionNavigateCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "entry_id"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "entry_id": {"$ref": "#/$defs/EntryId"}}
+    },
+    "SessionForkCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "entry_id", "position"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "entry_id": {"$ref": "#/$defs/EntryId"},
+        "position": {"enum": ["before", "at"]}
+      }
+    },
+    "SessionImportCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "path"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "path": {"$ref": "#/$defs/Path"}}
+    },
+    "SessionCompactCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "instructions": {"type": "string", "maxLength": 4096}}
+    },
+    "SessionConfigureCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "model", "thinking"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "model": {"$ref": "#/$defs/Model"},
+        "thinking": {"$ref": "#/$defs/ThinkingLevel"}
+      }
+    },
+    "SessionState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "generation", "reason", "model", "thinking"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "generation": {"$ref": "#/$defs/Counter"},
+        "reason": {"$ref": "#/$defs/SessionChangeReason"},
+        "model": {"$ref": "#/$defs/Model"},
+        "thinking": {"$ref": "#/$defs/ThinkingLevel"},
+        "session_id": {"$ref": "#/$defs/Id"},
+        "association_revision": {"$ref": "#/$defs/Counter"},
+        "pi_session_id": {"type": "string", "minLength": 1, "maxLength": 256},
+        "leaf_id": {"$ref": "#/$defs/EntryId"}
+      }
+    },
+    "SessionExport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "path"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "path": {"$ref": "#/$defs/Path"}}
+    },
+    "ResourceKind": {"enum": ["skill", "prompt", "context", "extension", "models"]},
+    "ResourceState": {"enum": ["active", "pending_approval", "rejected", "refused"]},
+    "ResourceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "state"],
+      "properties": {
+        "kind": {"$ref": "#/$defs/ResourceKind"},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "state": {"$ref": "#/$defs/ResourceState"},
+        "sha256": {"$ref": "#/$defs/Digest"},
+        "reason": {"$ref": "#/$defs/ShortText"}
+      }
+    },
+    "ResourceInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_dir", "entries", "restrictions"],
+      "properties": {
+        "profile_dir": {"$ref": "#/$defs/Path"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/ResourceEntry"}, "maxItems": 256},
+        "restrictions": {"type": "array", "items": {"$ref": "#/$defs/ShortText"}, "maxItems": 32}
+      }
+    },
+    "ResourceDecideCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "approve"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "sha256": {"$ref": "#/$defs/Digest"},
+        "approve": {"type": "boolean"}
+      }
+    },
+    "ProfileImportCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {"source": {"$ref": "#/$defs/Path"}}
+    },
+    "ProfileImportResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["copied", "skipped", "inventory"],
+      "properties": {
+        "copied": {"type": "array", "items": {"$ref": "#/$defs/Label"}, "maxItems": 256},
+        "skipped": {"type": "array", "items": {"$ref": "#/$defs/ShortText"}, "maxItems": 256},
+        "inventory": {"$ref": "#/$defs/ResourceInventory"}
+      }
+    },
+    "UiRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "ui_id", "generation", "prompt"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "ui_id": {"$ref": "#/$defs/Id"},
+        "generation": {"$ref": "#/$defs/Counter"},
+        "prompt": {"$ref": "#/$defs/UiPrompt"}
+      }
+    },
+    "UiClosed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "ui_id", "reason"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "ui_id": {"$ref": "#/$defs/Id"},
+        "reason": {"$ref": "#/$defs/UiCloseReason"}
+      }
+    },
+    "UiRespondCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "ui_id", "generation", "answer"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "ui_id": {"$ref": "#/$defs/Id"},
+        "generation": {"$ref": "#/$defs/Counter"},
+        "answer": {"$ref": "#/$defs/UiAnswer"}
+      }
     },
     "Request": {
       "oneOf": [
@@ -1316,6 +1640,171 @@
             "operation_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "service.stop"},
             "payload": {"$ref": "#/$defs/ServiceStopCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "models.list"},
+            "payload": {"$ref": "#/$defs/ModelsListQuery"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.tree"},
+            "payload": {"$ref": "#/$defs/ObjectiveSelector"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "resources.list"},
+            "payload": {"$ref": "#/$defs/Empty"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.navigate"},
+            "payload": {"$ref": "#/$defs/SessionNavigateCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.fork"},
+            "payload": {"$ref": "#/$defs/SessionForkCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.import"},
+            "payload": {"$ref": "#/$defs/SessionImportCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.export"},
+            "payload": {"$ref": "#/$defs/ObjectiveSelector"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.compact"},
+            "payload": {"$ref": "#/$defs/SessionCompactCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.reload"},
+            "payload": {"$ref": "#/$defs/ObjectiveSelector"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.configure"},
+            "payload": {"$ref": "#/$defs/SessionConfigureCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "resource.decide"},
+            "payload": {"$ref": "#/$defs/ResourceDecideCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "profile.import"},
+            "payload": {"$ref": "#/$defs/ProfileImportCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "ui.respond"},
+            "payload": {"$ref": "#/$defs/UiRespondCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "objective.delete_history"},
+            "payload": {"$ref": "#/$defs/ObjectiveHistoryDeleteCommand"}
           }
         }
       ]
@@ -2060,6 +2549,300 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "models.list"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ModelCatalog"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.tree"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionTree"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "resources.list"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ResourceInventory"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.navigate"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.fork"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.import"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.export"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionExport"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.compact"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.reload"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "session.configure"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "resource.decide"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ResourceInventory"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "profile.import"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ProfileImportResult"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "ui.respond"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "objective.delete_history"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ObjectiveDetail"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["kind", "request_id", "result"],
           "properties": {"kind": {"const": "reply"}, "request_id": {"$ref": "#/$defs/Id"}, "result": {"$ref": "#/$defs/Rejection"}}
         }
@@ -2465,6 +3248,215 @@
               ]
             }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.navigate"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.fork"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.import"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.export"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionExport"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.compact"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.reload"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "session.configure"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/SessionState"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "resource.decide"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ResourceInventory"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "profile.import"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ProfileImportResult"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "ui.respond"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "objective.delete_history"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ObjectiveDetail"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
         }
       ]
     },
@@ -2600,6 +3592,54 @@
             "sequence": {"$ref": "#/$defs/Counter"},
             "name": {"const": "terminal.closed"},
             "payload": {"$ref": "#/$defs/TerminalClosed"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "session.changed"},
+            "payload": {"$ref": "#/$defs/SessionState"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "ui.request"},
+            "payload": {"$ref": "#/$defs/UiRequest"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "ui.closed"},
+            "payload": {"$ref": "#/$defs/UiClosed"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "resources.changed"},
+            "payload": {"$ref": "#/$defs/ResourceInventory"}
           }
         }
       ]

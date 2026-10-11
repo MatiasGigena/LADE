@@ -36,8 +36,12 @@ in `cwd`):
 - `<session_dir>/sessions/` (0700): pi version-3 JSONL session file
   `<timestamp>_<session-id>.jsonl`. pi delays the first write until an assistant entry exists,
   so `session_file` in `worker.ready` may not exist yet (research §5 durability gap).
+- `<session_dir>/exports/`: JSONL written by a `session.command` `export`.
 
-The real `~/.pi`, `~/.agents` and the repository's `.pi/` are never read or written.
+Read only: `<session_dir>/profile/` (the service's snapshot of the LADE profile, IMP-011) and
+`<session_dir>/imports/` (service copies of sessions to import). The real `~/.pi`, `~/.agents` and the
+repository's `.pi/` are never read or written. The model catalogue for the service is produced by
+`node src/worker/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox.
 
 ## Protocol mapping
 
@@ -52,9 +56,11 @@ line before allocating, poison after the first error) until WP-A generalises it.
 
 | Inbound | Worker action |
 | --- | --- |
-| `worker.start` | Create (`resume:false`) or reopen (`resume:true`, most recent session in `<session_dir>/sessions`) the pi session, then `worker.ready {pi_session_id, session_file}`. |
+| `worker.start` | Create (`resume:false`) or reopen (`resume:true`: the given `session_file`, otherwise the most recent session in `<session_dir>/sessions`) the pi session with the optional `thinking` level and `resources` snapshot, then `worker.ready {pi_session_id, session_file}`, `session.changed {reason:"start", generation:"1"}` and `resources.loaded`. |
 | `input.deliver` | `input.received {input_id}` first, then deliver by mode (below). |
 | `session.abort` | `clearQueue()` (reported as a `system` item "Queue cleared" with counts only), then `abort()`; waits until the session is idle. |
+| `session.command {command_id, command}` | One session operation (`tree`, `navigate`, `fork`, `import`, `export`, `compact`, `reload`, `configure`), answered by `session.result {command_id, ok, message?, entries?, leaf_id?, truncated?}`. Not awaited by the read loop (an operation can wait for a dialog); a second command while one runs fails at once. Operations that change the session need an idle session. |
+| `ui.respond {ui_id, generation, answer}` | Answers an open extension dialog of the current generation; anything else is refused and reported. |
 | `worker.shutdown` | Abort if streaming, `dispose()`, flush stdout, exit 0. |
 
 Delivery modes:
@@ -65,8 +71,11 @@ Delivery modes:
 | `steer` | `steer(text)` — delivered after the current tool calls, before the next model call | `prompt(text)` |
 | `follow_up` | `followUp(text)` — delivered when the agent would otherwise stop | `prompt(text)` |
 
-`prompt` uses `expandPromptTemplates: false` and `source: "rpc"`; the worker awaits
-`preflightResult` (acceptance), not the end of the run, before reading the next frame. Steering and
+`prompt` uses `expandPromptTemplates: true` and `source: "rpc"`: prompt templates and skill
+commands are expanded exactly once, by pi, on this single path (the service and client never expand).
+The worker awaits `preflightResult` (acceptance), not the end of the run, before reading the next
+frame; an extension command (`/name` registered by an approved extension) is started without
+awaiting it, because it may wait for a dialog that only a later frame answers. Steering and
 follow-up modes are pi's `one-at-a-time`. A rejected input is `worker.error {code:"delivery_failed"}`;
 a failure after acceptance is `session_failed`.
 
@@ -81,7 +90,8 @@ SDK events → outbound bodies (`src/worker/activity.ts`):
 | `message_end` (user) | `activity.item` role `user` — shows when queued steering/follow-up actually entered the conversation |
 | `tool_execution_start` | `activity.item` role `tool`, `tool_name`, title `<tool> <path or command>`, text `arguments:` + JSON |
 | `tool_execution_end` | same `item_id`: `arguments:` + `result:` text (images as `[image]`), `is_error` |
-| `compaction_start`, `auto_retry_start` | `system` items without error text |
+| `compaction_start` / `compaction_end` | `system` items ("Compacting context", then "Context compacted", "Compaction aborted" or "Compaction failed" with the error flag) |
+| `auto_retry_start` / `auto_retry_end` | `system` items ("Retrying model request", then "Retry succeeded" or "Retry gave up" with the error flag) |
 
 An `activity.item` with a known `item_id` is an upsert of that item. Every item text is bounded to
 192 KiB of UTF-8 (cut at a character boundary, lone surrogates normalised) and further if JSON
@@ -98,6 +108,34 @@ output further deltas are dropped (the final item still carries the complete bou
 Inbound frames are read one at a time (async iteration of stdin), so stdin is not buffered
 unboundedly either.
 
+## Sessions, resources and extension UI (IMP-011)
+
+`src/worker/session.ts` (`SessionHost`) owns pi's `AgentSessionRuntime`
+(`createAgentSessionRuntime` with a factory over
+`createAgentSessionFromServices`). Fork and import go through the runtime (`fork`, `importFromJsonl`),
+which replaces the `AgentSession`; `setRebindSession` re-subscribes and re-binds extensions, and every
+replacement or reload increments the **generation** (starting at 1) reported in `session.changed`
+`{generation, reason, model, thinking, pi_session_id, session_file, leaf_id?}`. Navigation uses
+`navigateTree(entry, {summarize:false})`, which moves pi's leaf only and never touches files. Imports
+are accepted only from `<session_dir>/imports/`, exports written only under `<session_dir>/exports/`,
+reload snapshots only inside `session_dir`. `configure` calls `setModel` and `setThinkingLevel` (pi
+clamps the level to the model).
+
+`src/worker/resources.ts` (`LadeResourceLoader`) builds a `DefaultResourceLoader` per reload with all
+discovery disabled and only explicit paths of the service's profile snapshot: `skills/`, `prompts/`,
+the approved extensions that the worker **re-hashes** (`extensionHash`; a mismatch is reported as
+`refused` and the extension is not loaded), and `agentsFilesOverride` with the LADE profile's
+`AGENTS.md` followed by the worktree root's context file. `resources.loaded {generation, resources}`
+lists every context file, skill, template and extension with source and status (`loaded`, `refused`,
+`failed` with the diagnostic). Precedence and trust rules: [pi-compatibility.md](pi-compatibility.md).
+
+`src/worker/ui.ts` (`UiBridge`) is the `ExtensionUIContext` bound with `bindExtensions`. `select`,
+`confirm`, `input` and `editor` send `ui.request {ui_id, generation, prompt}` and wait for the
+matching `ui.respond`; the extension's timeout or abort sends `ui.closed {timeout|aborted}`, and a new
+generation closes open dialogs as `replaced`. `notify` becomes a system item. Display-only TUI
+surfaces are no-ops; `custom()` and editor control throw `UnsupportedUiError`, so nothing is answered
+automatically.
+
 ## SDK APIs used (0.85.1 root exports)
 
 - `ModelRuntime.create({authPath, modelsPath: null, modelsStorePath, allowModelNetwork: false})`,
@@ -105,8 +143,16 @@ unboundedly either.
 - `SettingsManager.inMemory({...})` (no global or project `settings.json`; `defaultProjectTrust:
   "never"`, telemetry/analytics off, one-at-a-time queues).
 - `new DefaultResourceLoader({cwd, agentDir, settingsManager, noExtensions, noSkills,
-  noPromptTemplates, noThemes, noContextFiles, systemPromptOverride: () => undefined,
+  noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, additionalSkillPaths,
+  additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
   appendSystemPromptOverride: () => [system_note]})` + `reload()`.
+- `createAgentSessionRuntime`, `createAgentSessionFromServices`,
+  `AgentSessionRuntime` (`fork`, `importFromJsonl`, `setRebindSession`, `setBeforeSessionInvalidate`,
+  `dispose`), `SessionManager.open`, `Theme` (a plain theme for the UI context).
+- `AgentSession`: `bindExtensions`, `navigateTree`, `compact`, `setModel`, `setThinkingLevel`,
+  `exportToJsonl`, `reload`, `extensionRunner.getCommand`, `sessionManager` (`getEntries`, `getLeafId`,
+  `getLabel`).
+- `ModelRuntime.getProviders` / `getModels` and pi-ai `getSupportedThinkingLevels` (catalogue).
 - `SessionManager.create(cwd, sessionsDir)` / `SessionManager.continueRecent(cwd, sessionsDir)`.
 - `createAgentSession({cwd, agentDir, modelRuntime, model, tools: ["read","bash","edit","write"],
   resourceLoader, sessionManager, settingsManager})`.
@@ -158,14 +204,20 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled
   `fetch`, refused tunnel, invalid authority, and the no-gateway failure.
+- `test/worker-compat.test.ts` — IMP-011 corpus with a disposable LADE profile: shared hash
+  constants, resource precedence and untrusted repository `.pi`, single template expansion, refused
+  changed extension, dialogs with generations, timeout close, explicit failure of `custom()`, reload
+  generations and late answers, tree/navigate (files unchanged)/fork/clone, export/import, compaction,
+  configure and retry activity, concurrent command refusal, and the pinned manifest against the SDK
+  catalogue.
 
 ## Limitations (v1)
 
-- **Resource discovery disabled**: no extensions, skills, prompt templates, themes, context files
-  (`AGENTS.md`/`CLAUDE.md`), `SYSTEM.md`/`APPEND_SYSTEM.md`, packages or `settings.json` from the
-  user profile or the repository. The only system-prompt addition is `system_note`.
-- **Extension UI unsupported**: no extensions are loaded and no UI context is bound, so dialogs
-  cannot occur; a future extension requiring UI must be rejected, never auto-answered.
+- **Resources only from the LADE profile snapshot**: themes, `SYSTEM.md`/`APPEND_SYSTEM.md`,
+  packages, `settings.json` and the repository's `.pi/` are never loaded; see
+  [pi-compatibility.md](pi-compatibility.md) for the full inventory.
+- **Terminal-only extension UI** fails explicitly (`custom()`, editor control) or is ignored
+  (status, widgets); approved extensions run with the worker's authority in the sandbox.
 - **Durability**: inherited from pi — first user message not flushed before an assistant entry; no
   fsync. `resume:true` with no prior session file starts a new session; the service detects this
   by a changed `pi_session_id`.

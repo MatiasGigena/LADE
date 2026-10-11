@@ -439,6 +439,15 @@ impl Viewer {
                     );
                     shown.set_hexpand(true);
                     self.footer.append(&shown);
+                    if content.chunked && !content.eof {
+                        self.footer.append(&label(
+                            &format!(
+                                "Large file ({}) — shown in bounded chunks",
+                                crate::presentation::format::byte_size(content.total_bytes)
+                            ),
+                            &["meta"],
+                        ));
+                    }
                     if !content.eof {
                         let more = widgets::button("Load more", &[]);
                         widgets::set_focus_key(&more, "viewer:load-more");
@@ -454,6 +463,29 @@ impl Viewer {
                             .and_downcast::<gtk::ScrolledWindow>(),
                     ) {
                         glib::idle_add_local_once(move || scroll.vadjustment().set_value(value));
+                    }
+                    // A followed content search result: select its exact bytes (queued after
+                    // the scroll restore) so the selection maps to a feedback reference.
+                    if let Some((start, end)) =
+                        self.controller.take_reveal(&key, content.loaded_bytes)
+                    {
+                        let (view, buffer, lines) =
+                            (self.view.clone(), self.buffer.clone(), self.lines.clone());
+                        let side = content.side;
+                        glib::idle_add_local_once(move || {
+                            let lines = lines.borrow();
+                            let iter = |byte| {
+                                let pos = text_map::position_at(&lines, side, byte)?;
+                                buffer.iter_at_line_offset(
+                                    i32::try_from(pos.line).ok()?,
+                                    i32::try_from(pos.char_offset).ok()?,
+                                )
+                            };
+                            if let (Some(from), Some(to)) = (iter(start), iter(end)) {
+                                buffer.select_range(&from, &to);
+                                view.scroll_to_mark(&buffer.get_insert(), 0.1, true, 0.0, 0.3);
+                            }
+                        });
                     }
                 }
             }

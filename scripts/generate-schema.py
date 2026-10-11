@@ -69,6 +69,32 @@ shared = {
     'Model': obj({'provider': string(min_length=1, max_length=128), 'id': string(min_length=1, max_length=256)}),
     'DeliveryMode': enum('prompt', 'steer', 'follow_up'),
     'ActivityRole': enum('user', 'assistant', 'thinking', 'tool', 'system'),
+    # IMP-011 pi compatibility (shared by both contracts).
+    'ThinkingLevel': enum('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'),
+    # pi session-tree entry id (pi chooses 8 hex characters, a UUID on collision).
+    'EntryId': string(min_length=1, max_length=64),
+    'TreeEntry': obj({'entry_id': ref('EntryId'),
+                      'kind': enum('user', 'assistant', 'tool_result', 'custom_message', 'compaction',
+                                   'branch_summary', 'model_change', 'thinking_change', 'label', 'session_info',
+                                   'custom', 'other'),
+                      'label': string(max_length=200)},
+                     {'parent_id': ref('EntryId'), 'bookmark': string(max_length=200)}),
+    # Semantic extension UI. Every prompt is answered explicitly by the developer or closed by the worker;
+    # nothing is answered automatically.
+    'UiPrompt': one_of(
+        obj({'kind': const('confirm'), 'title': string(max_length=512), 'message': string(max_length=4096)}),
+        obj({'kind': const('select'), 'title': string(max_length=512),
+             'options': array(string(max_length=512), 64, 1)}),
+        obj({'kind': const('input'), 'title': string(max_length=512), 'placeholder': string(max_length=512)}),
+        obj({'kind': const('editor'), 'title': string(max_length=512), 'prefill': string(max_length=65536)}),
+    ),
+    'UiAnswer': one_of(
+        obj({'kind': const('confirm'), 'confirmed': BOOL}),
+        obj({'kind': const('value'), 'value': string(max_length=65536)}),
+        obj({'kind': const('cancel')}),
+    ),
+    'UiCloseReason': enum('timeout', 'aborted', 'replaced', 'answered'),
+    'SessionChangeReason': enum('start', 'navigate', 'fork', 'import', 'reload', 'compact', 'configure'),
 }
 
 client = dict(shared)
@@ -124,12 +150,12 @@ summary_fields = {
 client.update({
     'ObjectiveSummary': obj(summary_fields),
     'SessionInfo': obj({'session_id': ID, 'association_revision': COUNTER, 'execution_generation': COUNTER,
-                        'model': ref('Model')}),
+                        'model': ref('Model')}, {'thinking': ref('ThinkingLevel')}),
     'ChangeCounts': obj({'files': COUNTER, 'added': COUNTER, 'removed': COUNTER}),
     'ActionName': enum('objective.update_intent', 'execution.start', 'execution.cancel', 'execution.resume',
                        'message.send', 'feedback.submit', 'review.freeze', 'review.return', 'review.verify',
                        'review.approve', 'review.refresh', 'review.integrate', 'objective.complete',
-                       'objective.discard', 'objective.cleanup'),
+                       'objective.discard', 'objective.cleanup', 'objective.delete_history'),
     'AvailableAction': obj({'action': ref('ActionName'), 'enabled': BOOL}, {'reason': ref('ShortText')}),
     'CandidateSummary': obj({'candidate_id': ID, 'ordinal': COUNTER, 'commit': ref('GitId'),
                              'base_target_commit': ref('GitId'),
@@ -152,14 +178,23 @@ client['ObjectiveDetail'] = obj({
     'candidates': array(ref('CandidateSummary'), 256), 'verifications': array(ref('VerificationSummary'), 256),
     'change_counts': ref('ChangeCounts'), 'unsent_drafts': COUNTER,
     'available_actions': array(ref('AvailableAction'), 32),
-}, {'session': ref('SessionInfo'), 'approval': ref('ApprovalSummary')})
+}, {'session': ref('SessionInfo'), 'approval': ref('ApprovalSummary'),
+    # The Objective's Git history (retention refs, branch) was deleted on the user's explicit request.
+    'history_deleted': BOOL})
 client.update({
     'ActivityItem': obj({'item_id': ID, 'seq': COUNTER, 'at': TS, 'role': ref('ActivityRole'),
                          'title': ref('Preview'), 'text': string(), 'is_error': BOOL, 'truncated': BOOL},
                         {'tool_name': ref('Label')}),
     'ChangedFile': obj({'path': ref('Path'),
                         'status': enum('added', 'modified', 'deleted', 'renamed', 'type_changed'),
-                        'added': COUNTER, 'removed': COUNTER, 'binary': BOOL}, {'old_path': ref('Path')}),
+                        'added': COUNTER, 'removed': COUNTER, 'binary': BOOL},
+                       # filtered: the path's `filter` attribute names a filter driver (Git LFS, clean/smudge);
+                       # LADE never runs filters, so its raw working-tree bytes are compared (unsupported content).
+                       {'old_path': ref('Path'), 'filtered': BOOL}),
+    # Why part of a Change Set is not (fully) represented: a nested repository without a commit left out of
+    # the capture, or filtered content stored raw. Repository-wide notices carry no path.
+    'ContentNotice': obj({'kind': enum('nested_repository', 'filtered_content'), 'message': ref('ShortText')},
+                         {'path': ref('Path')}),
     'ReferenceVersion': one_of(obj({'kind': const('working'), 'capture_id': ID}),
                                obj({'kind': const('candidate'), 'candidate_id': ID})),
     'Reference': obj({'artifact_digest': ref('Digest'), 'path': ref('Path'), 'version': ref('ReferenceVersion'),
@@ -177,8 +212,11 @@ client.update({
                     {'old_no': COUNTER, 'new_no': COUNTER, 'old_byte_start': COUNTER, 'new_byte_start': COUNTER}),
     'DiffHunk': obj({'old_start': COUNTER, 'old_lines': COUNTER, 'new_start': COUNTER, 'new_lines': COUNTER,
                      'lines': array(ref('DiffLine'), 1024)}),
+    # Content results: 1-based line and byte column, and the exact byte range [byte_start, byte_end) of the first
+    # match in the raw file bytes (the bytes file.read retains), when the file is small enough to locate it.
     'SearchResult': obj({'kind': enum('objective', 'file', 'content'), 'preview': ref('Preview')},
-                        {'objective_id': ID, 'path': ref('Path'), 'line': COUNTER, 'byte_start': COUNTER}),
+                        {'objective_id': ID, 'path': ref('Path'), 'line': COUNTER, 'byte_start': COUNTER,
+                         'column': COUNTER, 'byte_end': COUNTER}),
     # Payloads (request name -> payload def).
     'ObjectiveSelector': obj(O),
     'ActivityPageQuery': obj({**O, 'limit': ref('PageLimit')}, {'before': COUNTER}),
@@ -194,7 +232,7 @@ client.update({
     'ObjectiveCreateCommand': obj({'workspace_id': ID, 'title': ref('Title'), 'intent': ref('Intent'),
                                    'integration_target': ref('Branch'), 'start': ref('Start')}),
     'UpdateIntentCommand': obj({**O, 'expected_intent_revision': COUNTER, 'intent': ref('Intent')}),
-    'ExecutionStartCommand': obj({**O, 'model': ref('Model')}),
+    'ExecutionStartCommand': obj({**O, 'model': ref('Model')}, {'thinking': ref('ThinkingLevel')}),
     'MessageSendCommand': obj({**O, 'text': string(min_length=1), 'mode': ref('DeliveryMode')}),
     'DraftSaveCommand': obj({'draft_id': ID, **O, 'expected_revision': COUNTER, 'reference': ref('Reference'),
                              'body': string()}),
@@ -208,6 +246,8 @@ client.update({
                                 {'override_reason': string(min_length=1, max_length=2048)}),
     'ReviewIntegrateCommand': obj({**O, 'approval_id': ID}),
     'ObjectiveCleanupCommand': obj({**O, 'confirm_data_loss': BOOL}),
+    # Deliberate, user-confirmed deletion of a cleaned-up Objective's retention refs and branch; never automatic.
+    'ObjectiveHistoryDeleteCommand': obj({**O, 'confirm_history_loss': BOOL}),
     'SettingsUpdateCommand': obj({}, {'default_model': ref('Model'),
                                       'verification_commands': array(ref('Argv'), 32)}),
     # Reply data.
@@ -217,10 +257,13 @@ client.update({
     'ChangeList': obj({'basis_label': ref('Label'), 'target': ref('TargetRef'),
                        'files': array(ref('ChangedFile'), 1024), 'truncated': BOOL,
                        'total_added': COUNTER, 'total_removed': COUNTER},
-                      {'capture_id': ID, 'candidate_id': ID}),
+                      {'capture_id': ID, 'candidate_id': ID, 'notices': array(ref('ContentNotice'), 64)}),
     'FileContent': obj({'artifact_digest': ref('Digest'), 'total_bytes': COUNTER, 'offset': COUNTER,
                         'length': COUNTER, 'encoding': enum('utf8', 'binary'), 'eof': BOOL,
-                        'version_label': ref('Label')}, {'text': string()}),
+                        'version_label': ref('Label')},
+                       # chunked: the file exceeds the whole-file inspection bound and is served in bounded chunks
+                       # (encoding judged per chunk); the artifact still holds the whole file.
+                       {'text': string(), 'chunked': BOOL}),
     'FileDiff': obj({'binary': BOOL, 'hunks': array(ref('DiffHunk'), 512), 'truncated': BOOL},
                     {'old_digest': ref('Digest'), 'new_digest': ref('Digest')}),
     'SearchResults': obj({'scope_label': ref('Label'), 'results': array(ref('SearchResult'), 200),
@@ -254,6 +297,47 @@ client.update({
     # Explicit Exit / session logout: the service stops its workers and terminals and exits. Nothing resumes on
     # the next start (restart recovery marks interrupted work).
     'ServiceStopCommand': obj({'reason': enum('exit', 'logout')}),
+})
+# IMP-011: model catalogue, session tree/fork/import/export, resources and semantic extension UI.
+PROVIDER_ID = string(min_length=1, max_length=128)
+client.update({
+    'ProviderAuth': enum('none', 'api_key', 'subscription_token', 'oauth_login', 'cloud_credentials', 'custom'),
+    'ProviderStatus': enum('available', 'missing_credentials', 'restricted'),
+    'ProviderInfo': obj({'provider': PROVIDER_ID, 'name': ref('Label'), 'auth': array(ref('ProviderAuth'), 8),
+                         'status': ref('ProviderStatus'), 'models': COUNTER},
+                        {'reason': ref('ShortText'), 'variables': array(string(min_length=1, max_length=128), 8)}),
+    'ModelInfo': obj({'provider': PROVIDER_ID, 'id': string(min_length=1, max_length=256), 'name': ref('Label'),
+                      'reasoning': BOOL, 'thinking_levels': array(ref('ThinkingLevel'), 8)}),
+    'ModelsListQuery': obj({}, {'provider': PROVIDER_ID}),
+    'ModelCatalog': obj({'sdk_version': string(min_length=1, max_length=64),
+                         'providers': array(ref('ProviderInfo'), 128),
+                         'models': array(ref('ModelInfo'), 512), 'truncated': BOOL}, {'error': ref('ShortText')}),
+    'SessionTree': obj({**O, 'entries': array(ref('TreeEntry'), 1024), 'truncated': BOOL},
+                       {'leaf_id': ref('EntryId')}),
+    'SessionNavigateCommand': obj({**O, 'entry_id': ref('EntryId')}),
+    'SessionForkCommand': obj({**O, 'entry_id': ref('EntryId'), 'position': enum('before', 'at')}),
+    'SessionImportCommand': obj({**O, 'path': ref('Path')}),
+    'SessionCompactCommand': obj(O, {'instructions': string(max_length=4096)}),
+    'SessionConfigureCommand': obj({**O, 'model': ref('Model'), 'thinking': ref('ThinkingLevel')}),
+    'SessionState': obj({**O, 'generation': COUNTER, 'reason': ref('SessionChangeReason'), 'model': ref('Model'),
+                         'thinking': ref('ThinkingLevel')},
+                        {'session_id': ID, 'association_revision': COUNTER,
+                         'pi_session_id': string(min_length=1, max_length=256), 'leaf_id': ref('EntryId')}),
+    'SessionExport': obj({**O, 'path': ref('Path')}),
+    'ResourceKind': enum('skill', 'prompt', 'context', 'extension', 'models'),
+    'ResourceState': enum('active', 'pending_approval', 'rejected', 'refused'),
+    'ResourceEntry': obj({'kind': ref('ResourceKind'), 'name': string(min_length=1, max_length=256),
+                          'state': ref('ResourceState')}, {'sha256': ref('Digest'), 'reason': ref('ShortText')}),
+    'ResourceInventory': obj({'profile_dir': ref('Path'), 'entries': array(ref('ResourceEntry'), 256),
+                              'restrictions': array(ref('ShortText'), 32)}),
+    'ResourceDecideCommand': obj({'name': string(min_length=1, max_length=256), 'sha256': ref('Digest'),
+                                  'approve': BOOL}),
+    'ProfileImportCommand': obj({'source': ref('Path')}),
+    'ProfileImportResult': obj({'copied': array(ref('Label'), 256), 'skipped': array(ref('ShortText'), 256),
+                                'inventory': ref('ResourceInventory')}),
+    'UiRequest': obj({**O, 'ui_id': ID, 'generation': COUNTER, 'prompt': ref('UiPrompt')}),
+    'UiClosed': obj({**O, 'ui_id': ID, 'reason': ref('UiCloseReason')}),
+    'UiRespondCommand': obj({**O, 'ui_id': ID, 'generation': COUNTER, 'answer': ref('UiAnswer')}),
 })
 
 # name, mutating, payload def, reply data def. Mutating names require operation_id; queries (and the ephemeral
@@ -294,6 +378,21 @@ REQUESTS = [
     ('terminal.resize', False, 'TerminalResizeCommand', 'Empty'),
     ('terminal.close', False, 'TerminalSelector', 'Empty'),
     ('service.stop', True, 'ServiceStopCommand', 'Empty'),
+    # IMP-011.
+    ('models.list', False, 'ModelsListQuery', 'ModelCatalog'),
+    ('session.tree', False, 'ObjectiveSelector', 'SessionTree'),
+    ('resources.list', False, 'Empty', 'ResourceInventory'),
+    ('session.navigate', True, 'SessionNavigateCommand', 'SessionState'),
+    ('session.fork', True, 'SessionForkCommand', 'SessionState'),
+    ('session.import', True, 'SessionImportCommand', 'SessionState'),
+    ('session.export', True, 'ObjectiveSelector', 'SessionExport'),
+    ('session.compact', True, 'SessionCompactCommand', 'SessionState'),
+    ('session.reload', True, 'ObjectiveSelector', 'SessionState'),
+    ('session.configure', True, 'SessionConfigureCommand', 'SessionState'),
+    ('resource.decide', True, 'ResourceDecideCommand', 'ResourceInventory'),
+    ('profile.import', True, 'ProfileImportCommand', 'ProfileImportResult'),
+    ('ui.respond', True, 'UiRespondCommand', 'Empty'),
+    ('objective.delete_history', True, 'ObjectiveHistoryDeleteCommand', 'ObjectiveDetail'),
 ]
 EVENTS = [
     ('objective.changed', 'ObjectiveSummary'),
@@ -307,6 +406,11 @@ EVENTS = [
     ('service.notice', 'ServiceNotice'),
     ('terminal.output', 'TerminalOutput'),
     ('terminal.closed', 'TerminalClosed'),
+    # IMP-011.
+    ('session.changed', 'SessionState'),
+    ('ui.request', 'UiRequest'),
+    ('ui.closed', 'UiClosed'),
+    ('resources.changed', 'ResourceInventory'),
 ]
 assert set(client['ActionName']['enum']) <= {n for n, m, _, _ in REQUESTS if m}
 
@@ -346,13 +450,36 @@ worker = dict(shared)
 worker.update({
     'WorkerErrorCode': enum('startup_failed', 'session_failed', 'provider_failed', 'delivery_failed',
                             'protocol_violation', 'limit_reached', 'internal'),
+    # IMP-011: LADE-profile resources materialised in the session directory. Only listed extensions whose
+    # content still hashes to the approved sha256 are loaded.
+    'WorkerExtension': obj({'name': string(min_length=1, max_length=256), 'path': SANDBOX_PATH,
+                            'sha256': string('sha256')}),
+    'WorkerResources': obj({'profile_dir': SANDBOX_PATH, 'extensions': array(ref('WorkerExtension'), 64)}),
+    'SessionCommand': one_of(
+        obj({'op': const('tree')}),
+        obj({'op': const('navigate'), 'entry_id': ref('EntryId')}),
+        obj({'op': const('fork'), 'entry_id': ref('EntryId'), 'position': enum('before', 'at')}),
+        obj({'op': const('import'), 'path': SANDBOX_PATH}),
+        obj({'op': const('export'), 'path': SANDBOX_PATH}),
+        obj({'op': const('compact')}, {'instructions': string(max_length=4096)}),
+        obj({'op': const('reload'), 'resources': ref('WorkerResources')}),
+        obj({'op': const('configure'), 'model': ref('Model'), 'thinking': ref('ThinkingLevel')}),
+    ),
+    'LoadedResource': obj({'kind': enum('skill', 'prompt', 'context', 'extension'),
+                           'name': string(min_length=1, max_length=256),
+                           'source': enum('lade_profile', 'repository'),
+                           'status': enum('loaded', 'refused', 'failed')},
+                          {'sha256': string('sha256'), 'message': string(max_length=512)}),
     'ServiceToWorker': one_of(
         obj({'kind': const('worker.start'), 'objective_id': ID, 'session_dir': SANDBOX_PATH, 'cwd': SANDBOX_PATH,
-             'model': ref('Model'), 'resume': BOOL, 'system_note': string()}),
+             'model': ref('Model'), 'resume': BOOL, 'system_note': string()},
+            {'thinking': ref('ThinkingLevel'), 'resources': ref('WorkerResources'), 'session_file': SANDBOX_PATH}),
         obj({'kind': const('input.deliver'), 'input_id': ID, 'mode': ref('DeliveryMode'),
              'text': string(min_length=1)}),
         obj({'kind': const('session.abort')}),
         obj({'kind': const('worker.shutdown')}),
+        obj({'kind': const('session.command'), 'command_id': ID, 'command': ref('SessionCommand')}),
+        obj({'kind': const('ui.respond'), 'ui_id': ID, 'generation': COUNTER, 'answer': ref('UiAnswer')}),
     ),
     'WorkerToService': one_of(
         obj({'kind': const('worker.ready'), 'pi_session_id': string(min_length=1, max_length=256),
@@ -364,6 +491,15 @@ worker.update({
         obj({'kind': const('activity.delta'), 'item_id': ID, 'append_text': string()}),
         obj({'kind': const('turn.state'), 'state': enum('running', 'idle')}),
         obj({'kind': const('worker.error'), 'code': ref('WorkerErrorCode'), 'message': string(max_length=512)}),
+        obj({'kind': const('session.result'), 'command_id': ID, 'ok': BOOL, 'message': string(max_length=512)},
+            {'entries': array(ref('TreeEntry'), 1024), 'leaf_id': ref('EntryId'), 'truncated': BOOL}),
+        obj({'kind': const('session.changed'), 'generation': COUNTER, 'reason': ref('SessionChangeReason'),
+             'pi_session_id': string(min_length=1, max_length=256), 'session_file': SANDBOX_PATH,
+             'model': ref('Model'), 'thinking': ref('ThinkingLevel')}, {'leaf_id': ref('EntryId')}),
+        obj({'kind': const('resources.loaded'), 'generation': COUNTER,
+             'resources': array(ref('LoadedResource'), 256)}),
+        obj({'kind': const('ui.request'), 'ui_id': ID, 'generation': COUNTER, 'prompt': ref('UiPrompt')}),
+        obj({'kind': const('ui.closed'), 'ui_id': ID, 'reason': ref('UiCloseReason')}),
     ),
     'WorkerBody': one_of(ref('ServiceToWorker'), ref('WorkerToService')),
 })
@@ -427,6 +563,9 @@ def dump(value, indent=0):
 outputs = {
     'contracts/v1/schema.json': envelope('https://lade.local/contracts/v1', 'Body', client),
     'contracts/v1/worker-schema.json': envelope('https://lade.local/contracts/v1/worker', 'WorkerBody', worker),
+    # The worker sandbox binds only the worker package, so the worker validates against this copy.
+    'packages/pi-worker/src/worker/worker-schema.json': envelope('https://lade.local/contracts/v1/worker',
+                                                                 'WorkerBody', worker),
 }
 drift = []
 for path, schema in outputs.items():

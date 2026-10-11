@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 
 use super::command::Diagnostics;
-use super::{GitId, GitVersion, InProgress};
+use super::{GitId, GitVersion, InProgress, RepoPath};
 
 /// Why a checked-out Integration Target cannot be updated right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -79,6 +79,14 @@ pub enum GitError {
         worktree: PathBuf,
         reason: TargetBusyReason,
     },
+    /// The checkout step's dry run refused, before any ref moved: in practice untracked files
+    /// where the candidate adds files. `paths` names those found (bounded; may be empty when
+    /// Git refused for another reason, which `stderr` then shows).
+    TargetUntracked {
+        worktree: PathBuf,
+        paths: Vec<RepoPath>,
+        stderr: Diagnostics,
+    },
     /// The worktree that has the target checked out is missing on disk (prunable).
     TargetWorktreeUnavailable {
         worktree: PathBuf,
@@ -118,6 +126,7 @@ impl GitError {
             Self::TargetMoved { .. } => "target_moved",
             Self::TargetDirty { .. } => "target_dirty",
             Self::TargetBusy { .. } => "target_busy",
+            Self::TargetUntracked { .. } => "target_untracked",
             Self::TargetWorktreeUnavailable { .. } => "target_worktree_unavailable",
             Self::CheckoutFailed { .. } => "checkout_failed",
         }
@@ -126,7 +135,9 @@ impl GitError {
     /// Truncated stderr of the failing Git process, when there was one.
     pub fn stderr(&self) -> Option<&Diagnostics> {
         match self {
-            Self::Failed { stderr, .. } | Self::CheckoutFailed { stderr, .. } => Some(stderr),
+            Self::Failed { stderr, .. }
+            | Self::CheckoutFailed { stderr, .. }
+            | Self::TargetUntracked { stderr, .. } => Some(stderr),
             _ => None,
         }
     }

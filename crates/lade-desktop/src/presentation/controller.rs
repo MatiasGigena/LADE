@@ -17,7 +17,9 @@ use super::model::{
     ReferenceVersion, RepoPath, SearchResult, SearchResultKind, SearchScope, SessionInfo, Side,
     VerificationState,
 };
-use super::store::{Change, InspectorTab, MainView, Store, ViewerContent, ViewerKey, ViewerMode};
+use super::store::{
+    Change, InspectorTab, MainView, Reveal, Store, ViewerContent, ViewerKey, ViewerMode,
+};
 use super::terminal::{TerminalSession, TerminalStatus, input_chunks};
 use super::text_map::{MappedSelection, SelectionError};
 
@@ -51,6 +53,11 @@ impl Controller {
 
     fn emit(&self, intent: Intent) {
         self.sink.submit(intent);
+    }
+
+    /// The intent sink, for the IMP-011 gestures in `controller_compat`.
+    pub(super) fn submit_intent(&self, intent: Intent) {
+        self.emit(intent);
     }
 
     fn selected(&self) -> Option<ObjectiveId> {
@@ -743,7 +750,11 @@ impl Controller {
         )
     }
 
-    pub fn start_execution(&self, model: ModelRef) -> Result<(), String> {
+    pub fn start_execution(
+        &self,
+        model: ModelRef,
+        thinking: Option<super::compat::ThinkingLevel>,
+    ) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         let is_default = self.store.state().settings.default_model.as_ref() == Some(&model);
         self.command(
@@ -751,6 +762,7 @@ impl Controller {
             Intent::StartExecution {
                 objective_id,
                 model: model.clone(),
+                thinking,
             },
         )?;
         // Picking a model makes it the default for the next execution.
@@ -934,6 +946,16 @@ impl Controller {
         )
     }
 
+    /// Deletes the selected (cleaned-up) Objective's Git history. Call only from the
+    /// confirmation dialog.
+    pub fn delete_history(&self) -> Result<(), String> {
+        let objective_id = self.selected_or_err()?;
+        self.command(
+            ActionName::ObjectiveDeleteHistory,
+            Intent::DeleteHistory { objective_id },
+        )
+    }
+
     pub fn create_objective(
         &self,
         title: &str,
@@ -1032,7 +1054,40 @@ impl Controller {
         if let Some(path) = &result.path {
             self.select_file(path);
         }
+        // A located content match becomes the viewer selection (and so the feedback anchor)
+        // once the file shows those bytes.
+        if let (SearchResultKind::Content, Some(start), Some(end)) =
+            (result.kind, result.byte_start, result.byte_end)
+        {
+            self.store.update(|s| match s.viewer.key.clone() {
+                Some(key) if Some(&key.path) == result.path.as_ref() => {
+                    s.viewer.reveal = Some(Reveal { key, start, end });
+                    ((), vec![Change::Viewer])
+                }
+                _ => ((), Vec::new()),
+            });
+        }
         self.set_view(MainView::Workbench);
+    }
+
+    /// Takes the pending search-result range for the file shown under `key` once its loaded
+    /// text covers the range (`loaded_bytes`); a range for another file is dropped.
+    pub fn take_reveal(&self, key: &ViewerKey, loaded_bytes: u64) -> Option<(u64, u64)> {
+        self.store.update(|s| {
+            let taken = match &s.viewer.reveal {
+                Some(r) if &r.key != key => {
+                    s.viewer.reveal = None;
+                    None
+                }
+                Some(r) if r.end <= loaded_bytes => {
+                    let range = (r.start, r.end);
+                    s.viewer.reveal = None;
+                    Some(range)
+                }
+                _ => None,
+            };
+            (taken, Vec::new())
+        })
     }
 
     pub fn load_older_activity(&self) {
@@ -1255,6 +1310,49 @@ mod tests {
         assert!(controller.store.state().ui.compact_details);
         controller.set_layout_width(1280);
         assert_eq!(controller.store.state().ui.layout, LayoutClass::Wide);
+    }
+
+    #[test]
+    fn content_search_results_become_the_viewer_selection_range() {
+        let (controller, _) = setup();
+        let id = ObjectiveId::new(preview::MAIN_OBJECTIVE);
+        controller.select_objective(&id);
+        let path = RepoPath::utf8("src/network/retry.ts");
+        controller.open_search_result(&SearchResult {
+            kind: SearchResultKind::Content,
+            objective_id: Some(id.clone()),
+            path: Some(path.clone()),
+            line: Some(2),
+            preview: "retry".into(),
+            byte_start: Some(10),
+            byte_end: Some(15),
+        });
+        let key = controller
+            .store
+            .state()
+            .viewer
+            .key
+            .clone()
+            .expect("file opened");
+        assert_eq!((key.path.clone(), key.mode), (path, ViewerMode::FullFile));
+        assert_eq!(
+            controller.take_reveal(&key, 12),
+            None,
+            "range not loaded yet"
+        );
+        assert_eq!(controller.take_reveal(&key, 15), Some((10, 15)));
+        assert_eq!(controller.take_reveal(&key, 15), None, "taken once");
+        // A result without a located range selects nothing.
+        controller.open_search_result(&SearchResult {
+            kind: SearchResultKind::Content,
+            objective_id: Some(id),
+            path: Some(RepoPath::utf8("src/network/retry.ts")),
+            line: Some(2),
+            preview: "retry".into(),
+            byte_start: None,
+            byte_end: None,
+        });
+        assert_eq!(controller.store.state().viewer.reveal, None);
     }
 
     #[test]

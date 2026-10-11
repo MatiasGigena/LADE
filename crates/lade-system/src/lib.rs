@@ -8,6 +8,7 @@
 pub mod adapters {
     pub mod artifacts;
     pub mod git;
+    pub mod profile;
     pub mod sandbox;
 }
 pub mod diagnostics;

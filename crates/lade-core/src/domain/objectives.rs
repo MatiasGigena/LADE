@@ -414,6 +414,33 @@ impl Objective {
         self.update(now, |record| Ok(record.execution.interrupt()))
     }
 
+    /// The idle worker of `generation` replaced its pi session (fork/clone/import).
+    pub fn rebind_live_session(
+        &mut self,
+        generation: ExecutionGeneration,
+        session_id: SessionId,
+        now: Timestamp,
+    ) -> Result<Revision, DomainError> {
+        self.update(now, |record| {
+            if record.lifecycle != Lifecycle::Active {
+                return Err(DomainError::InvalidLifecycle(
+                    "session replacement requires an active objective",
+                ));
+            }
+            record.execution.rebind_live_session(generation, session_id)
+        })
+    }
+
+    /// Persists the developer's model choice for this Objective's session.
+    pub fn select_model(&mut self, model: ModelRef, now: Timestamp) -> Result<(), DomainError> {
+        self.update(now, |record| {
+            if record.lifecycle.is_terminal() {
+                return Err(DomainError::InvalidLifecycle("objective is closed"));
+            }
+            record.execution.select_model(model)
+        })
+    }
+
     /// Explicitly selects a new destination session (association revision advances).
     pub fn replace_session(
         &mut self,

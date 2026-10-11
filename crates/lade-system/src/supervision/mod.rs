@@ -7,10 +7,11 @@
 pub mod credentials;
 pub mod gateway;
 pub mod launcher;
+pub mod providers;
 pub mod sweep;
 pub mod terminal;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
 
 use lade_protocol::worker::WorkerBody;
@@ -21,6 +22,7 @@ pub use launcher::{
     GATEWAY_SOCKET_DIR, LauncherConfig, SandboxLauncher, default_launcher, gateway_socket_path,
     socket_path_fits,
 };
+pub use providers::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
 pub use sweep::{SweepReport, sweep_sockets, sweep_stale};
 pub use terminal::{Terminal, TerminalExit, TerminalRequest};
 
@@ -46,8 +48,10 @@ pub struct LaunchRequest {
     pub start: WorkerBody,
 }
 
-/// Something observed about a launched worker.
+/// Something observed about a launched worker. Transient channel messages: boxing the frame buys
+/// nothing.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum WorkerEvent {
     /// A validated frame from the worker.
     Body(WorkerBody),
@@ -108,6 +112,25 @@ pub trait WorkerLauncher: Send + Sync {
     /// missing credential variables, never values. `launch` re-checks everything.
     fn preflight(&self, _provider: &str) -> Result<(), LaunchError> {
         Ok(())
+    }
+
+    /// Runs the pinned SDK's model catalogue (`src/worker/catalog.ts`) without network and returns
+    /// its JSON output. `scratch` is a private, disposable directory; `models` the validated LADE
+    /// profile `models.json`, if any. Launchers without a sandbox refuse.
+    fn catalog(&self, _scratch: &Path, _models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
+        Err(LaunchError::SandboxUnavailable(
+            "the model catalogue runs only in the worker sandbox".into(),
+        ))
+    }
+
+    /// How LADE can authenticate `facts.id` now (credential names only, never values).
+    fn provider_access(&self, facts: &ProviderFacts) -> ProviderAccess {
+        providers::classify(
+            facts,
+            &gateway::default_policies(),
+            &CredentialSource::empty(),
+            &[],
+        )
     }
 }
 

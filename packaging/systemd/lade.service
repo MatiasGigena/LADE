@@ -46,6 +46,8 @@ SystemCallArchitectures=native
 # (bwrap brings up the sandbox loopback; interface queries). Nothing else is needed.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # Calls no LADE component, worker or verification needs; denied with EPERM rather than a kill.
+# Deliberately not denied: unshare/clone/mount/pivot_root (bwrap user namespaces), seccomp/prctl
+# (bwrap --seccomp filters) and ordinary file I/O (writes into a delegated cgroup subtree).
 SystemCallFilter=~@clock @cpu-emulation @module @obsolete @raw-io @reboot @swap
 SystemCallErrorNumber=EPERM
 

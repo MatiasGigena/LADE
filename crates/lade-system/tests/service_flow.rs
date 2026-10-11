@@ -329,6 +329,22 @@ fn full_loop_with_the_real_worker() {
     assert!(git(&env.repo, &["branch", "--list", &branch]).is_empty());
     let retained = git(&env.repo, &["for-each-ref", "refs/lade/retain/"]);
     assert!(retained.contains("candidate-"), "{retained}");
+
+    // Only an explicit, confirmed request deletes the retained history; the record stays.
+    match client.call(Request::ObjectiveDeleteHistory(
+        lade_protocol::client::ObjectiveHistoryDeleteCommand {
+            objective_id: objective.clone(),
+            confirm_history_loss: true,
+        },
+    )) {
+        Ok(ReplyData::ObjectiveDeleteHistory(d)) => {
+            assert_eq!(d.history_deleted, Some(true));
+            assert_eq!(d.lifecycle, Lifecycle::Integrated);
+        }
+        other => panic!("delete history: {other:?}"),
+    }
+    assert!(git(&env.repo, &["for-each-ref", "refs/lade/retain/"]).is_empty());
+    assert_eq!(head(&env.repo), after, "the integration stays");
     drop(client);
     service.shutdown();
 }

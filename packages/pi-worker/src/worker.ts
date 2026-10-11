@@ -2,13 +2,13 @@
 // `node packages/pi-worker/src/worker.ts`. Speaks delivery-plan §4.2 JSONL on stdin/stdout.
 // The stdio guard must stay the first import so SDK console output can never reach stdout.
 import { writeFrame } from "./worker/stdio.ts";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { WireError } from "./json.ts";
 import type { WorkerErrorCode } from "./dto.ts";
 import { ActivityMapper, safeMessage } from "./worker/activity.ts";
 import { StdioChannel } from "./worker/channel.ts";
 import { installGateway, installNoNetwork } from "./worker/gateway.ts";
-import { abort, deliver, openSession, StartError } from "./worker/session.ts";
+import { abort, deliver, SessionHost, StartError } from "./worker/session.ts";
+import { UiBridge } from "./worker/ui.ts";
 
 /** Exit statuses: clean shutdown/EOF, start failure, protocol violation, internal failure. */
 export const EXIT_OK = 0;
@@ -40,8 +40,8 @@ function report(code: WorkerErrorCode, message: string): void {
   void channel.send({ kind: "worker.error", code, message: safeMessage(message) });
 }
 
-async function exit(status: number, session: AgentSession | undefined): Promise<void> {
-  session?.dispose();
+async function exit(status: number, host: SessionHost | undefined): Promise<void> {
+  await host?.dispose().catch(() => undefined);
   await channel.flush();
   process.exit(status);
 }
@@ -62,20 +62,23 @@ function cleared(mapper: ActivityMapper): (steering: number, followUp: number) =
 }
 
 async function serve(): Promise<void> {
-  let session: AgentSession | undefined;
-  let mapper: ActivityMapper | undefined;
+  let host: SessionHost | undefined;
+  const mapper = new ActivityMapper(item => { void channel.send(item); });
+  const ui = new UiBridge(body => { void channel.send(body); }, (title, text, isError) => mapper.system(title, text, isError));
 
   try {
     for await (const body of channel.incoming()) {
-      if (session === undefined || mapper === undefined) {
+      if (host === undefined) {
         if (body.kind !== "worker.start") {
           report("protocol_violation", "the first frame must be worker.start");
 
-          return exit(EXIT_PROTOCOL, session);
+          return exit(EXIT_PROTOCOL, host);
         }
 
+        const opening = new SessionHost(body, item => { void channel.send(item); }, ui, session => session.subscribe(event => mapper.handle(event)), (title, text, isError) => mapper.system(title, text, isError));
+
         try {
-          session = await openSession(body);
+          await opening.open();
         } catch (error) {
           process.stderr.write(`lade-worker: start failed (${error instanceof Error ? error.name : "unknown"})\n`);
           report(error instanceof StartError ? error.code : "startup_failed", error instanceof StartError ? error.message : "could not open the pi session");
@@ -83,18 +86,19 @@ async function serve(): Promise<void> {
           return exit(EXIT_START, undefined);
         }
 
-        const activity = new ActivityMapper(item => { void channel.send(item); });
-        mapper = activity;
-        session.subscribe(event => activity.handle(event));
-        await channel.send({ kind: "worker.ready", pi_session_id: session.sessionId, session_file: session.sessionFile ?? "" });
+        host = opening;
+        await channel.send({ kind: "worker.ready", pi_session_id: host.session.sessionId, session_file: host.session.sessionFile ?? body.session_dir });
+        host.announce();
         continue;
       }
+
+      const session = host.session;
 
       switch (body.kind) {
         case "worker.start":
           report("protocol_violation", "worker.start was already processed");
 
-          return exit(EXIT_PROTOCOL, session);
+          return exit(EXIT_PROTOCOL, host);
         case "input.deliver":
           await channel.send({ kind: "input.received", input_id: body.input_id });
 
@@ -106,27 +110,40 @@ async function serve(): Promise<void> {
 
           break;
         case "session.abort":
+          session.abortCompaction();
           await abort(session, cleared(mapper));
 
           break;
+        case "session.command":
+          // Not awaited: a long command (compaction) must not block abort or dialog answers.
+          void host.command(body).then(result => channel.send(result));
+
+          break;
+        case "ui.respond": {
+          const refused = ui.respond(body);
+
+          if (refused !== undefined) mapper.system("Dialog answer refused", refused, true);
+
+          break;
+        }
 
         case "worker.shutdown":
           if (session.isStreaming) await abort(session, cleared(mapper));
 
-          return exit(EXIT_OK, session);
+          return exit(EXIT_OK, host);
       }
     }
 
     // stdin EOF: the service closed the link; stop the run and leave cleanly.
-    if (session?.isStreaming && mapper) await abort(session, cleared(mapper));
+    if (host?.session.isStreaming) await abort(host.session, cleared(mapper));
 
-    return exit(EXIT_OK, session);
+    return exit(EXIT_OK, host);
   } catch (error) {
     if (!(error instanceof WireError)) throw error;
     // Framing errors poison the link. The rejected bytes are never echoed.
     report("protocol_violation", `rejected inbound frame (${error.code})`);
 
-    return exit(EXIT_PROTOCOL, session);
+    return exit(EXIT_PROTOCOL, host);
   }
 }
 

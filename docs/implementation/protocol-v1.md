@@ -73,17 +73,33 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `review.integrate` | command | `ReviewIntegrateCommand` | `ObjectiveDetail` |
 | `objective.complete` / `objective.discard` | command | `ObjectiveSelector` | `ObjectiveDetail` |
 | `objective.cleanup` | command | `ObjectiveCleanupCommand` | `ObjectiveDetail` |
+| `objective.delete_history` | command | `ObjectiveHistoryDeleteCommand {objective_id, confirm_history_loss}` | `ObjectiveDetail` |
 | `settings.update` | command | `SettingsUpdateCommand` | `Settings` |
+| `models.list` | query | `ModelsListQuery {provider?}` | `ModelCatalog {sdk_version, providers: ProviderInfo[], models: ModelInfo[], truncated, error?}` |
+| `session.tree` | query | `ObjectiveSelector` | `SessionTree {entries: TreeEntry[], leaf_id?, truncated}` |
+| `resources.list` | query | `Empty` | `ResourceInventory` (profile entries with hash and approval state, the trust rules and restrictions) |
+| `session.navigate` | command | `SessionNavigateCommand {objective_id, entry_id}` | `SessionState` |
+| `session.fork` | command | `SessionForkCommand {objective_id, entry_id, position: before\|at}` | `SessionState` |
+| `session.import` | command | `SessionImportCommand {objective_id, path}` | `SessionState` |
+| `session.export` | command | `ObjectiveSelector` | `SessionExport {objective_id, path}` |
+| `session.compact` | command | `SessionCompactCommand {objective_id, instructions?}` | `SessionState` |
+| `session.reload` | command | `ObjectiveSelector` | `SessionState` |
+| `session.configure` | command | `SessionConfigureCommand {objective_id, model, thinking}` | `SessionState` |
+| `resource.decide` | command | `ResourceDecideCommand {name, sha256, approve}` | `ResourceInventory` |
+| `profile.import` | command | `ProfileImportCommand {source}` | `ProfileImportResult {copied, skipped, inventory}` |
+| `ui.respond` | command | `UiRespondCommand {objective_id, ui_id, generation, answer: UiAnswer}` | `Empty` |
 | `service.stop` | command | `ServiceStopCommand {reason: exit\|logout}` | `Empty` |
 | `terminal.open` | interaction | `TerminalOpenCommand {objective_id, cols, rows}` | `TerminalInfo {terminal_id, objective_id, mode: read_write\|read_only, cols, rows}` |
 | `terminal.input` | interaction | `TerminalInputCommand {terminal_id, data (1..=16,384 code points)}` | `Empty` |
 | `terminal.resize` | interaction | `TerminalResizeCommand {terminal_id, cols, rows}` | `Empty` |
 | `terminal.close` | interaction | `TerminalSelector {terminal_id}` | `Empty` |
 
+`SessionInfo` and `ExecutionStartCommand` gained an optional `thinking` (`ThinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). The IMP-011 rows are additive: no existing name, field or variant changed meaning. `SessionState {objective_id, generation, reason: SessionChangeReason, model, thinking, session_id?, association_revision?, pi_session_id?, leaf_id?}`: `generation` is the worker's pi session generation, and a `fork` or `import` reason comes with a new LADE `session_id` and association revision (input for the previous session is refused as `stale_association`). Semantics and trust rules: [pi-compatibility.md](pi-compatibility.md).
+
 Events: `objective.changed` → `ObjectiveSummary`; `objective.detail` → `ObjectiveDetail`; `activity.appended` → `ActivityAppended`; `activity.delta` → `ActivityDelta` (coalescible); `draft.changed` → `Draft`; `input.changed` → `InputSummary`; `worktree.changed` → `WorktreeChanged`; `verification.changed` → `VerificationSummary`; `service.notice` → `ServiceNotice`; `terminal.output` →
 `TerminalOutput {objective_id, terminal_id, seq, data (≤ 65,536 code points), dropped_bytes}`; `terminal.closed` →
 `TerminalClosed {objective_id, terminal_id, reason: exited|closed|review_freeze|lifecycle|failed, exit_code?,
-signal?}`. Field-level shapes are the schema `$defs` of those names (mirrored 1:1 by Rust `lade_protocol::client` and TS `dto.ts`).
+signal?}`; `session.changed` → `SessionState`; `ui.request` → `UiRequest {objective_id, ui_id, generation, prompt: UiPrompt}` (also re-announced to a newly attached client); `ui.closed` → `UiClosed {objective_id, ui_id, reason: answered|timeout|aborted|replaced}` (a stopped worker closes its dialogs as `aborted`); `resources.changed` → `ResourceInventory`. Field-level shapes are the schema `$defs` of those names (mirrored 1:1 by Rust `lade_protocol::client` and TS `dto.ts`).
 
 ### Contained terminal and lifetime (IMP-012, additive)
 
@@ -97,6 +113,28 @@ are shown to the developer as an explicit marker, never silently joined. Output 
 `service.stop` is an ordinary journaled command: the reply is sent, then the service stops its workers and
 terminals and exits; a client that sent it neither reconnects nor starts a new service.
 
+### Repository inspection additions (IMP-004/009, additive)
+
+All optional fields, so older peers' frames stay valid and an older client simply ignores what it does not know:
+
+- `ChangedFile.filtered` (`true` only): the path's `filter` attribute names a filter driver (Git LFS,
+  `clean`/`smudge`); LADE never runs filters, so raw working-tree bytes are compared — unsupported content.
+- `ChangeList.notices` (≤ 64 `ContentNotice {kind: nested_repository|filtered_content, message ≤ 512, path?}`):
+  a nested repository without a commit left out of a working capture (one per path), and one repository-level
+  notice when any listed file is filtered.
+- `SearchResult.column` (1-based byte column of the first match in its line) and `byte_end`; `byte_start` (already
+  in the schema, previously unset) is now filled for content results. `[byte_start, byte_end)` addresses the raw
+  file bytes `file.read` retains, so it can be used directly as a feedback reference range; both are omitted when
+  the file exceeds 16 MiB, the per-search 64 MiB offset budget is spent, or the match cannot be confirmed.
+- `FileContent.chunked` (`true` only): the file exceeds the 64 MiB whole-file bound (hard upper bound 1 GiB) and is
+  served in chunks of at most `limit` (≤ 256 KiB) through the existing `offset`/`limit` of `FileReadQuery`. The
+  `artifact_digest` still names the whole file; encoding is decided by a NUL in the first 8,000 bytes; a text chunk
+  is cut back to a character boundary, an offset inside a character is `invalid_request`, and a chunk that is not
+  UTF-8 is `unsupported_content` (no gaps in the text).
+- `ObjectiveDetail.history_deleted` (`true` only) and the `ActionName` `objective.delete_history`: the deliberate
+  deletion of a cleaned-up Objective's retention refs and branch. `confirm_history_loss` must be `true` (otherwise
+  `invalid_request`); it is never sent by the service or client on its own.
+
 ### Error semantics
 
 `ErrorCode` keeps the IMP-001 codes and adds `not_found`, `invalid_request`, `conflict`, `execution_unavailable`; `SafeAction` is unchanged. A frame that parses as bounded JSON with exact versions and whose body is a `request` with a valid `request_id`, but fails the schema (unknown name, invalid payload, wrong `operation_id` presence), is answered with an unnamed or named `invalid_request` rejection and the link stays open — `decode_client_frame` returns that `request_id` for exactly this case. Every other decode failure (framing, JSON, version, non-request schema failure) closes the link. `auth` failure closes the link without a reply. `detail` never carries source, prompt or secret content.
@@ -107,7 +145,7 @@ terminals and exits; a client that sent it neither reconnects nor starts a new s
 
 ## Service ↔ worker (`worker-schema.json`, JSONL)
 
-Service → worker: `worker.start {objective_id, session_dir, cwd, model, resume, system_note}`, `input.deliver {input_id, mode, text (non-empty)}`, `session.abort {}` (clears queued steer/follow-up, then aborts), `worker.shutdown {}`. Worker → service: `worker.ready {pi_session_id (pi's own id, a bounded string, not necessarily UUIDv4), session_file (may not exist yet)}`, `input.received {input_id}`, `activity.item {item_id, role, title ≤ 1024, text, tool_name?, is_error, truncated}`, `activity.delta {item_id, append_text}`, `turn.state {running|idle}`, `worker.error {code: WorkerErrorCode, message ≤ 512}`. Sandbox paths are plain strings of 1..=4096 code points chosen by the service.
+Service → worker: `worker.start {objective_id, session_dir, cwd, model, resume, system_note, thinking?, resources?: WorkerResources {profile_dir, extensions: [{name, path, sha256}]}, session_file?}`, `input.deliver {input_id, mode, text (non-empty)}`, `session.abort {}` (clears queued steer/follow-up, then aborts), `session.command {command_id, command: SessionCommand}` (`op` = `tree`, `navigate {entry_id}`, `fork {entry_id, position}`, `import {path}`, `export {path}`, `compact {instructions?}`, `reload {resources}`, `configure {model, thinking}`), `ui.respond {ui_id, generation, answer}`, `worker.shutdown {}`. Worker → service: `worker.ready {pi_session_id (pi's own id, a bounded string, not necessarily UUIDv4), session_file (may not exist yet)}`, `input.received {input_id}`, `activity.item {item_id, role, title ≤ 1024, text, tool_name?, is_error, truncated}`, `activity.delta {item_id, append_text}`, `turn.state {running|idle}`, `worker.error {code: WorkerErrorCode, message ≤ 512}`, `session.result {command_id, ok, message?, entries?, leaf_id?, truncated?}`, `session.changed {generation, reason, model, thinking, pi_session_id, session_file, leaf_id?}`, `resources.loaded {generation, resources: LoadedResource[]}`, `ui.request {ui_id, generation, prompt}`, `ui.closed {ui_id, reason}`. The worker validates against a package-local generated copy (`packages/pi-worker/src/worker/worker-schema.json`), because the sandbox binds only the worker package. Sandbox paths are plain strings of 1..=4096 code points chosen by the service.
 
 Semantics: an `activity.item` whose `item_id` was already sent is an upsert — the final authoritative text replaces the streamed one (deltas apply to the latest text of that item). Text over 192 KiB in one item is truncated by the worker with `truncated: true` and the full byte length noted in `title`. The service binds each worker link to one Objective at launch, rejects bodies of the wrong direction (`WorkerBody::is_from_worker`, TS `isServiceToWorker`/`isWorkerToService`) and treats any worker decode failure as a protocol violation that closes the worker link. Worker reports are never approval, verification or durable acceptance.
 

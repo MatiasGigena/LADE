@@ -28,7 +28,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use service_support::*;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     Defined,
     ActiveIdleWithChanges,
@@ -40,9 +40,10 @@ enum State {
     Approved,
     Integrated,
     Discarded,
+    CleanedUp,
 }
 
-const STATES: [State; 10] = [
+const STATES: [State; 11] = [
     State::Defined,
     State::ActiveIdleWithChanges,
     State::ActiveIdleEmpty,
@@ -53,6 +54,7 @@ const STATES: [State; 10] = [
     State::Approved,
     State::Integrated,
     State::Discarded,
+    State::CleanedUp,
 ];
 
 static FILES: AtomicU32 = AtomicU32::new(0);
@@ -155,11 +157,20 @@ fn build(env: &Env, client: &mut Client, workspace: &Id, state: State) -> Id {
                 _ => {}
             }
         }
-        State::Discarded => {
+        State::Discarded | State::CleanedUp => {
             ok(
                 client.call(Request::ObjectiveDiscard(selector(&objective))),
                 "discard",
             );
+            if state == State::CleanedUp {
+                ok(
+                    client.call(Request::ObjectiveCleanup(ObjectiveCleanupCommand {
+                        objective_id: objective.clone(),
+                        confirm_data_loss: true,
+                    })),
+                    "cleanup",
+                );
+            }
         }
     }
     objective
@@ -189,6 +200,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
                     provider: "lade-fixture".into(),
                     id: "scripted".into(),
                 },
+                thinking: None,
             })
         }
         ActionName::ExecutionCancel => Request::ExecutionCancel(selector(&objective)),
@@ -232,6 +244,12 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
             objective_id: objective,
             confirm_data_loss: false,
         }),
+        ActionName::ObjectiveDeleteHistory => {
+            Request::ObjectiveDeleteHistory(lade_protocol::client::ObjectiveHistoryDeleteCommand {
+                objective_id: objective,
+                confirm_history_loss: true,
+            })
+        }
     })
 }
 
@@ -246,7 +264,7 @@ fn every_projected_action_agrees_with_its_request() {
     for state in STATES {
         let probe = build(&env, &mut client, &ws.workspace_id, state);
         let actions = detail(&mut client, &probe).available_actions;
-        assert_eq!(actions.len(), 15, "one entry per action");
+        assert_eq!(actions.len(), 16, "one entry per action");
         for available in actions {
             // A fresh Objective per action: requests mutate state.
             let objective = build(&env, &mut client, &ws.workspace_id, state);
@@ -339,6 +357,7 @@ fn start_with(
                 provider: provider.into(),
                 id: id.into(),
             },
+            thinking: None,
         },
     ))
 }

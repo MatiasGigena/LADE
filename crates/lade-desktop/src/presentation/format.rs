@@ -114,6 +114,21 @@ pub fn duration_label(start: Timestamp, end: Option<Timestamp>) -> String {
     }
 }
 
+/// Human size in binary units ("812 bytes", "4.0 KiB", "65.2 MiB", "1.0 GiB").
+pub fn byte_size(bytes: u64) -> String {
+    const UNITS: [&str; 3] = ["KiB", "MiB", "GiB"];
+    if bytes < 1024 {
+        return format!("{bytes} bytes");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 pub fn file_status(status: ChangeStatus) -> (&'static str, &'static str) {
     match status {
         ChangeStatus::Added => ("A", "Added"),
@@ -401,6 +416,14 @@ pub fn journey(detail: &ObjectiveDetail, has_inputs: bool) -> [StepState; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_sizes_use_binary_units() {
+        assert_eq!(byte_size(812), "812 bytes");
+        assert_eq!(byte_size(4096), "4.0 KiB");
+        assert_eq!(byte_size((65 << 20) + (1 << 19)), "65.5 MiB");
+        assert_eq!(byte_size(1 << 30), "1.0 GiB");
+    }
 
     #[test]
     fn argv_splitting_without_a_shell() {

@@ -17,15 +17,16 @@ use lade_core::domain::inspection::{
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
 use lade_core::domain::review::{IntegrationPlan, Review};
 use lade_protocol::client::{
-    DraftDeleteCommand, DraftList, DraftSaveCommand, Empty, Event, FeedbackSubmitCommand,
-    InputList, MessageSendCommand, ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery,
-    OperationState, OperationStatus, Rejection, ReplyData, Request, SettingsUpdateCommand,
-    SnapshotData, Start, UpdateIntentCommand, WorkspaceOpenCommand,
+    DraftDeleteCommand, DraftList, DraftSaveCommand, Empty, ErrorCode, Event,
+    FeedbackSubmitCommand, InputList, MessageSendCommand, ObjectiveCreateCommand,
+    ObjectiveSelector, OperationGetQuery, OperationState, OperationStatus, Rejection, ReplyData,
+    Request, SafeAction, SettingsUpdateCommand, SnapshotData, Start, UpdateIntentCommand,
+    WorkspaceOpenCommand,
 };
 use lade_protocol::types::Id;
 
 use crate::adapters::artifacts::ArtifactDigest;
-use crate::adapters::git::Repository;
+use crate::adapters::git;
 use crate::storage::{self, CaptureRow, ObjectiveRow, WorkspaceRow};
 
 use super::convert::{
@@ -73,11 +74,23 @@ pub(crate) enum Pending {
         ctx: ReqCtx,
         confirm: bool,
     },
+    DeleteHistory {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+    },
     Complete {
         oid: ObjectiveId,
         ctx: ReqCtx,
     },
     Query {
+        ctx: ReqCtx,
+    },
+    Catalog,
+    ProfileImport {
+        ctx: ReqCtx,
+    },
+    Reload {
+        oid: ObjectiveId,
         ctx: ReqCtx,
     },
     TerminalOpen {
@@ -241,6 +254,29 @@ impl Service {
                 self.objective_discard(&mut ctx, &objective_id)
             }
             Request::ObjectiveCleanup(cmd) => return self.objective_cleanup(ctx, &cmd),
+            Request::ObjectiveDeleteHistory(cmd) => {
+                return self.objective_delete_history(ctx, &cmd);
+            }
+            // IMP-011 pi compatibility (service/compat.rs).
+            Request::ModelsList(query) => return self.models_list(ctx, query),
+            Request::SessionTree(ObjectiveSelector { objective_id }) => {
+                return self.session_tree(ctx, &objective_id);
+            }
+            Request::ResourcesList(_) => Ok(ReplyData::ResourcesList(self.inventory())),
+            Request::SessionNavigate(cmd) => return self.session_navigate(ctx, cmd),
+            Request::SessionFork(cmd) => return self.session_fork(ctx, cmd),
+            Request::SessionImport(cmd) => return self.session_import(ctx, &cmd),
+            Request::SessionExport(ObjectiveSelector { objective_id }) => {
+                return self.session_export(ctx, &objective_id);
+            }
+            Request::SessionCompact(cmd) => return self.session_compact(ctx, cmd),
+            Request::SessionReload(ObjectiveSelector { objective_id }) => {
+                return self.session_reload(ctx, &objective_id);
+            }
+            Request::SessionConfigure(cmd) => return self.session_configure(ctx, cmd),
+            Request::ResourceDecide(cmd) => self.resource_decide(&mut ctx, &cmd),
+            Request::ProfileImport(cmd) => return self.profile_import(ctx, &cmd),
+            Request::UiRespond(cmd) => self.ui_respond(&mut ctx, cmd),
             Request::TerminalOpen(cmd) => return self.terminal_open(ctx, &cmd),
             Request::TerminalInput(cmd) => self.terminal_input(&cmd),
             Request::TerminalResize(cmd) => self.terminal_resize(&cmd),
@@ -306,10 +342,20 @@ impl Service {
             (Pending::Cleanup { oid, ctx, confirm }, JobOutput::Unit(result)) => {
                 self.cleanup_done(oid, ctx, confirm, result);
             }
+            (Pending::DeleteHistory { oid, ctx }, JobOutput::Unit(result)) => {
+                self.delete_history_done(oid, ctx, result);
+            }
             (Pending::Complete { oid, ctx }, JobOutput::Flag(result)) => {
                 self.complete_done(oid, ctx, result);
             }
             (Pending::Query { ctx }, JobOutput::Query(result)) => self.finish(ctx, result),
+            (Pending::Catalog, JobOutput::Catalog(result)) => self.catalog_done(result),
+            (Pending::ProfileImport { ctx }, JobOutput::Profile(result)) => {
+                self.profile_import_done(ctx, result);
+            }
+            (Pending::Reload { oid, ctx }, JobOutput::Snapshot(result)) => {
+                self.reload_snapshot_done(oid, ctx, result);
+            }
             (
                 Pending::TerminalOpen {
                     oid,
@@ -380,7 +426,7 @@ impl Service {
         if !path.is_absolute() {
             return Err(invalid("workspace path must be absolute"));
         }
-        let repo = Repository::open(&path).map_err(|e| git_rejection(&e))?;
+        let repo = jobs::open_repository(&path).map_err(|e| git_rejection(&e))?;
         let top = repo.work_tree().to_path_buf();
         if let Some(existing) = self.workspaces.values().find(|ws| ws.path == top) {
             return Ok(ReplyData::WorkspaceOpen(
@@ -431,6 +477,16 @@ impl Service {
             &cmd.intent.acceptance,
         )
         .map_err(domain)?;
+        if cmd.integration_target.contains("\\x")
+            && git::unescape_branch_name(&cmd.integration_target)
+                .is_some_and(|raw| std::str::from_utf8(&raw).is_err())
+        {
+            return Err(Rejection::new(
+                ErrorCode::UnsupportedContent,
+                SafeAction::None,
+                "branch names that are not UTF-8 are listed but cannot be an integration target",
+            ));
+        }
         let target = BranchName::new(&cmd.integration_target).map_err(domain)?;
         let target_commit = jobs::target_commit(&ws.repo, target.as_str())?;
         let start_commit = match &cmd.start {
@@ -467,6 +523,7 @@ impl Service {
                 git_branch: None,
                 worktree: None,
                 integration_conflict: false,
+                history_deleted: false,
             },
             review: Review::new(oid),
             drafts: Vec::new(),
