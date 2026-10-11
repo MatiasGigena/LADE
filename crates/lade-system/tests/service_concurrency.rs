@@ -678,7 +678,11 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
     );
     let before = rss_kib();
     for _ in 0..8000 {
-        let frame = RequestFrame::new(new_id(), None, Request::Snapshot(Empty {})).unwrap();
+        // A cheap query: the service answers fast, so only the unread link fills up.
+        let query = Request::OperationGet(lade_protocol::client::OperationGetQuery {
+            operation_id: new_id(),
+        });
+        let frame = RequestFrame::new(new_id(), None, query).unwrap();
         if writer
             .write(&ClientEnvelope::new(ClientBody::Request(frame)))
             .is_err()
@@ -686,7 +690,8 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
             break;
         }
     }
-    // The service dropped the slow link instead of buffering for it: the next client gets the
+    // The service dropped the slow link instead of buffering for it (frame bound: 256 queued
+    // replies): the next client gets the
     // lease while the slow one still reads nothing, and resyncs from the snapshot.
     let mut next = eventually("next client admitted", || {
         Client::connect(&env.socket(), &env.capability()).ok()

@@ -167,7 +167,7 @@ or `chunk.*` closes it. Each link has a reader thread and a writer thread fed by
 makes no progress for 10 s (`WRITE_STALL_TIMEOUT`, a client that stopped reading) ends the link too, so a stalled
 client never pins the writer thread or its socket. With one controlling link, the 8 MiB link bound is also the
 service-wide outbound bound (≤ 32 MiB budget). `service_concurrency.rs::a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs`
-sends 8,000 snapshot requests without reading: the link is dropped, the next client is admitted and resyncs
+sends 8,000 queries without reading their replies: the link is dropped, the next client is admitted and resyncs
 from `snapshot`, the test process grows by less than 64 MiB and the stalled link receives a bounded tail.
 
 ## Threading model
