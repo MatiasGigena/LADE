@@ -147,12 +147,12 @@ shot 04-activity
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
 sleep 1
-click 1057 323 2   # Refresh the inspected capture (explicit, never silent)
-click 330 336 2    # hello.txt
+click 1057 295 2   # Refresh the inspected capture (explicit, never silent)
+click 330 308 2    # hello.txt
 shot 05-change-set
 
 step "select text, add feedback, wait until Saved"
-x mousemove 622 421 click --repeat 2 --delay 80 1
+x mousemove 622 388 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Please greet more warmly."
@@ -171,21 +171,21 @@ click 1343 78 2    # Feedback tab
 shot 07-stale-batch-blocked
 
 step "remove the stale draft (explicit confirmation)"
-click 1201 523 1
+click 1201 516 1
 shot 08-remove-draft-confirm
 click 359 160 2
 
 step "new draft on the current bytes, submitted as steer"
-click 1057 323 2   # Refresh
-click 330 336 2    # hello.txt
-x mousemove 625 421 click --repeat 2 --delay 80 1
+click 1057 295 2   # Refresh
+click 330 308 2    # hello.txt
+x mousemove 625 388 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Greet warmly."
 key shift+Return
 typ "lade-fixture: write hello.txt hello there"
 sleep 3
-click 1279 688 1   # Review and submit
+click 1279 680 1   # Review and submit
 shot 09-submit-dialog
 click 479 300 1    # Submit 1 item
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
@@ -198,7 +198,7 @@ key ctrl+1
 
 step "edit the intent"
 click 1175 78 1    # Overview tab
-click 1279 727 1   # Edit intent
+click 1200 520 1   # Edit intent (quiet action below the intent)
 key Tab
 typ "Only touch hello.txt"
 key Tab
@@ -207,24 +207,24 @@ shot 12-edit-intent
 click 487 440 2
 
 step "freeze for review"
-reveal freeze-for-review
+reveal black       # Freeze for review (the next action)
 click 1280 "$BUTTON_Y" 1
 wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
 sleep 3
 d=$(wt)
 [ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
-click 972 250 1    # inspected version: open the list ...
+click 972 222 1    # inspected version: open the list ...
 key Down           # ... Candidate 1 (current)
 key Return
 sleep 2
-click 330 336 2    # hello.txt in the frozen candidate
+click 330 308 2    # hello.txt in the frozen candidate
 shot 13-frozen
 
 step "Evidence: service-observed check"
 click 1258 78 1    # Evidence tab
-click 1280 446 0.3
+click 1280 442 0.3
 typ 'sh -c "test -f hello.txt"'
-click 1280 494 8   # Run check
+click 1280 490 8   # Run check
 shot 14-check-passed
 
 step "approve the candidate"
@@ -270,7 +270,7 @@ x windowsize "$WID" 1280 800
 sleep 2
 park
 import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
-x mousemove 1150 500; i=0; while [ $i -lt 12 ]; do x click 5; i=$((i + 1)); done; sleep 1
+click 1020 213 1   # open More actions (collapsed by default): every other action with its reason
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"

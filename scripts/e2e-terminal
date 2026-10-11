@@ -23,7 +23,7 @@ DPY=:${E2E_DISPLAY:-78}
 BIN=$ROOT/target/debug
 W=1440
 H=900
-for tool in Xvfb xdotool import git bwrap; do
+for tool in Xvfb xdotool import git bwrap python3; do
   command -v "$tool" >/dev/null || { echo "e2e-terminal: $tool is required" >&2; exit 2; }
 done
 [ -x "$BIN/laded" ] && [ -x "$BIN/lade-desktop" ] || {
@@ -51,6 +51,9 @@ key() { x key "$@"; sleep 1; }
 typ() { x type --delay 12 "$1"; }
 park() { x mousemove 700 880; sleep 0.5; }
 shot() { park; import -window root "$OUT/t-$1.png"; step "screenshot t-$1.png"; }
+start_button() {
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900
+}
 wait_for() {
   limit=$1; what=$2; shift 2
   n=0
@@ -114,7 +117,10 @@ key ctrl+n
 click 280 106 0.3; typ "Terminal check"
 click 280 195 0.3; typ "the terminal stays in scope"
 click 469 625 2
-click 1280 804 1
+# Start agent is the Overview's next action: a filled black button, found by pixels
+# (scripts/e2e-find-button.py) rather than by a fixed position.
+wait_for 20 "Start agent" start_button
+click 1280 "$(start_button)" 1
 wait_for 60 "sandboxed worker started" session_ready
 wait_for 30 "worktree" wt
 sleep 3
