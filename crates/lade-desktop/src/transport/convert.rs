@@ -265,10 +265,8 @@ pub fn safe_action(action: wire::SafeAction) -> Option<&'static str> {
 // Shapes.
 
 pub fn settings(s: &wire::Settings) -> view::Settings {
-    let default_model = s.default_model.as_ref().map(model);
     view::Settings {
-        available_models: crate::presentation::models::available_models(default_model.as_ref()),
-        default_model,
+        default_model: s.default_model.as_ref().map(model),
         verification_commands: s.verification_commands.clone(),
     }
 }
@@ -378,6 +376,7 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
             association_revision: counter(&s.association_revision),
             execution_generation: counter(&s.execution_generation),
             model: model(&s.model),
+            thinking: s.thinking.map(super::compat::thinking),
         }),
         candidates: d.candidates.iter().map(candidate).collect(),
         approval: d.approval.as_ref().map(approval),

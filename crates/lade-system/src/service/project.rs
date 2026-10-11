@@ -321,6 +321,7 @@ impl Service {
                 provider: preview(s.model.provider(), 128),
                 id: preview(s.model.id(), 256),
             },
+            thinking: self.thinking_of(st.objective().id()),
         });
         let skip = |len: usize| len.saturating_sub(DETAIL_LIST_MAX);
         let candidates = review

@@ -7,16 +7,17 @@ import { StdioChannel } from "../src/worker/channel.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
 import type { InboundBody } from "../src/worker/wire.ts";
 import type { JsonObject } from "../src/json.ts";
+import { parseId } from "../src/protocol.ts";
 
-const ID = "00000000-0000-4000-8000-000000000001";
+const ID = parseId("00000000-0000-4000-8000-000000000001");
 
 function frame(body: JsonObject, bundle = "0.2.0"): Buffer {
   return Buffer.from(JSON.stringify({ protocol: 1, bundle, body }));
 }
 
 test("inbound bodies are closed and exactly typed", () => {
-  assert.deepEqual(parseInbound(frame({ kind: "input.deliver", input_id: ID, mode: "steer", text: "x" })), { kind: "input.deliver", input_id: ID, mode: "steer", text: "x" });
-  assert.deepEqual(parseInbound(frame({ kind: "session.abort" })), { kind: "session.abort" });
+  assert.deepEqual({ ...parseInbound(frame({ kind: "input.deliver", input_id: ID, mode: "steer", text: "x" })) }, { kind: "input.deliver", input_id: ID, mode: "steer", text: "x" });
+  assert.deepEqual({ ...parseInbound(frame({ kind: "session.abort" })) }, { kind: "session.abort" });
   assert.throws(() => parseInbound(frame({ kind: "session.abort", extra: true })), { code: "invalid_schema" });
   assert.throws(() => parseInbound(frame({ kind: "input.deliver", input_id: "not-a-uuid", mode: "prompt", text: "x" })), { code: "invalid_schema" });
   assert.throws(() => parseInbound(frame({ kind: "input.deliver", input_id: ID, mode: "later", text: "x" })), { code: "invalid_schema" });
@@ -81,4 +82,17 @@ test("outbound writes wait for drain and coalesce deltas", async () => {
   await channel.flush();
   assert.equal(written.length, 2);
   assert.match(written[1] ?? "", /"append_text":"ab"/);
+});
+
+test("frames queued while a drain settles are still written", async () => {
+  const written: string[] = [];
+
+  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
+
+ return true; }, new EventEmitter());
+
+  void channel.send({ kind: "turn.state", state: "running" });
+  void channel.send({ kind: "turn.state", state: "idle" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(written.length, 2, "two synchronous sends are both written without a third");
 });

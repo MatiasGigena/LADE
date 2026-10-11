@@ -16,6 +16,7 @@ use lade_protocol::types::Id;
 
 use super::convert;
 use super::requests::{self, Context, Effects};
+use crate::presentation::compat::CompatUpdate;
 use crate::presentation::intents::Intent;
 use crate::presentation::model::{ConnectionState, NoticeLevel, ObjectiveId, ServiceNotice};
 use crate::presentation::store::StoreUpdate;
@@ -645,6 +646,22 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
             StoreUpdate::VerificationChanged(convert::verification(&v))
         }
         Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
+        Event::SessionChanged(s) => {
+            let (objective_id, session) = super::compat::session(&s);
+            StoreUpdate::Compat(CompatUpdate::Session {
+                objective_id,
+                session,
+            })
+        }
+        Event::UiRequest(r) => {
+            StoreUpdate::Compat(CompatUpdate::DialogOpened(super::compat::dialog(&r)))
+        }
+        Event::UiClosed(c) => StoreUpdate::Compat(CompatUpdate::DialogClosed {
+            ui_id: c.ui_id.as_str().to_owned(),
+        }),
+        Event::ResourcesChanged(i) => {
+            StoreUpdate::Compat(CompatUpdate::Inventory(super::compat::inventory(&i)))
+        }
         Event::TerminalOutput(o) => StoreUpdate::TerminalOutput {
             terminal_id: o.terminal_id.as_str().to_owned(),
             seq: o.seq.value(),

@@ -23,15 +23,20 @@ use std::time::{Duration, Instant};
 use lade_protocol::worker::WorkerBody;
 use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode_worker, encode};
 
-use super::credentials::CredentialSource;
-use super::gateway::{EgressPolicy, Gateway, UpstreamProxy, default_policies, ensure_private_dir};
+use super::credentials::{CredentialSource, ReleasedCredentials};
+use super::gateway::{
+    EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies, ensure_private_dir,
+};
+use super::providers::{ProviderAccess, ProviderFacts, classify};
 use super::sweep::{PidRecord, children_of, kill_record, write_pidfile};
 use super::{
     LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent,
     WorkerLauncher,
 };
+use crate::adapters::profile::{self, CustomProvider};
 use crate::adapters::sandbox::{
-    Limits, SandboxTools, WorkerLaunch, find_program, sandbox_available, worker_spec,
+    Limits, SandboxSpec, SandboxTools, WorkerLaunch, find_program, run_bounded, sandbox_available,
+    worker_spec,
 };
 
 /// Worker sandbox limits used by the launcher: [`Limits::WORKER`] with 8 GiB of address space.
@@ -59,6 +64,9 @@ pub const STDERR_LINE_BYTES: usize = 512;
 pub const STDERR_LINES_PER_SECOND: u32 = 100;
 const KILL_WAIT: Duration = Duration::from_secs(10);
 const INIT_DISCOVERY: Duration = Duration::from_secs(2);
+/// Wall-clock bound and largest accepted output of one model-catalogue run.
+pub const CATALOG_TIMEOUT: Duration = Duration::from_secs(60);
+pub const MAX_CATALOG_BYTES: u64 = 4 << 20;
 const POLL: Duration = Duration::from_millis(10);
 /// `sockaddr_un.sun_path` holds 108 bytes including the terminating NUL.
 pub const MAX_SOCKET_PATH: usize = 107;
@@ -254,17 +262,57 @@ fn safe_id(id: &str) -> bool {
 }
 
 impl SandboxLauncher {
-    fn provider_ready(&self, provider: &str) -> Result<(), LaunchError> {
-        if !self.config.policies.contains_key(provider) {
-            return Err(LaunchError::ProviderUnavailable(format!(
+    /// The LADE profile next to the run directory (`$STATE/profile`).
+    fn profile_dir(&self) -> Option<PathBuf> {
+        self.config
+            .run_dir
+            .parent()
+            .map(|state| state.join("profile"))
+    }
+
+    /// Custom providers of the LADE profile's `models.json` (none when it is absent or invalid).
+    fn custom_providers(&self) -> Vec<CustomProvider> {
+        self.profile_dir()
+            .and_then(|dir| profile::profile_providers(&dir).ok())
+            .unwrap_or_default()
+    }
+
+    /// The reviewed egress policy and the released credentials for `provider`: a built-in policy,
+    /// or the exact endpoint of a custom provider defined in the LADE profile.
+    fn resolve_provider(
+        &self,
+        provider: &str,
+    ) -> Result<(EgressPolicy, ReleasedCredentials), LaunchError> {
+        let unavailable = |e: String| LaunchError::ProviderUnavailable(e);
+        if let Some(policy) = self.config.policies.get(provider) {
+            let released = self
+                .config
+                .credentials
+                .resolve(provider)
+                .map_err(|e| unavailable(e.to_string()))?;
+            return Ok((policy.clone(), released));
+        }
+        let custom = self.custom_providers();
+        let Some(found) = custom.iter().find(|p| p.id == provider) else {
+            return Err(unavailable(format!(
                 "no egress policy for provider {provider}"
             )));
-        }
-        self.config
+        };
+        let released = self
+            .config
             .credentials
-            .resolve(provider)
-            .map(drop)
-            .map_err(|e| LaunchError::ProviderUnavailable(e.to_string()))
+            .resolve_custom(provider, &found.vars)
+            .map_err(|e| unavailable(e.to_string()))?;
+        let rule = EgressRule {
+            host: found.host.clone(),
+            port: found.port,
+            allow_private: found.local,
+        };
+        Ok((EgressPolicy::none().with_extra([rule]), released))
+    }
+
+    fn provider_ready(&self, provider: &str) -> Result<(), LaunchError> {
+        self.resolve_provider(provider).map(drop)
     }
 }
 
@@ -276,6 +324,59 @@ impl WorkerLauncher for SandboxLauncher {
             self.sandbox_ok.store(true, Ordering::SeqCst);
         }
         self.provider_ready(provider)
+    }
+
+    fn provider_access(&self, facts: &ProviderFacts) -> ProviderAccess {
+        classify(
+            facts,
+            &self.config.policies,
+            &self.config.credentials,
+            &self.custom_providers(),
+        )
+    }
+
+    fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
+        let sandbox = |e: crate::adapters::sandbox::SandboxError| {
+            LaunchError::SandboxUnavailable(e.to_string())
+        };
+        sandbox_available(&self.tools).map_err(sandbox)?;
+        let config = &self.config;
+        let node = config.node.canonicalize().map_err(LaunchError::Io)?;
+        let prefix = node
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| invalid("node prefix"))?
+            .to_path_buf();
+        let output = scratch.join("catalog.json");
+        let mut argv = vec![node.into_os_string()];
+        argv.extend(config.node_args.iter().cloned());
+        argv.push(
+            config
+                .worker_dir
+                .join("src/worker/catalog.ts")
+                .into_os_string(),
+        );
+        argv.push(output.clone().into_os_string());
+        if let Some(models) = models {
+            argv.push(models.as_os_str().to_os_string());
+        }
+        let mut spec = SandboxSpec::new(argv, scratch, config.limits).map_err(sandbox)?;
+        spec.ro_bind(&prefix)
+            .and_then(|s| s.ro_bind(&config.worker_dir))
+            .and_then(|s| s.rw_bind(scratch))
+            .and_then(|s| s.env("HOME", scratch))
+            .and_then(|s| s.env("LANG", "C.UTF-8"))
+            .and_then(|s| s.env("PI_CODING_AGENT_DIR", scratch))
+            .map_err(sandbox)?;
+        if let Some(models) = models {
+            spec.ro_bind(models).map_err(sandbox)?;
+        }
+        let outcome = run_bounded(spec.command(&self.tools), CATALOG_TIMEOUT, 16 << 10)
+            .map_err(LaunchError::Io)?;
+        if outcome.exit_code != Some(0) || outcome.timed_out {
+            return Err(LaunchError::Io(io::Error::other("model catalogue failed")));
+        }
+        read_bounded(&output)
     }
 
     fn launch(
@@ -305,13 +406,7 @@ impl WorkerLauncher for SandboxLauncher {
         sandbox_available(&self.tools)
             .map_err(|e| LaunchError::SandboxUnavailable(e.to_string()))?;
         let config = &self.config;
-        let policy = config.policies.get(&provider).cloned().ok_or_else(|| {
-            LaunchError::ProviderUnavailable(format!("no egress policy for provider {provider}"))
-        })?;
-        let credentials = config
-            .credentials
-            .resolve(&provider)
-            .map_err(|e| LaunchError::ProviderUnavailable(e.to_string()))?;
+        let (policy, credentials) = self.resolve_provider(&provider)?;
 
         ensure_private_dir(&config.run_dir).map_err(LaunchError::Io)?;
         let stem = format!("{}-{}", binding.objective_id, binding.execution_generation);
@@ -427,6 +522,15 @@ impl WorkerLauncher for SandboxLauncher {
         }
         Ok(Box::new(worker))
     }
+}
+
+/// Reads at most [`MAX_CATALOG_BYTES`] of a catalogue output file.
+pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
+    let meta = std::fs::symlink_metadata(path).map_err(LaunchError::Io)?;
+    if !meta.is_file() || meta.len() > MAX_CATALOG_BYTES {
+        return Err(invalid("model catalogue output"));
+    }
+    std::fs::read(path).map_err(LaunchError::Io)
 }
 
 /// State shared by the control handle and the per-launch threads.
