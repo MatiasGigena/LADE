@@ -1,0 +1,62 @@
+#!/bin/sh
+# Canonical IMP-013 load, latency and soak procedures (docs/planning/performance-budgets.md)
+# against the real release `laded`, real sandboxed workers and the offline `lade-fixture` model.
+# Not part of scripts/verify: a full load run takes about an hour, the soak 35 minutes.
+#
+#   scripts/load [OUT_DIR]          nominal 1/4-worker runs, service launches, GTK client phases
+#   scripts/load --soak [OUT_DIR]   warmup + soak with a quiescent PSS timeline
+#
+# OUT_DIR defaults to docs/implementation/evidence/imp-013. Results: load.md / load-timeline.csv,
+# soak.md / soak-timeline.csv. Knobs (defaults are the canonical procedure): LADE_LOAD_RUNS (5),
+# LADE_LOAD_IDLE_SECS (60), LADE_LOAD_SECS (300), LADE_LOAD_INPUTS (200), LADE_LOAD_OPENS (40),
+# LADE_LOAD_LAUNCHES (20), LADE_SOAK_WARMUP_SECS (300), LADE_SOAK_SECS (1800),
+# LADE_SOAK_CYCLE_SECS (60). The GTK client phases run under Xvfb (first free display from
+# LOAD_DISPLAY, default 93) when Xvfb and xdotool exist; otherwise the report says the client was not measured.
+# Requires bubblewrap (the service never runs workers unsandboxed) and Node 22.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+mode=load
+test=canonical_load
+if [ "${1:-}" = --soak ]; then
+  mode=soak
+  test=soak
+  shift
+fi
+OUT=${1:-$ROOT/docs/implementation/evidence/imp-013}
+mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
+command -v bwrap >/dev/null || { echo "load: bubblewrap is required" >&2; exit 2; }
+
+./scripts/cargo build --release --locked -p lade-system --bin laded
+LADE_LOAD_OUT=$OUT
+LADE_LOAD_LADED=$ROOT/target/release/laded
+export LADE_LOAD_OUT LADE_LOAD_LADED
+
+T=$(mktemp -d /tmp/lload.XXXXXX)
+xvfb=""
+cleanup() {
+  [ -z "$xvfb" ] || kill "$xvfb" 2>/dev/null || true
+  rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+if [ "$mode" = load ] && command -v Xvfb >/dev/null && command -v xdotool >/dev/null; then
+  ./scripts/cargo build --release --locked -p lade-desktop
+  # A display no other X server holds (other runs may share the host).
+  n=${LOAD_DISPLAY:-93}
+  while [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); done
+  DISPLAY=:$n
+  Xvfb "$DISPLAY" -screen 0 1440x900x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+  xvfb=$!
+  sleep 1
+  LADE_LOAD_CLIENT=$ROOT/target/release/lade-desktop
+  export DISPLAY LADE_LOAD_CLIENT
+fi
+echo "load: $mode -> $OUT (log: $T/$mode.log)"
+# Worker and service diagnostics are verbose; only the summary is kept.
+if ./scripts/cargo test --release --locked -p lade-system --test load -- --ignored --exact "$test" --nocapture >"$T/$mode.log" 2>&1; then
+  echo "load: done; see $OUT/$mode.md"
+else
+  tail -40 "$T/$mode.log" >&2
+  exit 1
+fi

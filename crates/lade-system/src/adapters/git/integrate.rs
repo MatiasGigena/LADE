@@ -228,6 +228,7 @@ impl Repository {
                 GitError::StaleRef { current, .. } => GitError::TargetMoved { current },
                 other => other,
             })?;
+        crate::fault::point("integrate.ref_moved");
         let Some(worktree) = worktree else {
             return Ok(SquashOutcome {
                 commit,
@@ -262,6 +263,66 @@ impl Repository {
                     },
                 })
             }
+        }
+    }
+
+    /// Completes the checkout step of a squash integration whose ref move survived a crash of
+    /// the integrating process (IMP-013 recovery): when `branch` holds `commit` and is checked
+    /// out in exactly one idle worktree, runs `read-tree -m -u <expected_target> <commit>` there.
+    /// The two-tree merge keeps index entries that already match `commit` and refuses to
+    /// overwrite local modifications, so a completed or locally edited checkout is never
+    /// damaged; calling it again is harmless. Returns the updated worktree, or `None` when the
+    /// target is not checked out. The ref is never moved back here.
+    pub fn finish_integration_checkout(
+        &self,
+        branch: &str,
+        expected_target: &GitId,
+        commit: &GitId,
+    ) -> Result<Option<PathBuf>> {
+        let state = self.target_checkout_state(branch)?;
+        if state.commit.as_ref() != Some(commit) {
+            return Err(GitError::TargetMoved {
+                current: state.commit,
+            });
+        }
+        let info = match state.checkouts.as_slice() {
+            [] => return Ok(None),
+            [only] => only,
+            [first, ..] => {
+                return Err(GitError::TargetBusy {
+                    worktree: first.path.clone(),
+                    reason: TargetBusyReason::MultipleCheckouts,
+                });
+            }
+        };
+        let worktree =
+            info.worktree
+                .clone()
+                .ok_or_else(|| GitError::TargetWorktreeUnavailable {
+                    worktree: info.path.clone(),
+                })?;
+        if !info.in_progress.is_empty() || info.index_locked {
+            return Err(GitError::TargetBusy {
+                worktree: info.path.clone(),
+                reason: if info.index_locked {
+                    TargetBusyReason::IndexLocked
+                } else {
+                    TargetBusyReason::InProgress(info.in_progress.clone())
+                },
+            });
+        }
+        let out = worktree
+            .git("read-tree")
+            .args(["read-tree", "-m", "-u", expected_target.hex(), commit.hex()])
+            .output()?;
+        if out.status.success() {
+            Ok(Some(worktree.path().to_path_buf()))
+        } else {
+            Err(GitError::CheckoutFailed {
+                worktree: worktree.path().to_path_buf(),
+                reverted: false,
+                stderr: out.stderr,
+            })
         }
     }
 }

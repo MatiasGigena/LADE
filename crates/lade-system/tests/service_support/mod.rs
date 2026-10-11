@@ -55,6 +55,7 @@ impl Env {
         ServiceConfig {
             state_dir: self.root.path().join("state"),
             runtime_dir: self.root.path().join("run"),
+            limits: lade_system::service::ResourceLimits::default(),
             storage_limit_bytes: lade_system::adapters::sandbox::WRITABLE_STORAGE_BYTES,
             cgroups: None,
         }
@@ -62,6 +63,17 @@ impl Env {
 
     pub fn start(&self, launcher: Arc<dyn WorkerLauncher>) -> RunningService {
         service::start(self.config(), launcher).expect("service starts")
+    }
+
+    /// Starts with explicit aggregate limits.
+    pub fn start_limited(
+        &self,
+        launcher: Arc<dyn WorkerLauncher>,
+        limits: service::ResourceLimits,
+    ) -> RunningService {
+        let mut config = self.config();
+        config.limits = limits;
+        service::start(config, launcher).expect("service starts")
     }
 
     pub fn capability(&self) -> String {
@@ -84,6 +96,8 @@ pub struct Client {
     writer: FrameWriter<UnixStream>,
     frames: Receiver<ClientBody>,
     pub events: VecDeque<EventFrame>,
+    /// Replies that arrived while another reply was awaited.
+    replies: Vec<Reply>,
     pub service_epoch: Id,
 }
 
@@ -123,6 +137,7 @@ impl Client {
                 writer,
                 frames,
                 events: VecDeque::new(),
+                replies: Vec::new(),
                 service_epoch,
             }),
             Ok(ClientBody::Event(event)) => Err(format!("refused: {:?}", event.event)),
@@ -154,10 +169,18 @@ impl Client {
     }
 
     pub fn wait_reply(&mut self, request_id: &Id) -> Reply {
+        if let Some(index) = self
+            .replies
+            .iter()
+            .position(|r| r.request_id == *request_id)
+        {
+            return self.replies.remove(index);
+        }
         let deadline = Instant::now() + TIMEOUT;
         loop {
             match self.pump(deadline) {
                 Some(ClientBody::Reply(reply)) if reply.request_id == *request_id => return reply,
+                Some(ClientBody::Reply(reply)) => self.replies.push(reply),
                 Some(ClientBody::Event(event)) => self.events.push_back(event),
                 Some(_) => {}
                 None => panic!("no reply for {request_id}"),
@@ -564,10 +587,19 @@ pub fn start_execution(client: &mut Client, objective: &Id) -> ObjectiveDetail {
 }
 
 pub fn wait_state(client: &mut Client, objective: &Id, state: ExecutionState) -> ObjectiveDetail {
-    eventually(&format!("execution {state:?}"), || {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
         let d = detail(client, objective);
-        (d.execution.state == state).then_some(d)
-    })
+        if d.execution.state == state {
+            return d;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out: execution {state:?}; last {:?}",
+            d.execution
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 pub fn changes(client: &mut Client, objective: &Id, basis: Basis) -> ChangeList {
@@ -609,4 +641,111 @@ pub fn worktree(env: &Env, objective: &Id) -> PathBuf {
         .path()
         .join("state/worktrees")
         .join(objective.as_str())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The real `laded` binary as a child process (crash windows, service kill).
+
+/// A `laded serve` child process of an [`Env`], with its stderr in a log file.
+pub struct Daemon {
+    child: Child,
+    pub log: PathBuf,
+}
+
+static DAEMON_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Env {
+    /// Starts `laded serve` for this environment (debug build: `fault` arms
+    /// `LADE_FAULT_POINT`) and waits until it serves.
+    pub fn spawn_laded(&self, fault: Option<&str>, extra: &[&str]) -> Daemon {
+        let run = DAEMON_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let log = self.root.path().join(format!("laded-{run}.log"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_laded"));
+        command
+            .arg("serve")
+            .arg("--state-dir")
+            .arg(self.root.path().join("state"))
+            .arg("--runtime-dir")
+            .arg(self.root.path().join("run"))
+            .args(extra)
+            .env_remove("LADE_FAULT_POINT")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(fs::File::create(&log).unwrap());
+        if let Some(point) = fault {
+            command.env("LADE_FAULT_POINT", point);
+        }
+        let mut daemon = Daemon {
+            child: command.spawn().expect("spawn laded"),
+            log,
+        };
+        let deadline = Instant::now() + TIMEOUT;
+        while !daemon.log_text().contains("laded: serving epoch=") {
+            if let Ok(Some(status)) = daemon.child.try_wait() {
+                panic!("laded exited early ({status}): {}", daemon.log_text());
+            }
+            assert!(
+                Instant::now() < deadline,
+                "laded did not start: {}",
+                daemon.log_text()
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+        daemon
+    }
+}
+
+impl Daemon {
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    pub fn log_text(&self) -> String {
+        fs::read_to_string(&self.log).unwrap_or_default()
+    }
+
+    /// Waits for the process to end by itself (an injected fault aborts it).
+    pub fn wait_exit(&mut self) -> std::process::ExitStatus {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if let Ok(Some(status)) = self.child.try_wait() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "laded did not exit: {}",
+                self.log_text()
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// `SIGKILL`, then reap.
+    pub fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Daemon {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Live (non-zombie) processes other than this one whose command line mentions `needle`.
+pub fn processes_mentioning(needle: &str) -> Vec<u32> {
+    let me = std::process::id();
+    fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| *pid != me)
+        .filter(|pid| {
+            let live = fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')));
+            live && fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle.as_bytes()))
+        })
+        .collect()
 }

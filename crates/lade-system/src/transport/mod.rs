@@ -35,6 +35,8 @@ pub const CAPABILITY_NAME: &str = "control.cap";
 pub const MAX_OUTBOUND_FRAMES: usize = 256;
 pub const MAX_OUTBOUND_BYTES: usize = 8 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// A single frame write that makes no progress for this long closes the link.
+pub const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PENDING_HANDSHAKES: usize = 8;
 
 #[derive(Debug)]
@@ -362,6 +364,9 @@ fn run_link<T: From<Inbound>>(
     let Ok(write_half) = stream.try_clone() else {
         return;
     };
+    // A client that stops reading cannot pin the writer thread: a stalled write ends the link
+    // (the queue bound already drops it from the service side, see `Outbound::push`).
+    let _ = write_half.set_write_timeout(Some(WRITE_STALL_TIMEOUT));
     let writer_out = out.clone();
     let writer = thread::Builder::new()
         .name(format!("laded-write-{conn}"))

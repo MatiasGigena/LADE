@@ -76,6 +76,15 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 
 `laded serve` runs in the foreground until killed (redacted diagnostics on stderr and in the bounded `$STATE/logs`, see [service.md](service.md#diagnostics)) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` model through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
+IMP-013 adds `service_concurrency.rs` and `service_crash.rs` (part of `scripts/verify`; the crash tests run the real
+`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and skip without bubblewrap) and the long
+procedures, which are **not** part of `scripts/verify`:
+
+```sh
+scripts/load [OUT_DIR]          # canonical 1/4-worker load, launches, GTK client phases (~1 h; release build)
+scripts/load --soak [OUT_DIR]   # 5 min warmup + 30 min soak (LADE_SOAK_SECS / LADE_SOAK_WARMUP_SECS)
+```
+
 `lade-desktop` is the live GTK client: it connects to `laded` over `$RUNTIME/control.sock` (u32-BE frames, `hello` + capability `auth`, single controlling lease), starts a detached sibling `laded serve` when none is running (unless `--no-spawn`), and offers the whole first-release loop — open a Workspace (`--open PATH` or Ctrl+O), create and start Objectives, Activity, Workbench inspection with Contextual Feedback, freeze, service-observed checks, approval, protected integration and cleanup. Every action's availability comes from the service's `available_actions`; the client never grants authority. `lade-desktop --preview` shows labelled fixture data without a service. Keyboard shortcut remaps are a client
 presentation preference in `$XDG_CONFIG_HOME/lade/keybindings.json` (else `~/.config/lade/keybindings.json`): JSON
 `{"version": 1, "bindings": {"focus-search": "F8", …}}` with action ids from `DEFAULT_APP_KEYBINDINGS`; the whole

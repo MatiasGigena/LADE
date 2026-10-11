@@ -12,6 +12,7 @@ pub mod adapters {
     pub mod sandbox;
 }
 pub mod diagnostics;
+pub mod fault;
 pub mod service;
 pub mod storage;
 pub mod supervision;

@@ -8,11 +8,15 @@ Source: `crates/lade-system/src/{bin/laded.rs,service,storage,transport}`.
 
 ```sh
 laded --version
-laded serve [--state-dir DIR] [--runtime-dir DIR]
+laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
+            [--storage-warn-mib N] [--storage-reserve-mib N]
 laded store info [--state-dir DIR]                 # schema this build understands, database schema, backups
 laded store restore --schema N [--state-dir DIR]   # rollback restore (used by scripts/install --rollback)
 laded diagnostics export OUT [--state-dir DIR]     # redacted diagnostics bundle, new 0600 file
 ```
+
+The limit flags set the [aggregate accounting](#aggregate-limits-and-storage-pressure-imp-013) across
+Objectives; the effective values are printed at startup (`laded: limits …`).
 
 Defaults: state `$XDG_STATE_HOME/lade` (`~/.local/state/lade`), runtime `$XDG_RUNTIME_DIR/lade` (fallback
 `$STATE/run`). Both must be absolute. Exit statuses: `0` version, `64` usage, `78` refused to start (unsafe directory,
@@ -159,7 +163,12 @@ After admission, frames are decoded with `decode_client_frame`: a schema-invalid
 `request_id` is answered `invalid_request` and the link stays; any other decode failure, a second `hello`, `auth`
 or `chunk.*` closes it. Each link has a reader thread and a writer thread fed by a bounded queue (256 frames /
 8 MiB). The service never blocks on a client: on overflow the queue is discarded, a `service.notice
-{code: "link_overflow"}` is sent and the link closes; the client resyncs from `snapshot`.
+{code: "link_overflow"}` is sent and the link closes; the client resyncs from `snapshot`. A frame write that
+makes no progress for 10 s (`WRITE_STALL_TIMEOUT`, a client that stopped reading) ends the link too, so a stalled
+client never pins the writer thread or its socket. With one controlling link, the 8 MiB link bound is also the
+service-wide outbound bound (≤ 32 MiB budget). `service_concurrency.rs::a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs`
+sends 8,000 queries without reading their replies: the link is dropped, the next client is admitted and resyncs
+from `snapshot`, the test process grows by less than 64 MiB and the stalled link receives a bounded tail.
 
 ## Threading model
 
@@ -167,18 +176,28 @@ or `chunk.*` closes it. Each link has a reader thread and a writer thread fed by
 accept thread ── per-link reader ─┐
 tick thread (100 ms) ─────────────┤   (the tick also drains terminal output, see below)
 supervisor forwarder (launcher) ──┼─► service queue ─► service thread (state + store) ─► per-link writer
-pool (3 threads) job results ─────┘                         │
-                                                            └─► pool: Git capture/diff/read/search, freeze,
-                                                                refresh, verification, integration,
-                                                                provisioning + launch, cleanup
+job lanes: results ───────────────┘                         │
+                                                            ├─► general lane (3 threads): Git capture/diff/
+                                                            │   read/search, freeze, refresh, integration,
+                                                            │   provisioning + launch, cleanup
+                                                            ├─► verification lane (4 threads): checks
+                                                            └─► reaper lane (4 threads): worker termination,
+                                                                terminal kills
 ```
 
 The service thread owns all in-memory state and the only store connection. Mutations follow
 clone → domain transition → commit (short transaction) → swap, so a failed write leaves memory unchanged. Long work
-runs on the pool with owned inputs and posts its result back; on completion the service revalidates (lifecycle,
+runs on a job lane with owned inputs and posts its result back; on completion the service revalidates (lifecycle,
 execution liveness, candidate status, generation) before committing. A long mutating command holds a per-Objective
 `busy` marker: other mutating commands on that Objective are rejected `conflict` until it completes (queries
 continue). Short Git reads (target resolution for details, `workspace.open`, branch lists) run inline.
+
+The lanes keep concurrent Objectives from starving each other (IMP-013): verifications (up to 900 s each) never
+occupy the threads that capture, freeze, launch or integrate, and revocation — terminating a worker, killing a
+terminal after lease loss, a freeze or a lifecycle change — never waits behind other work. Jobs a request starts
+are held until the request's operation is journaled `pending` and only then submitted, so a crash can never leave
+effects of an operation the journal does not know (the integration intent and its pending operation are one
+transaction).
 
 ## Requests
 
@@ -249,7 +268,12 @@ a reused `request_id` with different content is `duplicate_conflict`):
   files where the candidate adds files refuse with `conflict` naming them, before any ref moves; then CAS ref update
   + `read-tree -m -u`; dirty/busy targets refuse with `conflict` and stay untouched; if the real step still fails —
   the worktree changed after the dry run — the ref is CAS-reverted); success → Integrated, approval consumed, journal
-  `done`.
+  `done`. **Same-target
+  serialization (IMP-013):** one integration per (Workspace, target branch) runs at a time; a request for a target
+  that is being integrated waits (its Objective is `busy`, its operation `pending`) and is then checked against the
+  target the first one moved — normally `stale_target` with the approval invalidated, so a stale frozen review is
+  never integrated and the developer refreshes and re-approves. Integrations into other targets or repositories do
+  not wait. The Git CAS (`update-ref` with the expected old value) remains the final guard.
 - `objective.complete`: requires an empty Change Set (captured on the pool); `objective.discard`: core discard.
 - `objective.cleanup`: core cleanup rules; removes the worktree (without confirmation only when its content equals
   the branch commit) and CAS-deletes the branch; records, retention refs, artifacts and session files stay.
@@ -341,7 +365,7 @@ the worker's `prlimit` quotas.
   whose worktree exists (`invalid_lifecycle` "start the agent once" otherwise, and after Cleanup) and whose lifecycle
   is `defined`/`active` (read-write) or `frozen`/`approved` (**read-only**: the worktree is bound read-only). Any
   other lifecycle is `invalid_lifecycle`. Without a working sandbox: `execution_unavailable` — there is no
-  unsandboxed terminal. At most 4 terminals per Objective and 16 in total (`limit_reached`). The sandbox starts on
+  unsandboxed terminal. At most 4 terminals per Objective and `--max-terminals` (default 16) across all Objectives (`limit_reached`, naming both counts; before IMP-013 the total was wrongly counted per Objective). The sandbox starts on
   the pool; on completion the service revalidates the lease, the lifecycle and writer exclusion and kills a terminal
   whose scope changed meanwhile (`conflict`).
 - **Review writer exclusion.** `review.freeze` kills every writable terminal of the Objective — waiting for its
@@ -420,7 +444,66 @@ verifications interrupted, `dispatched` inputs → `uncertain`; nothing resumes;
 `sweep_stale($STATE/run)` (every `prlimit`/`bwrap` process carrying this run directory's sandbox marker, recorded or
 not, then pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/`prlimit` process of this uid whose
 arguments reference the state directory, leftover verification copies and `lade/verify/*` branches, and
-`$STATE/tmp`. With delegated cgroups `laded` has already killed and removed leftover sandbox cgroups.
+`$STATE/tmp`. With delegated cgroups `laded` has already killed and removed leftover sandbox cgroups. IMP-013 additions: a reconciled-done integration whose crash fell between the ref move and
+`read-tree` gets its checkout finished (`Repository::finish_integration_checkout`: `read-tree -m -u <expected>
+<commit>` in the single idle checkout; it keeps an already-updated index and refuses to overwrite local edits —
+then the first client sees a `service.notice {code: recovery}` naming the target); and a worktree that
+provisioning created but did not record (crash before `launch_done`) is adopted by the next launch when it is a
+registered worktree on the Objective's `lade/<id>` branch still at the start commit (no agent ran in it).
+
+### Crash-window matrix (A09/A10)
+
+Debug builds abort the process at a named point when `LADE_FAULT_POINT=<point>` is set (`lade_system::fault`;
+release builds compile the hook to nothing). `tests/service_crash.rs` runs the real `laded` binary with real
+sandboxed workers, aborts it at each point, restarts it and checks the recovered state and that the flow
+continues. Every point below is **tested**:
+
+| Point | State left by the crash | Recovery observed |
+| --- | --- | --- |
+| `input.accepted` | input + outcome committed, no reply, nothing dispatched | operation `completed`; input `queued`, delivered once after the explicit Resume |
+| `dispatch.recorded` | `dispatched` committed, frame never written | input `uncertain` (badge), never resent, also not after Resume |
+| `launch.provisioned` | worktree + branch created, not recorded | execution interrupted; Resume adopts the worktree (one `lade/*` branch) |
+| `capture.retained` | retention ref, no capture row | orphan ref harmless; the next capture records normally |
+| `freeze.branch_moved` | Objective branch at an unrecorded candidate commit | operation `uncertain`, Objective `active` without candidate; freezing again succeeds (CAS from the moved branch) |
+| `freeze.recorded` | candidate + outcome committed, no reply | operation `completed` with the candidate; Objective `frozen` |
+| `verify.copy` | verification copy and `lade/verify/*` branch, check not run | verification `interrupted`; copy and branch swept |
+| `integrate.intent` | intent + pending operation journaled, target untouched | `reconciled_aborted`; operation `uncertain`; approval expired; target unchanged |
+| `integrate.ref_moved` | target ref moved, checked-out files behind | `reconciled_done`; checkout finished at start (clean `git status`, files present) |
+| `integrate.applied` | Git done, outcome not recorded | `reconciled_done`, Objective `integrated`; the lost reply stays `uncertain` |
+| `cleanup.removed` | worktree and branch gone, record not cleaned | cleanup runs again and completes (idempotent); records and retention refs stay |
+
+Not injected (covered by design or out of reach): a crash inside a SQLite transaction (atomic by SQLite), inside
+pi's own session writes (pi does not fsync; see limitations), during a session fork/import rebinding, and the
+first-message gap of pi.
+
+`service_crash.rs::killing_the_service_ends_four_executions_and_their_terminals` kills `laded` (`SIGKILL`) while
+four sandboxed workers run and each Objective has a terminal with a `setsid nohup` daemon: no sandbox process
+and no daemon survives (bubblewrap `--die-with-parent`), and the restart shows all four executions interrupted,
+none resumed.
+
+## Aggregate limits and storage pressure (IMP-013)
+
+Source: `service/limits.rs`. Accounting across Objectives lives in the service only (sandbox limits —
+`prlimit`, cgroups — are the launcher's). Every limit is configurable, printed at startup and named in the
+refusal and in `available_actions`; the defaults are **proposals awaiting approval** (#14 policy):
+
+| Limit | Flag | Default | At the limit |
+| --- | --- | --- | --- |
+| live agent executions (one sandboxed worker each) | `--max-workers` | 16 | `execution.start`/`resume` → `limit_reached` "N of N agents are running (laded --max-workers N); stop one or raise the limit"; nothing is recorded; the action shows the same reason |
+| contained terminals in total | `--max-terminals` | 16 (4 per Objective, fixed) | `terminal.open` → `limit_reached` naming both counts |
+| free space on the state filesystem: warning | `--storage-warn-mib` | 2048 | `service.notice {level: warning, code: storage_low}` (on the transition and to every newly attached client) |
+| free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "storage pressure: … free, below the … reserve" — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
+
+The free-space reserve complements, and does not replace, the per-execution writable-storage monitor (IMP-006:
+worktree + session directory against `WRITABLE_STORAGE_BYTES`, the agent stopped with `limit_reached`): that one
+bounds one Objective's growth, this one protects the filesystem shared by every Objective and the store. Four is a
+measurement point, not a cap: the default admits 16 workers and the tests run five and six. Free space
+(`statvfs` `f_bavail × f_frsize` of `$STATE`) is checked at start and every second. Under pressure, decisions,
+drafts, accepted input (delivery `blocked` until Resume), captures, freezes, approvals, integrations and the
+activity history keep being recorded inside the reserve; nothing is deleted to make room and running executions
+are not stopped. Bounded spools: link queues (8 MiB), worker queues (8 MiB), terminal rings (1 MiB × terminals),
+and activity items (192 KiB each) are unchanged; streamed activity text is still flushed
+every second (a crash loses at most ~1 s of streamed text; accepted input and decisions are durable).
 
 ## Tests
 
@@ -439,6 +522,20 @@ a > 64 MiB file (whole-file digest, exact continuation, character-boundary refus
 chunk); an untracked collision refused before the target ref moves (reflog unchanged), then integrated once moved
 away; `objective.delete_history` refused before cleanup and without confirmation, then deleting every retention ref,
 durable across a restart.
+
+IMP-013: `tests/service_concurrency.rs` — four real (sandboxed) workers started and driven at once on two
+repositories: each worktree holds only its own Objective's files, an absolute-path write into another
+Objective's worktree fails inside the sandbox, a terminal of one Objective cannot see another's worktree or any
+session directory, one `lade/*` branch per Objective in its own repository, candidate retention refs never in
+the other repository; two integrations into the same `main` sent together → exactly one integrates, the other
+is `stale_target` with its approval invalidated (and a third approval bound to the old target too), while an
+integration into the second repository does not wait; refresh → re-approve → integrate leaves `main` with all
+three changes and a clean checkout. Aggregate worker quota (five live, the sixth refused with the visible
+reason, a cancel frees a slot), aggregate terminal total across Objectives, storage warning and reserve with the
+refusals and the records that keep working, a client crash with four terminals (their `setsid` daemons die,
+four agents keep running), the slow client above. `tests/service_crash.rs` — the crash-window matrix and the
+service kill. `tests/load.rs` (ignored; `scripts/load`) — the canonical load, launch and soak procedures; results
+in [evidence/imp-013](evidence/imp-013/README.md).
 
 ## Known gaps
 

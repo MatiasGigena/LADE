@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! laded --version
-//! laded serve [--state-dir DIR] [--runtime-dir DIR]
+//! laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
+//!             [--storage-warn-mib N] [--storage-reserve-mib N]
 //! laded credentials set <provider> [--variable NAME]
 //! laded credentials clear <provider> [--variable NAME]
 //! laded store info [--state-dir DIR]
@@ -29,7 +30,7 @@ use rustix::termios::{LocalModes, OptionalActions, Termios, isatty, tcgetattr, t
 
 use lade_system::adapters::sandbox::{OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup};
 use lade_system::diagnostics;
-use lade_system::service::{self, ServiceConfig, StartError};
+use lade_system::service::{self, ResourceLimits, ServiceConfig, StartError};
 use lade_system::storage::{self, backup};
 use lade_system::supervision::credentials::{FIXTURE_PROVIDER, custom_var, provider_env_vars};
 use lade_system::supervision::secret_service::{
@@ -40,7 +41,8 @@ use lade_system::supervision::{
     WorkerLauncher, default_launcher,
 };
 
-const USAGE: &str = "usage: laded serve [--state-dir DIR] [--runtime-dir DIR]
+const USAGE: &str = "usage: laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N]
+                   [--max-terminals N] [--storage-warn-mib N] [--storage-reserve-mib N]
        laded credentials set|clear <provider> [--variable NAME]
        laded store info [--state-dir DIR]
        laded store restore --schema N [--state-dir DIR]
@@ -292,6 +294,8 @@ struct Args {
     runtime: Option<PathBuf>,
     schema: Option<i64>,
     out: Option<PathBuf>,
+    /// Aggregate accounting across Objectives (`serve` only); defaults printed at startup.
+    limits: ResourceLimits,
 }
 
 /// Parses `--flag VALUE` pairs (each at most once, only the `allowed` ones) and, when
@@ -302,7 +306,9 @@ fn parse_args(args: &[OsString], allowed: &[&str], positional: bool) -> Option<A
         runtime: None,
         schema: None,
         out: None,
+        limits: ResourceLimits::default(),
     };
+    let mut seen = Vec::new();
     let mut iter = args.iter().peekable();
     if positional {
         let first = iter.next()?;
@@ -316,8 +322,19 @@ fn parse_args(args: &[OsString], allowed: &[&str], positional: bool) -> Option<A
         if !allowed.contains(&flag) {
             return None;
         }
+        if seen.contains(&flag) {
+            return None;
+        }
+        seen.push(flag);
         let value = iter.next()?;
+        let number = || value.to_str()?.parse::<u64>().ok();
+        let count = || usize::try_from(number()?).ok().filter(|n| *n > 0);
+        let mib = || number()?.checked_mul(1 << 20);
         match flag {
+            "--max-workers" => parsed.limits.max_workers = count()?,
+            "--max-terminals" => parsed.limits.max_terminals = count()?,
+            "--storage-warn-mib" => parsed.limits.storage_warn_bytes = mib()?,
+            "--storage-reserve-mib" => parsed.limits.storage_reserve_bytes = mib()?,
             "--state-dir" if parsed.state.is_none() => parsed.state = Some(PathBuf::from(value)),
             "--runtime-dir" if parsed.runtime.is_none() => {
                 parsed.runtime = Some(PathBuf::from(value));
@@ -332,7 +349,7 @@ fn parse_args(args: &[OsString], allowed: &[&str], positional: bool) -> Option<A
 }
 
 fn config(parsed: &Args) -> Result<ServiceConfig, ExitCode> {
-    let Some(config) =
+    let Some(mut config) =
         ServiceConfig::from_environment(parsed.state.clone(), parsed.runtime.clone())
     else {
         eprintln!("laded: no state directory (set XDG_STATE_HOME or HOME, or pass --state-dir)");
@@ -342,6 +359,7 @@ fn config(parsed: &Args) -> Result<ServiceConfig, ExitCode> {
         eprintln!("laded: --state-dir and --runtime-dir must be absolute paths");
         return Err(ExitCode::from(64));
     }
+    config.limits = parsed.limits.clone();
     Ok(config)
 }
 
@@ -514,8 +532,19 @@ fn main() -> ExitCode {
         .map(|a| a.to_str().unwrap_or(""))
         .collect();
     let parsed = match words.as_slice() {
-        ["serve", ..] => parse_args(&args[1..], &["--state-dir", "--runtime-dir"], false)
-            .map(|p| (serve as fn(&Args) -> ExitCode, p)),
+        ["serve", ..] => parse_args(
+            &args[1..],
+            &[
+                "--state-dir",
+                "--runtime-dir",
+                "--max-workers",
+                "--max-terminals",
+                "--storage-warn-mib",
+                "--storage-reserve-mib",
+            ],
+            false,
+        )
+        .map(|p| (serve as fn(&Args) -> ExitCode, p)),
         ["store", "info"] => parse_args(&args[2..], &["--state-dir"], false)
             .map(|p| (store_info as fn(&Args) -> ExitCode, p)),
         ["store", "restore"] => parse_args(&args[2..], &["--state-dir", "--schema"], false)

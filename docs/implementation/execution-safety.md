@@ -414,6 +414,8 @@ interrupts it.
   parent-death signals keeps running until the next `laded` start (startup sweep by marker) or until the unit stops.
 - **Seccomp scope**: a denylist; `ptrace` and `io_uring` are not filtered; the remaining kernel attack surface is that
   of an unprivileged user namespace.
+- **Service loss with four executions**: killing `laded` with four running workers and four terminals (each
+  with a `setsid nohup` daemon) leaves no process behind (`service_crash.rs`, IMP-013).
 - **Network scope**: the allowlist is per provider host, not per request; any code in the sandbox (tools,
   extensions) can use the provider tunnel with the released key. Destination filtering is not data-loss
   prevention: content sent to an allowed host is not inspected. Through an upstream proxy, DNS-based
@@ -434,7 +436,10 @@ interrupts it.
   otherwise filtered.
 - **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values, not an aggregate
   per-Objective budget, and `RLIMIT_NPROC` is still per real UID (root: not enforced). With delegation the terminal
-  shares the Objective's cgroup limits with the agent.
+  shares the Objective's cgroup limits with the agent. IMP-013 adds **counting** across Objectives in the
+  service (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new
+  writers; see [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many
+  sandboxes exist, not what each may consume.
 - **Terminal and agent write concurrently** while the Objective is active: the terminal is a second writer of the
   worktree until a freeze excludes both. Changes a terminal makes appear in the Change Set like the agent's (and
   count toward the writable-storage budget).
