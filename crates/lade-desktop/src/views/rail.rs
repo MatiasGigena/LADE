@@ -124,19 +124,21 @@ impl Rail {
             &row,
             &format!("objective:{}", objective.objective_id.as_str()),
         );
-        // Title plus one secondary line: sign, status and attention reasons as text. The outcome
-        // is the row's tooltip (and stays in the work area and the Overview).
+        // Title plus, when the group heading does not already say it, one line with the sign and
+        // the attention reasons. The outcome is the row's tooltip (its home is the Overview's intent).
         let content = vbox(space::TIGHT);
         let title = label(&objective.title, &["objective-title"]);
         title.set_lines(2);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.append(&title);
-        let line = panel::objective_row_line(objective);
-        content.append(&widgets::line_label(
-            &line,
-            &["meta", "objective-status"],
-            gtk::pango::EllipsizeMode::End,
-        ));
+        // Only what the group heading does not say: attention reasons, or a closed lifecycle.
+        if let Some(line) = panel::objective_row_line(objective) {
+            content.append(&widgets::line_label(
+                &line,
+                &["meta", "objective-status"],
+                gtk::pango::EllipsizeMode::End,
+            ));
+        }
         row.set_child(Some(&content));
         if !objective.outcome.is_empty() {
             row.set_tooltip_text(Some(&format!("{}\n{}", objective.title, objective.outcome)));

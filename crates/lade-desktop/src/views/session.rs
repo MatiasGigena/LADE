@@ -195,12 +195,11 @@ pub fn session_section(
     };
     match &session {
         Some(view) => {
+            // Model and generation are on Activity's state line; here only what it lacks.
             s.append(&label(
                 &format!(
-                    "{} · thinking {} · generation {} ({})",
-                    view.model.label(),
+                    "Thinking {} · this generation: {}",
                     view.thinking.label(),
-                    view.generation,
                     view.reason
                 ),
                 &[],

@@ -60,9 +60,7 @@ impl Workbench {
         top.append(&heading);
         let details_toggle = gtk::ToggleButton::with_label("Objective details");
         details_toggle.set_valign(gtk::Align::Start);
-        details_toggle.set_tooltip_text(Some(
-            "Show or hide the outcome, status details and collaboration journey",
-        ));
+        details_toggle.set_tooltip_text(Some("Show or hide the collaboration journey"));
         details_toggle.set_visible(false);
         top.append(&details_toggle);
         page.append(&top);
@@ -239,20 +237,6 @@ impl Workbench {
             .is_some_and(|i| !i.is_empty());
         drop(state);
 
-        let breadcrumb = hbox(space::TIGHT);
-        breadcrumb.add_css_class("breadcrumb");
-        breadcrumb.append(&label("Objectives", &["meta"]));
-        breadcrumb.append(&label("/", &["meta"]));
-        let crumb = widgets::line_label(
-            &summary.title,
-            &["breadcrumb-current"],
-            gtk::pango::EllipsizeMode::End,
-        );
-        breadcrumb.append(&crumb);
-        set_accessible_label(&breadcrumb, &format!("Objectives / {}", summary.title));
-        self.heading.append(&breadcrumb);
-        details.push(breadcrumb.upcast());
-
         let text = vbox(space::TIGHT);
         let title = widgets::heading(&summary.title, "objective-heading");
         set_focus_key(&title, "centre:title");
@@ -260,11 +244,9 @@ impl Workbench {
         title.set_selectable(true);
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
-        let outcome = label(&summary.outcome, &["secondary", "outcome-line"]);
-        text.append(&outcome);
-        details.push(outcome.upcast());
         self.heading.append(&text);
-        // The status lives in the Overview beside this column. The compact composition shows one
+        // The status and its reasons live in the Objectives list (the outcome in the Overview's
+        // intent). The compact composition shows one
         // region at a time, so the work area then carries it as one line of its own.
         let (sign, status_text) = panel::status_line(&summary);
         let status = widgets::sign_text(sign, &status_text);
@@ -449,13 +431,8 @@ impl Workbench {
                 .map(|c| c.status),
             _ => None,
         };
-        let (short, full) = format::version_line(
-            &ui.basis,
-            &list.basis_label,
-            status,
-            detail.as_ref(),
-            &list.target,
-        );
+        let (short, full) =
+            format::version_line(&ui.basis, &list.basis_label, status, &list.target);
         let version_label = label(&short, &["meta", "version-label"]);
         version_label.set_hexpand(true);
         version_label.set_tooltip_text(Some(&full));

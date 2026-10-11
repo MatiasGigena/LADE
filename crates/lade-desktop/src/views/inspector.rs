@@ -1,10 +1,13 @@
-//! Right inspector: Overview (status, the one next action, More actions, intent and Details),
-//! Evidence (candidates, service-observed checks) and Feedback (drafts with save state,
-//! submission, accepted inputs).
+//! Right inspector: Overview (approval state, the one next action, More actions, intent and
+//! Details), Evidence (candidates, service-observed checks) and Feedback (drafts with save state
+//! and submission of Contextual Feedback).
 //!
-//! Every action's availability comes from `available_actions` (`presentation::panel` only picks
-//! which offered action is the next step); disabled actions keep their place and their reason.
-//! The model picker, Agent Session tools and LADE profile resources live in Activity.
+//! Every action's availability comes from `available_actions`; `presentation::panel::home` gives
+//! each action one surface, and this panel draws only the Overview's, Evidence's and Feedback's.
+//! Disabled actions keep their place and their reason. Agent Session control (state, Start /
+//! Cancel / Resume, the model, accepted inputs and their delivery) is Activity's; the Overview
+//! points there in one line when the Objective waits for it. The Objective's status and
+//! attention reasons are the Objectives list's.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -27,7 +30,7 @@ use crate::presentation::model::{
     ObjectiveDetail, Timestamp, VerificationState,
 };
 use crate::presentation::panel::{self, PanelAction, Tone};
-use crate::presentation::store::{Change, InspectorTab};
+use crate::presentation::store::{Change, InspectorTab, MainView};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
 const FEEDBACK_MODES: [DeliveryMode; 2] = [DeliveryMode::Steer, DeliveryMode::FollowUp];
@@ -51,7 +54,6 @@ pub struct Inspector {
     drafts_box: gtk::Box,
     drafts_heading: gtk::Box,
     submit_box: gtk::Box,
-    inputs_box: gtk::Box,
     drafts: RefCell<HashMap<DraftId, DraftWidgets>>,
     last_error: RefCell<Option<String>>,
     check_entry: gtk::Entry,
@@ -62,7 +64,6 @@ pub struct Inspector {
     /// Disclosure states, kept across rebuilds (presentation only; collapsed by default).
     more_open: Cell<bool>,
     details_open: Cell<bool>,
-    model_open: Cell<bool>,
 }
 
 fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
@@ -108,8 +109,6 @@ impl Inspector {
         feedback.append(&drafts_box);
         let submit_box = vbox(space::GROUP);
         feedback.append(&submit_box);
-        let inputs_box = vbox(space::GROUP);
-        feedback.append(&inputs_box);
 
         let check_entry = gtk::Entry::builder()
             .placeholder_text("Command, e.g. npm test")
@@ -126,7 +125,6 @@ impl Inspector {
             drafts_box,
             drafts_heading,
             submit_box,
-            inputs_box,
             drafts: RefCell::new(HashMap::new()),
             last_error: RefCell::new(None),
             check_entry,
@@ -135,7 +133,6 @@ impl Inspector {
             dialogs: session::DialogHost::default(),
             more_open: Cell::new(false),
             details_open: Cell::new(false),
-            model_open: Cell::new(false),
         });
         let this = Rc::downgrade(&inspector);
         inspector.root.connect_switch_page(move |_, _, index| {
@@ -153,7 +150,6 @@ impl Inspector {
         inspector.render_evidence();
         inspector.reconcile_drafts();
         inspector.render_submit();
-        inspector.render_inputs();
         inspector.sync_tab();
         inspector
     }
@@ -165,13 +161,12 @@ impl Inspector {
     pub fn refresh(self: &Rc<Self>, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
         let mine = |id: &crate::presentation::model::ObjectiveId| Some(id) == selected.as_ref();
-        let (mut overview, mut evidence, mut drafts, mut submit, mut inputs) =
-            (false, false, false, false, false);
+        let (mut overview, mut evidence, mut drafts, mut submit) = (false, false, false, false);
         for change in changes {
             match change {
                 Change::Selection => {
                     self.last_error.replace(None);
-                    (overview, evidence, drafts, submit, inputs) = (true, true, true, true, true);
+                    (overview, evidence, drafts, submit) = (true, true, true, true);
                 }
                 Change::Connection | Change::Workspaces => {
                     (overview, evidence, submit) = (true, true, true);
@@ -187,13 +182,7 @@ impl Inspector {
                     self.render_draft_status(id);
                     submit = true;
                 }
-                Change::Inputs(id) if mine(id) => {
-                    inputs = true;
-                    overview = true;
-                }
                 Change::InspectorTab => self.sync_tab(),
-                Change::Catalog | Change::Resources => overview = true,
-                Change::Session(id) if mine(id) => overview = true,
                 Change::Dialogs => self.dialogs.sync(&self.root, &self.controller),
                 _ => {}
             }
@@ -209,9 +198,6 @@ impl Inspector {
         }
         if submit {
             widgets::rebuild_preserving_focus(&self.submit_box.clone(), || self.render_submit());
-        }
-        if inputs {
-            self.render_inputs();
         }
     }
 
@@ -258,27 +244,30 @@ impl Inspector {
         };
         let summary = &detail.summary;
 
-        // Status, once on this surface, and the essentials: agent model and execution state.
-        let status = vbox(space::TIGHT);
-        status.add_css_class("panel-status");
-        let (sign, text) = panel::status_line(summary);
-        let line = widgets::sign_text(sign, &text);
-        line.add_css_class("strong");
-        set_accessible_label(&line, &format!("Status: {text}"));
-        status.append(&line);
-        status.append(&label(&panel::agent_line(&detail), &["meta"]));
-        if let Some(approval) = &detail.approval {
-            status.append(&label(format::approval_label(approval.state), &["meta"]));
-        }
-        self.overview.append(&status);
-
-        // The one next action, with the service's answer to the latest command below it.
+        // The status and its reasons live in the Objectives list, the agent's state in Activity;
+        // the Overview starts with what only it has: the approval state and the next step.
         let next_area = vbox(space::ITEM);
         next_area.add_css_class("next-action");
+        if let Some(approval) = &detail.approval {
+            next_area.append(&label(format::approval_label(approval.state), &["meta"]));
+        }
+        // An agent control the Objective waits for is Activity's: one line and a jump there.
+        if let Some(pointer) = panel::agent_pointer(&detail) {
+            let row = vbox(0);
+            row.append(&label(&pointer, &["meta"]));
+            let open = widgets::button("Open Activity", &["quiet", "list-action-button"]);
+            open.set_halign(gtk::Align::Start);
+            set_accessible_description(&open, &pointer);
+            set_focus_key(&open, "overview:open-activity");
+            let controller = self.controller.clone();
+            open.connect_clicked(move |_| controller.set_view(MainView::Activity));
+            row.append(&open);
+            next_area.append(&row);
+        }
         let next = panel::next_action(&detail);
         match &next {
             Some(next) => next_area.append(&self.action_widget(&detail, next, true)),
-            None if !summary.lifecycle.is_archived() => {
+            None if !summary.lifecycle.is_archived() && panel::agent_pointer(&detail).is_none() => {
                 next_area.append(&label("No step is available right now.", &["meta"]))
             }
             None => {}
@@ -452,51 +441,17 @@ impl Inspector {
                 "Removes the Objective's branch and worktree; records and evidence stay.",
                 &["meta"],
             )),
-            ActionName::ExecutionStart if enabled => {
-                // Choosing the model is part of starting: one line, the picker on demand.
-                let chosen = vbox(space::TIGHT);
-                self.controller.picker_defaults();
-                chosen.append(&label(&self.model_summary(), &["meta"]));
-                let this = Rc::downgrade(self);
-                chosen.append(&widgets::disclosure(
-                    "Model and thinking",
-                    self.model_open.get(),
-                    &session::model_picker(&self.controller),
-                    move |open| {
-                        if let Some(this) = this.upgrade() {
-                            this.model_open.set(open);
-                        }
-                    },
-                ));
-                row.append(&chosen);
-            }
             _ => {}
         }
         row
     }
 
-    fn model_summary(&self) -> String {
-        match self.controller.chosen_model() {
-            Ok((model, thinking)) => {
-                format!("Model {} · thinking {}", model.label(), thinking.label())
-            }
-            Err(message) => message,
-        }
-    }
-
-    /// Runs an Overview action; confirmations open as dialogs that return focus to `button`.
+    /// Runs an Overview action (`panel::home` is Overview); confirmations open as dialogs that
+    /// return focus to `button`. Agent controls, checks and feedback have their own surfaces.
     fn activate(self: &Rc<Self>, action: ActionName, button: &gtk::Button) {
         let Some(detail) = self.detail() else { return };
         let controller = self.controller.clone();
         match action {
-            ActionName::ExecutionStart => {
-                let result = controller.chosen_model().and_then(|(model, thinking)| {
-                    controller.start_execution(model, Some(thinking))
-                });
-                self.report(result);
-            }
-            ActionName::ExecutionCancel => self.report(controller.cancel()),
-            ActionName::ExecutionResume => self.report(controller.resume()),
             ActionName::ReviewFreeze => self.report(controller.freeze()),
             ActionName::ReviewRefresh => self.report(controller.refresh_candidate()),
             ActionName::ReviewReturn => dialogs::confirm(
@@ -555,7 +510,13 @@ impl Inspector {
                 dialogs::delete_history(button, &controller, &detail.summary.title);
             }
             ActionName::ObjectiveUpdateIntent => dialogs::edit_intent(button, &controller),
-            ActionName::MessageSend | ActionName::FeedbackSubmit | ActionName::ReviewVerify => {}
+            // Drawn on their own surfaces (`panel::home`), never here.
+            ActionName::ExecutionStart
+            | ActionName::ExecutionCancel
+            | ActionName::ExecutionResume
+            | ActionName::MessageSend
+            | ActionName::FeedbackSubmit
+            | ActionName::ReviewVerify => {}
         }
     }
 
@@ -797,10 +758,21 @@ impl Inspector {
             &["meta"],
         ));
         if editors.is_empty() {
-            self.drafts_heading.append(&label(
-                "Select text in the viewer, then Add feedback to start a draft.",
+            // How to start a draft is the viewer's hint; accepted feedback and its delivery are
+            // Activity's ledger: one line and a jump there.
+            let none = vbox(0);
+            none.append(&label(
+                "No unsent drafts. Accepted feedback and its delivery are listed in Activity.",
                 &["meta"],
             ));
+            let open = widgets::button("Open Activity", &["quiet", "list-action-button"]);
+            open.set_halign(gtk::Align::Start);
+            set_accessible_description(&open, "Accepted inputs and their delivery state");
+            set_focus_key(&open, "feedback:open-activity");
+            let controller = self.controller.clone();
+            open.connect_clicked(move |_| controller.set_view(MainView::Activity));
+            none.append(&open);
+            self.drafts_heading.append(&none);
         }
         let mut widgets_map = self.drafts.borrow_mut();
         widgets_map.retain(|draft_id, w| {
@@ -1019,18 +991,12 @@ impl Inspector {
                 controller.set_feedback_mode(*m);
             }
         });
+        // What the mode means is explained once, in Activity's composer; here it is the
+        // choice's tooltip and accessible description.
+        let explanation = format::mode_explanation(batch.mode);
+        mode.set_tooltip_text(Some(explanation));
+        set_accessible_description(&mode, explanation);
         s.append(&field("Delivery", &mode));
-        s.append(&label(
-            match batch.mode {
-                DeliveryMode::FollowUp => {
-                    "Follow-up waits until the agent finishes its current work."
-                }
-                _ => {
-                    "Steer is delivered after the current tools finish; it is not an instant stop."
-                }
-            },
-            &["meta"],
-        ));
         let destination = batch.destination.as_ref().map_or_else(
             || "No Agent Session".to_owned(),
             |d| {
@@ -1071,46 +1037,6 @@ impl Inspector {
             },
         ));
         self.submit_box.append(&s);
-    }
-
-    fn render_inputs(&self) {
-        widgets::clear(&self.inputs_box);
-        let state = self.controller.store.state();
-        let Some(id) = state.ui.selected.as_ref() else {
-            return;
-        };
-        let inputs = state.inputs.get(id).cloned().unwrap_or_default();
-        drop(state);
-        let s = section("Accepted inputs");
-        if inputs.is_empty() {
-            s.append(&label("Nothing accepted yet.", &["meta"]));
-        }
-        for input in inputs.iter().rev() {
-            let row = vbox(space::TIGHT);
-            row.add_css_class("evidence-row");
-            let line = format::input_line(input);
-            let state_label = label(&line, &["strong"]);
-            if matches!(
-                input.delivery,
-                crate::presentation::model::DeliveryState::Uncertain
-                    | crate::presentation::model::DeliveryState::Blocked
-            ) {
-                state_label.add_css_class("warning-text");
-            }
-            row.append(&state_label);
-            row.append(&label(&input.text_preview, &[]));
-            row.append(&label(
-                &format!(
-                    "Accepted {} · input {}",
-                    format::relative_time(Timestamp(widgets::now_ms()), input.accepted_at),
-                    input.input_id.short()
-                ),
-                &["meta"],
-            ));
-            set_accessible_label(&row, &format!("{line}: {}", input.text_preview));
-            s.append(&row);
-        }
-        self.inputs_box.append(&s);
     }
 
     /// Focuses a draft's text view (after Add feedback), switching to the Feedback tab, and

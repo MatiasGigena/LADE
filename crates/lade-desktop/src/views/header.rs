@@ -362,6 +362,8 @@ impl Header {
         self.status.set_text(&short);
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
+        // In preview the band below the header is the one statement of the data source.
+        self.status.set_visible(!state.is_preview());
     }
 
     fn refresh_search(&self) {

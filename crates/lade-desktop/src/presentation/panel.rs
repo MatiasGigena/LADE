@@ -1,21 +1,85 @@
-//! The right panel's progressive disclosure, decided without GTK: which service-available action
-//! is the one **next action** for the lifecycle step, how the other actions are grouped (More
-//! actions, destructive ones last), the one-line essentials and the collapsed Details rows.
+//! Where each action and fact lives, decided without GTK: every action of the service's
+//! `available_actions` has exactly **one home surface** ([`home`]); the right panel's Overview shows
+//! its one **next action** for the review/integration step, groups the other Overview actions
+//! (More actions, destructive ones last) and keeps the collapsed Details; other surfaces get a
+//! short pointer instead of a second control.
 //!
-//! Authority stays with the service: every action shown here carries exactly the availability of
-//! `available_actions` (`ObjectiveDetail::availability`). The client only chooses which offered
-//! action to emphasise; it never enables, hides a disabled reason, or invents an action.
+//! Authority stays with the service: every action shown carries exactly the availability of
+//! `available_actions` (`ObjectiveDetail::availability`). The client only chooses where an action
+//! is drawn and which offered action to emphasise; it never enables, hides a disabled reason, or
+//! invents an action.
 
 use super::format;
 use super::model::{
-    ActionAvailability, ActionName, ExecutionState, Lifecycle, ObjectiveDetail, ObjectiveSummary,
-    Timestamp,
+    ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
 };
 
 /// Accessible name and visible label of the collapsed group of the other actions.
 pub const MORE_ACTIONS_TITLE: &str = "More actions";
 /// Accessible name and visible label of the collapsed metadata.
 pub const DETAILS_TITLE: &str = "Details";
+
+/// The surface that owns an action (its only control).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    /// Right panel, Overview tab: review, integration and Objective decisions; the intent.
+    Overview,
+    /// Right panel, Evidence tab: service-observed checks.
+    Evidence,
+    /// Right panel, Feedback tab: Contextual Feedback batches.
+    Feedback,
+    /// Activity: Agent Session control (start, cancel, resume) and free-form messages.
+    Activity,
+}
+
+/// Every action the service projects.
+pub const ALL_ACTIONS: [ActionName; 16] = [
+    ActionName::ObjectiveUpdateIntent,
+    ActionName::ExecutionStart,
+    ActionName::ExecutionCancel,
+    ActionName::ExecutionResume,
+    ActionName::MessageSend,
+    ActionName::FeedbackSubmit,
+    ActionName::ReviewFreeze,
+    ActionName::ReviewReturn,
+    ActionName::ReviewVerify,
+    ActionName::ReviewApprove,
+    ActionName::ReviewRefresh,
+    ActionName::ReviewIntegrate,
+    ActionName::ObjectiveComplete,
+    ActionName::ObjectiveDiscard,
+    ActionName::ObjectiveCleanup,
+    ActionName::ObjectiveDeleteHistory,
+];
+
+/// The one surface that draws `action`.
+pub fn home(action: ActionName) -> Surface {
+    match action {
+        ActionName::ExecutionStart
+        | ActionName::ExecutionCancel
+        | ActionName::ExecutionResume
+        | ActionName::MessageSend => Surface::Activity,
+        ActionName::ReviewVerify => Surface::Evidence,
+        ActionName::FeedbackSubmit => Surface::Feedback,
+        ActionName::ObjectiveUpdateIntent
+        | ActionName::ReviewFreeze
+        | ActionName::ReviewReturn
+        | ActionName::ReviewApprove
+        | ActionName::ReviewRefresh
+        | ActionName::ReviewIntegrate
+        | ActionName::ObjectiveComplete
+        | ActionName::ObjectiveDiscard
+        | ActionName::ObjectiveCleanup
+        | ActionName::ObjectiveDeleteHistory => Surface::Overview,
+    }
+}
+
+/// Agent Session controls in Activity's header, in order (Send is the composer's).
+pub const ACTIVITY_CONTROLS: [ActionName; 3] = [
+    ActionName::ExecutionStart,
+    ActionName::ExecutionCancel,
+    ActionName::ExecutionResume,
+];
 
 /// How an action is drawn. `Primary` (black) is used only for the enabled next action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,11 +102,8 @@ pub struct PanelAction {
     pub tone: Tone,
 }
 
-/// Lifecycle actions the Overview offers, in the order "More actions" lists them.
-const MORE_ORDER: [ActionName; 9] = [
-    ActionName::ExecutionStart,
-    ActionName::ExecutionResume,
-    ActionName::ExecutionCancel,
+/// Overview lifecycle actions in the order "More actions" lists them.
+const MORE_ORDER: [ActionName; 6] = [
     ActionName::ReviewFreeze,
     ActionName::ReviewReturn,
     ActionName::ReviewRefresh,
@@ -58,15 +119,13 @@ pub const DESTRUCTIVE: [ActionName; 3] = [
     ActionName::ObjectiveDeleteHistory,
 ];
 
-/// Steps that move the collaboration forward, most advanced first: the first one the service
-/// enables is the next action.
-const PROGRESSION: [ActionName; 6] = [
+/// Review steps that move the collaboration forward, most advanced first: the first one the
+/// service enables is the next action. Starting and resuming the agent are Activity's.
+const PROGRESSION: [ActionName; 4] = [
     ActionName::ReviewIntegrate,
     ActionName::ReviewRefresh,
     ActionName::ReviewApprove,
-    ActionName::ExecutionResume,
     ActionName::ReviewFreeze,
-    ActionName::ExecutionStart,
 ];
 
 pub fn action_label(action: ActionName, detail: &ObjectiveDetail) -> String {
@@ -107,7 +166,7 @@ pub fn enabled_note(detail: &ObjectiveDetail, action: ActionName) -> Option<Stri
 
 /// The primary (black) treatment is only for a cleanly available step: an enabled action that
 /// carries a service caveat (for example an approval that needs an override reason) is neutral.
-fn entry(detail: &ObjectiveDetail, action: ActionName, tone: Tone) -> PanelAction {
+pub fn entry(detail: &ObjectiveDetail, action: ActionName, tone: Tone) -> PanelAction {
     let availability = detail.availability(action);
     let note = enabled_note(detail, action);
     let tone = match (&availability, tone) {
@@ -125,30 +184,23 @@ fn entry(detail: &ObjectiveDetail, action: ActionName, tone: Tone) -> PanelActio
     }
 }
 
-/// The step the lifecycle is at, shown (disabled, with the service's reason) when the service
-/// enables no step forward.
+/// The review step the lifecycle is at, shown (disabled, with the service's reason) when the
+/// service enables no step forward. A defined Objective's step is starting the agent (Activity).
 fn expected_step(detail: &ObjectiveDetail) -> Option<ActionName> {
     match detail.summary.lifecycle {
-        Lifecycle::Defined => Some(ActionName::ExecutionStart),
-        Lifecycle::Active => Some(
-            if matches!(
-                detail.summary.execution.state,
-                ExecutionState::Cancelled | ExecutionState::Failed
-            ) {
-                ActionName::ExecutionResume
-            } else {
-                ActionName::ReviewFreeze
-            },
-        ),
+        Lifecycle::Active => Some(ActionName::ReviewFreeze),
         Lifecycle::Frozen => Some(ActionName::ReviewApprove),
         Lifecycle::Approved => Some(ActionName::ReviewIntegrate),
-        Lifecycle::Integrated | Lifecycle::CompletedNoChanges | Lifecycle::Discarded => None,
+        Lifecycle::Defined
+        | Lifecycle::Integrated
+        | Lifecycle::CompletedNoChanges
+        | Lifecycle::Discarded => None,
     }
 }
 
-/// The one next action: the most advanced step the service enables; for a closed Objective, an
-/// enabled Clean up (destructive treatment, confirmed in a dialog); otherwise the lifecycle's own
-/// step with the service's reason. `None` when nothing applies.
+/// The Overview's one next action: the most advanced review step the service enables; for a
+/// closed Objective, an enabled Clean up (destructive treatment, confirmed in a dialog);
+/// otherwise the lifecycle's own step with the service's reason. `None` when nothing applies.
 pub fn next_action(detail: &ObjectiveDetail) -> Option<PanelAction> {
     if let Some(action) = PROGRESSION
         .into_iter()
@@ -165,9 +217,9 @@ pub fn next_action(detail: &ObjectiveDetail) -> Option<PanelAction> {
         .map(|a| entry(detail, a, Tone::Neutral))
 }
 
-/// Everything else the service offers, for "More actions": lifecycle actions in a stable order,
-/// then the destructive ones. The next action is not repeated; not-offered actions are left out;
-/// Delete Git history disappears once the history is deleted (the panel says so instead).
+/// Every other Overview action the service offers, for "More actions": lifecycle actions in a
+/// stable order, then the destructive ones. The next action is not repeated; not-offered actions
+/// are left out; Delete Git history disappears once the history is deleted (the panel says so).
 pub fn more_actions(
     detail: &ObjectiveDetail,
     next: Option<&PanelAction>,
@@ -190,8 +242,57 @@ pub fn more_actions(
     (regular, destructive)
 }
 
-/// One status line per surface: sign, state and the attention reasons ("! Needs attention ·
-/// check failed · unsent drafts"). The sign makes the state readable without colour.
+/// Every action control the Overview draws: the next action, More actions and Edit intent.
+pub fn overview_actions(detail: &ObjectiveDetail) -> Vec<ActionName> {
+    let next = next_action(detail);
+    let (regular, destructive) = more_actions(detail, next.as_ref());
+    let mut actions: Vec<ActionName> = next
+        .iter()
+        .chain(&regular)
+        .chain(&destructive)
+        .map(|p| p.action)
+        .collect();
+    if detail.availability(ActionName::ObjectiveUpdateIntent) != ActionAvailability::NotOffered {
+        actions.push(ActionName::ObjectiveUpdateIntent);
+    }
+    actions
+}
+
+/// Activity's header controls the service offers (Start, Cancel, Resume).
+pub fn activity_controls(detail: &ObjectiveDetail) -> Vec<PanelAction> {
+    ACTIVITY_CONTROLS
+        .iter()
+        .filter(|a| detail.availability(**a) != ActionAvailability::NotOffered)
+        .map(|a| {
+            let tone = if *a == ActionName::ExecutionStart {
+                Tone::Primary
+            } else {
+                Tone::Neutral
+            };
+            entry(detail, *a, tone)
+        })
+        .collect()
+}
+
+/// When an agent control (Start, Resume) is what the Objective waits for, the Overview names it
+/// in one line and points to Activity instead of drawing a second control.
+pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
+    let enabled = |a| detail.availability(a) == ActionAvailability::Enabled;
+    if enabled(ActionName::ExecutionStart) {
+        Some("The agent has not started yet — start it in Activity.".to_owned())
+    } else if enabled(ActionName::ExecutionResume) {
+        Some(format!(
+            "The agent is stopped ({}) — resume it in Activity.",
+            format::execution_label(&detail.summary.execution).to_lowercase()
+        ))
+    } else {
+        None
+    }
+}
+
+/// Status, sign and the attention reasons ("! Needs attention · check failed · unsent drafts").
+/// Its home is the Objectives list; the compact work area repeats it only because the list is
+/// then another region.
 pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
     let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
     if summary.badges.is_empty() {
@@ -201,12 +302,16 @@ pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
     }
 }
 
-/// The always-visible essentials: agent model and execution state.
-pub fn agent_line(detail: &ObjectiveDetail) -> String {
-    let execution = format::execution_label_for(detail);
-    match &detail.session {
-        Some(session) => format!("{} · {execution}", session.model.label()),
-        None => format!("No Agent Session yet · {execution}"),
+/// The Objectives row's secondary line: what the group heading does not already say — the
+/// attention reasons with the sign, or the closed lifecycle in the archive. `None` otherwise.
+pub fn objective_row_line(summary: &ObjectiveSummary) -> Option<String> {
+    let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
+    if !summary.badges.is_empty() {
+        Some(format!("{sign} {}", summary.badge_text()))
+    } else if summary.lifecycle.is_archived() {
+        Some(format!("{sign} {text}"))
+    } else {
+        None
     }
 }
 
@@ -219,8 +324,9 @@ pub struct DetailRow {
     pub mono: bool,
 }
 
-/// The collapsed Details: lifecycle, last update, Agent Session identity, changes, branch, target
-/// and start.
+/// The collapsed Details: what no other surface shows — lifecycle, last update, branch and start
+/// commit. (Agent Session identity is Activity's; changes and the comparison target are the
+/// work area's.)
 pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> {
     let row = |key, value: String, full: Option<String>, mono| DetailRow {
         key,
@@ -228,76 +334,33 @@ pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> 
         full,
         mono,
     };
-    let mut rows = vec![row(
-        "Lifecycle",
-        format::lifecycle_label(detail.summary.lifecycle).to_owned(),
-        None,
-        false,
-    )];
-    rows.push(row(
-        "Updated",
-        format::relative_time(now, detail.summary.updated_at),
-        None,
-        false,
-    ));
-    if let Some(session) = &detail.session {
-        rows.push(row(
-            "Session",
-            format!(
-                "{} · generation {}",
-                session.session_id.short(),
-                session.execution_generation
-            ),
-            Some(format!(
-                "Agent Session {} · association r{} · execution generation {}",
-                session.session_id.as_str(),
-                session.association_revision,
-                session.execution_generation
-            )),
+    vec![
+        row(
+            "Lifecycle",
+            format::lifecycle_label(detail.summary.lifecycle).to_owned(),
+            None,
             false,
-        ));
-    }
-    let files = detail.change_counts.files;
-    rows.push(row(
-        "Changes",
-        format!(
-            "{files} file{} · +{} −{}",
-            if files == 1 { "" } else { "s" },
-            detail.change_counts.added,
-            detail.change_counts.removed
         ),
-        None,
-        false,
-    ));
-    rows.push(row("Branch", detail.branch.clone(), None, true));
-    rows.push(row(
-        "Target",
-        detail.integration_target.label(),
-        Some(format!(
-            "{} at {}",
-            detail.integration_target.branch, detail.integration_target.commit.hex
-        )),
-        true,
-    ));
-    rows.push(row(
-        "Started at",
-        detail.start_commit.short().to_owned(),
-        Some(detail.start_commit.hex.clone()),
-        true,
-    ));
-    rows
-}
-
-/// The sidebar row's single secondary line: sign, status and attention reasons.
-pub fn objective_row_line(summary: &ObjectiveSummary) -> String {
-    let (sign, text) = status_line(summary);
-    format!("{sign} {text}")
+        row(
+            "Updated",
+            format::relative_time(now, detail.summary.updated_at),
+            None,
+            false,
+        ),
+        row("Branch", detail.branch.clone(), None, true),
+        row(
+            "Started at",
+            detail.start_commit.short().to_owned(),
+            Some(detail.start_commit.hex.clone()),
+            true,
+        ),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::model::{AvailableAction, Badge};
+    use crate::presentation::model::{AvailableAction, Badge, ExecutionState};
     use crate::presentation::preview;
     use crate::presentation::store::PresentationState;
 
@@ -335,16 +398,75 @@ mod tests {
         d
     }
 
-    /// Every action the service offers, with the service's own projection (one entry each).
+    /// Every action, offered by the service with its own projection (one entry each, as Rust
+    /// projects them).
     fn all(enabled: &[ActionName]) -> Vec<(ActionName, bool, Option<&'static str>)> {
-        MORE_ORDER
+        ALL_ACTIONS
             .iter()
-            .chain(DESTRUCTIVE.iter())
             .map(|a| {
                 let on = enabled.contains(a);
                 (*a, on, (!on).then_some("blocked by the service"))
             })
             .collect()
+    }
+
+    /// The action controls each surface draws for `d` (the Evidence and Feedback tabs draw their
+    /// one action whenever the service offers it).
+    fn rendered(d: &ObjectiveDetail) -> Vec<(Surface, ActionName)> {
+        let offered = |a: ActionName| d.availability(a) != ActionAvailability::NotOffered;
+        let mut out: Vec<(Surface, ActionName)> = overview_actions(d)
+            .into_iter()
+            .map(|a| (Surface::Overview, a))
+            .collect();
+        out.extend(
+            activity_controls(d)
+                .into_iter()
+                .map(|p| (Surface::Activity, p.action)),
+        );
+        for (surface, action) in [
+            (Surface::Activity, ActionName::MessageSend),
+            (Surface::Evidence, ActionName::ReviewVerify),
+            (Surface::Feedback, ActionName::FeedbackSubmit),
+        ] {
+            if offered(action) {
+                out.push((surface, action));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn every_action_is_rendered_in_exactly_one_surface() {
+        let mut cases: Vec<ObjectiveDetail> = details();
+        let base = cases[0].clone();
+        for lifecycle in [
+            Lifecycle::Defined,
+            Lifecycle::Active,
+            Lifecycle::Frozen,
+            Lifecycle::Approved,
+            Lifecycle::Integrated,
+        ] {
+            for enabled in [&[][..], &ALL_ACTIONS[..]] {
+                let mut d = with(&base, &all(enabled));
+                d.summary.lifecycle = lifecycle;
+                cases.push(d);
+            }
+        }
+        for d in &cases {
+            let shown = rendered(d);
+            for action in ALL_ACTIONS {
+                let places: Vec<Surface> = shown
+                    .iter()
+                    .filter(|(_, a)| *a == action)
+                    .map(|(s, _)| *s)
+                    .collect();
+                let offered = d.availability(action) != ActionAvailability::NotOffered;
+                let deleted = d.history_deleted && action == ActionName::ObjectiveDeleteHistory;
+                let expected = usize::from(offered && !deleted);
+                assert_eq!(places.len(), expected, "{action:?} in {}", d.summary.title);
+                assert!(places.iter().all(|s| *s == home(action)), "{action:?}");
+            }
+        }
     }
 
     #[test]
@@ -354,6 +476,7 @@ mod tests {
             if let Some(next) = &next {
                 // Never more available than the service says, and the same reason.
                 assert_eq!(next.availability, base.availability(next.action));
+                assert_eq!(home(next.action), Surface::Overview);
                 if next.tone == Tone::Primary {
                     assert_eq!(next.availability, ActionAvailability::Enabled);
                 }
@@ -368,7 +491,13 @@ mod tests {
                         matches!(n.availability, ActionAvailability::Disabled { ref reason } if reason == "blocked by the service")
                     );
                 }
-                None => assert!(base.summary.lifecycle.is_archived()),
+                None => assert!(matches!(
+                    base.summary.lifecycle,
+                    Lifecycle::Defined
+                        | Lifecycle::Integrated
+                        | Lifecycle::CompletedNoChanges
+                        | Lifecycle::Discarded
+                )),
             }
         }
     }
@@ -398,17 +527,47 @@ mod tests {
             next.availability,
             ActionAvailability::Disabled { .. }
         ));
-        // Return, Cancel and Complete are decisions, never suggested as the next step.
+        // Return, Cancel, Start, Resume and Complete are never suggested as the Overview's step.
         let d = with(
             &base,
             &all(&[
                 ActionName::ReviewReturn,
                 ActionName::ExecutionCancel,
+                ActionName::ExecutionStart,
+                ActionName::ExecutionResume,
                 ActionName::ObjectiveComplete,
                 ActionName::ObjectiveDiscard,
             ]),
         );
         assert!(next_action(&d).is_none_or(|n| n.tone != Tone::Primary));
+    }
+
+    #[test]
+    fn agent_controls_are_pointed_to_not_repeated() {
+        let base = details().into_iter().next().unwrap();
+        let mut d = with(&base, &all(&[ActionName::ExecutionStart]));
+        d.summary.lifecycle = Lifecycle::Defined;
+        assert!(next_action(&d).is_none());
+        assert!(agent_pointer(&d).unwrap().contains("Activity"));
+        assert!(!overview_actions(&d).contains(&ActionName::ExecutionStart));
+        let controls = activity_controls(&d);
+        let start = controls
+            .iter()
+            .find(|p| p.action == ActionName::ExecutionStart)
+            .unwrap();
+        assert_eq!(start.tone, Tone::Primary);
+        assert!(
+            controls
+                .iter()
+                .filter(|p| p.action != ActionName::ExecutionStart)
+                .all(|p| p.tone == Tone::Neutral && p.availability != ActionAvailability::Enabled)
+        );
+        let mut d = with(&base, &all(&[ActionName::ExecutionResume]));
+        d.summary.lifecycle = Lifecycle::Active;
+        d.summary.execution.state = ExecutionState::Cancelled;
+        assert!(agent_pointer(&d).unwrap().contains("resume it in Activity"));
+        let d = with(&base, &all(&[]));
+        assert!(agent_pointer(&d).is_none());
     }
 
     #[test]
@@ -428,25 +587,13 @@ mod tests {
     }
 
     #[test]
-    fn every_offered_action_is_shown_once_with_its_reason() {
+    fn shown_actions_keep_the_services_reason() {
         for d in details() {
             let next = next_action(&d);
             let (regular, destructive) = more_actions(&d, next.as_ref());
             let shown: Vec<&PanelAction> =
                 next.iter().chain(&regular).chain(&destructive).collect();
-            for action in MORE_ORDER.iter().chain(DESTRUCTIVE.iter()) {
-                let count = shown.iter().filter(|p| p.action == *action).count();
-                let offered = d.availability(*action) != ActionAvailability::NotOffered;
-                let deleted = d.history_deleted && *action == ActionName::ObjectiveDeleteHistory;
-                assert_eq!(
-                    count,
-                    usize::from(offered && !deleted),
-                    "{action:?} in {}",
-                    d.summary.title
-                );
-            }
-            for p in &shown {
-                // Disabled reasons stay exposed exactly as the service gave them.
+            for p in shown.iter().copied().chain(activity_controls(&d).iter()) {
                 assert_eq!(p.availability, d.availability(p.action));
                 assert!(!p.label.is_empty());
             }
@@ -459,13 +606,13 @@ mod tests {
     fn enabled_notes_are_kept() {
         let base = details().into_iter().next().unwrap();
         let mut d = with(&base, &all(&[]));
+        d.available_actions
+            .retain(|a| a.action != ActionName::ReviewApprove);
         d.available_actions.push(AvailableAction {
             action: ActionName::ReviewApprove,
             enabled: true,
             reason: Some("verification missing; an override reason is required".into()),
         });
-        d.available_actions
-            .retain(|a| !(a.action == ActionName::ReviewApprove && !a.enabled));
         let next = next_action(&d).unwrap();
         assert_eq!(next.action, ActionName::ReviewApprove);
         assert_eq!(
@@ -478,49 +625,29 @@ mod tests {
     }
 
     #[test]
-    fn status_is_one_line_with_sign_and_reasons() {
+    fn the_list_row_says_only_what_its_group_does_not() {
         let base = details().into_iter().next().unwrap();
         let mut s = base.summary.clone();
         s.badges = vec![Badge::VerificationFailed, Badge::UnsentDrafts];
-        let (sign, text) = status_line(&s);
-        assert!(!sign.is_empty());
-        assert!(text.contains(" · "));
-        assert_eq!(objective_row_line(&s), format!("{sign} {text}"));
-        assert!(!objective_row_line(&s).contains('\n'));
+        let line = objective_row_line(&s).unwrap();
+        assert!(line.contains("check failed") && !line.contains('\n'));
+        // The attention word is the group heading's, not repeated in the row.
+        let (_, attention) = format::status_pill(s.lifecycle, s.attention);
+        assert!(!line.contains(attention));
+        assert!(status_line(&s).1.contains(" · "));
         s.badges.clear();
-        assert!(!status_line(&s).1.contains(" · "));
+        s.lifecycle = Lifecycle::Active;
+        assert!(objective_row_line(&s).is_none());
+        s.lifecycle = Lifecycle::Integrated;
+        assert!(objective_row_line(&s).unwrap().contains("Integrated"));
     }
 
     #[test]
-    fn details_keep_every_identity_with_the_full_value() {
+    fn details_hold_only_what_no_other_surface_shows() {
         let d = details().into_iter().find(|d| d.session.is_some()).unwrap();
         let rows = details_rows(&d, d.summary.updated_at);
         let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
-        for key in [
-            "Lifecycle",
-            "Updated",
-            "Session",
-            "Changes",
-            "Branch",
-            "Target",
-            "Started at",
-        ] {
-            assert_eq!(keys.iter().filter(|k| **k == key).count(), 1, "{key}");
-        }
-        let session = rows.iter().find(|r| r.key == "Session").unwrap();
-        let s = d.session.as_ref().unwrap();
-        assert!(
-            session
-                .full
-                .as_deref()
-                .unwrap()
-                .contains(s.session_id.as_str())
-        );
-        assert!(
-            session
-                .value
-                .contains(&format!("generation {}", s.execution_generation))
-        );
+        assert_eq!(keys, ["Lifecycle", "Updated", "Branch", "Started at"]);
         let start = rows.iter().find(|r| r.key == "Started at").unwrap();
         assert_eq!(start.full.as_deref(), Some(d.start_commit.hex.as_str()));
     }

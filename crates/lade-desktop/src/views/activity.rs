@@ -1,9 +1,11 @@
-//! Activity: the Agent Session transcript with incremental appends and in-place delta updates,
-//! plus a composer (Prompt / Steer / Follow-up) and Cancel / Resume. New items never take focus.
+//! Activity: the one home of Agent Session control — the agent's state line (model, execution,
+//! session and generation), Start / Cancel / Resume, the accepted inputs with their delivery
+//! state, the transcript with incremental appends and in-place delta updates, and the composer
+//! (Prompt / Steer / Follow-up). New items never take focus.
 //!
-//! The agent's contextual tools live here, collapsed under one disclosure: the model and thinking
-//! picker, the Agent Session section (tree, apply, compact, reload, export, import) and the LADE
-//! profile resources.
+//! The agent's contextual tools live here too, collapsed under one disclosure: the model and
+//! thinking picker (used by Start agent), the Agent Session section (tree, apply, compact, reload,
+//! export, import) and the LADE profile resources.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -18,8 +20,9 @@ use super::widgets::{
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
-    ActionName, ActivityItem, ActivityRole, DeliveryMode, ObjectiveId,
+    ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState, ObjectiveId, Timestamp,
 };
+use crate::presentation::panel::{self, Tone};
 use crate::presentation::store::{ActivityChange, Change};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -52,10 +55,18 @@ pub struct Activity {
     /// Content of the collapsed agent tools (model, Agent Session, profile resources).
     agent_panel: gtk::Box,
     agent_error: RefCell<Option<String>>,
+    /// The latest local error of Start / Cancel / Resume, below the state line.
+    control_error: gtk::Box,
+    /// Accepted inputs: an always-visible line for uncertain or blocked delivery, the list
+    /// collapsed.
+    inputs_alert: gtk::Box,
+    inputs_list: gtk::Box,
 }
 
 /// Title (and accessible name) of the agent tools disclosure.
 pub const AGENT_TOOLS_TITLE: &str = "Model, Agent Session and profile";
+/// Title (and accessible name) of the accepted-inputs disclosure.
+pub const INPUTS_TITLE: &str = "Accepted inputs and delivery";
 
 impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
@@ -70,6 +81,8 @@ impl Activity {
         titles.append(&title);
         let status = label("", &["meta"]);
         titles.append(&status);
+        let control_error = vbox(0);
+        titles.append(&control_error);
         head.append(&titles);
         let controls = hbox(space::ITEM);
         controls.set_hexpand(false);
@@ -92,6 +105,26 @@ impl Activity {
             AGENT_TOOLS_TITLE,
             false,
             &agent_scroll,
+            |_| {},
+        ));
+
+        // Accepted inputs (prompts, steers, follow-ups and submitted feedback) with their
+        // delivery state; an uncertain or blocked one is stated outside the disclosure.
+        let inputs_alert = vbox(space::TIGHT);
+        root.append(&inputs_alert);
+        let inputs_list = vbox(space::TIGHT);
+        let inputs_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(240)
+            .overlay_scrolling(false)
+            .child(&inputs_list)
+            .build();
+        set_accessible_label(&inputs_scroll, INPUTS_TITLE);
+        root.append(&widgets::disclosure(
+            INPUTS_TITLE,
+            false,
+            &inputs_scroll,
             |_| {},
         ));
 
@@ -154,17 +187,16 @@ impl Activity {
             scroll_pending: Cell::new(false),
             agent_panel,
             agent_error: RefCell::new(None),
+            control_error,
+            inputs_alert,
+            inputs_list,
         });
         let set_explain = move |d: &gtk::DropDown| {
-            explain.set_text(match MODES.get(d.selected() as usize) {
-                Some(DeliveryMode::Steer) => {
-                    "Delivered after the current tools finish; not an instant stop."
-                }
-                Some(DeliveryMode::FollowUp) => {
-                    "Delivered after the agent finishes its current work."
-                }
-                _ => "Starts a turn when the agent is idle.",
-            });
+            let mode = MODES
+                .get(d.selected() as usize)
+                .copied()
+                .unwrap_or(DeliveryMode::Prompt);
+            explain.set_text(format::mode_explanation(mode));
         };
         set_explain(&activity.mode);
         let this = Rc::downgrade(&activity);
@@ -223,7 +255,71 @@ impl Activity {
         activity.render_header();
         activity.render_items();
         activity.render_agent();
+        activity.render_inputs();
         activity
+    }
+
+    /// The accepted-input ledger of the selected Objective, newest first.
+    fn render_inputs(&self) {
+        widgets::clear(&self.inputs_alert);
+        widgets::clear(&self.inputs_list);
+        let inputs = {
+            let state = self.controller.store.state();
+            let Some(id) = state.ui.selected.as_ref() else {
+                return;
+            };
+            state.inputs.get(id).cloned().unwrap_or_default()
+        };
+        let troubled = inputs
+            .iter()
+            .filter(|i| {
+                matches!(
+                    i.delivery,
+                    DeliveryState::Uncertain | DeliveryState::Blocked
+                )
+            })
+            .count();
+        if troubled > 0 {
+            self.inputs_alert.append(&widgets::warning_line(&format!(
+                "{troubled} accepted input{} with delivery uncertain or blocked — never resent automatically; see {INPUTS_TITLE}.",
+                if troubled == 1 { "" } else { "s" }
+            )));
+        }
+        if inputs.is_empty() {
+            self.inputs_list
+                .append(&label("Nothing accepted yet.", &["meta"]));
+        }
+        for input in inputs.iter().rev() {
+            let row = vbox(space::TIGHT);
+            row.add_css_class("evidence-row");
+            let line = format::input_line(input);
+            let state_label = label(&line, &["strong"]);
+            if matches!(
+                input.delivery,
+                DeliveryState::Uncertain | DeliveryState::Blocked
+            ) {
+                state_label.add_css_class("warning-text");
+            }
+            row.append(&state_label);
+            row.append(&label(&input.text_preview, &[]));
+            row.append(&label(
+                &format!(
+                    "Accepted {} · input {}",
+                    format::relative_time(Timestamp(widgets::now_ms()), input.accepted_at),
+                    input.input_id.short()
+                ),
+                &["meta"],
+            ));
+            set_accessible_label(&row, &format!("{line}: {}", input.text_preview));
+            self.inputs_list.append(&row);
+        }
+    }
+
+    fn show_control_result(&self, result: Result<(), String>) {
+        widgets::clear(&self.control_error);
+        if let Err(message) = result {
+            self.control_error.append(&widgets::error_line(&message));
+        }
     }
 
     /// The agent tools: model and thinking, the Agent Session section and the LADE profile
@@ -304,9 +400,17 @@ impl Activity {
             match change {
                 Change::Selection => {
                     self.agent_error.replace(None);
+                    widgets::clear(&self.control_error);
                     self.restore_composer();
                     self.render_header();
                     self.render_items();
+                    self.render_inputs();
+                    agent = true;
+                }
+                Change::Inputs(id) if Some(id) == selected.as_ref() => self.render_inputs(),
+                Change::Catalog => {
+                    // The chosen model is named beside Start agent.
+                    self.render_header();
                     agent = true;
                 }
                 Change::Detail(id) if Some(id) == selected.as_ref() => {
@@ -314,7 +418,7 @@ impl Activity {
                     agent = true;
                 }
                 Change::Session(id) if Some(id) == selected.as_ref() => agent = true,
-                Change::Catalog | Change::Resources => agent = true,
+                Change::Resources => agent = true,
                 Change::Connection => self.render_header(),
                 Change::Activity(id, kind) if Some(id) == selected.as_ref() => match kind {
                     ActivityChange::Reset => self.render_items(),
@@ -355,28 +459,59 @@ impl Activity {
         let detail = state.selected_detail().cloned();
         drop(state);
         self.title.set_text(&title);
-        self.status.set_text(
-            &self
-                .controller
-                .execution_line()
-                .unwrap_or_else(|| "Select an Objective to see its Agent Session.".to_owned()),
-        );
+        let (mut line, full) = self.controller.execution_line().unwrap_or_else(|| {
+            let none = "Select an Objective to see its Agent Session.".to_owned();
+            (none.clone(), none)
+        });
         widgets::clear(&self.controls);
         widgets::clear(&self.send_area);
-        let Some(detail) = detail else { return };
-        // The status line beside them states why one is unavailable; the reason is also the
-        // button's tooltip and accessible description.
-        for (text, kind) in [
-            ("Cancel agent", ActionName::ExecutionCancel),
-            ("Resume agent", ActionName::ExecutionResume),
-        ] {
-            let controller = self.controller.clone();
-            let button = widgets::compact_action(text, &detail.availability(kind), move |_| {
-                let _ = match kind {
-                    ActionName::ExecutionCancel => controller.cancel(),
-                    _ => controller.resume(),
-                };
+        let Some(detail) = detail else {
+            self.status.set_text(&line);
+            return;
+        };
+        let controls = panel::activity_controls(&detail);
+        // Starting uses the model chosen under "Model, Agent Session and profile": name it here.
+        if controls
+            .iter()
+            .any(|p| p.action == ActionName::ExecutionStart && p.tone == Tone::Primary)
+        {
+            self.controller.picker_defaults();
+            line.push_str(&match self.controller.chosen_model() {
+                Ok((model, thinking)) => format!(
+                    " · starts with {} · thinking {}",
+                    model.label(),
+                    thinking.label()
+                ),
+                Err(message) => format!(" · {message}"),
             });
+        }
+        self.status.set_text(&line);
+        self.status.set_tooltip_text(Some(&full));
+        widgets::set_accessible_description(&self.status, &full);
+        // The state line beside them states why one is unavailable; the reason is also the
+        // button's tooltip and accessible description.
+        for control in controls {
+            let this = Rc::downgrade(self);
+            let action = control.action;
+            let button =
+                widgets::compact_action(&control.label, &control.availability, move |_| {
+                    if let Some(this) = this.upgrade() {
+                        let controller = &this.controller;
+                        let result = match action {
+                            ActionName::ExecutionStart => {
+                                controller.chosen_model().and_then(|(model, thinking)| {
+                                    controller.start_execution(model, Some(thinking))
+                                })
+                            }
+                            ActionName::ExecutionCancel => controller.cancel(),
+                            _ => controller.resume(),
+                        };
+                        this.show_control_result(result);
+                    }
+                });
+            if control.tone == Tone::Primary {
+                button.add_css_class("primary");
+            }
             self.controls.append(&button);
         }
         let this = Rc::downgrade(self);
