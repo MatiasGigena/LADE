@@ -735,6 +735,15 @@ impl PresentationState {
                         None => editors.push(DraftEditor::from_durable(draft)),
                     }
                 }
+                // A never-saved local draft the service does not list: its first save (if one
+                // was in flight when the link dropped) did not land, so it may be sent again.
+                for editor in editors.iter_mut() {
+                    if editor.durable_revision() == 0
+                        && !drafts.iter().any(|d| d.draft_id == editor.draft_id)
+                    {
+                        editor.reconciled();
+                    }
+                }
                 // Keep only local drafts never saved (revision 0) besides the durable ones.
                 editors.retain(|e| {
                     e.durable_revision() == 0 || drafts.iter().any(|d| d.draft_id == e.draft_id)
@@ -1374,5 +1383,46 @@ mod tests {
             store.state().connection,
             ConnectionState::Reconnecting { attempt: 1 }
         );
+    }
+
+    #[test]
+    fn never_saved_draft_unlisted_after_reconnect_is_saved_again() {
+        use crate::presentation::drafts::DraftEditor;
+        use crate::presentation::model::{
+            ArtifactDigest, CaptureId, DraftId, Reference, ReferenceVersion, RepoPath, SessionId,
+            Side,
+        };
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let o = ObjectiveId::new("o");
+        let reference = Reference {
+            artifact_digest: ArtifactDigest::new("digest"),
+            path: RepoPath::utf8("a.txt"),
+            version: ReferenceVersion::Working {
+                capture_id: CaptureId::new("cap"),
+            },
+            side: Side::New,
+            byte_start: 0,
+            byte_end: 1,
+            selected_text: "a".into(),
+            line_hint: Some(1),
+        };
+        let id = DraftId::new("d");
+        let mut editor = DraftEditor::new_local(id.clone(), o.clone(), SessionId::new("s"), reference);
+        editor.edit("typed", 0);
+        assert!(editor.poll(300, true).is_some());
+        state.drafts.insert(o.clone(), vec![editor]);
+        state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting { attempt: 1 }));
+        state.apply(StoreUpdate::Connection(ConnectionState::Connected));
+        let draft = state.draft_mut(&id).unwrap();
+        assert!(draft.poll(10_000, true).is_none(), "outcome unknown until drafts are listed");
+        // The service lists no such draft: the first save never landed.
+        state.apply(StoreUpdate::Drafts {
+            objective_id: o.clone(),
+            drafts: Vec::new(),
+        });
+        let draft = state.draft_mut(&id).expect("local text kept");
+        assert_eq!(draft.body, "typed");
+        let request = draft.poll(10_000, true).expect("saved again");
+        assert_eq!(request.expected_revision, 0);
     }
 }

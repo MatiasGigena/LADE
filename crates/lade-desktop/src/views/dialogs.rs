@@ -8,7 +8,7 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, vbox};
-use crate::presentation::controller::{Controller, FeedbackBatch};
+use crate::presentation::controller::{Controller, FeedbackBatch, UnsavedDraft};
 use crate::presentation::format;
 use crate::presentation::intents::StartPoint;
 use crate::presentation::keys::{self, AppAction, Keymap};
@@ -43,6 +43,69 @@ pub fn confirm(
         Err(message) => d.show_error(&message),
     });
     dialog.present();
+}
+
+/// Closing or Exit would lose draft text the service has not acknowledged: the developer keeps the
+/// window open (default) or explicitly discards that text. Returns the dialog window so the
+/// caller can close it when the drafts get saved meanwhile.
+pub fn unsaved_drafts(
+    opener: &impl IsA<gtk::Widget>,
+    exit: bool,
+    drafts: &[UnsavedDraft],
+    connected: bool,
+    on_discard: impl Fn() + 'static,
+) -> gtk::Window {
+    let count = drafts.len();
+    let plural = if count == 1 { "" } else { "s" };
+    let title = if exit {
+        "Exit with unsaved feedback?"
+    } else {
+        "Close with unsaved feedback?"
+    };
+    let dialog = Dialog::new(opener, title, 520);
+    let why = if connected {
+        "The service has not acknowledged saving it"
+    } else {
+        "The service is not reachable, so it cannot be saved now"
+    };
+    dialog.body.append(&widgets::warning_line(&format!(
+        "{count} feedback draft{plural} not saved. {why}."
+    )));
+    let items = vbox(8);
+    for draft in drafts {
+        let entry = vbox(2);
+        entry.add_css_class("confirm-item");
+        entry.append(&label(
+            &format!("{} · {}", draft.objective, draft.reference_label),
+            &["meta"],
+        ));
+        entry.append(&label(&draft.status, &[]));
+        items.append(&entry);
+    }
+    dialog.body.append(&items);
+    dialog.body.append(&label(
+        if exit {
+            "If you exit now, the unsaved text is lost; a draft keeps only the revision the service saved before. Keep the window open to retry saving."
+        } else {
+            "If you close now, the unsaved text is lost; a draft keeps only the revision the service saved before. Keep the window open to retry saving."
+        },
+        &["secondary"],
+    ));
+    let keep = dialog.add_button("Keep window open", &[]);
+    let window = dialog.window.clone();
+    keep.connect_clicked(move |_| window.close());
+    keep.grab_focus();
+    let discard = dialog.add_button(
+        if exit {
+            "Exit and discard unsaved text"
+        } else {
+            "Close and discard unsaved text"
+        },
+        &["destructive"],
+    );
+    discard.connect_clicked(move |_| on_discard());
+    dialog.present();
+    dialog.window
 }
 
 pub fn approve_with_override(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) {
