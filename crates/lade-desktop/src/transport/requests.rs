@@ -272,6 +272,7 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             Request::ExecutionStart(wire::ExecutionStartCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 model: convert::to_model(model),
+                thinking: None,
             }),
             Context::command(intent.label(), Some(objective_id)),
         ),
@@ -602,6 +603,22 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             | ReplyData::DraftsList(_)
             | ReplyData::InputsList(_)
             | ReplyData::DraftDelete(_),
+        ) => {}
+        (
+            _,
+            ReplyData::ModelsList(_)
+            | ReplyData::SessionTree(_)
+            | ReplyData::ResourcesList(_)
+            | ReplyData::SessionNavigate(_)
+            | ReplyData::SessionFork(_)
+            | ReplyData::SessionImport(_)
+            | ReplyData::SessionExport(_)
+            | ReplyData::SessionCompact(_)
+            | ReplyData::SessionReload(_)
+            | ReplyData::SessionConfigure(_)
+            | ReplyData::ResourceDecide(_)
+            | ReplyData::ProfileImport(_)
+            | ReplyData::UiRespond(_),
         ) => {}
     }
     effects

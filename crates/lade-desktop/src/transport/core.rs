@@ -605,6 +605,15 @@ impl Core {
 
 /// Maps one service event onto the store.
 pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
+    if matches!(
+        event,
+        Event::SessionChanged(_)
+            | Event::UiRequest(_)
+            | Event::UiClosed(_)
+            | Event::ResourcesChanged(_)
+    ) {
+        return Vec::new();
+    }
     vec![match event {
         Event::ObjectiveChanged(s) => StoreUpdate::ObjectiveChanged(convert::summary(&s)),
         Event::ObjectiveDetail(d) => StoreUpdate::ObjectiveDetail(Box::new(convert::detail(&d))),
@@ -632,6 +641,10 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
             StoreUpdate::VerificationChanged(convert::verification(&v))
         }
         Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
+        Event::SessionChanged(_)
+        | Event::UiRequest(_)
+        | Event::UiClosed(_)
+        | Event::ResourcesChanged(_) => return Vec::new(),
     }]
 }
 

@@ -487,6 +487,7 @@ pub(crate) fn wire_detail(objective_id: &str) -> wire::ObjectiveDetail {
                 provider: "lade-fixture".into(),
                 id: "scripted".into(),
             },
+            thinking: None,
         }),
         approval: None,
     }
