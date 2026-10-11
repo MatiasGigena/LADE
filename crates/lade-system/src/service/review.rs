@@ -12,12 +12,13 @@ use lade_core::domain::review::{
     ApproveCandidate, IntegrationPlan, NewCandidate, NewVerification, RefreshOutcome, RefreshResult,
 };
 use lade_protocol::client::{
-    CandidateCommand, ErrorCode, Event, NoticeLevel, ObjectiveCleanupCommand, Rejection, ReplyData,
-    ReviewApproveCommand, ReviewIntegrateCommand, ReviewVerifyCommand, SafeAction,
+    CandidateCommand, ErrorCode, Event, NoticeLevel, ObjectiveCleanupCommand,
+    ObjectiveHistoryDeleteCommand, Rejection, ReplyData, ReviewApproveCommand,
+    ReviewIntegrateCommand, ReviewVerifyCommand, SafeAction,
 };
 use lade_protocol::types::Id;
 
-use crate::adapters::git::{GitError, SquashRequest};
+use crate::adapters::git::{self, GitError, SquashRequest};
 use crate::storage::{self, JournalRow};
 
 use super::convert::{
@@ -26,7 +27,7 @@ use super::convert::{
 };
 use super::handlers::{Pending, sql};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
-use super::project::{wire_approval, wire_candidate, wire_verification};
+use super::project::{delete_history_blocker, wire_approval, wire_candidate, wire_verification};
 use super::{Flow, JobOutput, ReqCtx, Service};
 
 fn ts_now() -> Timestamp {
@@ -868,6 +869,72 @@ impl Service {
                 Flow::Done
             }
         }
+    }
+
+    /// `objective.delete_history`: the deliberate, user-confirmed deletion of a cleaned-up
+    /// Objective's Git history — its capture and candidate retention refs and (if still present)
+    /// its branch. Never automatic; records, artifacts and session files stay.
+    pub(crate) fn objective_delete_history(
+        &mut self,
+        ctx: ReqCtx,
+        cmd: &ObjectiveHistoryDeleteCommand,
+    ) -> Flow {
+        let prepared = (|| {
+            let oid = self.objective_id(&cmd.objective_id)?;
+            self.check_idle(oid)?;
+            let st = self.obj(oid)?;
+            if let Some(reason) = delete_history_blocker(st) {
+                return Err(domain(lade_core::DomainError::InvalidLifecycle(reason)));
+            }
+            if !cmd.confirm_history_loss {
+                return Err(super::convert::invalid(
+                    "deleting history needs explicit confirmation (confirm_history_loss)",
+                ));
+            }
+            let mut refs = sql(storage::capture_retention_refs(self.store.conn(), oid))?;
+            for candidate in st.review.candidates() {
+                let base = format!("{}candidate-{}", git::RETENTION_PREFIX, candidate.id);
+                refs.push(format!("{base}-tree"));
+                refs.push(base);
+            }
+            if let Some(branch) = &st.row.git_branch {
+                refs.push(format!("refs/heads/{branch}"));
+            }
+            Ok((oid, self.ws_of(st)?.repo.clone(), refs))
+        })();
+        match prepared {
+            Ok((oid, repo, refs)) => {
+                self.rt(oid).busy = Some("delete_history");
+                self.spawn(Pending::DeleteHistory { oid, ctx }, move || {
+                    JobOutput::Unit(jobs::delete_refs(&repo, &refs))
+                });
+                Flow::Deferred
+            }
+            Err(rejection) => {
+                self.finish(ctx, Err(rejection));
+                Flow::Done
+            }
+        }
+    }
+
+    pub(crate) fn delete_history_done(
+        &mut self,
+        oid: ObjectiveId,
+        mut ctx: ReqCtx,
+        result: Result<(), Rejection>,
+    ) {
+        self.rt(oid).busy = None;
+        let outcome = (|| {
+            result?;
+            let mut st = self.obj(oid)?.clone();
+            st.row.history_deleted = true;
+            let data = ReplyData::ObjectiveDeleteHistory(Box::new(self.detail_of(&st)));
+            self.commit_obj(Some(&mut ctx), Some(&data), st)
+                .map_err(|_| durability("history deleted but not recorded; query the objective"))?;
+            Ok(data)
+        })();
+        self.finish(ctx, outcome);
+        self.emit_objective(oid);
     }
 
     pub(crate) fn cleanup_done(

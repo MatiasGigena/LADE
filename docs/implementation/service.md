@@ -40,15 +40,40 @@ path and asking for a shorter `--runtime-dir`.
 
 Git-side state lives in the Workspace repository: Objective branches `lade/<short-id>` (suffix `-2`… on collision),
 retention refs `refs/lade/retain/{capture-<id>,candidate-<id>,candidate-<id>-tree}` that pin every inspected capture
-and candidate against garbage collection (never removed by Cleanup), and temporary `lade/verify/<id>` branches for
-verification copies.
+and candidate against garbage collection (never removed by Cleanup; only by the explicit, confirmed
+`objective.delete_history`), and temporary `lade/verify/<id>` branches for verification copies.
+
+### Git invocations
+
+Every Git process goes through the hardened builder (`adapters/git/command.rs`): cleared environment, no
+user/system configuration, fixed `GIT_CONFIG_*` overrides (hooks path, fsmonitor, pager, editor, askpass, credential
+helper, external diff, signing, protocols, maintenance). Before **each** invocation the configuration that invocation
+would see (repository, worktree and included files) is listed once (`git config --list -z --name-only`) and every
+repository-defined filter driver (`clean`/`smudge`/`process` emptied, `required=false`), merge driver (`false`) and
+configuration-defined hook (`hook.<name>.command` and `.event` emptied, `.enabled=false`) is overridden for that
+call. The hook overrides are unconditional: Git versions without configuration hooks ignore the keys. This costs one
+short extra `git config` process per call. Remaining race: a file *included* by the repository configuration that
+changes between the listing and the call (the worker cannot write the common Git directory, but an include could
+point elsewhere).
+
+Captures (`capture_working_tree`) use a temporary index, force `core.fileMode`/`core.symlinks` on and
+`core.ignoreCase` off (a candidate is an exact commit and the supported Linux filesystems represent modes and
+symlinks; a repository setting meant for filesystems that cannot must not hide such a change), honour the
+repository's `.gitignore`/`info/exclude` and the **user's own** global excludes file (resolved by the service from
+`~/.gitconfig` / `$XDG_CONFIG_HOME/git/config` or the default `$XDG_CONFIG_HOME/git/ignore`), but never a
+`core.excludesFile` from the repository configuration (it could hide new files from review). An untracked nested
+repository without a checked-out commit (which Git cannot record) is excluded and reported (≤ 64 per capture) instead
+of failing the capture; one with a commit is recorded as a gitlink. Branch names that are not UTF-8 are listed in a
+lossless escaped form (`\xHH` per invalid byte; Git forbids `\` in ref names) and refused as integration targets
+(`unsupported_content`).
 
 ## Storage
 
 One connection, opened and owned by the service thread: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`,
 `busy_timeout` 5 s. Opening runs `PRAGMA quick_check`; a failure, a non-WAL journal or a schema version newer than this
 build refuses to start — the database is never reset or rewritten. Migrations are an append-only ordered list recorded
-in `schema_migrations(version, applied_at)`, each applied in its own transaction.
+in `schema_migrations(version, applied_at)`, each applied in its own transaction. v3 adds
+`objectives.history_deleted` (an older build refuses a v3 database, exit 78).
 
 **Dependency:** `rusqlite =0.40.2` with `bundled` (SQLite compiled in, so behaviour does not depend on the host
 library version). It is allowed for `lade-system` only; `scripts/check-architecture.py` still rejects any path from
@@ -61,7 +86,7 @@ Schema v1 tables:
 | --- | --- |
 | `settings` | the wire `Settings` JSON (default model, verification commands) |
 | `workspaces` | id, canonical top-level path (bytes), name, default branch |
-| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path and the integration-conflict fact |
+| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path, the integration-conflict fact and (v3) whether its Git history was deleted |
 | `sessions` | each session association (session id, association revision, model, last generation, pi session id/file) |
 | `captures` | capture id → tree id, target commit, change counts, retention ref |
 | `drafts`, `draft_revisions` | current draft (reference JSON, body, CAS revision, state, submitted input) and every saved revision |
@@ -134,13 +159,20 @@ Queries: `snapshot` (≤ 64 workspaces with ≤ 64 branches each, ≤ 400 most r
 clipped to 512 chars, settings, current sequence); `objective.get` (detail with a freshly resolved target commit,
 the latest ≤ 64 candidates/verifications and `available_actions`); `activity.page` (items before `seq`, newest last,
 ≤ 768 KiB of text per page, live streamed text included); `changes.list` (working: a fresh capture; candidate:
-candidate tree vs its base target commit; since: tree vs tree); `file.read` and `diff.get` (working uses the latest
-capture, or captures first; whole file bytes ≤ 64 MiB are retained in the artifact store and their digest returned;
-UTF-8 pages are cut at character boundaries and kept under the frame budget, binary content is reported as binary;
-diffs are bounded to 1,800 lines / 640 KiB with `truncated`); `search` (objectives by title/outcome; file paths via
-`ls_tree` and content via `git grep` over the basis tree, or the workspace default branch without an objective, with a
-`scope_label` naming the version); `drafts.list`, `inputs.list`; `operation.get` (journal state: `unknown`,
-`pending`, `completed`, `uncertain`, with the recorded outcome).
+candidate tree vs its base target commit; since: tree vs tree; changed files whose `filter` attribute names a driver
+carry `filtered`, and `notices` name nested repositories left out of the capture and filtered/LFS content);
+`file.read` and `diff.get` (working uses the latest capture, or captures first; whole file bytes ≤ 64 MiB are
+retained in the artifact store and their digest returned; UTF-8 pages are cut at character boundaries and kept under
+the frame budget, binary content is reported as binary; a file above 64 MiB and up to the hard bound of 1 GiB is
+streamed once into the artifact store — never held in memory, the last 8 large-blob digests are remembered so paging
+does not re-stream — and served as `chunked` pages through `offset`/`limit`; larger files are `unsupported_content`;
+feedback staleness on such files streams the blob digest, then compares the referenced range; diffs are bounded to
+1,800 lines / 640 KiB with `truncated`); `search` (objectives by title/outcome; file paths via `ls_tree` and content
+via `git grep` over the basis tree, or the workspace default branch without an objective, with a `scope_label`
+naming the version; content results carry the line, byte column and the exact byte range of the first match in the
+raw blob, computed from the blob for files ≤ 16 MiB within a 64 MiB budget per search); `drafts.list`,
+`inputs.list`; `operation.get` (journal state: `unknown`, `pending`, `completed`, `uncertain`, with the recorded
+outcome).
 
 Commands (all journaled; a duplicate `operation_id` with the same canonical digest returns the recorded reply without
 re-executing, a different digest is `duplicate_conflict`, a duplicate while pending is `conflict`/`query_operation`;
@@ -184,11 +216,21 @@ a reused `request_id` with different content is `duplicate_conflict`):
   (returned for revision, `stale_target` rejection, `integration_conflict` badge).
 - `review.integrate`: core `check_integration` against the fresh target (a moved target invalidates the approval
   durably and rejects `stale_target`); the intent (expected target, tree, message, commit time) is journaled; then
-  `integrate_squash` (CAS ref update + `read-tree -m -u` in a clean checked-out target; dirty/busy targets refuse with
-  `conflict` and stay untouched); success → Integrated, approval consumed, journal `done`.
+  `integrate_squash` (in a checked-out target first a dry run `read-tree -m -u -n` of the checkout step: untracked
+  files where the candidate adds files refuse with `conflict` naming them, before any ref moves; then CAS ref update
+  + `read-tree -m -u`; dirty/busy targets refuse with `conflict` and stay untouched; if the real step still fails —
+  the worktree changed after the dry run — the ref is CAS-reverted); success → Integrated, approval consumed, journal
+  `done`.
 - `objective.complete`: requires an empty Change Set (captured on the pool); `objective.discard`: core discard.
 - `objective.cleanup`: core cleanup rules; removes the worktree (without confirmation only when its content equals
   the branch commit) and CAS-deletes the branch; records, retention refs, artifacts and session files stay.
+- `objective.delete_history`: only for a cleaned-up Objective whose history was not deleted yet, and only with
+  `confirm_history_loss: true` (`invalid_request` otherwise; the client sends it only from a confirmation dialog with
+  an explicit acknowledgement). On the pool it CAS-deletes every capture retention ref recorded for the Objective,
+  `candidate-<id>` and `candidate-<id>-tree` of each candidate and the Objective branch if it still exists; then
+  `history_deleted` is recorded with the outcome. Never automatic (not by Cleanup, uninstall or storage pressure);
+  records, accepted inputs, evidence and artifacts stay. Git may later collect the unreferenced objects, after which
+  that Objective's candidates and captures can no longer be inspected.
 - `settings.update`: validated and persisted.
 - `service.stop {reason: exit|logout}`: journaled and answered, then the service thread leaves its loop: every
   terminal is killed, every worker is terminated (sandbox killed), the store is closed, the socket and capability
@@ -203,8 +245,9 @@ Terminal requests (`terminal.open/input/resize/close`, IMP-012) are interaction,
 current candidate, evidence, target movement, busy marker, latest capture, verification sandbox) with a reason when
 disabled; approval with missing or failed evidence is enabled with a reason stating that an override reason is
 required, and input (`message.send`, `feedback.submit`) to a stopped execution is enabled with a reason saying it waits
-for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for ten
-Objective states, that every enabled action's request is accepted and every disabled action's request is rejected.
+for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for
+eleven Objective states, that every enabled action's request is accepted and every disabled action's request is
+rejected.
 
 Events carry a monotonically increasing `sequence` per service epoch: `objective.changed` + `objective.detail` after
 every Objective change, `activity.appended` per item, `activity.delta` coalesced per 100 ms tick, `draft.changed`,
@@ -326,7 +369,7 @@ arguments reference the state directory, leftover verification copies and `lade/
 
 ## Tests
 
-`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage}.rs` run the real socket, real SQLite and disposable Git
+`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage,inspect}.rs` run the real socket, real SQLite and disposable Git
 repositories: handshake/file modes, wrong capability and pre-auth frames, second client refused and reconnect,
 invalid request keeps the link, admission rotates on restart; duplicate operations and `operation.get`; objective and
 journal survive restart; restart interrupts a live execution and makes unacknowledged dispatch uncertain; corrupt
@@ -334,8 +377,13 @@ store refuses to start; draft CAS and whole-batch stale blocking; the full loop 
 bubblewrap launcher when it works, else the unsandboxed test launcher; `lade-fixture` model): message → working changes → draft → feedback → revision → freeze → sandboxed
 verification (or override without bubblewrap) → approve → integrate into a clean checked-out `main` → cleanup; dirty
 target refused and untouched; moved target → `stale_target`, approval invalidated, refresh, re-approve, integrate;
-the real sandboxed launcher when bubblewrap works; and the writable-storage monitor with a 256 KiB budget
-(`service_storage.rs`: `failed` with `limit_reached`, badge, error notice, no automatic restart).
+the real sandboxed launcher when bubblewrap works; the writable-storage monitor with a 256 KiB budget
+(`service_storage.rs`: `failed` with `limit_reached`, badge, error notice, no automatic restart). `service_inspect.rs`: nested-repository and filtered-content
+notices (working and candidate bases); exact content-search byte ranges against the retained bytes; chunked reading of
+a > 64 MiB file (whole-file digest, exact continuation, character-boundary refusal, fresh and stale feedback on a
+chunk); an untracked collision refused before the target ref moves (reflog unchanged), then integrated once moved
+away; `objective.delete_history` refused before cleanup and without confirmation, then deleting every retention ref,
+durable across a restart.
 
 ## Known gaps
 
@@ -346,5 +394,10 @@ the real sandboxed launcher when bubblewrap works; and the writable-storage moni
   `service.stop` (Exit, logout with a running client).
 - A terminal needs an existing worktree: an Objective that never ran its agent has none (no provisioning from
   `terminal.open`).
-- Search content results carry line numbers, not byte offsets.
-- Reading files larger than 64 MiB is refused (`unsupported_content`) rather than streamed.
+- Files above 1 GiB cannot be inspected (`unsupported_content`); a chunk of a large text file that is not UTF-8
+  is refused rather than shown with a gap.
+- Search byte ranges are omitted for matched files above 16 MiB (line and column remain), and case-insensitive
+  matching folds ASCII only (Git runs with `LC_ALL=C`).
+- Filtered/LFS content is detected and labelled but not supported: raw working-tree bytes are compared and would
+  be committed unfiltered; integrating into a checked-out target whose filtered files differ from their raw blobs
+  is refused as dirty.

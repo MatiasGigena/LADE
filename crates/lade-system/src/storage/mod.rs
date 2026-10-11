@@ -20,7 +20,12 @@ pub use compat::*;
 pub use rows::*;
 
 /// Ordered schema migrations. Never edit an applied entry; append a new one.
-const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2), (3, SCHEMA_V3)];
+
+/// v3: the Objective's Git history (retention refs, branch) was deleted on explicit request.
+const SCHEMA_V3: &str = r"
+ALTER TABLE objectives ADD COLUMN history_deleted INTEGER NOT NULL DEFAULT 0;
+";
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE settings (

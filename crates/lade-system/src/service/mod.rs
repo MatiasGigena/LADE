@@ -212,6 +212,8 @@ pub(crate) struct Service {
     store: Store,
     paths: Paths,
     artifacts: Arc<ArtifactStore>,
+    /// Artifacts of large files read in chunks (see [`jobs::LargeBlobs`]).
+    large_blobs: Arc<jobs::LargeBlobs>,
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
@@ -398,6 +400,7 @@ pub fn start(
         store,
         paths,
         artifacts: Arc::new(artifacts),
+        large_blobs: Arc::default(),
         launcher,
         supervisor_tx,
         queue_tx: queue_tx.clone(),

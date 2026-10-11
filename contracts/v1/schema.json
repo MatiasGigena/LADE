@@ -363,7 +363,8 @@
         "review.integrate",
         "objective.complete",
         "objective.discard",
-        "objective.cleanup"
+        "objective.cleanup",
+        "objective.delete_history"
       ]
     },
     "AvailableAction": {
@@ -479,7 +480,8 @@
         "unsent_drafts": {"$ref": "#/$defs/Counter"},
         "available_actions": {"type": "array", "items": {"$ref": "#/$defs/AvailableAction"}, "maxItems": 32},
         "session": {"$ref": "#/$defs/SessionInfo"},
-        "approval": {"$ref": "#/$defs/ApprovalSummary"}
+        "approval": {"$ref": "#/$defs/ApprovalSummary"},
+        "history_deleted": {"type": "boolean"}
       }
     },
     "ActivityItem": {
@@ -508,7 +510,18 @@
         "added": {"$ref": "#/$defs/Counter"},
         "removed": {"$ref": "#/$defs/Counter"},
         "binary": {"type": "boolean"},
-        "old_path": {"$ref": "#/$defs/Path"}
+        "old_path": {"$ref": "#/$defs/Path"},
+        "filtered": {"type": "boolean"}
+      }
+    },
+    "ContentNotice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "message"],
+      "properties": {
+        "kind": {"enum": ["nested_repository", "filtered_content"]},
+        "message": {"$ref": "#/$defs/ShortText"},
+        "path": {"$ref": "#/$defs/Path"}
       }
     },
     "ReferenceVersion": {
@@ -614,7 +627,9 @@
         "objective_id": {"$ref": "#/$defs/Id"},
         "path": {"$ref": "#/$defs/Path"},
         "line": {"$ref": "#/$defs/Counter"},
-        "byte_start": {"$ref": "#/$defs/Counter"}
+        "byte_start": {"$ref": "#/$defs/Counter"},
+        "column": {"$ref": "#/$defs/Counter"},
+        "byte_end": {"$ref": "#/$defs/Counter"}
       }
     },
     "ObjectiveSelector": {
@@ -795,6 +810,12 @@
       "required": ["objective_id", "confirm_data_loss"],
       "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "confirm_data_loss": {"type": "boolean"}}
     },
+    "ObjectiveHistoryDeleteCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "confirm_history_loss"],
+      "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "confirm_history_loss": {"type": "boolean"}}
+    },
     "SettingsUpdateCommand": {
       "type": "object",
       "additionalProperties": false,
@@ -837,7 +858,8 @@
         "total_added": {"$ref": "#/$defs/Counter"},
         "total_removed": {"$ref": "#/$defs/Counter"},
         "capture_id": {"$ref": "#/$defs/Id"},
-        "candidate_id": {"$ref": "#/$defs/Id"}
+        "candidate_id": {"$ref": "#/$defs/Id"},
+        "notices": {"type": "array", "items": {"$ref": "#/$defs/ContentNotice"}, "maxItems": 64}
       }
     },
     "FileContent": {
@@ -852,7 +874,8 @@
         "encoding": {"enum": ["utf8", "binary"]},
         "eof": {"type": "boolean"},
         "version_label": {"$ref": "#/$defs/Label"},
-        "text": {"type": "string"}
+        "text": {"type": "string"},
+        "chunked": {"type": "boolean"}
       }
     },
     "FileDiff": {
@@ -1770,6 +1793,18 @@
             "operation_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "ui.respond"},
             "payload": {"$ref": "#/$defs/UiRespondCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "objective.delete_history"},
+            "payload": {"$ref": "#/$defs/ObjectiveHistoryDeleteCommand"}
           }
         }
       ]
@@ -2787,6 +2822,27 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "objective.delete_history"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ObjectiveDetail"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["kind", "request_id", "result"],
           "properties": {"kind": {"const": "reply"}, "request_id": {"$ref": "#/$defs/Id"}, "result": {"$ref": "#/$defs/Rejection"}}
         }
@@ -3377,6 +3433,25 @@
                   "additionalProperties": false,
                   "required": ["status", "data"],
                   "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
+            "name": {"const": "objective.delete_history"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/ObjectiveDetail"}}
                 },
                 {"$ref": "#/$defs/Rejection"}
               ]
