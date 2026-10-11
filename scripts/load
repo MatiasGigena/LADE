@@ -10,8 +10,8 @@
 # soak.md / soak-timeline.csv. Knobs (defaults are the canonical procedure): LADE_LOAD_RUNS (5),
 # LADE_LOAD_IDLE_SECS (60), LADE_LOAD_SECS (300), LADE_LOAD_INPUTS (200), LADE_LOAD_OPENS (40),
 # LADE_LOAD_LAUNCHES (20), LADE_SOAK_WARMUP_SECS (300), LADE_SOAK_SECS (1800),
-# LADE_SOAK_CYCLE_SECS (60). The GTK client phases run under Xvfb (display LOAD_DISPLAY,
-# default 78) when Xvfb and xdotool exist; otherwise the report says the client was not measured.
+# LADE_SOAK_CYCLE_SECS (60). The GTK client phases run under Xvfb (first free display from
+# LOAD_DISPLAY, default 93) when Xvfb and xdotool exist; otherwise the report says the client was not measured.
 # Requires bubblewrap (the service never runs workers unsandboxed) and Node 22.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -42,7 +42,10 @@ cleanup() {
 trap cleanup EXIT INT TERM
 if [ "$mode" = load ] && command -v Xvfb >/dev/null && command -v xdotool >/dev/null; then
   ./scripts/cargo build --release --locked -p lade-desktop
-  DISPLAY=:${LOAD_DISPLAY:-78}
+  # A display no other X server holds (other runs may share the host).
+  n=${LOAD_DISPLAY:-93}
+  while [ -e "/tmp/.X$n-lock" ]; do n=$((n + 1)); done
+  DISPLAY=:$n
   Xvfb "$DISPLAY" -screen 0 1440x900x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
   xvfb=$!
   sleep 1

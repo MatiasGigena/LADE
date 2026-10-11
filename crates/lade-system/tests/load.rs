@@ -875,20 +875,29 @@ fn spawn_client(binary: &Path, env: &Env) -> Child {
         .unwrap()
 }
 
-fn window_visible() -> bool {
+/// A mapped window of exactly this client process (other clients may share the display).
+fn window_visible(pid: u32) -> bool {
     Command::new("xdotool")
-        .args(["search", "--onlyvisible", "--name", "LADE"])
+        .args(["search", "--onlyvisible", "--pid", &pid.to_string()])
         .output()
         .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
+}
+
+/// Time until the client's window is mapped, or `None` after 30 s.
+fn wait_mapped(child: &Child, started: Instant) -> Option<Duration> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if window_visible(child.id()) {
+            return Some(started.elapsed());
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    None
 }
 
 fn kill_client(mut child: Child) {
     let _ = child.kill();
     let _ = child.wait();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while window_visible() && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
-    }
 }
 
 /// Client warm launches (window mapped, a proxy), then idle and streaming client phases.
@@ -902,24 +911,19 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     let launches = env_u64("LADE_LOAD_LAUNCHES", 20);
     let (laded, _) = Laded::start(&world.env);
     let mut mapped = Dist::default();
-    // One cold-ish start to warm the caches, not counted.
-    kill_client({
-        let c = spawn_client(&binary, &world.env);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !window_visible() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(10));
-        }
-        c
-    });
+    // One start to warm the caches, not counted.
+    let warm = spawn_client(&binary, &world.env);
+    let _ = wait_mapped(&warm, Instant::now());
+    kill_client(warm);
+    thread::sleep(Duration::from_millis(300));
+    let mut unmapped = 0;
     for _ in 0..launches {
         let started = Instant::now();
         let child = spawn_client(&binary, &world.env);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !window_visible() {
-            assert!(Instant::now() < deadline, "client window never appeared");
-            thread::sleep(Duration::from_millis(5));
+        match wait_mapped(&child, started) {
+            Some(elapsed) => mapped.push(elapsed),
+            None => unmapped += 1,
         }
-        mapped.push(started.elapsed());
         kill_client(child);
         thread::sleep(Duration::from_millis(300));
     }
@@ -977,7 +981,9 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     let _ = write!(
         report,
         "\n## GTK client (Xvfb, development host)\n\nWarm launches: process start → main window mapped (`xdotool search --onlyvisible`). This is a **proxy**: it does not prove a usable, presented workbench.\n\n| Measure | n | p50 ms | p95 ms | max ms |\n| --- | --- | --- | --- | --- |\n{}\n{PHASE_HEADER}{}{}",
-        mapped.row("client window mapped"),
+        mapped.row(&format!(
+            "client window mapped ({unmapped} launches not mapped within 30 s)"
+        )),
         phase_stats(&samples, "client-idle"),
         phase_stats(&samples, "client-stream-4w"),
     );
@@ -1067,6 +1073,9 @@ fn canonical_load() {
         "## Service launch\n\nProcess start → admitted client received its snapshot (warm OS cache, {OBJECTIVES} Objectives; includes restart recovery and the sandbox sweep).\n\n| Measure | n | p50 ms | p95 ms | max ms |\n| --- | --- | --- | --- | --- |\n{}",
         launch.row("laded start → snapshot")
     );
+    // Saved before the optional client phases, which cannot lose the nominal results.
+    write_timeline(&out.join("load-timeline.csv"), &samples);
+    fs::write(out.join("load.md"), &report).unwrap();
     client_phases(&world, &mut report, &mut samples);
     write_timeline(&out.join("load-timeline.csv"), &samples);
     fs::write(out.join("load.md"), &report).unwrap();
