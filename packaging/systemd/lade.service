@@ -3,9 +3,14 @@
 #
 # Hardening is limited to options that work in a user manager without creating a user or mount
 # namespace around laded: laded must itself create bubblewrap user namespaces for every worker, and
-# options such as ProtectSystem=, PrivateTmp=, ProtectHome= or RestrictNamespaces= in a user unit
-# would either nest laded in a namespace (breaking the worktree paths it hands to Git and bwrap) or
-# forbid the namespaces the sandbox needs. Host security settings are never changed.
+# options such as ProtectSystem=, ProtectHome=, PrivateTmp=, PrivateDevices=, ProtectKernel*= or
+# RestrictNamespaces= in a user unit would either nest laded in a namespace (breaking the worktree
+# paths it hands to Git and bwrap, and the SO_PEERCRED uid check) or forbid the namespaces the
+# sandbox needs. ProtectHome=read-only with ReadWritePaths= is not possible either: integration
+# writes into the user's repositories, which can live anywhere. MemoryDenyWriteExecute= would break
+# Node's JIT in the worker. The seccomp-based options below need no namespace (NoNewPrivileges=yes
+# is required for them in a user manager and is fine: bubblewrap runs unprivileged, never setuid).
+# Host security settings are never changed.
 [Unit]
 Description=LADE service (Objectives, Git authority and sandboxed agent workers)
 Documentation=file://@DOCDIR@/user-guide.md
@@ -13,7 +18,7 @@ Documentation=file://@DOCDIR@/user-guide.md
 [Service]
 Type=exec
 ExecStart=@LADED@ serve
-# The bundled pi worker package and the Node runtime found at install time (laded locates node on
+# The bundled pi worker package and the Node runtime chosen at install time (laded locates node on
 # PATH; verification commands resolve argv[0] in /usr/bin and /bin only).
 Environment=LADE_WORKER_DIR=@WORKER_DIR@
 Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
@@ -33,11 +38,25 @@ RestartSec=2
 # Restarting cannot fix either, so do not loop.
 RestartPreventExitStatus=64 78
 UMask=0077
+# Diagnostics policy (#14): no core dumps of laded or any worker (process memory can hold the
+# released provider key); diagnostics are the redacted journal lines and $STATE/logs.
+LimitCORE=0
 # bubblewrap is used unprivileged (user namespaces), so no setuid helper is needed.
 NoNewPrivileges=yes
 LockPersonality=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+# Unix sockets (control socket, gateway), IP (provider egress through the gateway) and netlink
+# (bwrap brings up the sandbox loopback; interface queries). Nothing else is needed.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# Calls no LADE component, worker or verification needs; denied with EPERM rather than a kill.
+# Deliberately not denied: unshare/clone/mount/pivot_root (bwrap user namespaces), seccomp/prctl
+# (bwrap installs the sandbox filter read from its --seccomp pipe), pipes and file I/O (the filter
+# and launch-gate pipes, writes into the delegated cgroup subtree). The sandbox filter stacks on
+# top of this one and denies more inside the sandbox.
+SystemCallFilter=~@clock @cpu-emulation @module @obsolete @raw-io @reboot @swap
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=default.target
