@@ -10,6 +10,7 @@
 mod compat;
 pub mod convert;
 mod execution;
+pub mod faults;
 mod handlers;
 mod inspect;
 mod jobs;

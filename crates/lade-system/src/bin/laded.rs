@@ -183,6 +183,13 @@ fn serve(parsed: &Args) -> ExitCode {
         cgroups: delegated_cgroups(),
         ..config
     };
+    if let Some(dir) = service::faults::directory() {
+        eprintln!(
+            "laded: warning: test fault injection enabled ({}={}); not for real use",
+            service::faults::FAULTS_ENV,
+            dir.display()
+        );
+    }
     let launcher = make_launcher(&config);
     let code = match service::start(config, launcher) {
         Ok(running) => {
