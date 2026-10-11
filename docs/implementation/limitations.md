@@ -15,7 +15,9 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 - All runtime evidence so far comes from the **development host** (disposable repositories, the `lade-fixture`
   offline model, `scripts/verify`, `scripts/test-install`). Nothing has been validated on a clean installation of the
   supported platform (Mint 22.3 / Cinnamon / X11). Installed-release validation is **IMP-016**.
-- No live provider has been exercised end to end (credentials are never used in tests). **IMP-011**.
+- No live provider has been exercised end to end (credentials are never used in tests), including the subscription
+  token path (`ANTHROPIC_OAUTH_TOKEN`) and the provider hosts added by IMP-011. **IMP-011** (needs an authorised live
+  account).
 - The developer comprehension exercise (A23) has not been designed or run; it needs Matias. **IMP-015**.
 - The release go/no-go is Matias's decision and has not been taken. **IMP-016**.
 
@@ -43,7 +45,8 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | Through an upstream `HTTPS_PROXY`, private-address checks apply only to IP literals (the proxy resolves names) | Private destinations reachable via a proxy are not blocked by LADE | IMP-007 |
 | Credentials come only from `laded`'s environment or `~/.config/lade/credentials.env` (0600). No Secret Service / GNOME Keyring custody, no memory-only mode | Keys rest in a plaintext file or the unit environment | IMP-007, IMP-014 |
 | The released key is readable by every process in the sandbox (accepted by #8: no per-extension secrecy) | Any tool run by the agent can read the key | IMP-007 |
-| Providers authenticated by OAuth logins, profiles or ADC (Copilot/Codex subscriptions, Bedrock, Vertex) have no egress policy and are unavailable; no graphical login/logout | Only API-key providers in the [default policy table](execution-safety.md#egress-gateway) work | IMP-011 |
+| Interactive OAuth logins and refresh-token storage (Claude Pro/Max login, ChatGPT Plus/Pro, Copilot, xAI, OpenRouter OAuth, Radius), cloud credentials (Bedrock, Vertex) and account-specific endpoints (Azure, Cloudflare, OpenCode) are **restricted** with a reason shown in the picker; 23 of 41 catalogue providers are restricted ([pi-compatibility.json](pi-compatibility.json)); no graphical login/logout | Subscription access works only where pi accepts a plain token variable (`ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY`); custom providers need an exact endpoint in the LADE profile | IMP-007, IMP-014 (credential custody) |
+| Custom providers: only `$LADE_PROVIDER_*` credential references (literal keys for local endpoints only), no `!command`, no `oauth`, no redefinition of built-ins | Some pi `models.json` files must be adapted before import | IMP-011 (trust rule) |
 | HTTPS through the gateway is tested only against a plain-HTTP origin (TLS uses undici's unmodified connector) | End-to-end TLS through the gateway is not covered by tests | IMP-011 |
 
 ## Git and repository handling
@@ -73,9 +76,11 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 
 | Limitation | Impact | Tracked |
 | --- | --- | --- |
-| Resource discovery is disabled in the worker: no extensions, skills, prompt templates, themes, context files (`AGENTS.md`/`CLAUDE.md`), `SYSTEM.md`, packages or `settings.json` from the profile or repository | pi behaves as a bare agent with LADE's system note only | IMP-011 |
-| Extension UI is unsupported (no extensions are loaded) | Extensions requiring UI cannot be used | IMP-011 |
-| No session tree/fork/clone/import/export, model/thinking switching during a session, manual compaction or reload | Only one linear session per Objective | IMP-011 |
+| Resources come only from the LADE profile (`~/.local/state/lade/profile`) plus the worktree root's context file; repository `.pi/`, `SYSTEM.md`/`APPEND_SYSTEM.md`, themes, packages and `settings.json` are not loaded ([inventory](pi-compatibility.md)) | Repository-provided pi resources must be copied into the LADE profile deliberately | IMP-011 (trust rule) |
+| Approved executable extensions run with the worker's full authority inside the sandbox, including the released provider key | Approval by content hash is a trust decision, not containment | IMP-007 |
+| Terminal-only extension UI (`custom()`, editor control) fails explicitly; status/widget surfaces are ignored | TUI-only extensions do not work | IMP-011 (restricted) |
+| Changing the provider of a live session needs stop → configure → resume; HTML export, session statistics, retry settings, image input and setting labels are not available | See the [inventory](pi-compatibility.md) (unresolved rows) | IMP-011 |
+| Open extension dialogs are not durable: a worker or service restart closes them (`aborted`) and the extension sees no answer | A pending decision must be asked again | IMP-013 |
 | Images are not part of the input protocol; tool images appear as `[image]` | Image inputs/outputs are not supported | IMP-011 |
 | Activity items over 192 KiB are truncated (the full byte length is shown) | Very large tool outputs are not fully visible | IMP-011 |
 | The worker depends on a second copy of `@earendil-works/pi-ai` (≈ +130 MB) and installs with `--ignore-scripts` | Larger bundle; the narrow pi fork (IMP-008) would remove the duplicate | IMP-008 |
@@ -89,7 +94,7 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | Under Xvfb on the development host (GTK 4.14, a GTK 4 clipboard owner), a paste of more than about 256 KiB never reached the client's buffer, so the 256 KiB size guard was exercised by pasting into existing text; behaviour with other clipboard owners and on Mint is unverified | A very large paste may fail silently at the toolkit level, before LADE can explain it | IMP-010 |
 | Syntax highlighting is off in the file and diff viewer | Plain text only | IMP-010 |
 | Dialogs (new Objective, open repository, submit feedback, approve, cleanup) are not captured as evidence | Their appearance is unverified | IMP-010 |
-| The model list is static on the client side | New pi models or custom providers cannot be chosen | IMP-011 |
+| The model picker, session tree, resource approval and extension dialogs (IMP-011) are captured only with preview fixture data under Xvfb (`evidence/imp-011/`); no keyboard or Orca walk-through | Their accessibility is unverified | IMP-011, IMP-010 |
 | No notifications, background attention outside the window, or logout handling | Attention is shown only inside the open window | IMP-012 |
 | Native presentation latency and memory budgets have not been measured | Performance targets in [performance-budgets.md](../planning/performance-budgets.md) are unverified | IMP-010, IMP-013 |
 

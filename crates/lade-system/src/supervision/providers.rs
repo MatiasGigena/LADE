@@ -283,4 +283,38 @@ mod tests {
         assert_eq!(local.status, AccessStatus::Available);
         assert_eq!(local.auth, [AuthKind::Custom]);
     }
+
+    /// The pinned compatibility manifest states exactly what this build's tables decide.
+    #[test]
+    fn compatibility_manifest_matches_the_reviewed_tables() {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../docs/implementation/pi-compatibility.json"
+        ))
+        .unwrap();
+        let policies = default_policies();
+        let providers = manifest["providers"].as_array().unwrap();
+        assert!(providers.len() > 30);
+        for provider in providers {
+            let id = provider["id"].as_str().unwrap();
+            let status = provider["status"].as_str().unwrap();
+            let usable =
+                provider_env_vars(id).is_some() && policies.contains_key(id) && cloud(id).is_none();
+            assert_eq!(status == "supported", usable, "{id}");
+            if status == "restricted" {
+                let reason = provider["reason"].as_str().unwrap();
+                assert!(!reason.is_empty(), "{id}");
+                if let Some(why) = cloud(id) {
+                    assert_eq!(reason, why, "{id}");
+                }
+            } else if id != FIXTURE_PROVIDER {
+                let vars: Vec<&str> = provider["variables"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap())
+                    .collect();
+                assert_eq!(Some(vars.as_slice()), provider_env_vars(id), "{id}");
+            }
+        }
+    }
 }

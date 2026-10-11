@@ -2,13 +2,14 @@
 // session tree/fork/import/export, compaction, reload generations, model/thinking selection, retry
 // and the semantic extension UI. Offline fixture model only; disposable directories only.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { extensionHash } from "../src/worker/resources.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
-import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker } from "./worker-support.ts";
+import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker, WORKER } from "./worker-support.ts";
 import type { Sandbox } from "./worker-support.ts";
 
 const EXTENSION = `export default function (pi) {
@@ -334,3 +335,24 @@ test("a second command while one runs fails at once; a foreign profile path is r
   const done = await worker.waitFor(frame => frame.kind === "session.result" && frame.command_id === first, mark);
   assert.equal(done.ok, true, text(done.message));
 }));
+
+test("the pinned compatibility manifest matches the SDK catalogue", () => {
+  const box = sandbox();
+
+  try {
+    const out = join(box.root, "catalog.json");
+    execFileSync(process.execPath, [join(dirname(WORKER), "worker", "catalog.ts"), out], { stdio: "ignore" });
+    const catalog = record(JSON.parse(readFileSync(out, "utf8")));
+    const manifest = record(JSON.parse(readFileSync(join(dirname(WORKER), "..", "..", "..", "docs", "implementation", "pi-compatibility.json"), "utf8")));
+
+    const ids = (value: JsonValue | undefined): string[] => {
+      assert.ok(Array.isArray(value));
+
+      return value.map(entry => text(record(entry).id));
+    };
+
+    assert.equal(record(manifest.sdk).version, catalog.sdk_version, "manifest is pinned to the installed SDK version");
+    assert.deepEqual(ids(manifest.providers), ids(catalog.providers), "every catalogue provider is classified, none extra");
+    assert.equal(catalog.error, null);
+  } finally { cleanup(box); }
+});
