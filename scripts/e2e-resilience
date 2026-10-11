@@ -1,0 +1,398 @@
+#!/bin/sh
+# IMP-005 / IMP-010 failure paths in the real GTK client under Xvfb against a real `laded serve`
+# with the sandboxed `lade-fixture` model:
+#
+#   - draft save failure → visible failure → Retry → "Saving…" while the service holds the write →
+#     "Saved r1" only after the acknowledgement (checked against the service database);
+#   - safe close: closing the window right after typing flushes the draft before the window goes;
+#     with the service gone, closing shows the explicit "not saved" outcome (keep open or
+#     discard), keeping the window open lets the draft save after the service returns, and an
+#     explicit discard loses only the unsaved text;
+#   - the service killed and restarted in the middle of an agent run: the window reconnects, the
+#     run is interrupted and nothing resumes, the developer continues the loop; a draft save
+#     failure during the loop; the loop's dialogs (open repository, new Objective, submit,
+#     approve with override, integrate, cleanup, delete Git history, Exit).
+#
+#   scripts/e2e-resilience [OUT_ROOT]   (default: docs/implementation/evidence)
+#                                        → OUT_ROOT/imp-005/r-*.png, OUT_ROOT/imp-010/{e,d}-*.png,
+#                                          run.log in each
+#
+# Save failures are induced with the service's **test-only** fault directory
+# (LADE_TEST_FAULTS_DIR, crates/lade-system/src/service/faults.rs): `draft.save` refuses with
+# `durability_failure`, `delay <ms>` holds the save on the service thread. The service is "gone" by
+# SIGKILL. Requires a debug build, Xvfb, xdotool, ImageMagick `import`, git, bubblewrap, python3
+# (ctypes + libX11 for scripts/x11-close-window.py; sqlite3 to read the service database
+# read-only). Environment: E2E_DISPLAY (default 79), E2E_KEEP=1 keeps the temporary directory.
+#
+# Fragile by nature (as scripts/e2e-gui): no window manager, dialogs open at the top-left corner,
+# controls are clicked by position in the 1440x900 layout. Every state change is asserted from the
+# database, Git, the filesystem or processes, not from pixels.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT_ROOT=${1:-$ROOT/docs/implementation/evidence}
+OUT5=$OUT_ROOT/imp-005
+OUT10=$OUT_ROOT/imp-010
+DPY=:${E2E_DISPLAY:-79}
+BIN=$ROOT/target/debug
+W=1440
+H=900
+for tool in Xvfb xdotool import git bwrap python3; do
+  command -v "$tool" >/dev/null || { echo "e2e-resilience: $tool is required" >&2; exit 2; }
+done
+[ -x "$BIN/laded" ] && [ -x "$BIN/lade-desktop" ] || {
+  echo "e2e-resilience: build first: ./scripts/cargo build --workspace --locked" >&2
+  exit 2
+}
+mkdir -p "$OUT5" "$OUT10"
+T=$(mktemp -d /tmp/lres.XXXXXX)
+STATE=$T/state
+RUN=$T/run
+REPO=$T/repo
+FAULTS=$T/faults
+LOG=$T/run.log
+pids=""
+cleanup() {
+  for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  [ "${E2E_KEEP:-0}" = 1 ] || rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+fail() {
+  echo "e2e-resilience: FAILED: $*" | tee -a "$LOG" >&2
+  import -window root "$T/failed.png" 2>/dev/null || true
+  [ -f "$T/laded.log" ] && tail -20 "$T/laded.log" >&2
+  exit 1
+}
+step() { echo "e2e-resilience: $*" | tee -a "$LOG"; }
+
+export DISPLAY=$DPY
+x() { xdotool "$@"; }
+click() { x mousemove "$1" "$2" click 1; sleep "${3:-1}"; }
+key() { x key "$@"; sleep 1; }
+typ() { x type --delay 8 "$1"; }
+park() { x mousemove 700 880; sleep 0.5; }
+# shot DIR NAME
+shot() { park; import -window root "$1/$2.png"; step "screenshot $(basename "$1")/$2.png"; }
+scroll_inspector() { # scroll_inspector CLICKS (down; negative = up)
+  x mousemove 1280 600
+  n=$1; b=5
+  [ "$n" -lt 0 ] && { n=$((0 - n)); b=4; }
+  i=0; while [ $i -lt "$n" ]; do x click $b; i=$((i + 1)); done; sleep 1
+}
+inspector_top() { scroll_inspector -20; }
+# Inspector buttons move with scrolling and wrapped reasons, so they are found by pixels
+# (scripts/e2e-find-button.py): `black` is a filled primary button, `label T` an enabled button
+# whose label band matches the template scripts/e2e-templates/T.png.
+find_button() {
+  case $1 in
+    black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
+    *) import -window root -depth 8 ppm:- |
+      python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
+  esac
+}
+# click_inspector WHAT KIND: from the top of the inspector, scroll down until the button shows.
+click_inspector() {
+  inspector_top
+  tries=0
+  while ! y=$(find_button "$2"); do
+    tries=$((tries + 1))
+    [ $tries -le 16 ] || fail "no enabled button for $1"
+    scroll_inspector 2
+  done
+  click 1280 "$y" 1
+}
+click_primary() { click_inspector "$1" black; }
+wait_for() {
+  limit=$1; what=$2; shift 2
+  n=0
+  while ! "$@" >/dev/null 2>&1; do
+    n=$((n + 1))
+    [ $n -le $((limit * 4)) ] || fail "timed out waiting for $what"
+    sleep 0.25
+  done
+}
+wt() { for d in "$STATE"/worktrees/*; do [ -d "$d" ] && echo "$d" && return 0; done; return 1; }
+wt_file_is() { d=$(wt) && [ "$(cat "$d/hello.txt" 2>/dev/null)" = "$1" ]; }
+session_ready() { ls "$STATE"/sessions/*/agent >/dev/null 2>&1; }
+# A worker sandbox of this state directory (bwrap and node carry its session path).
+worker_alive() { pgrep -f "$STATE/sessions" >/dev/null 2>&1; }
+no_worker() { ! worker_alive; }
+last_connection() { grep " connection " "$T/trace.log" | tail -1 | cut -d' ' -f3; }
+connected() { [ "$(last_connection)" = Connected ]; }
+reconnecting() { [ "$(last_connection)" != Connected ]; }
+# The service database, read-only (WAL readers do not disturb the service).
+sql() {
+  python3 -I -c 'import sqlite3, sys
+db = sqlite3.connect("file:" + sys.argv[1] + "?mode=ro", uri=True)
+for row in db.execute(sys.argv[2]):
+    print("|".join(str(v) for v in row))' "$STATE/lade.db" "$1"
+}
+draft_rows() { sql "select revision, body from drafts where deleted = 0 order by created_at"; }
+draft_is() { [ "$(sql "select revision || '|' || body from drafts where deleted = 0 and id = '$1'")" = "$2|$3" ]; }
+latest_draft() { sql "select id from drafts where deleted = 0 order by created_at desc limit 1"; }
+no_drafts() { [ "$(sql "select count(*) from drafts where deleted = 0")" = 0 ]; }
+has_drafts() { ! no_drafts; }
+
+start_laded() {
+  LADE_TEST_FAULTS_DIR=$FAULTS "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
+  LADED=$!
+  pids="$pids $LADED"
+  wait_for 10 "control socket" test -S "$RUN/control.sock"
+}
+kill_laded() {
+  kill -9 "$LADED"
+  wait "$LADED" 2>/dev/null || true
+}
+start_desktop() {
+  LADE_DESKTOP_TRACE=$T/trace.log XDG_CONFIG_HOME=$T/config GTK_A11Y=none \
+    "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" "$@" >>"$T/desktop.log" 2>&1 &
+  DESKTOP=$!
+  pids="$pids $DESKTOP"
+  wait_for 20 "LADE window" xdotool search --onlyvisible --name '^LADE$'
+  WID=$(xdotool search --onlyvisible --name '^LADE$' | head -1)
+  x windowmove "$WID" 0 0 windowsize "$WID" $W $H
+  sleep 2
+  click 700 60 0.5   # keyboard focus (no window manager)
+}
+desktop_gone() { ! kill -0 "$DESKTOP" 2>/dev/null; }
+close_window() { python3 -I "$ROOT/scripts/x11-close-window.py" "$WID"; }
+draft_text() { click 1278 350 0.3; x key ctrl+End; typ "$1"; }
+
+step "development host, Xvfb ${W}x${H}, debug build; not the supported Mint/Cinnamon/X11 host"
+step "repository with main checked out and clean; service with the test-only fault directory"
+mkdir -p "$REPO" "$FAULTS" && mkdir -m 700 "$RUN"
+: >"$LOG"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.email dev@example.com
+git -C "$REPO" config user.name Developer
+printf '# Demo\n\nA small repository.\n' >"$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m initial
+BASE=$(git -C "$REPO" rev-parse main)
+Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+pids="$pids $!"
+sleep 1
+start_laded
+grep -q "test fault injection enabled" "$T/laded.log" || fail "the service did not announce test fault injection"
+start_desktop --open "$REPO"
+wait_for 10 "connected" connected
+
+step "dialog: open repository (Ctrl+O)"
+key ctrl+o
+sleep 2
+shot "$OUT10" d-01-open-repository
+click 771 303 2    # Cancel (the file chooser has no Escape binding without a portal)
+
+step "dialog: new Objective (Ctrl+N), then create it"
+key ctrl+n
+click 280 106 0.3; typ "Greeting file"
+click 280 195 0.3; typ "hello.txt says hi"
+shot "$OUT10" d-02-new-objective
+click 469 625 2
+
+step "start the agent (sandboxed worker, fixture model) and let it write hello.txt"
+sleep 2
+click_primary "Start agent"
+wait_for 60 "sandboxed worker started" session_ready
+inspector_top
+key ctrl+2
+click 680 790 0.3
+typ "lade-fixture: write hello.txt hi"
+key ctrl+Return
+wait_for 60 "hello.txt written by the agent" wt_file_is hi
+
+step "IMP-005: a draft save the service refuses stays visibly unsaved with Retry"
+key ctrl+1
+click 1057 323 2   # Refresh the inspected capture
+click 330 336 2    # hello.txt
+x mousemove 622 421 click --repeat 2 --delay 80 1
+sleep 1
+: >"$FAULTS/draft.save"            # refuse every draft.save
+key ctrl+shift+m
+typ "Please greet more warmly."
+wait_for 10 "the refused save" grep -q "draft [0-9a-f]* Save failed" "$T/trace.log"
+sleep 1
+no_drafts || fail "a refused save was written"
+shot "$OUT5" r-01-save-failed
+
+step "Retry while the service holds the write: Saving…, not Saved, until the acknowledgement"
+echo "delay 4000" >"$FAULTS/draft.save"
+click 1169 509 1   # Retry (beside the failed draft)
+sleep 1
+no_drafts || fail "the held save was written early"
+grep "draft " "$T/trace.log" | tail -1 | grep -q "Saving…" || fail "the draft is not shown as saving"
+shot "$OUT5" r-02-saving-before-ack
+wait_for 15 "the held save committed" has_drafts
+DRAFT=$(latest_draft)
+wait_for 10 "Saved r1 shown" grep -q "draft [0-9a-f]* Saved r1" "$T/trace.log"
+draft_is "$DRAFT" 1 "Please greet more warmly." || fail "revision 1 is not the typed text: $(draft_rows)"
+rm "$FAULTS/draft.save"
+sleep 1
+shot "$OUT5" r-03-saved-after-ack
+click 1382 82 1    # Dismiss the refusal notice (restores the layout)
+
+step "safe close: typing then closing at once flushes the draft before the window goes"
+draft_text " Thanks"
+close_window
+wait_for 10 "the window closed" desktop_gone
+draft_is "$DRAFT" 2 "Please greet more warmly. Thanks" || fail "the close did not flush: $(draft_rows)"
+grep "draft " "$T/trace.log" | tail -1 | grep -q "Saved r2" || fail "closed before the acknowledgement"
+start_desktop
+click 120 167 2    # the Objective
+click 1330 78 1    # Feedback tab
+shot "$OUT5" r-04-reopened-saved
+
+step "service gone: typing is visibly not saved and closing asks keep-open or discard"
+kill_laded
+wait_for 20 "the window noticed" reconnecting
+draft_text " Bye"
+sleep 1
+close_window
+sleep 2
+kill -0 "$DESKTOP" || fail "the window closed with unsaved text"
+shot "$OUT5" r-05-close-not-saved
+draft_is "$DRAFT" 2 "Please greet more warmly. Thanks" || fail "unexpected draft state"
+
+step "keep the window open; the service returns; the draft saves on reconnect"
+key Return         # Keep window open (default focus)
+kill -0 "$DESKTOP" || fail "Keep window open closed the window"
+start_laded
+wait_for 30 "reconnected" connected
+wait_for 15 "the kept text saved" draft_is "$DRAFT" 3 "Please greet more warmly. Thanks Bye"
+sleep 2
+shot "$OUT5" r-06-reconnected-saved
+
+step "explicit discard: only the unsaved text is lost"
+kill_laded
+wait_for 20 "the window noticed" reconnecting
+draft_text " Lost"
+sleep 1
+close_window
+sleep 2
+key Tab            # Keep window open has focus; Tab reaches the discard button
+key Return
+wait_for 10 "the window closed after the discard" desktop_gone
+start_laded
+start_desktop
+click 120 167 2
+click 1330 78 1
+draft_is "$DRAFT" 3 "Please greet more warmly. Thanks Bye" || fail "discarded text reached the service"
+shot "$OUT5" r-07-after-discard
+
+step "IMP-010: the service is killed in the middle of an agent run"
+key ctrl+2
+click 946 98 3     # Resume agent (the run was interrupted by the kills above)
+wait_for 60 "worker resumed" worker_alive
+click 680 790 0.3
+typ "lade-fixture: delay 2000"
+x key shift+Return
+typ "lade-fixture: write hello.txt slow"
+mark=$(wc -l <"$T/trace.log")
+key ctrl+Return
+wait_for 30 "the agent streaming its reply" sh -c "tail -n +$mark '$T/trace.log' | grep -q ' activity [0-9]* Assistant'"
+sleep 1
+shot "$OUT10" e-01-agent-running
+wt_file_is hi || fail "the slow run finished before the kill"
+step "kill -9 laded while the agent streams (its tool call is still seconds away)"
+kill_laded
+wait_for 20 "worker ended with the service" no_worker
+sleep 1
+shot "$OUT10" e-02-service-lost
+step "restart: the run is interrupted, nothing resumes"
+start_laded
+wait_for 30 "reconnected" connected
+sleep 5
+no_worker || fail "the agent was resumed"
+wt_file_is hi || fail "the interrupted run wrote hello.txt"
+step "input delivery state after the restart: $(sql "select d.state from input_delivery d join accepted_inputs a on a.id = d.input_id order by a.rowid desc limit 1")"
+shot "$OUT10" e-03-interrupted
+step "the developer continues: Resume and a new instruction"
+click 946 98 3
+wait_for 60 "worker resumed" worker_alive
+click 680 790 0.3
+typ "lade-fixture: write hello.txt hello"
+key ctrl+Return
+wait_for 60 "hello.txt rewritten" wt_file_is hello
+sleep 3
+shot "$OUT10" e-04-continued
+
+step "a draft save fails during the loop; Retry; submit"
+click 1201 523 1   # Remove draft… (the stale draft would block the whole batch)
+click 359 160 2    # Remove draft (confirmation)
+wait_for 10 "the stale draft removed" no_drafts
+key ctrl+1
+click 1057 323 2   # Refresh (the worktree changed after the inspected capture)
+click 330 336 2    # hello.txt
+x mousemove 625 421 click --repeat 2 --delay 80 1
+sleep 1
+: >"$FAULTS/draft.save"
+mark=$(wc -l <"$T/trace.log")
+key ctrl+shift+m
+typ "Greet warmly."
+x key shift+Return
+typ "lade-fixture: write hello.txt hello there"
+wait_for 10 "the refused save" sh -c "tail -n +$mark '$T/trace.log' | grep -q 'draft [0-9a-f]* Save failed'"
+sleep 1
+no_drafts || fail "a refused save was written"
+shot "$OUT10" e-05-loop-save-failed
+rm "$FAULTS/draft.save"
+click 1169 509 1   # Retry
+wait_for 15 "the retried save" has_drafts
+DRAFT=$(latest_draft)
+wait_for 10 "Saved r1" draft_is "$DRAFT" 1 "Greet warmly.
+lade-fixture: write hello.txt hello there"
+click 1382 82 1    # Dismiss the refusal notice
+step "dialog: submit feedback"
+click_primary "Review and submit"
+shot "$OUT10" d-03-submit-feedback
+click 479 300 1    # Submit 1 item
+wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
+sleep 3
+
+step "freeze, then approve with an override reason (no check was run)"
+click 1175 78 1    # Overview tab
+click_inspector "Freeze for review" freeze-for-review
+wait_for 60 "candidate commit on the Objective branch" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
+sleep 3
+click_primary "Approve Candidate 1"
+typ "Reviewed the one-line change by hand; no check configured."
+shot "$OUT10" d-04-approve-override
+click 382 299 3    # Approve candidate
+sql "select count(*) from approvals" | grep -q '^1$' || fail "approval not recorded"
+
+step "dialog: protected integration"
+click_primary "Integrate into main"
+shot "$OUT10" d-05-integrate-confirm
+click 374 160 1    # Integrate
+wait_for 60 "squash commit on main" sh -c "git -C '$REPO' log -1 --format=%s main | grep -q 'Greeting file'"
+[ "$(git -C "$REPO" rev-parse main^)" = "$BASE" ] || fail "main is not one squash commit ahead"
+[ "$(cat "$REPO/hello.txt")" = "hello there" ] || fail "main worktree file missing or wrong"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "main checkout not clean"
+sleep 2
+
+step "dialog: cleanup"
+click_inspector "Clean up branch and worktree" clean-up
+shot "$OUT10" d-06-cleanup
+click 524 181 1    # Clean up
+wait_for 60 "branch and worktree removed" sh -c "! ls -d '$STATE'/worktrees/*/ >/dev/null 2>&1 && [ -z \"\$(git -C '$REPO' branch --list 'lade/*')\" ]"
+sleep 2
+
+step "dialog: delete Git history (explicit acknowledgement)"
+git -C "$REPO" for-each-ref refs/lade/retain/ | grep -q . || fail "retention refs missing before deletion"
+click_inspector "Delete Git history" delete-git-history
+click 37 204 0.5   # I understand this history cannot be restored by LADE
+shot "$OUT10" d-07-delete-history
+click 418 266 3    # Delete history
+[ -z "$(git -C "$REPO" for-each-ref refs/lade/)" ] || fail "retention refs remain"
+
+step "dialog: Exit (Ctrl+Q) stops the service"
+key ctrl+q
+shot "$OUT10" d-08-exit
+click 391 177 1    # Exit
+n=0
+while kill -0 "$LADED" 2>/dev/null; do
+  n=$((n + 1)); [ $n -le 80 ] || fail "laded kept running after Exit"; sleep 0.25
+done
+wait_for 10 "the window closed" desktop_gone
+step "PASSED; captures in $OUT5 and $OUT10"
+cp "$LOG" "$OUT10/run.log"; cp "$LOG" "$OUT5/run.log"
