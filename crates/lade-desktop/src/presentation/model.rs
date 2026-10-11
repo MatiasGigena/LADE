@@ -275,6 +275,8 @@ pub struct SessionInfo {
     pub association_revision: u64,
     pub execution_generation: u64,
     pub model: ModelRef,
+    /// The Objective's persisted thinking selection, when one was made.
+    pub thinking: Option<super::compat::ThinkingLevel>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -749,7 +751,6 @@ pub struct ServiceNotice {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Settings {
     pub default_model: Option<ModelRef>,
-    pub available_models: Vec<ModelRef>,
     pub verification_commands: Vec<Vec<String>>,
 }
 

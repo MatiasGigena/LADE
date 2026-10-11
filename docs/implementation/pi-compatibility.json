@@ -1,0 +1,488 @@
+{
+  "manifest": 1,
+  "sdk": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.85.1"
+  },
+  "generated_from": "node packages/pi-worker/src/worker/catalog.ts (provider ids and auth facts of the pinned SDK catalogue) and the reviewed tables in crates/lade-system/src/supervision/{credentials,gateway,providers}.rs",
+  "providers": [
+    {
+      "id": "amazon-bedrock",
+      "name": "Amazon Bedrock",
+      "status": "restricted",
+      "auth": [
+        "cloud_credentials"
+      ],
+      "reason": "AWS profiles and keys are not released, and the Bedrock SDK's node:http transport bypasses the LADE gateway"
+    },
+    {
+      "id": "ant-ling",
+      "name": "Ant Ling",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.ant-ling.com/v1"
+    },
+    {
+      "id": "anthropic",
+      "name": "Anthropic",
+      "auth": [
+        "api_key",
+        "subscription_token",
+        "oauth_login"
+      ],
+      "status": "supported",
+      "variables": [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_OAUTH_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN"
+      ],
+      "restricted_auth": {
+        "oauth_login": "Anthropic (Claude Pro/Max): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      }
+    },
+    {
+      "id": "azure-openai-responses",
+      "name": "Azure OpenAI",
+      "status": "restricted",
+      "auth": [
+        "cloud_credentials"
+      ],
+      "reason": "the endpoint host is specific to each Azure resource; there is no reviewed per-resource egress policy"
+    },
+    {
+      "id": "baseten",
+      "name": "Baseten",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://inference.baseten.co/v1"
+    },
+    {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "CEREBRAS_API_KEY"
+      ]
+    },
+    {
+      "id": "cloudflare-ai-gateway",
+      "name": "Cloudflare AI Gateway",
+      "status": "restricted",
+      "auth": [
+        "cloud_credentials"
+      ],
+      "reason": "the endpoint host is specific to each Cloudflare account; there is no reviewed egress policy"
+    },
+    {
+      "id": "cloudflare-workers-ai",
+      "name": "Cloudflare Workers AI",
+      "status": "restricted",
+      "auth": [
+        "cloud_credentials"
+      ],
+      "reason": "the endpoint host is specific to each Cloudflare account; there is no reviewed egress policy"
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "DEEPSEEK_API_KEY"
+      ]
+    },
+    {
+      "id": "fireworks",
+      "name": "Fireworks",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "FIREWORKS_API_KEY"
+      ]
+    },
+    {
+      "id": "github-copilot",
+      "name": "GitHub Copilot",
+      "auth": [
+        "api_key",
+        "oauth_login"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.individual.githubcopilot.com; GitHub Copilot: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+    },
+    {
+      "id": "google",
+      "name": "Google",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "GEMINI_API_KEY"
+      ]
+    },
+    {
+      "id": "google-vertex",
+      "name": "Google Vertex AI",
+      "status": "restricted",
+      "auth": [
+        "cloud_credentials"
+      ],
+      "reason": "Application Default Credentials files are not released into the sandbox"
+    },
+    {
+      "id": "groq",
+      "name": "Groq",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "GROQ_API_KEY"
+      ]
+    },
+    {
+      "id": "huggingface",
+      "name": "Hugging Face",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "HF_TOKEN"
+      ]
+    },
+    {
+      "id": "kimi-coding",
+      "name": "Kimi For Coding",
+      "auth": [
+        "api_key",
+        "subscription_token",
+        "oauth_login"
+      ],
+      "status": "supported",
+      "variables": [
+        "KIMI_API_KEY"
+      ],
+      "restricted_auth": {
+        "oauth_login": "Kimi Code (subscription): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      }
+    },
+    {
+      "id": "minimax",
+      "name": "MiniMax",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.minimax.io/anthropic"
+    },
+    {
+      "id": "minimax-cn",
+      "name": "MiniMax CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.minimaxi.com/anthropic"
+    },
+    {
+      "id": "mistral",
+      "name": "Mistral",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "MISTRAL_API_KEY"
+      ]
+    },
+    {
+      "id": "moonshotai",
+      "name": "Moonshot AI",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "MOONSHOT_API_KEY"
+      ]
+    },
+    {
+      "id": "moonshotai-cn",
+      "name": "Moonshot AI CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.moonshot.cn/v1"
+    },
+    {
+      "id": "nvidia",
+      "name": "NVIDIA",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "NVIDIA_API_KEY"
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "OPENAI_API_KEY"
+      ]
+    },
+    {
+      "id": "openai-codex",
+      "name": "OpenAI Codex",
+      "auth": [
+        "oauth_login"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://chatgpt.com/backend-api; OpenAI (ChatGPT Plus/Pro): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode Zen",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for an account-specific endpoint"
+    },
+    {
+      "id": "opencode-go",
+      "name": "OpenCode Go",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for an account-specific endpoint"
+    },
+    {
+      "id": "openrouter",
+      "name": "OpenRouter",
+      "auth": [
+        "api_key",
+        "oauth_login"
+      ],
+      "status": "supported",
+      "variables": [
+        "OPENROUTER_API_KEY"
+      ],
+      "restricted_auth": {
+        "oauth_login": "OpenRouter OAuth: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      }
+    },
+    {
+      "id": "qwen-token-plan",
+      "name": "Qwen Token Plan",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    },
+    {
+      "id": "qwen-token-plan-cn",
+      "name": "Qwen Token Plan CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    },
+    {
+      "id": "qwen-token-plan-individual",
+      "name": "Qwen Token Plan Individual",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+    },
+    {
+      "id": "radius",
+      "name": "Radius",
+      "auth": [
+        "api_key",
+        "oauth_login"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for an account-specific endpoint; Radius: interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+    },
+    {
+      "id": "together",
+      "name": "Together",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "TOGETHER_API_KEY"
+      ]
+    },
+    {
+      "id": "vercel-ai-gateway",
+      "name": "Vercel AI Gateway",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "AI_GATEWAY_API_KEY"
+      ]
+    },
+    {
+      "id": "xai",
+      "name": "xAI",
+      "auth": [
+        "api_key",
+        "oauth_login"
+      ],
+      "status": "supported",
+      "variables": [
+        "XAI_API_KEY"
+      ],
+      "restricted_auth": {
+        "oauth_login": "xAI (Grok/X subscription): interactive OAuth login and refresh-token storage are restricted (no credential custody, IMP-007/IMP-014)"
+      }
+    },
+    {
+      "id": "xiaomi",
+      "name": "Xiaomi",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://api.xiaomimimo.com/v1"
+    },
+    {
+      "id": "xiaomi-token-plan-ams",
+      "name": "Xiaomi Token Plan AMS",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan-ams.xiaomimimo.com/v1"
+    },
+    {
+      "id": "xiaomi-token-plan-cn",
+      "name": "Xiaomi Token Plan CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan-cn.xiaomimimo.com/v1"
+    },
+    {
+      "id": "xiaomi-token-plan-sgp",
+      "name": "Xiaomi Token Plan SGP",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan-sgp.xiaomimimo.com/v1"
+    },
+    {
+      "id": "zai",
+      "name": "Z.AI",
+      "auth": [
+        "api_key"
+      ],
+      "status": "supported",
+      "variables": [
+        "ZAI_API_KEY"
+      ]
+    },
+    {
+      "id": "zai-coding-cn",
+      "name": "Z.AI Coding CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://open.bigmodel.cn/api/coding/paas/v4"
+    },
+    {
+      "id": "lade-fixture",
+      "name": "LADE fixture provider (offline, scripted; not a real model)",
+      "status": "supported",
+      "auth": [
+        "none"
+      ],
+      "note": "offline scripted fixture model, not a real model"
+    }
+  ],
+  "custom_providers": {
+    "status": "supported",
+    "source": "LADE profile models.json ($XDG_STATE_HOME/lade/profile/models.json)",
+    "rules": [
+      "https endpoints, or plain http only to loopback/local hosts",
+      "credentials only as one whole $LADE_PROVIDER_* variable resolved from the laded environment or credentials.env; literal keys only for local endpoints",
+      "no !command values, no other environment interpolation, no oauth blocks",
+      "ids must not redefine a provider with a reviewed LADE policy or credential mapping",
+      "egress is allowed to exactly the declared host:port (private addresses only for local endpoints)"
+    ]
+  },
+  "resources": {
+    "context_files": "supported: LADE profile AGENTS.md, then the worktree root's own context file in pi order (AGENTS.override.md, AGENTS.md, AGENTS.MD, CLAUDE.md, CLAUDE.MD)",
+    "skills": "supported: LADE profile skills/",
+    "prompt_templates": "supported: LADE profile prompts/, expanded once by pi",
+    "extensions": "supported with approval: LADE profile extensions/, approved by sha256 content hash, re-verified by the worker",
+    "repository_pi_dir": "restricted: repository .pi/ resources are not loaded (untrusted repository content)",
+    "system_md": "restricted: SYSTEM.md / APPEND_SYSTEM.md are not loaded; LADE's system note is the only addition",
+    "themes": "restricted: no terminal themes in the GTK client",
+    "packages": "restricted: pi packages (npm/git installs) are not installed or loaded",
+    "settings_json": "restricted: global/project settings.json are not read; settings are in memory"
+  },
+  "extension_ui": {
+    "supported": [
+      "select",
+      "confirm",
+      "input",
+      "editor",
+      "notify"
+    ],
+    "display_only_noops": [
+      "setStatus",
+      "setWidget",
+      "setFooter",
+      "setHeader",
+      "setTitle",
+      "setWorkingMessage",
+      "setWorkingVisible",
+      "setWorkingIndicator",
+      "setHiddenThinkingLabel",
+      "onTerminalInput",
+      "addAutocompleteProvider",
+      "setToolsExpanded"
+    ],
+    "fail_explicitly": [
+      "custom",
+      "pasteToEditor",
+      "setEditorText",
+      "getEditorText",
+      "setEditorComponent",
+      "setTheme"
+    ]
+  }
+}

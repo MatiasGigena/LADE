@@ -437,7 +437,7 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
         ErrorCode::InvalidLifecycle
     );
 
-    // The fact is durable across a restart (schema v2), and the record itself stays.
+    // The fact is durable across a restart (schema v3), and the record itself stays.
     drop(client);
     service.shutdown();
     let service = env.start(FakeLauncher::shared());

@@ -130,9 +130,21 @@ in `dist/providers/data/*.json`):
 | `cerebras` | `api.cerebras.ai` | `CEREBRAS_API_KEY` |
 | `together` | `api.together.ai` | `TOGETHER_API_KEY` |
 | `fireworks` | `api.fireworks.ai` | `FIREWORKS_API_KEY` |
+| `moonshotai` | `api.moonshot.ai` | `MOONSHOT_API_KEY` |
+| `huggingface` | `router.huggingface.co` | `HF_TOKEN` |
+| `nvidia` | `integrate.api.nvidia.com` | `NVIDIA_API_KEY` |
+| `zai` | `api.z.ai` | `ZAI_API_KEY` |
+| `vercel-ai-gateway` | `ai-gateway.vercel.sh` | `AI_GATEWAY_API_KEY` |
+| `kimi-coding` | `api.kimi.com` | `KIMI_API_KEY` |
 
 Providers whose pi authentication is not a plain variable (Bedrock profiles, Vertex ADC, OAuth logins such as
-Copilot/Codex) have no entry and are unavailable.
+Copilot/Codex), whose endpoint is account-specific, or that have no reviewed entry are **restricted** with a reason
+shown to the developer; the full classification is [pi-compatibility.json](pi-compatibility.json).
+
+Custom providers of the LADE profile's `models.json` (IMP-011) get one rule for exactly their declared
+`host:port`, with `allow_private` only when the endpoint is a local host; their credentials are `LADE_PROVIDER_*`
+variables from the same sources as below. The model catalogue itself is computed by the worker package in a
+sandbox without a gateway (no network).
 
 ## Credentials
 

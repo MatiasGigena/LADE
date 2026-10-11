@@ -447,6 +447,7 @@ fn session(generation: u64) -> SessionInfo {
         association_revision: 2,
         execution_generation: generation,
         model: ModelRef::new("lade-fixture", "scripted-preview"),
+        thinking: None,
     }
 }
 
@@ -993,7 +994,6 @@ fn inputs(now: Timestamp) -> Vec<InputSummary> {
 fn settings() -> Settings {
     Settings {
         default_model: Some(ModelRef::new("lade-fixture", "scripted-preview")),
-        available_models: vec![ModelRef::new("lade-fixture", "scripted-preview")],
         verification_commands: vec![
             vec!["git".into(), "diff".into(), "--check".into()],
             vec![
@@ -1041,7 +1041,100 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
         objective_id: id(MAIN_OBJECTIVE),
         inputs: inputs(now),
     });
+    updates.extend(compat_fixture());
     updates
+}
+
+/// Labelled IMP-011 fixture data: a catalogue with every provider status, the fixture's models,
+/// a pi session state and a profile with an extension waiting for approval.
+fn compat_fixture() -> Vec<StoreUpdate> {
+    use super::compat::{
+        Catalog, CompatUpdate, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
+        ResourceState, ResourceView, SessionView, ThinkingLevel,
+    };
+    let provider =
+        |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderView {
+            id: id.into(),
+            name: name.into(),
+            auth: auth.iter().map(|a| (*a).to_owned()).collect(),
+            status,
+            reason: reason.map(str::to_owned),
+            variables: Vec::new(),
+            models: 1,
+        };
+    vec![
+        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+            sdk_version: "0.85.1".into(),
+            providers: vec![
+                provider(
+                    "lade-fixture",
+                    "Preview data — fixture provider",
+                    ProviderStatus::Available,
+                    Some("offline scripted fixture model, not a real model"),
+                    &["no credentials needed"],
+                ),
+                provider(
+                    "anthropic",
+                    "Preview data — Anthropic",
+                    ProviderStatus::MissingCredentials,
+                    Some("set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN in the laded environment or ~/.config/lade/credentials.env"),
+                    &["API key", "subscription token", "OAuth login"],
+                ),
+                provider(
+                    "openai-codex",
+                    "Preview data — OpenAI (ChatGPT Plus/Pro)",
+                    ProviderStatus::Restricted,
+                    Some("interactive OAuth login and refresh-token storage are restricted: LADE has no credential custody for them"),
+                    &["OAuth login"],
+                ),
+            ],
+            error: None,
+        })),
+        StoreUpdate::Compat(CompatUpdate::Models {
+            provider: "lade-fixture".into(),
+            models: vec![ModelView {
+                provider: "lade-fixture".into(),
+                id: "scripted-preview".into(),
+                name: "Preview data — scripted".into(),
+                reasoning: false,
+                thinking: vec![ThinkingLevel::Off],
+            }],
+        }),
+        StoreUpdate::Compat(CompatUpdate::Session {
+            objective_id: id(MAIN_OBJECTIVE),
+            session: SessionView {
+                generation: 2,
+                reason: "reloaded".into(),
+                model: ModelRef::new("lade-fixture", "scripted-preview"),
+                thinking: ThinkingLevel::Off,
+                association_revision: Some(2),
+                pi_session_id: Some("01a12924-dd29-706e-adf1-5c643ac92a8a".into()),
+                leaf_id: None,
+            },
+        }),
+        StoreUpdate::Compat(CompatUpdate::Inventory(Inventory {
+            profile_dir: "Preview data — ~/.local/state/lade/profile".into(),
+            entries: vec![
+                ResourceView {
+                    kind: ResourceKind::Context,
+                    name: "AGENTS.md".into(),
+                    state: ResourceState::Active,
+                    sha256: None,
+                    reason: None,
+                },
+                ResourceView {
+                    kind: ResourceKind::Extension,
+                    name: "ask.js".into(),
+                    state: ResourceState::PendingApproval,
+                    sha256: Some("4554c00dbb28cad89d67afb301d893073eefca19bee50292764c7b8c3dc8bf03".into()),
+                    reason: Some("new or changed executable extension: approve this exact content, then reload the session".into()),
+                },
+            ],
+            restrictions: vec![
+                "Repository .pi/ resources are never loaded (project trust is \"never\").".into(),
+            ],
+        })),
+    ]
 }
 
 pub fn fixture_updates() -> Vec<StoreUpdate> {

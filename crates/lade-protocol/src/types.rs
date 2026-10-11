@@ -345,6 +345,126 @@ pub enum ActivityRole {
     System,
 }
 
+/// pi thinking level (`ThinkingLevel` in pi-agent-core 0.85.1). The worker clamps a requested
+/// level to the selected model's capabilities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingLevel {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl ThinkingLevel {
+    pub const ALL: [Self; 7] = [
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Xhigh,
+        Self::Max,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.as_str() == text)
+    }
+}
+
+/// Kind of one pi session-tree entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TreeEntryKind {
+    User,
+    Assistant,
+    ToolResult,
+    CustomMessage,
+    Compaction,
+    BranchSummary,
+    ModelChange,
+    ThinkingChange,
+    Label,
+    SessionInfo,
+    Custom,
+    Other,
+}
+
+/// One entry of the pi session tree (labels are short previews, never full content).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TreeEntry {
+    pub entry_id: String,
+    pub kind: TreeEntryKind,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmark: Option<String>,
+}
+
+/// A semantic extension dialog. There is no automatic answer for any kind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UiPrompt {
+    Confirm { title: String, message: String },
+    Select { title: String, options: Vec<String> },
+    Input { title: String, placeholder: String },
+    Editor { title: String, prefill: String },
+}
+
+/// The developer's answer to a [`UiPrompt`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UiAnswer {
+    Confirm { confirmed: bool },
+    Value { value: String },
+    Cancel,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiCloseReason {
+    Timeout,
+    Aborted,
+    Replaced,
+    Answered,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionChangeReason {
+    Start,
+    Navigate,
+    Fork,
+    Import,
+    Reload,
+    Compact,
+    Configure,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkPosition {
+    Before,
+    At,
+}
+
 /// Longest prefix of `text` within `max_bytes`, cut at a UTF-8 boundary, and whether it was cut.
 pub fn truncate_utf8(text: &str, max_bytes: usize) -> (&str, bool) {
     if text.len() <= max_bytes {

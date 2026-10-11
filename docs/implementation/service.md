@@ -72,8 +72,8 @@ lossless escaped form (`\xHH` per invalid byte; Git forbids `\` in ref names) an
 One connection, opened and owned by the service thread: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`,
 `busy_timeout` 5 s. Opening runs `PRAGMA quick_check`; a failure, a non-WAL journal or a schema version newer than this
 build refuses to start — the database is never reset or rewritten. Migrations are an append-only ordered list recorded
-in `schema_migrations(version, applied_at)`, each applied in its own transaction. v2 adds
-`objectives.history_deleted` (an older build refuses a v2 database, exit 78).
+in `schema_migrations(version, applied_at)`, each applied in its own transaction. v3 adds
+`objectives.history_deleted` (an older build refuses a v3 database, exit 78).
 
 **Dependency:** `rusqlite =0.40.2` with `bundled` (SQLite compiled in, so behaviour does not depend on the host
 library version). It is allowed for `lade-system` only; `scripts/check-architecture.py` still rejects any path from
@@ -86,7 +86,7 @@ Schema v1 tables:
 | --- | --- |
 | `settings` | the wire `Settings` JSON (default model, verification commands) |
 | `workspaces` | id, canonical top-level path (bytes), name, default branch |
-| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path, the integration-conflict fact and (v2) whether its Git history was deleted |
+| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path, the integration-conflict fact and (v3) whether its Git history was deleted |
 | `sessions` | each session association (session id, association revision, model, last generation, pi session id/file) |
 | `captures` | capture id → tree id, target commit, change counts, retention ref |
 | `drafts`, `draft_revisions` | current draft (reference JSON, body, CAS revision, state, submitted input) and every saved revision |

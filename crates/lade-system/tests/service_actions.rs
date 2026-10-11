@@ -200,6 +200,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
                     provider: "lade-fixture".into(),
                     id: "scripted".into(),
                 },
+                thinking: None,
             })
         }
         ActionName::ExecutionCancel => Request::ExecutionCancel(selector(&objective)),
@@ -356,6 +357,7 @@ fn start_with(
                 provider: provider.into(),
                 id: id.into(),
             },
+            thinking: None,
         },
     ))
 }

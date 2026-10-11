@@ -331,6 +331,46 @@ impl Execution {
         true
     }
 
+    /// The live, idle worker replaced its pi session (fork, clone or import): the destination becomes
+    /// `session_id` with a new association revision, so input and feedback addressed to the previous
+    /// session are detected as stale instead of being delivered to the replacement.
+    pub fn rebind_live_session(
+        &mut self,
+        generation: ExecutionGeneration,
+        session_id: SessionId,
+    ) -> Result<Revision, DomainError> {
+        self.check_generation(generation)?;
+        if self.state != ExecutionState::Idle {
+            return Err(DomainError::InvalidLifecycle(
+                "session replacement needs an idle execution",
+            ));
+        }
+        let Some(current) = &self.session else {
+            return Err(DomainError::ExecutionUnavailable);
+        };
+        if current.session_id == session_id {
+            return Err(DomainError::InvalidRequest(
+                "replacement session must differ",
+            ));
+        }
+        let association_revision = current.association_revision.advance()?;
+        self.session = Some(SessionAssociation {
+            session_id,
+            association_revision,
+            model: current.model.clone(),
+        });
+        Ok(association_revision)
+    }
+
+    /// Records the developer's model selection for the bound session (the destination is unchanged).
+    pub fn select_model(&mut self, model: ModelRef) -> Result<(), DomainError> {
+        let Some(current) = self.session.as_mut() else {
+            return Err(DomainError::ExecutionUnavailable);
+        };
+        current.model = model;
+        Ok(())
+    }
+
     /// Explicitly replaces the destination session; input addressed to the old association becomes stale.
     pub fn replace_session(
         &mut self,
@@ -566,6 +606,57 @@ mod tests {
         assert!(
             Execution::restore(ExecutionState::None, ExecutionGeneration::new(1), session).is_err()
         );
+    }
+
+    #[test]
+    fn live_rebind_needs_an_idle_current_generation_and_makes_the_old_association_stale() {
+        let (mut execution, generation) = started();
+        let original = execution.session().cloned().expect("bound");
+        assert!(matches!(
+            execution.rebind_live_session(generation, session_id(2)),
+            Err(DomainError::InvalidLifecycle(_))
+        ));
+        execution.worker_ready(generation).expect("ready");
+        assert!(matches!(
+            execution.rebind_live_session(ExecutionGeneration::new(9), session_id(2)),
+            Err(DomainError::StaleExecution)
+        ));
+        assert!(matches!(
+            execution.rebind_live_session(generation, original.session_id),
+            Err(DomainError::InvalidRequest(_))
+        ));
+        let revision = execution
+            .rebind_live_session(generation, session_id(2))
+            .expect("rebind");
+        assert_eq!(revision, original.association_revision.advance().unwrap());
+        assert_eq!(
+            execution.check_association(original.session_id, original.association_revision),
+            Err(DomainError::StaleAssociation)
+        );
+        assert!(execution.check_association(session_id(2), revision).is_ok());
+        assert_eq!(execution.session().unwrap().model, original.model);
+        execution.observe_turn(generation, true).expect("running");
+        assert!(matches!(
+            execution.rebind_live_session(generation, session_id(3)),
+            Err(DomainError::InvalidLifecycle(_))
+        ));
+    }
+
+    #[test]
+    fn model_selection_keeps_the_destination() {
+        let mut execution = Execution::new();
+        assert_eq!(
+            execution.select_model(model()),
+            Err(DomainError::ExecutionUnavailable)
+        );
+        let (mut execution, _) = started();
+        let before = execution.session().cloned().unwrap();
+        let other = ModelRef::new("anthropic", "some-model").unwrap();
+        execution.select_model(other.clone()).expect("select");
+        let after = execution.session().unwrap();
+        assert_eq!(after.model, other);
+        assert_eq!(after.session_id, before.session_id);
+        assert_eq!(after.association_revision, before.association_revision);
     }
 
     #[test]
