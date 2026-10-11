@@ -15,20 +15,14 @@
   "npm_distribution": {
     "consumer": "packages/pi-worker (WP-D worker)",
     "lockfile": "packages/pi-worker/package-lock.json",
-    "relation": "The worker installs the npm registry tarball of the same 0.85.1 release built from the pinned commit. Its package.json and npm-shrinkwrap.json are byte-identical to upstream/package.json and upstream/npm-shrinkwrap.json (hashes in files), so its nested dependency tree follows the upstream shrinkwrap. Unpatched; only root exports are imported.",
-    "install": "npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund (the skipped install scripts of esbuild, protobufjs and @google/genai are not needed by the worker)",
+    "relation": "The worker installs the npm registry tarball of the same 0.85.1 release built from the pinned commit. Its package.json and npm-shrinkwrap.json are byte-identical to upstream/package.json and upstream/npm-shrinkwrap.json (hashes in files), and the lockfile's nested tree under it is exactly that shrinkwrap (packages/pi-worker/test/worker-deps.test.ts). With the empty patch inventory this registry tarball is the narrow fork's runnable distribution. Unpatched; only root exports are imported, plus pi-ai's root entry from the copy nested under it (src/worker/pi-ai.ts), so exactly one pi-ai is installed and loaded.",
+    "install": "npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund (the skipped install scripts are esbuild's binary check, protobufjs's version-scheme warning and @google/genai's no-op preinstall, none needed by the worker; see docs/implementation/build.md)",
     "packages": {
       "@earendil-works/pi-coding-agent": {
         "version": "0.85.1",
         "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.1.tgz",
         "integrity": "sha512-FGRN+OHbWaefBPGaTggAdLjrIHW+s2PzLyglz/5dfLzb9of7uuXMXYC0fJIeZTw+shS32o2cuQ9jF7YSDuL/oQ==",
-        "use": "SDK root exports: createAgentSession, ModelRuntime, SessionManager, SettingsManager, DefaultResourceLoader"
-      },
-      "@earendil-works/pi-ai": {
-        "version": "0.85.1",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-ai/-/pi-ai-0.85.1.tgz",
-        "integrity": "sha512-+VgVIJDkDO2efYJKEEqvPTH4zmnIaXdAppGbO+vKFA9qy5PdhFiAenuFAkU+oiCSfOC4dMHDyrjdQeL4ZoC5CQ==",
-        "use": "createAssistantMessageEventStream and stream types for the lade-fixture provider; a second copy beside the shrinkwrapped nested one"
+        "use": "SDK root exports: createAgentSession, ModelRuntime, SessionManager, SettingsManager, DefaultResourceLoader; its nested pi-ai root entry (createAssistantMessageEventStream, getSupportedThinkingLevels, stream types) for the lade-fixture provider and the catalogue"
       },
       "undici": {
         "version": "8.9.0",

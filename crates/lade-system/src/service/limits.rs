@@ -111,10 +111,10 @@ impl Service {
 
     /// Why work that adds writers on the state filesystem is refused now.
     pub(crate) fn storage_blocker(&self) -> Option<String> {
-        (self.storage.level == Pressure::Critical).then(|| {
+        (self.free_space.level == Pressure::Critical).then(|| {
             format!(
                 "storage pressure: {} MiB free on the state filesystem, below the {} MiB reserve (laded --storage-reserve-mib); free space and retry",
-                self.storage.free.map_or(0, mib),
+                self.free_space.free.map_or(0, mib),
                 mib(self.limits.storage_reserve_bytes)
             )
         })
@@ -125,7 +125,7 @@ impl Service {
     }
 
     /// Re-reads free space (every second from the tick) and announces level changes.
-    pub(crate) fn check_storage(&mut self) {
+    pub(crate) fn check_free_space(&mut self) {
         let free = free_bytes(&self.paths.state);
         let level = match free {
             Some(free) if free < self.limits.storage_reserve_bytes => Pressure::Critical,
@@ -133,8 +133,8 @@ impl Service {
             // An unreadable filesystem state is not invented pressure; IO errors still surface.
             _ => Pressure::Normal,
         };
-        let changed = level != self.storage.level;
-        self.storage = Storage { level, free };
+        let changed = level != self.free_space.level;
+        self.free_space = Storage { level, free };
         if changed {
             eprintln!(
                 "laded: storage level={level:?} free_mib={}",
@@ -146,8 +146,8 @@ impl Service {
 
     /// Sends the current storage notice (also re-sent to a newly attached client).
     pub(crate) fn announce_storage(&mut self, transition: bool) {
-        let free = self.storage.free.map_or(0, mib);
-        match self.storage.level {
+        let free = self.free_space.free.map_or(0, mib);
+        match self.free_space.level {
             Pressure::Normal if transition => self.notice(
                 NoticeLevel::Info,
                 "storage_ok",

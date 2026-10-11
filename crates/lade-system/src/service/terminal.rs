@@ -160,6 +160,7 @@ impl Service {
                 rows,
                 run_dir: self.paths.run.clone(),
                 limits: TERMINAL_LIMITS,
+                cgroups: self.cgroups.clone(),
             };
             Ok((oid, terminal_id, tools, request))
         })();

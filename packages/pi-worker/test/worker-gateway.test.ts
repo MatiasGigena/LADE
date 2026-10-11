@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import type { Server } from "node:http";
 import { connect, createServer as createNetServer } from "node:net";
 import type { AddressInfo, Socket } from "node:net";
@@ -32,6 +33,20 @@ function portOf(server: Server): number {
 
 const origin = createServer((request, response) => {
   response.end(`origin saw ${request.url}`);
+});
+
+// A minimal WebSocket echo (RFC 6455 handshake; one short masked text frame back, unmasked).
+origin.on("upgrade", (request, socket: Socket) => {
+  open.add(socket);
+  socket.once("close", () => open.delete(socket));
+  const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"] ?? ""}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  socket.once("data", (frame: Buffer) => {
+    const length = (frame[1] ?? 0) & 0x7f;
+    const mask = frame.subarray(2, 6);
+    const payload = Buffer.from(frame.subarray(6, 6 + length).map((byte, index) => byte ^ (mask[index % 4] ?? 0)));
+    socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+  });
 });
 
 const gateway = createNetServer(client => {
@@ -88,6 +103,48 @@ test("fetch is tunnelled through the gateway socket with HTTP CONNECT", async ()
   assert.deepEqual(authorities, [`provider.lade.test:${port}`]);
 });
 
+/** GET through the `node:http` global agent. */
+function httpGet(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    http.get(url, response => {
+      let body = "";
+
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => { body += chunk; });
+      response.once("end", () => resolve(body));
+    }).once("error", reject);
+  });
+}
+
+test("node:http clients use the global agent, which tunnels through the gateway", async () => {
+  installGateway(socketPath);
+  const port = portOf(origin);
+  assert.equal(await httpGet(`http://sdk.lade.test:${port}/v1/chat`), "origin saw /v1/chat");
+  assert.equal(authorities.at(-1), `sdk.lade.test:${port}`);
+  await assert.rejects(httpGet("http://refused.lade.test:80/"), { code: "gateway_refused" });
+  http.globalAgent.destroy();
+});
+
+/** Open a WebSocket (the global one, undici's, as pi uses), send `ping`, resolve with the reply. */
+function echo(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+
+    socket.addEventListener("open", () => socket.send("ping"));
+    socket.addEventListener("message", event => { resolve(String(event.data)); socket.close(); });
+    socket.addEventListener("error", () => reject(new Error("websocket failed")));
+  });
+}
+
+test("WebSocket connections are tunnelled through the gateway", async () => {
+  installGateway(socketPath);
+  const port = portOf(origin);
+  assert.equal(await echo(`ws://realtime.lade.test:${port}/v1/responses`), "ping");
+  assert.equal(authorities.at(-1), `realtime.lade.test:${port}`);
+  await assert.rejects(echo("ws://refused.lade.test:80/"), /websocket failed/);
+  assert.equal(authorities.at(-1), "refused.lade.test:80");
+});
+
 test("a refused tunnel fails the request", async () => {
   await assert.rejects(tunnel(socketPath, "refused.lade.test:443"), { code: "gateway_refused" });
   await assert.rejects(tunnel(socketPath, "bad host:443"), { code: "gateway_target" });
@@ -95,9 +152,14 @@ test("a refused tunnel fails the request", async () => {
 
 test("without a gateway socket every connection fails with a clear reason", async () => {
   installNoNetwork();
+  await assert.rejects(httpGet("http://provider.lade.test/"), { code: "network_unavailable" });
   await assert.rejects(fetch("http://provider.lade.test/"), (error: Error) => {
     assert.match(String(error.cause), /network disabled: no LADE gateway socket/);
 
     return true;
   });
+  // WebSocket fails closed too: it uses the same refusing dispatcher, never a socket of its own.
+  const tunnels = authorities.length;
+  await assert.rejects(echo(`ws://provider.lade.test:${portOf(origin)}/`), /websocket failed/);
+  assert.equal(authorities.length, tunnels);
 });

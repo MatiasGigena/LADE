@@ -1,6 +1,6 @@
 # Execution safety: worker sandbox, egress gateway, credentials, sweep (WP-F2)
 
-Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,sweep,terminal}.rs`.
+Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,secret_service,sweep,terminal}.rs`.
 It instantiates [delivery plan §1, §5, §7](delivery-plan.md) and [architecture §5](../../architecture.md#5-host-authority-and-protected-git).
 The service (`laded`) consumes it through the `supervision` contract (`WorkerLauncher`, `WorkerControl`,
 `SupervisorEvent`); it never runs a worker outside this path. The "Not enforced" list at the end feeds
@@ -16,14 +16,18 @@ canonicalizes the Node runtime and worker package, and creates the run directory
 2. Runs `sandbox_available()` (a full sandbox with worker limits running `true`). Failure →
    `LaunchError::SandboxUnavailable`. **There is no unsandboxed fallback.**
 3. Looks up the provider's egress policy (none → `ProviderUnavailable`) and releases the provider's
-   credentials (missing → `ProviderUnavailable` naming the variables, never values).
+   credentials from the environment, the Secret Service and the credentials file
+   ([credentials](#credentials); missing → `ProviderUnavailable` naming the variables and, when it could not be
+   asked, why the Secret Service was unavailable — never values).
 4. Starts the per-launch gateway on `<socket_dir>/<first 12 hex of the objective id>-<generation>.sock`
    (`socket_dir` = `$RUNTIME/g` in `laded`; socket 0600, directory 0700; socket paths over 107 bytes are refused,
    and `laded` checks the widest one at startup). Pidfiles stay in `run_dir` (`$STATE/run`), whose length is free.
-5. Spawns `prlimit <limits> -- bwrap <isolation> -- node --disable-wasm-trap-handler <worker_dir>/src/worker.ts`
-   in its own process group with piped stdin/stdout/stderr, and records
-   `STATE/run/worker-<objective>-<generation>.pid` (outer bwrap, then the PID-namespace init once bwrap forked it;
-   each line `pid starttime`, starttime from `/proc/<pid>/stat` field 22).
+5. Spawns `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm env -u PWD -u SHLVL -- node
+   --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped stdin/stdout/stderr,
+   with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
+   records `STATE/run/worker-<objective>-<generation>.pid` (outer bwrap, then the PID-namespace init; each line `pid
+   starttime`, starttime from `/proc/<pid>/stat` field 22), moves both into the Objective's cgroup leaf when cgroups
+   are delegated, and only then opens the gate. A failure of either kills the sandbox and fails the launch.
 6. Starts three threads — writer, monitor, stderr forwarder — and queues `worker.start`.
 
 Threads and bounds:
@@ -46,7 +50,7 @@ the repository's `packages/pi-worker`; release builds never use the compiled-in 
 `entry` (default `<worker_dir>/src/worker.ts`; tests point it at probe scripts), `node_args` (default
 `NODE_ARGS`), `run_dir`, `socket_dir`, `limits` (default `WORKER_LIMITS`), `policies` (default `default_policies()`),
 `credentials` (default `CredentialSource::from_process()`), `upstream_proxy` (default `UpstreamProxy::from_env()`),
-`extra_ro`.
+`extra_ro`, `cgroups` (default none; `laded` passes the delegated subtree, see [cgroups](#cgroup-v2-placement)).
 
 ## Sandbox layout
 
@@ -61,14 +65,26 @@ From `adapters::sandbox::worker_spec` (WP-C), per launch:
 | Objective worktree | read-write, working directory |
 | Objective session dir | read-write, `HOME`, pi agent/session dirs |
 | gateway socket | the only network path (`--unshare-net`; `LADE_GATEWAY_SOCKET`) |
-| `/tmp`, `/proc`, `/dev` | private |
+| `/tmp` | private tmpfs of `SANDBOX_TMP_BYTES` (1 GiB, `bwrap --size`); writes beyond it fail with `ENOSPC` |
+| `/proc`, `/dev` | private |
 
 Namespaces: all unshared (`--unshare-all --unshare-user --disable-userns --unshare-net`), `--cap-drop ALL`,
-`--new-session`, `--die-with-parent`, read-only root remount. Environment: exactly `HOME`, `PATH`, `LANG=C.UTF-8`,
-`TERM=dumb`, `LADE_GATEWAY_SOCKET`, `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, `PI_OFFLINE=1`,
-`PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`, the selected provider's credential variables, plus `PWD` exported
-by bwrap. No control socket, capability file, database or other Objective is reachable. File descriptors: only
-the three pipes (std opens everything else `O_CLOEXEC`).
+`--new-session`, `--die-with-parent`, read-only root remount, and the [seccomp filter](#seccomp-filter).
+Environment: exactly `HOME`, `PATH`, `LANG=C.UTF-8`, `TERM=dumb`, `LADE_GATEWAY_SOCKET`, `PI_CODING_AGENT_DIR`,
+`PI_CODING_AGENT_SESSION_DIR`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0` and the selected
+provider's credential variables; the `PWD` bwrap exports for `--chdir` is removed (`env -u PWD`) before the program
+starts. No control socket, capability file, database or other Objective is reachable. File descriptors: only the
+three pipes. std opens everything else `O_CLOEXEC`; the two pipe ends bwrap reads (the seccomp program and the
+gate) are made inheritable only while one sandbox spawns (sandbox spawns are serialized by one lock), and bwrap and
+the gate close both before the program starts. bwrap forwards every inheritable descriptor it receives, so the
+guarantee does not rest on that lock: right before `exec` the gate closes **every descriptor above stderr** it
+finds in `/proc/<gate>/fd`, so the program gets exactly 0, 1 and 2 even if `laded` itself inherited a stray
+descriptor from its parent or a concurrent spawn leaked one (CI observed two foreign descriptors before this; the
+gate therefore needs bash, which is Essential on Debian, Ubuntu and Mint, for multi-digit redirections). Evidence:
+`adapters_sandbox.rs::only_stdio_reaches_the_sandboxed_program` and
+`concurrent_sandboxes_get_only_their_own_stdio` (16 sandboxes at once while the test process holds a descriptor
+without close-on-exec: each program sees only 0, 1, 2). A host helper (Git, `kill`) that `laded` starts in the spawn
+instant may still inherit a copy of the read ends; they hold only the public filter program and the gate byte.
 
 Two minimal changes to the WP-C sandbox adapter were needed:
 
@@ -81,6 +97,9 @@ Two minimal changes to the WP-C sandbox adapter were needed:
 
 ## Limits (§7)
 
+All values are constants in `crates/lade-system/src/adapters/sandbox/limits.rs`, the single place to change them;
+they are the delivery-plan proposals and their approval is Matias's decision (#14).
+
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |
 | address space (`RLIMIT_AS`) | **8 GiB** | 4 GiB | Node 22 cannot start under 4 GiB: V8 reserves heap and code ranges up front. With the default trap-handler WebAssembly bounds checking, every WebAssembly instance (Node's type stripper, undici's HTTP parser) reserves ~10 GiB of guard regions, which fails even at 16 GiB; `--disable-wasm-trap-handler` (explicit bounds checks) avoids this. `RLIMIT_AS` bounds virtual memory, not resident memory. |
@@ -88,6 +107,90 @@ Two minimal changes to the WP-C sandbox adapter were needed:
 | open files | 1024 | 1024 | |
 | file size | 512 MiB | 512 MiB | |
 | CPU time | none | none (verification: 600 s) | |
+| private `/tmp` | 1 GiB tmpfs | — | memory-backed; counts against `memory.max` under cgroups |
+| writable storage (worktree + session dir) | 2 GiB monitor | 2 GiB monitor | measured every 5 s by the service; above it the agent is stopped with `limit_reached` ([service.md](service.md#resource-limits-imp-006)); not a quota |
+| memory, processes/threads, CPU per Objective (cgroup v2) | 4 GiB `memory.max`, 512 `pids.max`, `cpu.max` unlimited | — | only with a delegated cgroup; shared by the Objective's worker, terminals and verification runs |
+
+### cgroup v2 placement
+
+`adapters::sandbox::cgroup`. When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), its cgroup is
+delegated: systemd sets the `user.delegate` (or `trusted.delegate`) extended attribute and chowns it to the service
+user. `detect` checks, in order: a cgroup v2 membership line (`0::<path>` in `/proc/self/cgroup`), cgroup2 mounted at
+`/sys/fs/cgroup`, the delegation attribute, ownership by the service's uid, and the `memory pids cpu` controllers.
+Then it moves `laded` into `<unit>/service` (cgroup v2 forbids processes in inner nodes), enables the controllers on
+`<unit>` and `<unit>/sandboxes`, and each Objective gets `<unit>/sandboxes/<objective>` with the limits above and one
+leaf per sandbox. The launcher, terminals and verification move the outer bwrap and the PID-namespace init into the
+leaf while the gate is closed (nothing else exists yet), verify membership through `/proc/<pid>/cgroup`, then open
+the gate, so every descendant is accounted. The leaf is killed (`cgroup.kill`) and removed after the sandbox ends;
+leftovers are removed at the next start. Any failed check gives the explicit diagnostic `cgroup limits unavailable
+(<reason>); sandboxes use the prlimit limits only` and the prlimit-only behaviour; LADE never writes into a cgroup it
+was not delegated and never refuses to start for lack of delegation.
+
+Evidence: `tests/adapters_cgroup.rs` — the fallback reasons (v1/hybrid, not mounted, not delegated: nothing
+written), the exact files written into a delegated subtree (on a directory standing in for cgroupfs), missing
+controllers. `delegated_cgroup_contains_and_limits_a_sandbox` exercises real placement and `pids.max` only with
+`LADE_TEST_DELEGATED_CGROUP=1` inside a delegated scope (`systemd-run --user --scope -p Delegate=yes …`); it has
+**not been executed** (neither CI nor the development host has a delegated cgroup v2; the host is cgroup v1/hybrid).
+
+### Seccomp filter
+
+`adapters::sandbox::seccomp` compiles a classic-BPF program in Rust (no libseccomp, no `unsafe`); every sandbox
+(worker, terminal, verification, probe) passes it to `bwrap --seccomp FD` on a pipe, and bwrap installs it (with
+`PR_SET_NO_NEW_PRIVS`) as the last step before executing the program, after its own namespace and mount setup.
+Architectures: x86_64 and aarch64; any other has no program, so building the command fails and the sandbox is
+unavailable (fail closed).
+
+| Rule | Result |
+| --- | --- |
+| foreign architecture (i386 `int 0x80` on x86_64) | process killed |
+| x32 system calls (`__X32_SYSCALL_BIT`) | `EPERM` |
+| `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`, `delete_module` | `EPERM` |
+| `mount`, `umount2`, `pivot_root`, `open_tree`, `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`, `mount_setattr` | `EPERM` |
+| `keyctl`, `add_key`, `request_key`, `bpf`, `perf_event_open`, `userfaultfd`, `open_by_handle_at` | `EPERM` |
+| `swapon`, `swapoff`, `reboot`, `setns` | `EPERM` |
+| `clone`/`unshare` with any namespace flag (`CLONE_NEWNS/CGROUP/UTS/IPC/USER/PID/NET`, `unshare` also `NEWTIME`) | `EPERM` |
+| `clone3` | `ENOSYS` (its flags are in memory a filter cannot read; libc falls back to `clone`) |
+| `personality` other than `PER_LINUX` (0) or the query `0xffffffff` | `EPERM` (no ASLR disabling) |
+| `ioctl` `TIOCSTI`, `TIOCLINUX` (request compared as the kernel's 32-bit value) | `EPERM` |
+| everything else | allowed |
+
+`ptrace` is not filtered: a filter cannot tell a child from another process; the PID namespace already limits
+targets to the sandbox's own processes. Tests: the filter's unit test runs every rule through a small BPF
+interpreter; `adapters_sandbox.rs::seccomp_denies_the_reviewed_system_calls_with_eperm` (`Seccomp: 2`;
+`personality(ADDR_NO_RANDOMIZE)` allowed on the host but `EPERM` inside; keyctl, unshare(CLONE_NEWUSER), mount, bpf,
+setns, perf_event_open, userfaultfd, init_module, reboot `EPERM`; `unshare -U` refused);
+`supervision_terminal.rs::seccomp_refuses_terminal_input_injection_and_pwd_is_the_shells_own` (`TIOCSTI` on the
+terminal's own PTY gives `EPERM`); the real worker still runs end to end with the fixture model
+(`supervision_launcher.rs::real_worker_writes_file_with_fixture_model_and_terminates_cleanly`, `service_flow.rs`), and
+every terminal test passes under the filter.
+
+### Launch gate and supervisor loss
+
+Every sandbox command line contains bwrap's `--file` operation copying a gate pipe to `/tmp/.lade-gate`, and the
+program is started by a small bash gate script. bwrap copies the pipe into the file while it sets up the sandbox, so
+it blocks until the supervisor either writes `go` and closes the pipe (`Gate::open`) or loses it (the pipe closes
+empty: the supervisor died or abandoned the launch). Meanwhile the sandbox is only the outer bwrap and its fork (the
+future PID-namespace init); the program has not started. The gate script reads the file, removes it, and executes the
+program only after `go`; an empty gate ends the sandbox with status 125. Supervisors write the pidfile and place the
+cgroup before opening the gate, so:
+
+- **the program never runs unrecorded or outside its cgroup while the supervisor lives;**
+- **a supervisor that dies before opening the gate leaves nothing running** (the sandbox ends by itself);
+- a supervisor that dies after opening the gate but before bwrap armed its parent-death signals (bwrap arms them
+  after its clone and again just before the program, a window of microseconds in `laded`) leaves a sandbox the
+  startup sweep finds by its **marker**: every sandbox command line carries `--unsetenv LADE_SANDBOX_<16 hex of
+  SHA-256 of the canonical run directory>` (a no-op for the sandbox, which can neither see nor change its outer
+  processes), and `sweep_stale` kills every live process of the service user carrying that argument — recorded or
+  not — before the pidfile pass, repeating until none is left.
+
+`supervision_sweep.rs::forced_supervisor_loss_races_leave_no_survivors` forces 40 races: a stand-in supervisor
+(`sh`) starts the sandbox and is killed in the same instant, before any pidfile exists and before bwrap armed its
+signals; half the runs never open the gate, half do. Result on the development host: none of the never-opened
+sandboxes ran its program; all 20 opened ones kept running unsupervised (the worst case); after the sweep **0 of 40
+survive**. `adapters_sandbox.rs::the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing` checks the gate
+itself. The earlier WP-C observation (about 9 of 40 forced races surviving unrecorded) is closed by these two
+mechanisms; such a survivor still runs until the next `laded` start (outside systemd) or until the unit stops
+(`KillMode=control-group`).
 
 ## Egress gateway
 
@@ -103,6 +206,24 @@ HTTP `CONNECT` proxy on the per-launch Unix socket; the worker's undici dispatch
   IPv6 unique-local/site-local/link-local, or an IPv4-mapped/compatible/NAT64 form of those, the request is
   refused (`403 private_address`) unless the matching rule sets `allow_private` (custom local providers). The
   connection goes to one of the checked addresses — never re-resolved.
+- Worker side (`packages/pi-worker/src/worker/gateway.ts`): undici's global dispatcher (`fetch`, and the global
+  `WebSocket`, whose `ws:`/`wss:` handshakes use the same dispatcher) **and** the `node:http`/`node:https` global
+  agents tunnel every connection through the socket; `https`/`wss` run TLS end-to-end over the tunnel with the
+  request's own TLS options (custom `ca`, client certificates; a custom `checkServerIdentity` is replaced by Node's
+  default check). Clients that bring their own agent, `agent: false` or their own sockets (for example the `ws`
+  package) bypass the global agents and have no network. Without a socket every path fails with
+  `network_unavailable`. Evidence: `supervision_gateway.rs::worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway`
+  (the real Rust gateway, a TLS origin with a certificate generated in the test by the `openssl` CLI and trusted
+  only through `NODE_EXTRA_CA_CERTS`: `fetch`, `https.get` and a `wss://` WebSocket echo complete over TLS; a port
+  outside the policy is refused for all three), `packages/pi-worker/test/worker-gateway.test.ts` (`node:http`
+  through the agent, a `ws://` echo through the tunnel, refusal, no network for `fetch`, `http` and `WebSocket`),
+  `supervision_launcher.rs::probe_sees_only_allowlisted_env_files_and_network` (inside the sandbox a raw socket and
+  Node's WebSocket without the gateway installed cannot connect).
+- WebSockets in the pinned provider contract: in pi-ai 0.85.1 only the `openai-codex-responses` API (provider
+  `openai-codex`, ChatGPT Plus/Pro, an interactive OAuth login and therefore restricted) opens a WebSocket, through
+  `globalThis.WebSocket` (undici's after `install()`), falling back to SSE over `fetch`. No supported provider
+  needs one. The `ws` package in the dependency tree is used by `@google/genai` (Live API) and `openai` (Realtime),
+  neither of which pi calls; a client of the `ws` package dials its own socket and has no network in the sandbox.
 - Upstream proxy: when `laded` runs with `HTTPS_PROXY`/`https_proxy` (`http://[user:pass@]host[:port]`), tunnels
   are chained with `CONNECT` through it (`Proxy-Authorization: Basic` from the URL's userinfo), after the
   allowlist check. `NO_PROXY` minimal semantics: `*`, exact host/IP, and domain suffixes (`example.com`,
@@ -148,22 +269,87 @@ sandbox without a gateway (no network).
 
 ## Credentials
 
-`CredentialSource` holds the known credential variables of `laded`'s environment (snapshot at construction; other
-variables are not retained) and the optional file `$XDG_CONFIG_HOME/lade/credentials.env`
-(`~/.config/lade/credentials.env`). The file is re-read on each resolution and refused (`InsecureFile`) unless it
-is a regular file (not a symlink), owned by the service's uid, without group/other permission bits (0600/0400),
-and at most 64 KiB; there is no fallback location. Format: `NAME=value` lines, optional `export `, `#` comments,
-optional matching quotes; unknown names are ignored. The environment wins over the file. Only the selected
-provider's variables are released; values containing NUL/CR/LF are ignored. Values never appear in logs, errors
-or `Debug` output (`Secret`, `ReleasedCredentials`, `CredentialSource`, `WorkerLaunch`, `SandboxSpec` redact).
+`CredentialSource` (`credentials.rs`) has three sources. For each variable of the selected provider the first one
+that has it wins:
+
+1. **`laded`'s environment** — the known credential variables, snapshot at construction (other variables are not
+   retained). An explicit operator override (for example in the unit), so it ranks first.
+2. **The user's Secret Service** (GNOME Keyring on Mint) through the `secret-tool` CLI of `libsecret-tools`
+   (`secret_service.rs`): items with the attributes `service=lade provider=<id> variable=<NAME>`. It ranks above
+   the file so that a key moved into the keyring is not shadowed by a stale plaintext copy.
+3. **`$XDG_CONFIG_HOME/lade/credentials.env`** (`~/.config/lade/credentials.env`), the plaintext fallback the user
+   writes by hand. Re-read on each resolution and refused (`InsecureFile`) unless it is a regular file (not a
+   symlink), owned by the service's uid, without group/other permission bits (0600/0400), and at most 64 KiB; there
+   is no fallback location. Format: `NAME=value` lines, optional `export `, `#` comments, optional matching quotes;
+   unknown names are ignored.
+
+Only the selected provider's variables are released; values containing NUL/CR/LF are ignored. Values never appear
+in logs, errors or `Debug` output (`Secret`, `ReleasedCredentials`, `CredentialSource`, `SecretService`,
+`WorkerLaunch`, `SandboxSpec` redact).
+
+Secret Service lookups:
+
+- **When:** only for the selected provider, when a worker launches (`resolve`), and in the synchronous start
+  preflight (`check`) only when neither the environment nor the file already satisfies the provider. Describing
+  providers in the model picker (`is_available`) never asks the keyring — reading every provider's key to draw a
+  list is not acceptable — so a key kept only in the keyring shows *needs credentials* until a start looks it up.
+- **How:** `secret-tool lookup service lade provider <id> variable <NAME>`: only attributes on the command line
+  (visible to other local users, like any argument), the value on secret-tool's stdout pipe (64 KiB bound; one
+  trailing newline tolerated). secret-tool runs with `env_clear` plus `HOME`, `XDG_RUNTIME_DIR`,
+  `DBUS_SESSION_BUS_ADDRESS` (else `unix:path=$XDG_RUNTIME_DIR/bus` when that socket exists), `DISPLAY`,
+  `WAYLAND_DISPLAY`, `XAUTHORITY` and `LC_ALL=C`, stdin `/dev/null`, in its own process group, under **one 5 s
+  deadline per resolution** (`LOOKUP_TIMEOUT`); at the deadline the group is killed.
+- **Outcomes:** found → released; exit 1 without stderr → not found (then the file); exit with stderr → unavailable
+  with that first stderr line (bounded, printable) as the reason; timeout → unavailable ("did not answer within
+  5 s; a locked keyring may be waiting for its unlock prompt"); `secret-tool` missing or no session bus → unavailable
+  before any call (secret-tool is then never run, so it cannot try to autolaunch a bus through X11). A locked
+  collection whose unlock prompt cannot be shown or is dismissed makes `lookup` look like "not found"; when the
+  resolution would then fail, `secret-tool search service lade provider <id>` (no `--unlock`, stdout discarded
+  unread) distinguishes it and the error says the keyring is locked. An unavailable Secret Service is never fatal
+  by itself: the environment and the file still apply, the reason is logged once per resolution (names and reason
+  only) and appended to the `ProviderUnavailable` message. **No failure ever writes a key anywhere** (no plaintext
+  fallback is created).
+- **Storing:** `laded credentials set <provider> [--variable NAME]` reads the key from stdin (a terminal: one line
+  with echo off; otherwise everything piped in, one trailing newline dropped), refuses empty or multi-line values and
+  ones over 64 KiB (exit 65), and runs `secret-tool store --label "LADE <provider> <NAME>" service lade provider
+  <id> variable <NAME>` with the key on its stdin (60 s bound for a possible unlock prompt). The variable defaults
+  to the provider's first one and must be one of the provider's variables (or a `LADE_PROVIDER_*` name for a
+  custom provider, where `--variable` is required). `laded credentials clear <provider> [--variable NAME]` removes
+  the provider's items (all of them without `--variable`). When the Secret Service is unavailable, either command
+  exits 69 with the reason and the credentials-file alternative; it never writes the file itself.
+
+Evidence: `tests/supervision_secret_service.rs` with a fake `secret-tool` (`tests/fixtures/fake-secret-tool`):
+precedence environment > Secret Service > file, attribute-only command lines and the minimal environment, preflight
+and picker not asking the keyring when unnecessary, custom providers, a hung secret-tool bounded by one deadline
+and killed, unavailable and locked reasons with the file still applying, missing tool / missing bus without any
+call, and the CLI (stdin only, refusals, clear, unavailable → exit 69 and no file); and
+`real_secret_service_round_trip_lock_and_clear`, which starts a private `dbus-daemon` and GNOME Keyring in a
+disposable HOME and runs `laded credentials set`, a launch-path lookup, a locked collection (lookup and store report
+the lock), unlock, and `laded credentials clear` against the real `secret-tool` (skipped with the reason when
+`secret-tool`, `gnome-keyring-daemon`, `dbus-daemon` or `dbus-send` is missing; it ran on the development host).
+The terminal echo-off path was checked by hand on a pseudo-terminal, not by a test.
 
 The released key is readable by the worker process and every tool it runs inside the sandbox (in-process exposure
-accepted by issue #8). Secret Service / keyring integration is a follow-up.
+accepted by issue #8): the Secret Service protects the key **at rest**, not inside the sandbox.
+
+### Credential refresh flows (restricted)
+
+Interactive OAuth logins and refresh-token custody are **restricted**, not implemented: who runs the login (a
+trusted helper outside the sandbox, never a Workspace extension), who refreshes, where a rotated refresh token is
+kept, and how a refresh races a running worker are an open product decision for Matias (#43). Until then a pi OAuth
+provider (Claude Pro/Max login, ChatGPT Plus/Pro, GitHub Copilot, xAI, OpenRouter OAuth, Radius) would have to keep
+its refresh token in the sandbox's pi auth store, readable and replaceable by every tool, and its refresh requests
+would go to identity hosts outside the provider's reviewed egress policy. Subscription access that pi accepts as a
+plain long-lived variable (`ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY`) is supported like an API key, and those
+variables can be kept in the Secret Service; LADE never refreshes them.
 
 ## Sweep
 
-`sweep_stale(run_dir) -> SweepReport` must run at service start before any launch. For every
-`worker-*.pid` it sends `SIGKILL` (via `kill`, no `unsafe`) to each recorded process whose pid **and** start time
+`sweep_stale(run_dir) -> SweepReport` must run at service start before any launch. First it sends `SIGKILL`
+(rustix, no `unsafe`) to every live process of the service user whose command line carries the run directory's
+[marker](#launch-gate-and-supervisor-loss) as a whole argument (outer `prlimit`/`bwrap` and bwrap's forks, the
+namespace init among them), repeating for up to 3 s until none is left. Then, for every `worker-*.pid` and
+`terminal-*.pid`, it sends `SIGKILL` (via `kill`, no `unsafe`) to each recorded process whose pid **and** start time
 still match a live, non-zombie process — namespace init first — and skips the rest (pid reuse); then it removes
 all worker pidfiles and legacy `gw-*.sock` files. The report lists killed and skipped pids and the removed counts.
 `sweep_sockets(socket_dir)` then removes the gateway sockets left in `$RUNTIME/g`.
@@ -184,8 +370,9 @@ process.
    the PTY the shell's controlling terminal (job control, `^C` reaches the foreground job). The PTY is private to
    this terminal, so `TIOCSTI` from inside can only inject into its own input; bwrap's `--new-session` still
    separates the sandbox from any terminal of `laded`.
-3. Pidfile `$STATE/run/terminal-<objective>-<terminal>.pid` (outer bwrap, then the PID-namespace init), read by
-   the startup sweep exactly like worker pidfiles.
+3. Pidfile `$STATE/run/terminal-<objective>-<terminal>.pid` (outer bwrap, then the PID-namespace init), written
+   (and the cgroup leaf placed) while the launch gate is closed and read by the startup sweep exactly like worker
+   pidfiles; the command line carries the sweep marker.
 
 | Path / property | Terminal |
 | --- | --- |
@@ -194,8 +381,8 @@ process.
 | Objective worktree | read-write while `defined`/`active`; **read-only** while a freeze runs and for `frozen`/`approved` candidates |
 | session dir, worker package, Node, gateway socket, credentials | **not bound / not set** |
 | network | none (`--unshare-net`, no gateway) |
-| environment | `HOME=/tmp`, `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `TERM=vt100`, `PS1`, `LADE_TERMINAL=read_write\|read_only` (+ `PWD` from bwrap) |
-| limits | `Limits::WORKER` through `prlimit`: 4 GiB address space, 512 processes, 1024 files, 512 MiB file size |
+| environment | `HOME=/tmp`, `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `TERM=vt100`, `PS1`, `LADE_TERMINAL=read_write\|read_only` (bwrap's `PWD` removed; the shell sets its own) |
+| limits | `TERMINAL_LIMITS` (= `Limits::WORKER`) through `prlimit`: 4 GiB address space, 512 processes, 1024 files, 512 MiB file size; the seccomp filter (no `TIOCSTI`); the Objective's cgroup when delegated |
 
 Teardown: `Terminal::kill` (explicit close, freeze, lifecycle, lease loss, `service.stop`, shutdown, `Drop`) sends
 `SIGKILL` to the PID-namespace init — ending every process of the terminal, including `setsid`/double-forked
@@ -213,32 +400,48 @@ interrupts it.
 
 ## Not enforced (feeds limitations.md)
 
-- **Disk usage**: no quota on the worktree, session dir or `/tmp` tmpfs (tmpfs is memory-backed). The §7 2 GiB
-  monitor belongs to the service; true quotas are an installation gate.
-- **Memory**: `RLIMIT_AS` (8 GiB, not 4 GiB) limits virtual address space only; no cgroup memory limit.
-- **Process count**: `RLIMIT_NPROC` is per real UID (shared with the user's other processes) and not enforced for
-  root.
-- **Supervisor-loss race**: if `laded` dies in the first milliseconds of a launch, before bwrap armed its
-  parent-death signal, or before the pidfile (or its namespace-init line) was written, the sandbox can survive
-  unrecorded; the startup sweep covers only recorded processes (plus `bwrap`/`prlimit` roots naming the state
-  directory). Outside that window, killing `laded` with four running workers and four terminals (each with a
-  `setsid nohup` daemon) leaves no process behind (`service_crash.rs`, IMP-013).
+- **Disk usage**: the 2 GiB writable-storage limit is a periodic monitor (every 5 s), not a quota: a burst between two
+  checks can exceed it, and nothing reserves disk for `~/.local/state/lade`. True quotas remain an installation gate.
+- **Memory**: without a delegated cgroup only `RLIMIT_AS` (8 GiB virtual for the worker, 4 GiB for terminals)
+  applies; resident memory and `/tmp` tmpfs pages are then not capped per Objective or in aggregate. With delegation
+  the per-Objective `memory.max` applies; no aggregate limit across Objectives is set.
+- **Process count**: without delegation `RLIMIT_NPROC` is per real UID (shared with the user's other processes) and
+  not enforced for root; `pids.max` applies only with delegation.
+- **CPU**: no CPU ceiling for workers or terminals (§7 proposes none; `cpu.max` is configurable).
+- **Delegated cgroup path unexecuted**: the real placement test needs a delegated cgroup v2, which neither CI nor the
+  development host provides.
+- **Supervisor-loss window**: a sandbox whose supervisor died after opening the gate but before bwrap armed its
+  parent-death signals keeps running until the next `laded` start (startup sweep by marker) or until the unit stops.
+- **Seccomp scope**: a denylist; `ptrace` and `io_uring` are not filtered; the remaining kernel attack surface is that
+  of an unprivileged user namespace.
+- **Service loss with four executions**: killing `laded` with four running workers and four terminals (each
+  with a `setsid nohup` daemon) leaves no process behind (`service_crash.rs`, IMP-013).
 - **Network scope**: the allowlist is per provider host, not per request; any code in the sandbox (tools,
   extensions) can use the provider tunnel with the released key. Destination filtering is not data-loss
   prevention: content sent to an allowed host is not inspected. Through an upstream proxy, DNS-based
   private-address checks are delegated to the proxy.
 - **Per-extension secrecy**: none; every process in the sandbox can read the credential variables.
-- **Tool network**: only undici/`fetch` traffic is tunnelled; other clients have no network at all (not a
-  bypass, a functional limitation).
+- **Key at rest**: with the Secret Service the key rests encrypted in the user's keyring, but the Secret Service
+  has no per-application access control: any process of the user's unlocked desktop session can read LADE's items.
+  The environment and `credentials.env` remain plaintext options; there is no LADE-managed memory-only mode (a
+  variable set only in the service's environment, for example `systemctl --user set-environment`, stays out of
+  files but lives in the user manager). A key kept only in the keyring shows *needs credentials* in the picker
+  until a start looks it up, and a locked keyring can delay the synchronous start preflight by up to 5 s.
+- **Credential refresh**: interactive OAuth logins and refresh-token custody are restricted pending #43 (see
+  [credential refresh flows](#credential-refresh-flows-restricted)).
+- **Tool network**: `fetch`/undici, the global `WebSocket` and `node:http(s)` clients using the global agents are
+  tunnelled; clients with their own agent or sockets (the `ws` package), raw sockets, other runtimes (Python, curl)
+  and UDP have no network at all (not a bypass, a functional limitation).
 - **Worker output**: frames are schema-validated; content of valid frames (activity text) is untrusted and not
   otherwise filtered.
-- **Terminal quotas** are the worker's per-process `prlimit` values, not an aggregate per-Objective budget: a terminal
-  and the agent of the same Objective each get them, and `RLIMIT_NPROC` is still per real UID (root: not enforced).
-  No CPU limit, no disk quota (as for workers). IMP-013 adds **counting** across Objectives in the service
-  (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new writers; see
-  [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many sandboxes exist,
-  not what each may consume.
+- **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values, not an aggregate
+  per-Objective budget, and `RLIMIT_NPROC` is still per real UID (root: not enforced). With delegation the terminal
+  shares the Objective's cgroup limits with the agent. IMP-013 adds **counting** across Objectives in the
+  service (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new
+  writers; see [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many
+  sandboxes exist, not what each may consume.
 - **Terminal and agent write concurrently** while the Objective is active: the terminal is a second writer of the
-  worktree until a freeze excludes both. Changes a terminal makes appear in the Change Set like the agent's.
+  worktree until a freeze excludes both. Changes a terminal makes appear in the Change Set like the agent's (and
+  count toward the writable-storage budget).
 - **Terminal output** is untrusted bytes shown as text; escape sequences are interpreted by the client's minimal
   VT parser only (no clipboard, title or hyperlink effects).

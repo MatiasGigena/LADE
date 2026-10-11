@@ -12,6 +12,7 @@ use adapters_support::{TempDir, commit_all, git, git_os, init_repo, status};
 use lade_system::adapters::git::{
     ChangeStatus, CommitSpec, GitError, GitId, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
     ObjectFormat, RepoPath, Repository, STDERR_LIMIT, SquashRequest, TargetBusyReason, Worktree,
+    escape_branch_name, unescape_branch_name,
 };
 
 fn path(bytes: &[u8]) -> RepoPath {
@@ -157,7 +158,10 @@ fn capture_case(format: &str) {
     let status_before = status(w);
     let scratch = tmp.path().join("scratch");
     fs::create_dir(&scratch).unwrap();
-    let tree = repo.capture_working_tree(&wt, &scratch).expect("capture");
+    let tree = repo
+        .capture_working_tree(&wt, &scratch)
+        .expect("capture")
+        .tree;
     assert_eq!(status(w), status_before, "status changed by capture");
     assert_eq!(
         fs::read(&index_path).unwrap(),
@@ -272,9 +276,9 @@ fn retention_ref_survives_gc_prune() {
     let scratch = tmp.path().join("scratch");
     fs::create_dir(&scratch).unwrap();
     fs::write(wt.path().join("kept.txt"), "retained unique content 1\n").unwrap();
-    let kept = repo.capture_working_tree(&wt, &scratch).unwrap();
+    let kept = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
     fs::write(wt.path().join("kept.txt"), "unretained unique content 2\n").unwrap();
-    let dropped = repo.capture_working_tree(&wt, &scratch).unwrap();
+    let dropped = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
     let refname = repo.retain("capture-1", &kept).unwrap();
     assert_eq!(refname, "refs/lade/retain/capture-1");
     assert_eq!(repo.retain("capture-1", &kept).unwrap(), refname);
@@ -576,7 +580,7 @@ fn integration_fixture(tag: &str) -> IntegrationFixture {
     fs::write(wt.path().join("README"), "hello\nchanged\n").unwrap();
     let scratch = tmp.path().join("scratch");
     fs::create_dir(&scratch).unwrap();
-    let candidate_tree = repo.capture_working_tree(&wt, &scratch).unwrap();
+    let candidate_tree = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
     let target = repo.resolve_commit("refs/heads/main").unwrap();
     IntegrationFixture {
         tmp,
@@ -705,12 +709,57 @@ fn integrate_refuses_moved_target() {
 }
 
 #[test]
-fn integrate_reverts_ref_when_checkout_cannot_be_updated() {
+fn integrate_refuses_untracked_collision_before_moving_the_ref() {
     let f = integration_fixture("int-e");
     let dir = f.main_dir();
-    // An untracked file where the candidate adds one: read-tree refuses to overwrite it.
+    let reflog_before = git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]);
+    // An untracked file where the candidate adds one: the preflight refuses before update-ref.
     fs::write(dir.join("feature.txt"), "precious local file\n").unwrap();
     match f.repo.integrate_squash(&f.request("main")) {
+        Err(GitError::TargetUntracked {
+            worktree,
+            paths,
+            stderr,
+        }) => {
+            assert_eq!(worktree, dir);
+            assert_eq!(paths, vec![path(b"feature.txt")]);
+            assert!(stderr.as_bytes().len() <= STDERR_LIMIT);
+        }
+        other => panic!("expected untracked refusal, got {other:?}"),
+    }
+    assert_eq!(
+        f.repo.resolve_ref("refs/heads/main").unwrap(),
+        Some(f.target.clone())
+    );
+    // The ref never moved: no update and no revert in its log.
+    assert_eq!(
+        git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]),
+        reflog_before
+    );
+    assert_eq!(
+        fs::read(dir.join("feature.txt")).unwrap(),
+        b"precious local file\n"
+    );
+    assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
+    assert!(!dir.join(".git/index.lock").exists());
+}
+
+#[test]
+fn integrate_reverts_ref_when_checkout_fails_after_the_preflight() {
+    if rustix_is_root() {
+        eprintln!(
+            "skipped: running as root, so a read-only target directory cannot make the checkout step fail"
+        );
+        return;
+    }
+    let f = integration_fixture("int-f");
+    let dir = f.main_dir();
+    // The dry run passes (nothing collides), but the real step cannot create feature.txt.
+    let mode = fs::metadata(&dir).unwrap().permissions().mode();
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let result = f.repo.integrate_squash(&f.request("main"));
+    fs::set_permissions(&dir, fs::Permissions::from_mode(mode)).unwrap();
+    match result {
         Err(GitError::CheckoutFailed {
             reverted, stderr, ..
         }) => {
@@ -723,11 +772,19 @@ fn integrate_reverts_ref_when_checkout_cannot_be_updated() {
         f.repo.resolve_ref("refs/heads/main").unwrap(),
         Some(f.target.clone())
     );
-    assert_eq!(
-        fs::read(dir.join("feature.txt")).unwrap(),
-        b"precious local file\n"
-    );
-    assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
+    assert!(!dir.join("feature.txt").exists());
+}
+
+fn rustix_is_root() -> bool {
+    String::from_utf8_lossy(
+        &std::process::Command::new("id")
+            .arg("-u")
+            .output()
+            .expect("id -u")
+            .stdout,
+    )
+    .trim()
+        == "0"
 }
 
 #[test]
@@ -805,7 +862,7 @@ fn malicious_repository_configuration_never_executes() {
     fs::write(wt.path().join("added.txt"), "added\n").unwrap();
     let scratch = tmp.path().join("scratch");
     fs::create_dir(&scratch).unwrap();
-    let tree = repo.capture_working_tree(&wt, &scratch).unwrap();
+    let tree = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
     let changes = repo.diff_numstat(&main, &tree).unwrap();
     assert_eq!(changes.len(), 2);
     repo.diff_hunks(&main, &tree, &path(b"shared.txt"), None)
@@ -877,5 +934,282 @@ fn malicious_repository_configuration_never_executes() {
     assert!(
         fired.is_empty(),
         "untrusted configuration executed: {fired:?}"
+    );
+}
+
+/// Whether this host's Git runs hooks defined in configuration (`hook.<name>.command`).
+fn config_hooks_supported(tmp: &Path) -> bool {
+    let probe = tmp.join("hook-probe");
+    fs::create_dir(&probe).unwrap();
+    git(&probe, &["init", "-q"]);
+    let marker = tmp.join("hook-probe-ran");
+    git(
+        &probe,
+        &[
+            "config",
+            "hook.probe.command",
+            &format!("touch {}", marker.display()),
+        ],
+    );
+    git(&probe, &["config", "hook.probe.event", "pre-commit"]);
+    let _ = adapters_support::git_cmd(&probe)
+        .args(["hook", "run", "pre-commit"])
+        .output();
+    marker.exists()
+}
+
+#[test]
+fn configuration_hooks_never_run() {
+    let tmp = TempDir::new("config-hooks");
+    if !config_hooks_supported(tmp.path()) {
+        eprintln!(
+            "skipped real run: host Git has no configuration-defined hooks (hook.<name>.command); \
+             the emitted overrides are covered by the command unit tests"
+        );
+        return;
+    }
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    let markers = tmp.path().join("markers");
+    fs::create_dir(&markers).unwrap();
+    for event in [
+        "reference-transaction",
+        "post-index-change",
+        "post-checkout",
+        "pre-commit",
+        "post-commit",
+        "post-merge",
+    ] {
+        let name = format!("evil-{event}");
+        git(
+            &repo_dir,
+            &[
+                "config",
+                &format!("hook.{name}.command"),
+                &format!("touch {}/{event}", markers.display()),
+            ],
+        );
+        git(&repo_dir, &["config", &format!("hook.{name}.event"), event]);
+    }
+    let repo = Repository::open(&repo_dir).unwrap();
+    let main = repo.resolve_commit("refs/heads/main").unwrap();
+    let wt = repo
+        .worktree_add("lade/hooks", &main, &tmp.path().join("hooks-wt"))
+        .unwrap();
+    fs::write(wt.path().join("added.txt"), "added\n").unwrap();
+    let scratch = tmp.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let tree = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
+    repo.retain("capture-hooks", &tree).unwrap();
+    repo.integrate_squash(&SquashRequest {
+        target_branch: "main".into(),
+        expected_target: main,
+        candidate_tree: tree,
+        message: "integrate".into(),
+        timestamp: None,
+    })
+    .unwrap();
+    repo.worktree_remove(&wt, true).unwrap();
+    let fired: Vec<_> = fs::read_dir(&markers)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert!(fired.is_empty(), "configuration hooks executed: {fired:?}");
+}
+
+#[test]
+fn non_utf8_branch_names_are_listed_losslessly() {
+    let tmp = TempDir::new("branches");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    let raw = b"feat-caf\xe9-\xff";
+    git_os(
+        &repo_dir,
+        &[
+            OsStr::new("branch"),
+            OsStr::from_bytes(raw),
+            OsStr::new("main"),
+        ],
+    );
+    git(&repo_dir, &["branch", "plain"]);
+    let repo = Repository::open(&repo_dir).unwrap();
+    let branches = repo.list_branches().unwrap();
+    let names: Vec<&str> = branches.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["feat-caf\\xe9-\\xff", "main", "plain"]);
+    let odd = &branches[0];
+    assert_eq!(odd.raw, raw);
+    assert!(!odd.is_utf8());
+    assert_eq!(unescape_branch_name(&odd.name).as_deref(), Some(&raw[..]));
+    assert_eq!(escape_branch_name(b"plain"), "plain");
+    assert!(branches[1].is_utf8());
+    assert_eq!(odd.commit, repo.resolve_commit("refs/heads/main").unwrap());
+    assert_eq!(unescape_branch_name("bad\\x4"), None);
+}
+
+#[test]
+fn capture_skips_nested_repositories_without_a_commit() {
+    let tmp = TempDir::new("nested");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    let repo = Repository::open(&repo_dir).unwrap();
+    let wt = objective(&repo, tmp.path(), "nest");
+    let w = wt.path();
+    for dir in ["empty-a", "deep/empty b"] {
+        fs::create_dir_all(w.join(dir)).unwrap();
+        git(&w.join(dir), &["init", "-q"]);
+        fs::write(w.join(dir).join("inside.txt"), "not captured\n").unwrap();
+    }
+    fs::create_dir(w.join("full")).unwrap();
+    git(&w.join("full"), &["init", "-q", "-b", "main"]);
+    git(&w.join("full"), &["config", "user.name", "Test"]);
+    git(
+        &w.join("full"),
+        &["config", "user.email", "t@example.invalid"],
+    );
+    fs::write(w.join("full/x"), "x\n").unwrap();
+    commit_all(&w.join("full"), "nested");
+    fs::write(w.join("regular.txt"), "kept\n").unwrap();
+    let scratch = tmp.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let capture = repo.capture_working_tree(&wt, &scratch).unwrap();
+    let mut skipped = capture.skipped_nested.clone();
+    skipped.sort();
+    assert_eq!(skipped, vec![path(b"deep/empty b"), path(b"empty-a")]);
+    let base = repo.resolve_commit("refs/heads/main").unwrap();
+    let changes = repo.diff_numstat(&base, &capture.tree).unwrap();
+    let paths: Vec<&[u8]> = changes.iter().map(|c| c.path.as_bytes()).collect();
+    assert_eq!(paths, [&b"full"[..], b"regular.txt"]);
+    assert_eq!(
+        changes[0].new_mode, 0o160000,
+        "committed nested repo is a gitlink"
+    );
+    assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
+}
+
+#[test]
+fn capture_applies_only_the_configured_user_excludes_file() {
+    let tmp = TempDir::new("excludes");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    let repo_excludes = tmp.path().join("repo-excludes");
+    fs::write(&repo_excludes, "repo-hidden.txt\n").unwrap();
+    git(
+        &repo_dir,
+        &[
+            "config",
+            "core.excludesFile",
+            repo_excludes.to_str().unwrap(),
+        ],
+    );
+    let user_excludes = tmp.path().join("user-ignore");
+    fs::write(&user_excludes, "*.secret\n").unwrap();
+    let plain = Repository::open(&repo_dir).unwrap();
+    let wt = objective(&plain, tmp.path(), "exc");
+    for name in ["keys.secret", "repo-hidden.txt", "visible.txt"] {
+        fs::write(wt.path().join(name), "x\n").unwrap();
+    }
+    let scratch = tmp.path().join("scratch");
+    fs::create_dir(&scratch).unwrap();
+    let base = plain.resolve_commit("refs/heads/main").unwrap();
+    let names = |repo: &Repository| -> Vec<Vec<u8>> {
+        let tree = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
+        repo.diff_numstat(&base, &tree)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.path.into_bytes())
+            .collect()
+    };
+    // The repository's own core.excludesFile is never honoured (it could hide new files).
+    assert_eq!(
+        names(&plain),
+        [&b"keys.secret"[..], b"repo-hidden.txt", b"visible.txt"]
+    );
+    let with_user = plain.clone().with_excludes_file(Some(user_excludes));
+    assert_eq!(names(&with_user), [&b"repo-hidden.txt"[..], b"visible.txt"]);
+}
+
+#[test]
+fn filtered_paths_name_files_with_a_filter_driver() {
+    let tmp = TempDir::new("filtered");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    fs::write(
+        repo_dir.join(".gitattributes"),
+        "*.bin filter=lfs diff=lfs merge=lfs -text\n*.txt -filter\n",
+    )
+    .unwrap();
+    fs::write(
+        repo_dir.join("model.bin"),
+        "version https://git-lfs.github.com/spec/v1\n",
+    )
+    .unwrap();
+    fs::write(repo_dir.join("notes.txt"), "plain\n").unwrap();
+    let commit = commit_all(&repo_dir, "lfs");
+    let repo = Repository::open(&repo_dir).unwrap();
+    let tree = id(&repo, &commit);
+    let model = path(b"model.bin");
+    let notes = path(b"notes.txt");
+    let readme = path(b"README");
+    assert_eq!(
+        repo.filtered_paths(&tree, &[&model, &notes, &readme])
+            .unwrap(),
+        vec![model.clone()]
+    );
+    assert!(repo.filtered_paths(&tree, &[]).unwrap().is_empty());
+}
+
+#[test]
+fn grep_reports_exact_byte_ranges() {
+    let tmp = TempDir::new("grep-offsets");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    let text = "αβγ\r\nfirst line\r\nprefix ÉCOLE Needle needle\nlast";
+    fs::write(repo_dir.join("u.txt"), text).unwrap();
+    let big = "x".repeat(17 << 20) + "\nNeedle\n";
+    fs::write(repo_dir.join("big.txt"), &big).unwrap();
+    let commit = commit_all(&repo_dir, "offsets");
+    let repo = Repository::open(&repo_dir).unwrap();
+    let tree = id(&repo, &commit);
+    let found = repo
+        .grep(
+            &tree,
+            &GrepQuery {
+                text: "needle".into(),
+                ignore_case: true,
+                max_results: 10,
+            },
+        )
+        .unwrap();
+    let hit = found
+        .matches
+        .iter()
+        .find(|m| m.path.as_bytes() == b"u.txt")
+        .unwrap();
+    let start = text.find("Needle").unwrap();
+    assert_eq!(hit.line, 3);
+    assert_eq!(hit.byte_start, Some(start as u64));
+    assert_eq!(hit.byte_end, Some((start + 6) as u64));
+    assert_eq!(&text.as_bytes()[start..start + 6], b"Needle");
+    let large = found
+        .matches
+        .iter()
+        .find(|m| m.path.as_bytes() == b"big.txt")
+        .unwrap();
+    assert_eq!(
+        (large.line, large.byte_start, large.byte_end),
+        (2, None, None)
+    );
+
+    let accented = repo
+        .grep(
+            &tree,
+            &GrepQuery {
+                // Git folds ASCII only (LADE runs it with LC_ALL=C); the byte range is exact.
+                text: "ÉCOLE".into(),
+                ignore_case: true,
+                max_results: 10,
+            },
+        )
+        .unwrap();
+    let start = text.find("ÉCOLE").unwrap();
+    assert_eq!(accented.matches.len(), 1);
+    assert_eq!(accented.matches[0].byte_start, Some(start as u64));
+    assert_eq!(
+        accented.matches[0].byte_end,
+        Some((start + "ÉCOLE".len()) as u64)
     );
 }

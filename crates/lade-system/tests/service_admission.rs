@@ -19,7 +19,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
     let config = lade_system::service::ServiceConfig {
         state_dir: long_state.clone(),
         runtime_dir: env.root.path().join("run"),
-        limits: Default::default(),
+        ..env.config()
     };
     let running = lade_system::service::start(config, FakeLauncher::shared()).expect("starts");
     running.shutdown();
@@ -28,7 +28,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
     let config = lade_system::service::ServiceConfig {
         state_dir: long_state,
         runtime_dir: long_runtime.clone(),
-        limits: Default::default(),
+        ..env.config()
     };
     let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
         panic!("service started with an unbindable socket path");

@@ -17,15 +17,16 @@ use lade_core::domain::inspection::{
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
 use lade_core::domain::review::{IntegrationPlan, Review};
 use lade_protocol::client::{
-    DraftDeleteCommand, DraftList, DraftSaveCommand, Empty, Event, FeedbackSubmitCommand,
-    InputList, MessageSendCommand, ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery,
-    OperationState, OperationStatus, Rejection, ReplyData, Request, SettingsUpdateCommand,
-    SnapshotData, Start, UpdateIntentCommand, WorkspaceOpenCommand,
+    DraftDeleteCommand, DraftList, DraftSaveCommand, Empty, ErrorCode, Event,
+    FeedbackSubmitCommand, InputList, MessageSendCommand, ObjectiveCreateCommand,
+    ObjectiveSelector, OperationGetQuery, OperationState, OperationStatus, Rejection, ReplyData,
+    Request, SafeAction, SettingsUpdateCommand, SnapshotData, Start, UpdateIntentCommand,
+    WorkspaceOpenCommand,
 };
 use lade_protocol::types::Id;
 
 use crate::adapters::artifacts::ArtifactDigest;
-use crate::adapters::git::Repository;
+use crate::adapters::git;
 use crate::storage::{self, CaptureRow, ObjectiveRow, WorkspaceRow};
 
 use super::convert::{
@@ -73,6 +74,10 @@ pub(crate) enum Pending {
         ctx: ReqCtx,
         confirm: bool,
     },
+    DeleteHistory {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+    },
     Complete {
         oid: ObjectiveId,
         ctx: ReqCtx,
@@ -95,6 +100,8 @@ pub(crate) enum Pending {
         writable: bool,
         size: (u16, u16),
     },
+    Storage,
+    Ignore,
 }
 
 /// Why a working capture was taken.
@@ -248,6 +255,9 @@ impl Service {
                 self.objective_discard(&mut ctx, &objective_id)
             }
             Request::ObjectiveCleanup(cmd) => return self.objective_cleanup(ctx, &cmd),
+            Request::ObjectiveDeleteHistory(cmd) => {
+                return self.objective_delete_history(ctx, &cmd);
+            }
             // IMP-011 pi compatibility (service/compat.rs).
             Request::ModelsList(query) => return self.models_list(ctx, query),
             Request::SessionTree(ObjectiveSelector { objective_id }) => {
@@ -290,6 +300,7 @@ impl Service {
             (Pending::Launch { oid, generation }, JobOutput::Launch(out)) => {
                 self.launch_done(oid, generation, out);
             }
+            (Pending::Storage, JobOutput::Storage(usage)) => self.storage_measured(usage),
             (Pending::Capture { oid, purpose }, JobOutput::Capture(result)) => {
                 self.capture_done(oid, purpose, result);
             }
@@ -332,6 +343,9 @@ impl Service {
             ) => self.integrate_done(oid, ctx, &plan, &journal_id, result),
             (Pending::Cleanup { oid, ctx, confirm }, JobOutput::Unit(result)) => {
                 self.cleanup_done(oid, ctx, confirm, result);
+            }
+            (Pending::DeleteHistory { oid, ctx }, JobOutput::Unit(result)) => {
+                self.delete_history_done(oid, ctx, result);
             }
             (Pending::Complete { oid, ctx }, JobOutput::Flag(result)) => {
                 self.complete_done(oid, ctx, result);
@@ -414,7 +428,7 @@ impl Service {
         if !path.is_absolute() {
             return Err(invalid("workspace path must be absolute"));
         }
-        let repo = Repository::open(&path).map_err(|e| git_rejection(&e))?;
+        let repo = jobs::open_repository(&path).map_err(|e| git_rejection(&e))?;
         let top = repo.work_tree().to_path_buf();
         if let Some(existing) = self.workspaces.values().find(|ws| ws.path == top) {
             return Ok(ReplyData::WorkspaceOpen(
@@ -465,6 +479,16 @@ impl Service {
             &cmd.intent.acceptance,
         )
         .map_err(domain)?;
+        if cmd.integration_target.contains("\\x")
+            && git::unescape_branch_name(&cmd.integration_target)
+                .is_some_and(|raw| std::str::from_utf8(&raw).is_err())
+        {
+            return Err(Rejection::new(
+                ErrorCode::UnsupportedContent,
+                SafeAction::None,
+                "branch names that are not UTF-8 are listed but cannot be an integration target",
+            ));
+        }
         let target = BranchName::new(&cmd.integration_target).map_err(domain)?;
         let target_commit = jobs::target_commit(&ws.repo, target.as_str())?;
         let start_commit = match &cmd.start {
@@ -501,6 +525,7 @@ impl Service {
                 git_branch: None,
                 worktree: None,
                 integration_conflict: false,
+                history_deleted: false,
             },
             review: Review::new(oid),
             drafts: Vec::new(),

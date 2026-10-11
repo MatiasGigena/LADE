@@ -56,6 +56,8 @@ impl Env {
             state_dir: self.root.path().join("state"),
             runtime_dir: self.root.path().join("run"),
             limits: lade_system::service::ResourceLimits::default(),
+            storage_limit_bytes: lade_system::adapters::sandbox::WRITABLE_STORAGE_BYTES,
+            cgroups: None,
         }
     }
 

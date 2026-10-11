@@ -370,6 +370,7 @@ pub enum ActionName {
     ObjectiveComplete,
     ObjectiveDiscard,
     ObjectiveCleanup,
+    ObjectiveDeleteHistory,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -402,6 +403,8 @@ pub struct ObjectiveDetail {
     pub change_counts: ChangeCounts,
     pub unsent_drafts: u64,
     pub available_actions: Vec<AvailableAction>,
+    /// The Objective's Git history (retention refs, branch) was deleted on explicit request.
+    pub history_deleted: bool,
 }
 
 impl ObjectiveDetail {
@@ -455,6 +458,22 @@ pub struct ChangedFile {
     pub added: u64,
     pub removed: u64,
     pub binary: bool,
+    /// Content goes through a filter driver (LFS etc.): raw bytes compared, unsupported.
+    pub filtered: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentNoticeKind {
+    NestedRepository,
+    FilteredContent,
+}
+
+/// Why part of a Change Set is not fully represented (service text).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContentNotice {
+    pub kind: ContentNoticeKind,
+    pub message: String,
+    pub path: Option<RepoPath>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -470,6 +489,7 @@ pub struct ChangeList {
     pub truncated: bool,
     pub total_added: u64,
     pub total_removed: u64,
+    pub notices: Vec<ContentNotice>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -540,6 +560,8 @@ pub struct FilePage {
     pub text: Option<String>,
     pub eof: bool,
     pub version_label: String,
+    /// The file exceeds the service's whole-file bound and is served in bounded chunks.
+    pub chunked: bool,
 }
 
 /// Accumulated, contiguous pages of one file version.
@@ -557,6 +579,8 @@ pub struct FileContent {
     pub loaded_bytes: u64,
     pub eof: bool,
     pub version_label: String,
+    /// Served in bounded chunks (a file above the whole-file bound).
+    pub chunked: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -668,7 +692,9 @@ pub struct SearchResult {
     pub path: Option<RepoPath>,
     pub line: Option<u64>,
     pub preview: String,
+    /// Exact byte range of the first match in the raw file bytes, when the service located it.
     pub byte_start: Option<u64>,
+    pub byte_end: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

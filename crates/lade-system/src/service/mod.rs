@@ -41,7 +41,9 @@ use lade_protocol::{Framing, encode};
 use rusqlite::Transaction;
 
 use crate::adapters::artifacts::ArtifactStore;
-use crate::adapters::sandbox::SandboxTools;
+use crate::adapters::sandbox::{
+    STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxTools, WRITABLE_STORAGE_BYTES,
+};
 use crate::storage::{self, Store, StoreError};
 use crate::supervision::launcher::RESERVED_GENERATION;
 use crate::supervision::{
@@ -62,6 +64,12 @@ pub struct ServiceConfig {
     pub runtime_dir: PathBuf,
     /// Aggregate limits across Objectives (configurable; see [`ResourceLimits`]).
     pub limits: ResourceLimits,
+    /// Writable-storage budget of one execution (worktree plus session directory); see
+    /// [`WRITABLE_STORAGE_BYTES`].
+    pub storage_limit_bytes: u64,
+    /// Delegated cgroup subtree for terminals and verification runs (the launcher has its own
+    /// handle); `None` without delegation.
+    pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 impl ServiceConfig {
@@ -85,6 +93,8 @@ impl ServiceConfig {
             state_dir,
             runtime_dir,
             limits: ResourceLimits::default(),
+            storage_limit_bytes: WRITABLE_STORAGE_BYTES,
+            cgroups: None,
         })
     }
 }
@@ -168,6 +178,8 @@ pub(crate) enum JobOutput {
     Profile(Result<crate::adapters::profile::ImportReport, String>),
     Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
     Terminal(Result<crate::supervision::Terminal, Rejection>),
+    Storage(Vec<execution::StorageUsage>),
+    Done,
 }
 
 /// Identity of the request being answered.
@@ -212,6 +224,8 @@ pub(crate) struct Service {
     store: Store,
     paths: Paths,
     artifacts: Arc<ArtifactStore>,
+    /// Artifacts of large files read in chunks (see [`jobs::LargeBlobs`]).
+    large_blobs: Arc<jobs::LargeBlobs>,
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
@@ -243,7 +257,7 @@ pub(crate) struct Service {
     /// `service.stop` was answered: leave the loop and shut down.
     stopping: bool,
     limits: ResourceLimits,
-    storage: limits::Storage,
+    free_space: limits::Storage,
     /// Facts restart recovery wants the next client to see (sent once on attach).
     recovery_notes: Vec<String>,
     /// Integrations in flight per (Workspace, target branch), with the requests waiting for
@@ -251,6 +265,10 @@ pub(crate) struct Service {
     integrating: HashMap<(WorkspaceId, String), VecDeque<(ReqCtx, ReviewIntegrateCommand)>>,
     /// While a request is dispatched: the jobs it started, submitted once it is journaled.
     held: Option<Vec<(bool, jobs::Task)>>,
+    storage_limit: u64,
+    /// A writable-storage measurement job is in flight.
+    storage_check: bool,
+    cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 /// A running service instance (threads and admission material).
@@ -340,7 +358,7 @@ fn private_dir(path: &Path) -> Result<(), StartError> {
         .map_err(|e| StartError::StateDir(format!("{}: {}", path.display(), e.kind())))
 }
 
-fn lock_state(state: &Path) -> Result<File, StartError> {
+pub(crate) fn lock_state(state: &Path) -> Result<File, StartError> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -408,6 +426,7 @@ pub fn start(
         store,
         paths,
         artifacts: Arc::new(artifacts),
+        large_blobs: Arc::default(),
         launcher,
         supervisor_tx,
         queue_tx: queue_tx.clone(),
@@ -437,15 +456,18 @@ pub fn start(
         terminals_opening: 0,
         stopping: false,
         limits: config.limits.clone(),
-        storage: limits::Storage::default(),
+        free_space: limits::Storage::default(),
         recovery_notes: Vec::new(),
         integrating: HashMap::new(),
         held: None,
+        storage_limit: config.storage_limit_bytes,
+        storage_check: false,
+        cgroups: config.cgroups.clone(),
     };
     service.load().map_err(StartError::Recovery)?;
     service.load_compat().map_err(StartError::Recovery)?;
     service.recover().map_err(StartError::Recovery)?;
-    service.check_storage();
+    service.check_free_space();
     eprintln!("laded: limits {}", config.limits);
 
     let capability =
@@ -961,6 +983,12 @@ impl Service {
         self.pump_terminals();
         if self.ticks.is_multiple_of(10) {
             self.flush_activity();
+            self.check_free_space();
+        }
+        if self
+            .ticks
+            .is_multiple_of(STORAGE_CHECK_INTERVAL.as_millis() as u64 / TICK.as_millis() as u64)
+        {
             self.check_storage();
         }
         self.check_timeouts();

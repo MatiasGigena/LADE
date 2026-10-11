@@ -10,6 +10,9 @@ Source: `crates/lade-system/src/{bin/laded.rs,service,storage,transport}`.
 laded --version
 laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
             [--storage-warn-mib N] [--storage-reserve-mib N]
+laded store info [--state-dir DIR]                 # schema this build understands, database schema, backups
+laded store restore --schema N [--state-dir DIR]   # rollback restore (used by scripts/install --rollback)
+laded diagnostics export OUT [--state-dir DIR]     # redacted diagnostics bundle, new 0600 file
 ```
 
 The limit flags set the [aggregate accounting](#aggregate-limits-and-storage-pressure-imp-013) across
@@ -17,7 +20,9 @@ Objectives; the effective values are printed at startup (`laded: limits …`).
 
 Defaults: state `$XDG_STATE_HOME/lade` (`~/.local/state/lade`), runtime `$XDG_RUNTIME_DIR/lade` (fallback
 `$STATE/run`). Both must be absolute. Exit statuses: `0` version, `64` usage, `78` refused to start (unsafe directory,
-unopenable/corrupt/newer store, another instance holds the state directory), `70` internal. The process sets umask
+unopenable/corrupt/newer store, pre-migration backup failed, another instance holds the state directory), `70`
+internal; `store restore`: `75` while a service holds the state directory, `1` refused (no intact backup of that
+schema, or the database is not newer); `diagnostics export`: `73` the output exists (never overwritten), `74` I/O. The process sets umask
 `077`. It runs until the controlling client asks it to stop (`service.stop`, explicit Exit or logout: exit status
 `0`, see [Lifetime](#lifetime-close-exit-logout)) or until killed; `SIGTERM` is not trapped (no `unsafe` signal
 handlers) — workers and terminals die with their sandbox (`--die-with-parent`) and the next start recovers.
@@ -34,6 +39,8 @@ handlers) — workers and terminals die with their sandbox (`--die-with-parent`)
 | `$STATE/verify/<verification>/` | disposable verification copies (removed after each run and swept on start) |
 | `$STATE/run/` | launcher and terminal pidfiles (`worker-*.pid`, `terminal-*.pid`; swept on start) |
 | `$STATE/tmp/` | temporary capture indexes and artifact staging (cleared on start) |
+| `$STATE/backups/` (0700) | pre-migration backups `lade.db.schema-<n>.<ms>.bak` (0600, at most 3), the append-only `migrations.journal`, and newer databases set aside by a rollback restore (`lade.db.newer-schema-<n>.<ms>`, never pruned) |
+| `$STATE/logs/` (0700) | redacted diagnostics `laded.log`, `laded.log.1` … `.3` (0600, JSON lines, 4 × 1 MiB) |
 | `$RUNTIME/control.cap`, `control.sock` | admission capability and control socket (0600, directory 0700) |
 | `$RUNTIME/g/<12 hex>-<gen>.sock` | per-launch gateway sockets (0600, directory 0700; swept on start) |
 
@@ -44,15 +51,40 @@ path and asking for a shorter `--runtime-dir`.
 
 Git-side state lives in the Workspace repository: Objective branches `lade/<short-id>` (suffix `-2`… on collision),
 retention refs `refs/lade/retain/{capture-<id>,candidate-<id>,candidate-<id>-tree}` that pin every inspected capture
-and candidate against garbage collection (never removed by Cleanup), and temporary `lade/verify/<id>` branches for
-verification copies.
+and candidate against garbage collection (never removed by Cleanup; only by the explicit, confirmed
+`objective.delete_history`), and temporary `lade/verify/<id>` branches for verification copies.
+
+### Git invocations
+
+Every Git process goes through the hardened builder (`adapters/git/command.rs`): cleared environment, no
+user/system configuration, fixed `GIT_CONFIG_*` overrides (hooks path, fsmonitor, pager, editor, askpass, credential
+helper, external diff, signing, protocols, maintenance). Before **each** invocation the configuration that invocation
+would see (repository, worktree and included files) is listed once (`git config --list -z --name-only`) and every
+repository-defined filter driver (`clean`/`smudge`/`process` emptied, `required=false`), merge driver (`false`) and
+configuration-defined hook (`hook.<name>.command` and `.event` emptied, `.enabled=false`) is overridden for that
+call. The hook overrides are unconditional: Git versions without configuration hooks ignore the keys. This costs one
+short extra `git config` process per call. Remaining race: a file *included* by the repository configuration that
+changes between the listing and the call (the worker cannot write the common Git directory, but an include could
+point elsewhere).
+
+Captures (`capture_working_tree`) use a temporary index, force `core.fileMode`/`core.symlinks` on and
+`core.ignoreCase` off (a candidate is an exact commit and the supported Linux filesystems represent modes and
+symlinks; a repository setting meant for filesystems that cannot must not hide such a change), honour the
+repository's `.gitignore`/`info/exclude` and the **user's own** global excludes file (resolved by the service from
+`~/.gitconfig` / `$XDG_CONFIG_HOME/git/config` or the default `$XDG_CONFIG_HOME/git/ignore`), but never a
+`core.excludesFile` from the repository configuration (it could hide new files from review). An untracked nested
+repository without a checked-out commit (which Git cannot record) is excluded and reported (≤ 64 per capture) instead
+of failing the capture; one with a commit is recorded as a gitlink. Branch names that are not UTF-8 are listed in a
+lossless escaped form (`\xHH` per invalid byte; Git forbids `\` in ref names) and refused as integration targets
+(`unsupported_content`).
 
 ## Storage
 
 One connection, opened and owned by the service thread: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`,
 `busy_timeout` 5 s. Opening runs `PRAGMA quick_check`; a failure, a non-WAL journal or a schema version newer than this
 build refuses to start — the database is never reset or rewritten. Migrations are an append-only ordered list recorded
-in `schema_migrations(version, applied_at)`, each applied in its own transaction.
+in `schema_migrations(version, applied_at)`, each applied in its own transaction. v3 adds
+`objectives.history_deleted` (an older build refuses a v3 database, exit 78).
 
 **Dependency:** `rusqlite =0.40.2` with `bundled` (SQLite compiled in, so behaviour does not depend on the host
 library version). It is allowed for `lade-system` only; `scripts/check-architecture.py` still rejects any path from
@@ -65,7 +97,7 @@ Schema v1 tables:
 | --- | --- |
 | `settings` | the wire `Settings` JSON (default model, verification commands) |
 | `workspaces` | id, canonical top-level path (bytes), name, default branch |
-| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path and the integration-conflict fact |
+| `objectives` | every `ObjectiveRecord` field (intent, revisions, target, start commit, lifecycle, execution state/generation/session association/model, cleaned_up, timestamps) plus the real Git branch, worktree path, the integration-conflict fact and (v3) whether its Git history was deleted |
 | `sessions` | each session association (session id, association revision, model, last generation, pi session id/file) |
 | `captures` | capture id → tree id, target commit, change counts, retention ref |
 | `drafts`, `draft_revisions` | current draft (reference JSON, body, CAS revision, state, submitted input) and every saved revision |
@@ -77,7 +109,29 @@ Schema v1 tables:
 | `integration_journal` | intent (expected target, candidate tree, message, commit time) before mutation, outcome after |
 
 Never stored: the capability, provider credentials, environment values. Diagnostics go to stderr with codes and ids
-only, never prompt, source or secret bodies.
+only, never prompt, source or secret bodies (see [Diagnostics](#diagnostics)).
+
+### Migration safety (IMP-014)
+
+Before migrating an **existing** database (a fresh one has nothing to lose), `Store::open` writes a consistent copy
+with `VACUUM INTO` to `$STATE/backups/lade.db.schema-<from>.<unix ms>.bak` (created 0600 first; the directory is a
+private 0700 directory of the service user, fsynced), records `backup <from> <to> <file> <sha256> <bundle>` in
+`$STATE/backups/migrations.journal`, prunes all but the newest 3 backups (journaling `pruned`), and only then runs the
+migrations; `applied <from> <to>` is journaled after they commit. If the backup cannot be written (disk full,
+permissions) the service refuses to start (exit 78) **without migrating**. An interrupted migration rolls back its
+own transaction; the backup stays.
+
+`laded store restore --schema N` is the rollback half: under the service's state lock (refused with exit 75 while a
+service runs) it picks the newest journaled backup of schema `N` whose digest still matches, checks it
+(`quick_check`, schema `N`), folds the WAL of the current database (`wal_checkpoint(TRUNCATE)`), moves the current
+database to `$STATE/backups/lade.db.newer-schema-<n>.<ms>` (kept, never pruned — it is the only copy of what happened
+after the upgrade), stages the backup as a 0600 copy, renames it into place, fsyncs and journals `restored`.
+`scripts/install --rollback` uses it (with the newer bundle's `laded`) when the database schema is newer than the
+`schema=` recorded in the previous bundle's `VERSION`; see the [user guide](../user-guide.md#1-install). Tests:
+`storage::tests` (forward migration backs up, restore, the old schema starts again, bounded backups, tampered/missing
+backup and running service refused; also over the real migrations 1 → 3) and `tests/laded_cli.rs` (a schema-1 store
+migrated 1 → 3 by the real `laded serve`, restored with `laded store restore --schema 1`, then opened by a
+schema-1 store — `Store::open_as_schema`, a test stand-in for the previous release — and migrated forward again).
 
 ### What is durable
 
@@ -153,13 +207,20 @@ Queries: `snapshot` (≤ 64 workspaces with ≤ 64 branches each, ≤ 400 most r
 clipped to 512 chars, settings, current sequence); `objective.get` (detail with a freshly resolved target commit,
 the latest ≤ 64 candidates/verifications and `available_actions`); `activity.page` (items before `seq`, newest last,
 ≤ 768 KiB of text per page, live streamed text included); `changes.list` (working: a fresh capture; candidate:
-candidate tree vs its base target commit; since: tree vs tree); `file.read` and `diff.get` (working uses the latest
-capture, or captures first; whole file bytes ≤ 64 MiB are retained in the artifact store and their digest returned;
-UTF-8 pages are cut at character boundaries and kept under the frame budget, binary content is reported as binary;
-diffs are bounded to 1,800 lines / 640 KiB with `truncated`); `search` (objectives by title/outcome; file paths via
-`ls_tree` and content via `git grep` over the basis tree, or the workspace default branch without an objective, with a
-`scope_label` naming the version); `drafts.list`, `inputs.list`; `operation.get` (journal state: `unknown`,
-`pending`, `completed`, `uncertain`, with the recorded outcome).
+candidate tree vs its base target commit; since: tree vs tree; changed files whose `filter` attribute names a driver
+carry `filtered`, and `notices` name nested repositories left out of the capture and filtered/LFS content);
+`file.read` and `diff.get` (working uses the latest capture, or captures first; whole file bytes ≤ 64 MiB are
+retained in the artifact store and their digest returned; UTF-8 pages are cut at character boundaries and kept under
+the frame budget, binary content is reported as binary; a file above 64 MiB and up to the hard bound of 1 GiB is
+streamed once into the artifact store — never held in memory, the last 8 large-blob digests are remembered so paging
+does not re-stream — and served as `chunked` pages through `offset`/`limit`; larger files are `unsupported_content`;
+feedback staleness on such files streams the blob digest, then compares the referenced range; diffs are bounded to
+1,800 lines / 640 KiB with `truncated`); `search` (objectives by title/outcome; file paths via `ls_tree` and content
+via `git grep` over the basis tree, or the workspace default branch without an objective, with a `scope_label`
+naming the version; content results carry the line, byte column and the exact byte range of the first match in the
+raw blob, computed from the blob for files ≤ 16 MiB within a 64 MiB budget per search); `drafts.list`,
+`inputs.list`; `operation.get` (journal state: `unknown`, `pending`, `completed`, `uncertain`, with the recorded
+outcome).
 
 Commands (all journaled; a duplicate `operation_id` with the same canonical digest returns the recorded reply without
 re-executing, a different digest is `duplicate_conflict`, a duplicate while pending is `conflict`/`query_operation`;
@@ -203,8 +264,11 @@ a reused `request_id` with different content is `duplicate_conflict`):
   (returned for revision, `stale_target` rejection, `integration_conflict` badge).
 - `review.integrate`: core `check_integration` against the fresh target (a moved target invalidates the approval
   durably and rejects `stale_target`); the intent (expected target, tree, message, commit time) is journaled; then
-  `integrate_squash` (CAS ref update + `read-tree -m -u` in a clean checked-out target; dirty/busy targets refuse with
-  `conflict` and stay untouched); success → Integrated, approval consumed, journal `done`. **Same-target
+  `integrate_squash` (in a checked-out target first a dry run `read-tree -m -u -n` of the checkout step: untracked
+  files where the candidate adds files refuse with `conflict` naming them, before any ref moves; then CAS ref update
+  + `read-tree -m -u`; dirty/busy targets refuse with `conflict` and stay untouched; if the real step still fails —
+  the worktree changed after the dry run — the ref is CAS-reverted); success → Integrated, approval consumed, journal
+  `done`. **Same-target
   serialization (IMP-013):** one integration per (Workspace, target branch) runs at a time; a request for a target
   that is being integrated waits (its Objective is `busy`, its operation `pending`) and is then checked against the
   target the first one moved — normally `stale_target` with the approval invalidated, so a stale frozen review is
@@ -213,6 +277,13 @@ a reused `request_id` with different content is `duplicate_conflict`):
 - `objective.complete`: requires an empty Change Set (captured on the pool); `objective.discard`: core discard.
 - `objective.cleanup`: core cleanup rules; removes the worktree (without confirmation only when its content equals
   the branch commit) and CAS-deletes the branch; records, retention refs, artifacts and session files stay.
+- `objective.delete_history`: only for a cleaned-up Objective whose history was not deleted yet, and only with
+  `confirm_history_loss: true` (`invalid_request` otherwise; the client sends it only from a confirmation dialog with
+  an explicit acknowledgement). On the pool it CAS-deletes every capture retention ref recorded for the Objective,
+  `candidate-<id>` and `candidate-<id>-tree` of each candidate and the Objective branch if it still exists; then
+  `history_deleted` is recorded with the outcome. Never automatic (not by Cleanup, uninstall or storage pressure);
+  records, accepted inputs, evidence and artifacts stay. Git may later collect the unreferenced objects, after which
+  that Objective's candidates and captures can no longer be inspected.
 - `settings.update`: validated and persisted.
 - `service.stop {reason: exit|logout}`: journaled and answered, then the service thread leaves its loop: every
   terminal is killed, every worker is terminated (sandbox killed), the store is closed, the socket and capability
@@ -227,8 +298,9 @@ Terminal requests (`terminal.open/input/resize/close`, IMP-012) are interaction,
 current candidate, evidence, target movement, busy marker, latest capture, verification sandbox) with a reason when
 disabled; approval with missing or failed evidence is enabled with a reason stating that an override reason is
 required, and input (`message.send`, `feedback.submit`) to a stopped execution is enabled with a reason saying it waits
-for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for ten
-Objective states, that every enabled action's request is accepted and every disabled action's request is rejected.
+for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for
+eleven Objective states, that every enabled action's request is accepted and every disabled action's request is
+rejected.
 
 Events carry a monotonically increasing `sequence` per service epoch: `objective.changed` + `objective.detail` after
 every Objective change, `activity.appended` per item, `activity.delta` coalesced per 100 ms tick, `draft.changed`,
@@ -250,7 +322,37 @@ input is never resent automatically.
 
 Attention uses `lade_core::derive_attention` with facts the service tracks (uncertain delivery, stale unsent drafts,
 failed checks, integration conflict, cached target movement, non-empty latest capture); wire badges add
-`verification_missing`, `unsent_drafts` and `fixture_model`.
+`verification_missing`, `unsent_drafts`, `fixture_model` and `limit_reached` (first, for an execution that failed
+because an enforced limit was reached; its failure reason starts with `limit_reached:`).
+
+## Resource limits (IMP-006)
+
+Every value is a constant in `crates/lade-system/src/adapters/sandbox/limits.rs` (the §7 proposals; approving or
+changing them is Matias's decision). Enforcement per sandbox is described in
+[execution-safety.md](execution-safety.md#limits-7); the service adds two things:
+
+- **Writable-storage monitor (§7, 2 GiB).** Every 5 s (`STORAGE_CHECK_INTERVAL`) one pool job measures, for each live
+  execution, the allocated blocks of its worktree plus its session directory (symbolic links not followed, hard links
+  counted per name). Above `ServiceConfig::storage_limit_bytes` (default `WRITABLE_STORAGE_BYTES` = 2 GiB) the
+  service records the execution as `failed` with the reason `limit_reached: writable storage <used> exceeds the
+  <limit> limit (worktree and session directory)`, terminates the worker, sends `service.notice {level: error, code:
+  limit_reached}` and appends a system activity item; the summary carries the `limit_reached` badge. Nothing is
+  restarted and the limit is never raised: the developer frees space (for example in a terminal, which stays open and
+  whose writes count too) and resumes explicitly; a resume that is still over the limit is stopped again at the next
+  check. This is a **monitor, not a quota**: writes between two checks succeed, and the disk itself is not reserved.
+- **cgroup v2 placement.** At start `laded` (the binary, not `service::start`) calls
+  `adapters::sandbox::cgroup::detect`. When the unit's cgroup is delegated (`Delegate=memory pids cpu` in
+  `packaging/systemd/lade.service`: systemd marks it with the `user.delegate`/`trusted.delegate` extended attribute,
+  owned by the service user, with the three controllers available), `laded` moves itself into `<unit
+  cgroup>/service`, enables the controllers, removes sandbox cgroups a previous instance left, and passes the subtree
+  to the launcher, the terminals and verification runs: each Objective gets `<unit cgroup>/sandboxes/<objective>`
+  with `OBJECTIVE_CGROUP_LIMITS` (`memory.max` 4 GiB, `pids.max` 512, `cpu.max` unlimited), shared by its worker,
+  terminals and verification runs in one leaf each (`worker-<generation>`, `terminal-<id>`, `verify-<id>`). A
+  sandbox is moved into its leaf while its launch gate is still closed; when it ends the leaf is killed
+  (`cgroup.kill`) and removed. Without delegation (cgroup v1/hybrid, not started by the unit, a non-delegated cgroup,
+  missing controllers, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
+  prlimit limits only` and continues; it never writes into a cgroup it was not delegated. A memory OOM kill inside a
+  sandbox is logged (`sandbox memory limit reached`) and surfaces as the worker's unexpected exit.
 
 ## Contained terminals (IMP-012)
 
@@ -305,6 +407,32 @@ A second client never gets authority: the window application is single-instance 
 launch activates the existing window), and the service refuses any second link while the lease is held (one
 `service.notice {code: unauthorized}`, then the link closes).
 
+## Diagnostics
+
+`laded serve` points its own stderr at a pipe read by the `laded-diagnostics` thread (`lade_system::diagnostics`), so
+every line written to stderr by the service, its libraries, a panic or the forwarded worker stderr goes through one
+path: cut to 2,048 bytes, **redacted**, then written to the original stderr (the user journal under systemd) and as a
+JSON object `{ts, pid, source, line}` to `$STATE/logs/laded.log`. Rotation is by size: when the next record would
+pass 1 MiB the files shift (`laded.log` → `.1` … `.3`, the oldest is deleted), so the logs never exceed 4 MiB. The
+log is opened lazily, only once the state directory exists as a private directory of the service user; a log
+write failure never stops stderr forwarding. These numeric bounds are the implementation driver's proposal under the
+#14 policy and still need Matias's approval.
+
+Redaction (#14: credentials, prompts, source and tool-output bodies are excluded by default; redaction is tested,
+not infallible): `NAME=value`, `"name": "value"` and `name: value` where the name contains `KEY`, `TOKEN`,
+`SECRET`, `PASSW`, `AUTH`, `CREDENTIAL`, `COOKIE` or `CAPABILITY`; the value after `Bearer`/`Basic`; URL user-info;
+well-known token prefixes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, `eyJ` …); and opaque strings of
+32+ characters mixing upper case, lower case and digits become `<redacted>`; the home directory becomes `~`; control
+characters become spaces. Ids, hex digests and error codes are kept. The service itself never writes prompts,
+source, tool or terminal output to stderr.
+
+`laded diagnostics export OUT` writes a new 0600 plain-text file (never overwrites; `73`): a header (bundle,
+protocol, supported/database schema, kernel release, what is included and excluded), then each log file and the
+migration journal, every line redacted again. It never includes the database, artifacts, worktrees, session files,
+credentials or the environment. Review it before sharing it. The desktop client has no menu yet, so there is no
+"Export diagnostics" action in the window; the command is the export path. The unit sets `LimitCORE=0`, so no core
+dump of `laded` or a worker (whose memory can hold the released key) reaches `systemd-coredump`.
+
 ## Restart recovery
 
 Before the socket exists: (1) operations left `pending` are recorded `uncertain` with an `interrupted` outcome
@@ -313,9 +441,10 @@ parent, message, identity and time) and comparing it with the actual target ref 
 (`reconciled_done`), otherwise `reconciled_aborted`; (3) per Objective `lade_core::application::recover_after_restart`:
 live executions → `cancelled` + `interrupted`, unconsumed approvals invalidated (`service_restart`), running
 verifications interrupted, `dispatched` inputs → `uncertain`; nothing resumes; (4) best-effort sweep: the launcher's
-`sweep_stale($STATE/run)` (pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/`prlimit` process of
-this uid whose arguments reference the state directory, leftover verification copies and `lade/verify/*` branches,
-and `$STATE/tmp`. IMP-013 additions: a reconciled-done integration whose crash fell between the ref move and
+`sweep_stale($STATE/run)` (every `prlimit`/`bwrap` process carrying this run directory's sandbox marker, recorded or
+not, then pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/`prlimit` process of this uid whose
+arguments reference the state directory, leftover verification copies and `lade/verify/*` branches, and
+`$STATE/tmp`. With delegated cgroups `laded` has already killed and removed leftover sandbox cgroups. IMP-013 additions: a reconciled-done integration whose crash fell between the ref move and
 `read-tree` gets its checkout finished (`Repository::finish_integration_checkout`: `read-tree -m -u <expected>
 <commit>` in the single idle checkout; it keeps an already-updated index and refuses to overwrite local edits —
 then the first client sees a `service.notice {code: recovery}` naming the target); and a worktree that
@@ -365,7 +494,10 @@ refusal and in `available_actions`; the defaults are **proposals awaiting approv
 | free space on the state filesystem: warning | `--storage-warn-mib` | 2048 | `service.notice {level: warning, code: storage_low}` (on the transition and to every newly attached client) |
 | free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "storage pressure: … free, below the … reserve" — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
 
-Four is a measurement point, not a cap: the default admits 16 workers and the tests run five and six. Free space
+The free-space reserve complements, and does not replace, the per-execution writable-storage monitor (IMP-006:
+worktree + session directory against `WRITABLE_STORAGE_BYTES`, the agent stopped with `limit_reached`): that one
+bounds one Objective's growth, this one protects the filesystem shared by every Objective and the store. Four is a
+measurement point, not a cap: the default admits 16 workers and the tests run five and six. Free space
 (`statvfs` `f_bavail × f_frsize` of `$STATE`) is checked at start and every second. Under pressure, decisions,
 drafts, accepted input (delivery `blocked` until Resume), captures, freezes, approvals, integrations and the
 activity history keep being recorded inside the reserve; nothing is deleted to make room and running executions
@@ -375,7 +507,7 @@ every second (a crash loses at most ~1 s of streamed text; accepted input and de
 
 ## Tests
 
-`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal}.rs` run the real socket, real SQLite and disposable Git
+`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage,inspect}.rs` run the real socket, real SQLite and disposable Git
 repositories: handshake/file modes, wrong capability and pre-auth frames, second client refused and reconnect,
 invalid request keeps the link, admission rotates on restart; duplicate operations and `operation.get`; objective and
 journal survive restart; restart interrupts a live execution and makes unacknowledged dispatch uncertain; corrupt
@@ -383,7 +515,13 @@ store refuses to start; draft CAS and whole-batch stale blocking; the full loop 
 bubblewrap launcher when it works, else the unsandboxed test launcher; `lade-fixture` model): message → working changes → draft → feedback → revision → freeze → sandboxed
 verification (or override without bubblewrap) → approve → integrate into a clean checked-out `main` → cleanup; dirty
 target refused and untouched; moved target → `stale_target`, approval invalidated, refresh, re-approve, integrate;
-and the real sandboxed launcher when bubblewrap works.
+the real sandboxed launcher when bubblewrap works; the writable-storage monitor with a 256 KiB budget
+(`service_storage.rs`: `failed` with `limit_reached`, badge, error notice, no automatic restart). `service_inspect.rs`: nested-repository and filtered-content
+notices (working and candidate bases); exact content-search byte ranges against the retained bytes; chunked reading of
+a > 64 MiB file (whole-file digest, exact continuation, character-boundary refusal, fresh and stale feedback on a
+chunk); an untracked collision refused before the target ref moves (reflog unchanged), then integrated once moved
+away; `objective.delete_history` refused before cleanup and without confirmation, then deleting every retention ref,
+durable across a restart.
 
 IMP-013: `tests/service_concurrency.rs` — four real (sandboxed) workers started and driven at once on two
 repositories: each worktree holds only its own Objective's files, an absolute-path write into another
@@ -401,6 +539,10 @@ in [evidence/imp-013](evidence/imp-013/README.md).
 
 ## Known gaps
 
+- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending Matias's approval
+  (#14); a secret in an unusual shape can pass redaction. Lines written to stderr while the log file is unavailable
+  (state directory not yet created) reach only the journal.
+
 - The working-basis Change Set compares against the current target commit; if the target moved after the start
   commit, target-side changes appear as reverted until a candidate is frozen (candidates merge onto the target).
 - The lease refusal is a `service.notice` event (the protocol has no request to reply to).
@@ -408,5 +550,10 @@ in [evidence/imp-013](evidence/imp-013/README.md).
   `service.stop` (Exit, logout with a running client).
 - A terminal needs an existing worktree: an Objective that never ran its agent has none (no provisioning from
   `terminal.open`).
-- Search content results carry line numbers, not byte offsets.
-- Reading files larger than 64 MiB is refused (`unsupported_content`) rather than streamed.
+- Files above 1 GiB cannot be inspected (`unsupported_content`); a chunk of a large text file that is not UTF-8
+  is refused rather than shown with a gap.
+- Search byte ranges are omitted for matched files above 16 MiB (line and column remain), and case-insensitive
+  matching folds ASCII only (Git runs with `LC_ALL=C`).
+- Filtered/LFS content is detected and labelled but not supported: raw working-tree bytes are compared and would
+  be committed unfiltered; integrating into a checked-out target whose filtered files differ from their raw blobs
+  is refused as dirty.

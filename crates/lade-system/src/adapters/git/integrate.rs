@@ -2,14 +2,16 @@
 //!
 //! Integration never uses `reset --hard`, `stash` or `checkout`: the target ref moves by
 //! compare-and-swap and a checked-out target worktree is brought along with a two-tree
-//! `read-tree -m -u`, which refuses to overwrite local modifications or untracked files. If that
-//! fails, the ref is moved back by compare-and-swap.
+//! `read-tree -m -u`, which refuses to overwrite local modifications or untracked files. That
+//! step is dry-run first, before the ref moves, so a colliding untracked file refuses cleanly;
+//! if the real step still fails, the ref is moved back by compare-and-swap.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{
-    CommitSpec, GitError, GitId, InProgress, MIN_MERGE_TREE_VERSION, RepoPath, Repository, Result,
-    TargetBusyReason, Worktree, validate_branch_name,
+    ChangeStatus, CommitSpec, GitError, GitId, InProgress, MIN_MERGE_TREE_VERSION, RepoPath,
+    Repository, Result, TargetBusyReason, Worktree, validate_branch_name,
 };
 
 /// Result of a merge preview.
@@ -75,10 +77,8 @@ impl Repository {
                 required: MIN_MERGE_TREE_VERSION,
             });
         }
-        let overrides = Self::driver_overrides(self.git_dir(), self.work_tree())?;
         let out = self
             .git("merge-tree")
-            .configs(&overrides)
             .args([
                 "merge-tree",
                 "--write-tree",
@@ -160,11 +160,9 @@ impl Repository {
     }
 
     fn worktree_status(&self, worktree: &Worktree) -> Result<(bool, bool)> {
-        let overrides = Self::driver_overrides(worktree.admin_dir(), worktree.path())?;
         let out = worktree
             .git("status")
             .read_only()
-            .configs(&overrides)
             .args([
                 "status",
                 "--porcelain=v1",
@@ -192,9 +190,11 @@ impl Repository {
     /// 2. If the target is checked out, that worktree must exist, be clean (tracked content), hold
     ///    no `index.lock` and have no merge/rebase/cherry-pick/revert/bisect in progress; otherwise
     ///    a typed refusal is returned and nothing is changed.
-    /// 3. A commit with the fixed LADE identity is created (`candidate_tree`, parent
+    /// 3. A checked-out target's checkout step is dry-run; an untracked file the candidate would
+    ///    overwrite is [`GitError::TargetUntracked`] and nothing is changed.
+    /// 4. A commit with the fixed LADE identity is created (`candidate_tree`, parent
     ///    `expected_target`) and the ref is moved by compare-and-swap.
-    /// 4. A checked-out worktree is updated with `read-tree -m -u <old> <new>`; on failure the ref
+    /// 5. A checked-out worktree is updated with `read-tree -m -u <old> <new>`; on failure the ref
     ///    is moved back by compare-and-swap and [`GitError::CheckoutFailed`] is returned.
     pub fn integrate_squash(&self, request: &SquashRequest) -> Result<SquashOutcome> {
         let state = self.target_checkout_state(&request.target_branch)?;
@@ -214,6 +214,9 @@ impl Repository {
                 });
             }
         };
+        if let Some(worktree) = &worktree {
+            self.preflight_checkout(worktree, request)?;
+        }
         let commit = self.commit_tree(&CommitSpec {
             tree: request.candidate_tree.clone(),
             parents: vec![request.expected_target.clone()],
@@ -232,20 +235,16 @@ impl Repository {
                 updated_worktree: None,
             });
         };
-        let checkout =
-            Self::driver_overrides(worktree.admin_dir(), worktree.path()).and_then(|overrides| {
-                worktree
-                    .git("read-tree")
-                    .configs(&overrides)
-                    .args([
-                        "read-tree",
-                        "-m",
-                        "-u",
-                        request.expected_target.hex(),
-                        commit.hex(),
-                    ])
-                    .output()
-            });
+        let checkout = worktree
+            .git("read-tree")
+            .args([
+                "read-tree",
+                "-m",
+                "-u",
+                request.expected_target.hex(),
+                commit.hex(),
+            ])
+            .output();
         match checkout {
             Ok(out) if out.status.success() => Ok(SquashOutcome {
                 commit,
@@ -312,10 +311,8 @@ impl Repository {
                 },
             });
         }
-        let overrides = Self::driver_overrides(worktree.admin_dir(), worktree.path())?;
         let out = worktree
             .git("read-tree")
-            .configs(&overrides)
             .args(["read-tree", "-m", "-u", expected_target.hex(), commit.hex()])
             .output()?;
         if out.status.success() {
@@ -329,6 +326,49 @@ impl Repository {
         }
     }
 }
+
+impl Repository {
+    /// Before any ref moves: a dry run of the checkout step (`read-tree -m -u -n`, which writes
+    /// neither index nor files) in the target worktree. A refusal — in practice an untracked
+    /// file where the candidate adds one — is [`GitError::TargetUntracked`] naming the colliding
+    /// paths, and nothing has been changed. The real step can still fail if the worktree
+    /// changes in between; then the compare-and-swap revert of [`Self::integrate_squash`] applies.
+    fn preflight_checkout(&self, worktree: &Worktree, request: &SquashRequest) -> Result<()> {
+        let out = worktree
+            .git("read-tree-preflight")
+            .args([
+                "read-tree",
+                "-m",
+                "-u",
+                "-n",
+                request.expected_target.hex(),
+                request.candidate_tree.hex(),
+            ])
+            .output()?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let mut paths = Vec::new();
+        for file in self.diff_numstat(&request.expected_target, &request.candidate_tree)? {
+            let adds = matches!(
+                file.status,
+                ChangeStatus::Added | ChangeStatus::Renamed { .. } | ChangeStatus::Copied { .. }
+            );
+            let on_disk = worktree.path().join(file.path.as_os_str());
+            if adds && fs::symlink_metadata(&on_disk).is_ok() && paths.len() < MAX_REPORTED_PATHS {
+                paths.push(file.path);
+            }
+        }
+        Err(GitError::TargetUntracked {
+            worktree: worktree.path().to_path_buf(),
+            paths,
+            stderr: out.stderr,
+        })
+    }
+}
+
+/// Most colliding paths a [`GitError::TargetUntracked`] names.
+const MAX_REPORTED_PATHS: usize = 32;
 
 fn checked_out_worktree(info: &CheckoutInfo) -> Result<Worktree> {
     let worktree = info

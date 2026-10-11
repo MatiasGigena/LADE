@@ -94,6 +94,7 @@ impl Fixture {
             credentials: CredentialSource::empty(),
             upstream_proxy: None,
             extra_ro: Vec::new(),
+            cgroups: None,
         }
     }
 
@@ -379,6 +380,14 @@ function direct() {
     s.on('error', (e) => resolve(e.code));
   });
 }
+// Node's own WebSocket without the LADE gateway installed: a direct connection attempt.
+function websocket() {
+  return new Promise((resolve) => {
+    const ws = new WebSocket('wss://1.1.1.1/');
+    ws.addEventListener('open', () => { ws.close(); resolve('connected'); });
+    ws.addEventListener('error', () => resolve('failed'));
+  });
+}
 async function start() {
   out({ kind: 'worker.ready', pi_session_id: 'probe', session_file: '/probe' });
   const report = {
@@ -387,6 +396,7 @@ async function start() {
     hostFile: fs.existsSync(process.env.LADE_TEST_OUTSIDE || '__OUTSIDE__'),
     home: fs.existsSync('/root'),
     direct: await direct(),
+    websocket: await websocket(),
     allowed: await connectVia('__ALLOWED__'),
     denied: await connectVia('denied.example:443'),
   };
@@ -459,7 +469,7 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     server.join().unwrap();
     assert!(
         text.contains(
-            r#""envKeys":["HOME","LADE_GATEWAY_SOCKET","LANG","OPENAI_API_KEY","PATH","PI_CODING_AGENT_DIR","PI_CODING_AGENT_SESSION_DIR","PI_OFFLINE","PI_SKIP_VERSION_CHECK","PI_TELEMETRY","PWD","TERM"]"#
+            r#""envKeys":["HOME","LADE_GATEWAY_SOCKET","LANG","OPENAI_API_KEY","PATH","PI_CODING_AGENT_DIR","PI_CODING_AGENT_SESSION_DIR","PI_OFFLINE","PI_SKIP_VERSION_CHECK","PI_TELEMETRY","TERM"]"#
         ),
         "{text}"
     );
@@ -467,6 +477,7 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     assert!(text.contains(r#""hostFile":false"#), "{text}");
     assert!(text.contains(r#""home":false"#), "{text}");
     assert!(text.contains(r#""direct":"ENETUNREACH""#), "{text}");
+    assert!(text.contains(r#""websocket":"failed""#), "{text}");
     assert!(
         text.contains(r#""allowed":"HTTP/1.1 200 Connection Established pong""#),
         "{text}"

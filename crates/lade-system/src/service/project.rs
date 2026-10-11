@@ -251,6 +251,13 @@ impl Service {
         let record = objective.record();
         let view = derive_attention(objective, &self.facts(st, target));
         let mut badges: Vec<Badge> = view.badges.into_iter().filter_map(wire_badge).collect();
+        if matches!(
+            record.execution.state(),
+            lade_core::domain::execution::ExecutionState::Failed { reason }
+                if reason.starts_with(super::execution::LIMIT_REACHED)
+        ) {
+            badges.insert(0, Badge::LimitReached);
+        }
         if record.lifecycle == Lifecycle::Frozen
             && st
                 .review
@@ -383,6 +390,7 @@ impl Service {
             available_actions: self.actions(st, target),
             session,
             approval,
+            history_deleted: st.row.history_deleted.then_some(true),
         }
     }
 
@@ -409,7 +417,7 @@ impl Service {
         // Aggregate quota and storage pressure (service/limits.rs), named in the reason.
         let worker_blocker = self.worker_blocker(oid);
         let storage_blocker = self.storage_blocker();
-        let mut out = Vec::with_capacity(15);
+        let mut out = Vec::with_capacity(16);
         out.push(gate(
             ActionName::ObjectiveUpdateIntent,
             busy_reason.or((!matches!(
@@ -640,6 +648,10 @@ impl Service {
                 None
             }),
         ));
+        out.push(gate(
+            ActionName::ObjectiveDeleteHistory,
+            busy_reason.or(delete_history_blocker(st)),
+        ));
         out
     }
 
@@ -675,5 +687,17 @@ impl Service {
         self.emit(Event::ObjectiveChanged(detail.summary()));
         self.emit(Event::ObjectiveDetail(Box::new(detail)));
         self.enforce_terminal_scope(oid);
+    }
+}
+
+/// Why `objective.delete_history` is not available (it also needs explicit confirmation).
+pub(crate) fn delete_history_blocker(st: &ObjState) -> Option<&'static str> {
+    let record = st.objective().record();
+    if !record.cleaned_up {
+        Some("deleting history requires a cleaned-up objective")
+    } else if st.row.history_deleted {
+        Some("history already deleted")
+    } else {
+        None
     }
 }

@@ -15,7 +15,7 @@ use lade_core::domain::ids::{ObjectiveId, Timestamp};
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{ErrorCode, Outcome, Rejection, RequestName, SafeAction, Settings};
 
-use crate::adapters::git::{CommitSpec, Repository};
+use crate::adapters::git::CommitSpec;
 use crate::storage;
 
 use super::Service;
@@ -36,7 +36,7 @@ impl Service {
                 default_model: None,
             });
         for row in storage::load_workspaces(conn).map_err(|e| sql_text(&e))? {
-            match Repository::open(&row.path) {
+            match super::jobs::open_repository(&row.path) {
                 Ok(repo) => {
                     self.workspaces.insert(
                         row.id,

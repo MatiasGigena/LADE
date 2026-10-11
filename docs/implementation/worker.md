@@ -159,7 +159,9 @@ automatically.
 - `AgentSession`: `subscribe`, `prompt(text, {expandPromptTemplates, source, preflightResult})`,
   `steer`, `followUp`, `clearQueue`, `abort`, `isStreaming`, `sessionId`, `sessionFile`, `dispose`.
 - Types: `AgentSession`, `AgentSessionEvent`, `AgentToolResult`, `ModelRuntime`.
-- From `@earendil-works/pi-ai@0.85.1`: `createAssistantMessageEventStream` and message/stream types.
+- From the SDK's own `@earendil-works/pi-ai@0.85.1` (the copy nested under pi-coding-agent, re-exported
+  by `src/worker/pi-ai.ts`; see [Dependencies](#dependencies)): `createAssistantMessageEventStream`,
+  `getSupportedThinkingLevels` and message/stream types.
 - From `undici@8.9.0`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
 
 ## `lade-fixture` provider
@@ -204,12 +206,40 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled
   `fetch`, refused tunnel, invalid authority, and the no-gateway failure.
+- `test/worker-deps.test.ts` — the dependency seam: exactly one pi-ai is locked and installed (no
+  direct dependency, no hoisted copy), pi-coding-agent and pi-agent-core resolve the package that
+  `src/worker/pi-ai.ts` re-exports, the fixture provider registered on a real `ModelRuntime` streams
+  through the SDK's own `AssistantMessageEventStream` class (same constructor as the SDK's
+  `lazyStream` wrapper), and the installed SDK is the pinned distribution: `package.json` and
+  `npm-shrinkwrap.json` hashes equal `vendor/pi-coding-agent/manifest.json`, the patch inventory is
+  empty, direct dependencies match `npm_distribution`, and the lockfile's nested tree is exactly the
+  upstream shrinkwrap (versions and integrity).
 - `test/worker-compat.test.ts` — IMP-011 corpus with a disposable LADE profile: shared hash
   constants, resource precedence and untrusted repository `.pi`, single template expansion, refused
   changed extension, dialogs with generations, timeout close, explicit failure of `custom()`, reload
   generations and late answers, tree/navigate (files unchanged)/fork/clone, export/import, compaction,
   configure and retry activity, concurrent command refusal, and the pinned manifest against the SDK
   catalogue.
+
+## Dependencies
+
+Direct production dependencies: `@earendil-works/pi-coding-agent@0.85.1` and `undici@8.9.0` (gateway
+dispatcher). pi-coding-agent ships an `npm-shrinkwrap.json`, so npm installs its whole locked tree —
+pi-ai, pi-agent-core, pi-tui, the provider SDKs — nested under
+`node_modules/@earendil-works/pi-coding-agent/node_modules/` and never hoists or dedupes it. A direct
+`@earendil-works/pi-ai` dependency therefore always added a second registry copy beside the nested
+one, even at the identical version, with its transitive versions taken from our lockfile instead of
+the upstream shrinkwrap. Dropping it shrank the production install from 225 to 133 packages, 256 to
+159 MB on disk and 24.7k to 13.8k files. The worker no longer depends on pi-ai directly:
+`src/worker/pi-ai.ts` is the only module that names it, re-exporting from the nested copy's `.`
+export target (`dist/index.js`) by relative path, so the worker loads exactly the pi-ai instance the SDK
+loads. The two copies were structurally compatible before (the SDK has no `instanceof` checks on
+streams and provider registration is per `ModelRuntime`, not in a pi-ai global), so this removed no
+latent failure, but it removes a second set of module state and the risk of one appearing.
+`scripts/check-architecture.py` allows that relative import only from `src/worker/pi-ai.ts` and
+rejects a bare `@earendil-works/pi-ai` import anywhere in the worker. The path depends on npm's
+nested layout, which the lockfile and the upstream shrinkwrap pin and `test/worker-deps.test.ts`
+checks; an SDK upgrade must re-run that test.
 
 ## Limitations (v1)
 
@@ -223,20 +253,14 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   by a changed `pi_session_id`.
 - **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4: WP-A's schema must type
   `pi_session_id` as a bounded string.
-- **Network coverage**: only undici and global `fetch` traffic is routed. Provider SDKs that use
-  `node:http(s)` directly (e.g. the AWS Bedrock SDK) or WebSocket transports bypass the dispatcher
-  and therefore have no network in the sandbox. HTTPS through the gateway is exercised only with a
-  plain-HTTP origin in tests (TLS uses undici's unmodified connector).
+- **Network coverage**: undici/global `fetch` traffic and `node:http(s)` clients that use the global
+  agents are routed through the gateway (`src/worker/gateway.ts`). SDKs that bring their own agent
+  (or `agent: false`), raw sockets and other runtimes have no network in the sandbox. TLS through the
+  real gateway is tested against a local origin with a test-generated certificate, for both `fetch`
+  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`).
 - **Tool output isolation**: pi's `bash` tool spawns children with piped stdout, but nothing in the
   worker stops a hostile process from writing to the worker's inherited fd 1 via `/proc`; the
   service must treat every frame as untrusted (it does: closed schema validation).
-- **Duplicate pi-ai**: the shrinkwrap nests pi-ai inside the coding-agent package, so the worker
-  depends on a second registry copy of `@earendil-works/pi-ai@0.85.1` (≈ +130 MB on disk; its
-  transitive versions are pinned by our lockfile, not by the upstream shrinkwrap). Only its
-  `typebox`-only root entry and the event-stream class are loaded; the nested copy remains the one
-  pi uses. TypeScript deduplicates the two by package name and version, so the types are
-  identical. IMP-008's fork build can drop the duplicate.
-- **Install scripts**: installed with `--ignore-scripts`; the skipped scripts (esbuild binary check,
-  protobufjs, @google/genai) are not needed by the worker. `@silvia-odwyer/photon-node` is
-  WebAssembly and needs none; the optional clipboard native module is unused.
+- **Install scripts**: installed with `--ignore-scripts`; the reasoning per package is in
+  [build.md](build.md#worker-dependencies-and-install-scripts). None of the skipped scripts is needed.
 - **Images** are not part of the §4.2 input body; tool images appear as `[image]` in activity text.

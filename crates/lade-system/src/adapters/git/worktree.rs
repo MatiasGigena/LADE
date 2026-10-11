@@ -56,9 +56,7 @@ impl Repository {
                 what: "worktree path",
             });
         }
-        let overrides = Self::driver_overrides(self.git_dir(), self.work_tree())?;
         self.git("worktree-add")
-            .configs(&overrides)
             .args(["worktree", "add", "--quiet", "--no-track", "-b", branch])
             .arg(path)
             .arg(start.hex())
@@ -124,11 +122,7 @@ impl Repository {
             return Ok(());
         }
         restore_gitfile(worktree)?;
-        let overrides = Self::driver_overrides(worktree.admin_dir(), worktree.path())?;
-        let mut cmd = self
-            .git("worktree-remove")
-            .configs(&overrides)
-            .args(["worktree", "remove"]);
+        let mut cmd = self.git("worktree-remove").args(["worktree", "remove"]);
         if force {
             cmd = cmd.arg("--force");
         }
@@ -175,16 +169,13 @@ impl Repository {
             .args(["symbolic-ref", "HEAD"])
             .arg(&refname)
             .run()?;
-        let overrides = Self::driver_overrides(worktree.admin_dir(), worktree.path())?;
         worktree
             .git("read-tree")
-            .configs(&overrides)
             .args(["read-tree", commit.hex()])
             .run()?;
         // Exit status 1 only reports paths that still differ; the index itself is updated.
         let out = worktree
             .git("update-index")
-            .configs(&overrides)
             .args(["update-index", "-q", "--refresh"])
             .output()?;
         match out.status.code() {
