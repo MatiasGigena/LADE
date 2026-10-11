@@ -1,6 +1,6 @@
 # Execution safety: worker sandbox, egress gateway, credentials, sweep (WP-F2)
 
-Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,sweep,terminal}.rs`.
+Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,secret_service,sweep,terminal}.rs`.
 It instantiates [delivery plan §1, §5, §7](delivery-plan.md) and [architecture §5](../../architecture.md#5-host-authority-and-protected-git).
 The service (`laded`) consumes it through the `supervision` contract (`WorkerLauncher`, `WorkerControl`,
 `SupervisorEvent`); it never runs a worker outside this path. The "Not enforced" list at the end feeds
@@ -16,7 +16,9 @@ canonicalizes the Node runtime and worker package, and creates the run directory
 2. Runs `sandbox_available()` (a full sandbox with worker limits running `true`). Failure →
    `LaunchError::SandboxUnavailable`. **There is no unsandboxed fallback.**
 3. Looks up the provider's egress policy (none → `ProviderUnavailable`) and releases the provider's
-   credentials (missing → `ProviderUnavailable` naming the variables, never values).
+   credentials from the environment, the Secret Service and the credentials file
+   ([credentials](#credentials); missing → `ProviderUnavailable` naming the variables and, when it could not be
+   asked, why the Secret Service was unavailable — never values).
 4. Starts the per-launch gateway on `<socket_dir>/<first 12 hex of the objective id>-<generation>.sock`
    (`socket_dir` = `$RUNTIME/g` in `laded`; socket 0600, directory 0700; socket paths over 107 bytes are refused,
    and `laded` checks the widest one at startup). Pidfiles stay in `run_dir` (`$STATE/run`), whose length is free.
@@ -204,15 +206,24 @@ HTTP `CONNECT` proxy on the per-launch Unix socket; the worker's undici dispatch
   IPv6 unique-local/site-local/link-local, or an IPv4-mapped/compatible/NAT64 form of those, the request is
   refused (`403 private_address`) unless the matching rule sets `allow_private` (custom local providers). The
   connection goes to one of the checked addresses — never re-resolved.
-- Worker side (`packages/pi-worker/src/worker/gateway.ts`): undici's global dispatcher (`fetch`) **and** the
-  `node:http`/`node:https` global agents tunnel every connection through the socket; `https` runs TLS end-to-end
-  over the tunnel with the request's own TLS options (custom `ca`, client certificates; a custom
-  `checkServerIdentity` is replaced by Node's default check). Clients that bring their own agent or `agent: false`
-  bypass the global agents and have no network. Without a socket both paths fail with `network_unavailable`.
-  Evidence: `supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway` (the real Rust
-  gateway, a TLS origin with a certificate generated in the test by the `openssl` CLI and trusted only through
-  `NODE_EXTRA_CA_CERTS`: `fetch` and `https.get` complete over TLS; a port outside the policy is refused for both),
-  `packages/pi-worker/test/worker-gateway.test.ts` (`node:http` through the agent, refusal, no network).
+- Worker side (`packages/pi-worker/src/worker/gateway.ts`): undici's global dispatcher (`fetch`, and the global
+  `WebSocket`, whose `ws:`/`wss:` handshakes use the same dispatcher) **and** the `node:http`/`node:https` global
+  agents tunnel every connection through the socket; `https`/`wss` run TLS end-to-end over the tunnel with the
+  request's own TLS options (custom `ca`, client certificates; a custom `checkServerIdentity` is replaced by Node's
+  default check). Clients that bring their own agent, `agent: false` or their own sockets (for example the `ws`
+  package) bypass the global agents and have no network. Without a socket every path fails with
+  `network_unavailable`. Evidence: `supervision_gateway.rs::worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway`
+  (the real Rust gateway, a TLS origin with a certificate generated in the test by the `openssl` CLI and trusted
+  only through `NODE_EXTRA_CA_CERTS`: `fetch`, `https.get` and a `wss://` WebSocket echo complete over TLS; a port
+  outside the policy is refused for all three), `packages/pi-worker/test/worker-gateway.test.ts` (`node:http`
+  through the agent, a `ws://` echo through the tunnel, refusal, no network for `fetch`, `http` and `WebSocket`),
+  `supervision_launcher.rs::probe_sees_only_allowlisted_env_files_and_network` (inside the sandbox a raw socket and
+  Node's WebSocket without the gateway installed cannot connect).
+- WebSockets in the pinned provider contract: in pi-ai 0.85.1 only the `openai-codex-responses` API (provider
+  `openai-codex`, ChatGPT Plus/Pro, an interactive OAuth login and therefore restricted) opens a WebSocket, through
+  `globalThis.WebSocket` (undici's after `install()`), falling back to SSE over `fetch`. No supported provider
+  needs one. The `ws` package in the dependency tree is used by `@google/genai` (Live API) and `openai` (Realtime),
+  neither of which pi calls; a client of the `ws` package dials its own socket and has no network in the sandbox.
 - Upstream proxy: when `laded` runs with `HTTPS_PROXY`/`https_proxy` (`http://[user:pass@]host[:port]`), tunnels
   are chained with `CONNECT` through it (`Proxy-Authorization: Basic` from the URL's userinfo), after the
   allowlist check. `NO_PROXY` minimal semantics: `*`, exact host/IP, and domain suffixes (`example.com`,
@@ -258,17 +269,79 @@ sandbox without a gateway (no network).
 
 ## Credentials
 
-`CredentialSource` holds the known credential variables of `laded`'s environment (snapshot at construction; other
-variables are not retained) and the optional file `$XDG_CONFIG_HOME/lade/credentials.env`
-(`~/.config/lade/credentials.env`). The file is re-read on each resolution and refused (`InsecureFile`) unless it
-is a regular file (not a symlink), owned by the service's uid, without group/other permission bits (0600/0400),
-and at most 64 KiB; there is no fallback location. Format: `NAME=value` lines, optional `export `, `#` comments,
-optional matching quotes; unknown names are ignored. The environment wins over the file. Only the selected
-provider's variables are released; values containing NUL/CR/LF are ignored. Values never appear in logs, errors
-or `Debug` output (`Secret`, `ReleasedCredentials`, `CredentialSource`, `WorkerLaunch`, `SandboxSpec` redact).
+`CredentialSource` (`credentials.rs`) has three sources. For each variable of the selected provider the first one
+that has it wins:
+
+1. **`laded`'s environment** — the known credential variables, snapshot at construction (other variables are not
+   retained). An explicit operator override (for example in the unit), so it ranks first.
+2. **The user's Secret Service** (GNOME Keyring on Mint) through the `secret-tool` CLI of `libsecret-tools`
+   (`secret_service.rs`): items with the attributes `service=lade provider=<id> variable=<NAME>`. It ranks above
+   the file so that a key moved into the keyring is not shadowed by a stale plaintext copy.
+3. **`$XDG_CONFIG_HOME/lade/credentials.env`** (`~/.config/lade/credentials.env`), the plaintext fallback the user
+   writes by hand. Re-read on each resolution and refused (`InsecureFile`) unless it is a regular file (not a
+   symlink), owned by the service's uid, without group/other permission bits (0600/0400), and at most 64 KiB; there
+   is no fallback location. Format: `NAME=value` lines, optional `export `, `#` comments, optional matching quotes;
+   unknown names are ignored.
+
+Only the selected provider's variables are released; values containing NUL/CR/LF are ignored. Values never appear
+in logs, errors or `Debug` output (`Secret`, `ReleasedCredentials`, `CredentialSource`, `SecretService`,
+`WorkerLaunch`, `SandboxSpec` redact).
+
+Secret Service lookups:
+
+- **When:** only for the selected provider, when a worker launches (`resolve`), and in the synchronous start
+  preflight (`check`) only when neither the environment nor the file already satisfies the provider. Describing
+  providers in the model picker (`is_available`) never asks the keyring — reading every provider's key to draw a
+  list is not acceptable — so a key kept only in the keyring shows *needs credentials* until a start looks it up.
+- **How:** `secret-tool lookup service lade provider <id> variable <NAME>`: only attributes on the command line
+  (visible to other local users, like any argument), the value on secret-tool's stdout pipe (64 KiB bound; one
+  trailing newline tolerated). secret-tool runs with `env_clear` plus `HOME`, `XDG_RUNTIME_DIR`,
+  `DBUS_SESSION_BUS_ADDRESS` (else `unix:path=$XDG_RUNTIME_DIR/bus` when that socket exists), `DISPLAY`,
+  `WAYLAND_DISPLAY`, `XAUTHORITY` and `LC_ALL=C`, stdin `/dev/null`, in its own process group, under **one 5 s
+  deadline per resolution** (`LOOKUP_TIMEOUT`); at the deadline the group is killed.
+- **Outcomes:** found → released; exit 1 without stderr → not found (then the file); exit with stderr → unavailable
+  with that first stderr line (bounded, printable) as the reason; timeout → unavailable ("did not answer within
+  5 s; a locked keyring may be waiting for its unlock prompt"); `secret-tool` missing or no session bus → unavailable
+  before any call (secret-tool is then never run, so it cannot try to autolaunch a bus through X11). A locked
+  collection whose unlock prompt cannot be shown or is dismissed makes `lookup` look like "not found"; when the
+  resolution would then fail, `secret-tool search service lade provider <id>` (no `--unlock`, stdout discarded
+  unread) distinguishes it and the error says the keyring is locked. An unavailable Secret Service is never fatal
+  by itself: the environment and the file still apply, the reason is logged once per resolution (names and reason
+  only) and appended to the `ProviderUnavailable` message. **No failure ever writes a key anywhere** (no plaintext
+  fallback is created).
+- **Storing:** `laded credentials set <provider> [--variable NAME]` reads the key from stdin (a terminal: one line
+  with echo off; otherwise everything piped in, one trailing newline dropped), refuses empty or multi-line values and
+  ones over 64 KiB (exit 65), and runs `secret-tool store --label "LADE <provider> <NAME>" service lade provider
+  <id> variable <NAME>` with the key on its stdin (60 s bound for a possible unlock prompt). The variable defaults
+  to the provider's first one and must be one of the provider's variables (or a `LADE_PROVIDER_*` name for a
+  custom provider, where `--variable` is required). `laded credentials clear <provider> [--variable NAME]` removes
+  the provider's items (all of them without `--variable`). When the Secret Service is unavailable, either command
+  exits 69 with the reason and the credentials-file alternative; it never writes the file itself.
+
+Evidence: `tests/supervision_secret_service.rs` with a fake `secret-tool` (`tests/fixtures/fake-secret-tool`):
+precedence environment > Secret Service > file, attribute-only command lines and the minimal environment, preflight
+and picker not asking the keyring when unnecessary, custom providers, a hung secret-tool bounded by one deadline
+and killed, unavailable and locked reasons with the file still applying, missing tool / missing bus without any
+call, and the CLI (stdin only, refusals, clear, unavailable → exit 69 and no file); and
+`real_secret_service_round_trip_lock_and_clear`, which starts a private `dbus-daemon` and GNOME Keyring in a
+disposable HOME and runs `laded credentials set`, a launch-path lookup, a locked collection (lookup and store report
+the lock), unlock, and `laded credentials clear` against the real `secret-tool` (skipped with the reason when
+`secret-tool`, `gnome-keyring-daemon`, `dbus-daemon` or `dbus-send` is missing; it ran on the development host).
+The terminal echo-off path was checked by hand on a pseudo-terminal, not by a test.
 
 The released key is readable by the worker process and every tool it runs inside the sandbox (in-process exposure
-accepted by issue #8). Secret Service / keyring integration is a follow-up.
+accepted by issue #8): the Secret Service protects the key **at rest**, not inside the sandbox.
+
+### Credential refresh flows (restricted)
+
+Interactive OAuth logins and refresh-token custody are **restricted**, not implemented: who runs the login (a
+trusted helper outside the sandbox, never a Workspace extension), who refreshes, where a rotated refresh token is
+kept, and how a refresh races a running worker are an open product decision for Matias (#43). Until then a pi OAuth
+provider (Claude Pro/Max login, ChatGPT Plus/Pro, GitHub Copilot, xAI, OpenRouter OAuth, Radius) would have to keep
+its refresh token in the sandbox's pi auth store, readable and replaceable by every tool, and its refresh requests
+would go to identity hosts outside the provider's reviewed egress policy. Subscription access that pi accepts as a
+plain long-lived variable (`ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY`) is supported like an API key, and those
+variables can be kept in the Secret Service; LADE never refreshes them.
 
 ## Sweep
 
@@ -346,9 +419,17 @@ interrupts it.
   prevention: content sent to an allowed host is not inspected. Through an upstream proxy, DNS-based
   private-address checks are delegated to the proxy.
 - **Per-extension secrecy**: none; every process in the sandbox can read the credential variables.
-- **Tool network**: `fetch`/undici and `node:http(s)` clients using the global agents are tunnelled; clients with
-  their own agent, raw sockets, other runtimes (Python, curl) and UDP have no network at all (not a bypass, a
-  functional limitation).
+- **Key at rest**: with the Secret Service the key rests encrypted in the user's keyring, but the Secret Service
+  has no per-application access control: any process of the user's unlocked desktop session can read LADE's items.
+  The environment and `credentials.env` remain plaintext options; there is no LADE-managed memory-only mode (a
+  variable set only in the service's environment, for example `systemctl --user set-environment`, stays out of
+  files but lives in the user manager). A key kept only in the keyring shows *needs credentials* in the picker
+  until a start looks it up, and a locked keyring can delay the synchronous start preflight by up to 5 s.
+- **Credential refresh**: interactive OAuth logins and refresh-token custody are restricted pending #43 (see
+  [credential refresh flows](#credential-refresh-flows-restricted)).
+- **Tool network**: `fetch`/undici, the global `WebSocket` and `node:http(s)` clients using the global agents are
+  tunnelled; clients with their own agent or sockets (the `ws` package), raw sockets, other runtimes (Python, curl)
+  and UDP have no network at all (not a bypass, a functional limitation).
 - **Worker output**: frames are schema-validated; content of valid frames (activity text) is untrusted and not
   otherwise filtered.
 - **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values, not an aggregate

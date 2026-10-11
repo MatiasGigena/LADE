@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod gateway;
 pub mod launcher;
 pub mod providers;
+pub mod secret_service;
 pub mod sweep;
 pub mod terminal;
 

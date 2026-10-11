@@ -52,9 +52,9 @@ pub struct ProviderAccess {
 /// Subscription access that pi accepts as a plain variable (works like an API key here).
 const SUBSCRIPTION_VARS: &[&str] = &["ANTHROPIC_OAUTH_TOKEN", "KIMI_API_KEY"];
 
-pub const OAUTH_RESTRICTION: &str = "interactive OAuth login and refresh-token storage are restricted: LADE has no \
-     credential custody for them (Secret Service, IMP-007/IMP-014) and tokens in the sandbox's auth store would be \
-     readable by every tool";
+pub const OAUTH_RESTRICTION: &str = "interactive OAuth login and refresh-token storage are restricted: refresh-token \
+     credential custody (who runs the login, who refreshes, where the rotated token is kept) is an open product \
+     decision (#43), and tokens in the sandbox's auth store would be readable by every tool";
 
 fn restricted(auth: Vec<AuthKind>, reason: String) -> ProviderAccess {
     ProviderAccess {
@@ -101,7 +101,7 @@ pub fn classify(
         };
     }
     if let Some(provider) = custom.iter().find(|p| p.id == facts.id) {
-        let resolved = credentials.resolve_custom(&provider.id, &provider.vars);
+        let available = credentials.is_available_custom(&provider.vars);
         let endpoint = format!(
             "custom provider from the LADE profile at {}:{}{}",
             provider.host,
@@ -110,14 +110,21 @@ pub fn classify(
         );
         return ProviderAccess {
             auth: vec![AuthKind::Custom],
-            status: if resolved.is_ok() {
+            status: if available {
                 AccessStatus::Available
             } else {
                 AccessStatus::MissingCredentials
             },
-            reason: Some(match resolved {
-                Ok(_) => endpoint,
-                Err(e) => format!("{endpoint}; {e}"),
+            reason: Some(if available {
+                endpoint
+            } else {
+                format!(
+                    "{endpoint}; set {} in the laded environment, the Secret Service (laded \
+                     credentials set {} --variable NAME; read only when execution starts) or \
+                     ~/.config/lade/credentials.env",
+                    provider.vars.join(" and "),
+                    provider.id
+                )
             }),
             variables: provider.vars.clone(),
         };
@@ -164,13 +171,17 @@ pub fn classify(
             },
         );
     };
+    // The Secret Service is not asked here (that would read every provider's key): a key kept
+    // only there shows as missing until execution starts and looks it up.
     let available = credentials.is_available(&facts.id);
     let mut reason = if available {
         None
     } else {
         Some(format!(
-            "set {} in the laded environment or ~/.config/lade/credentials.env",
-            vars.join(" or ")
+            "set {} in the laded environment, the Secret Service (laded credentials set {}; read \
+             only when execution starts) or ~/.config/lade/credentials.env",
+            vars.join(" or "),
+            facts.id
         ))
     };
     if let Some(note) = oauth_note {
