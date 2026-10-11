@@ -52,7 +52,7 @@ typ() { x type --delay 12 "$1"; }
 park() { x mousemove 700 880; sleep 0.5; }
 shot() { park; import -window root "$OUT/t-$1.png"; step "screenshot t-$1.png"; }
 start_button() {
-  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
 }
 wait_for() {
   limit=$1; what=$2; shift 2
@@ -117,10 +117,12 @@ key ctrl+n
 click 280 106 0.3; typ "Terminal check"
 click 280 195 0.3; typ "the terminal stays in scope"
 click 469 625 2
-# Start agent is the Overview's next action: a filled black button, found by pixels
-# (scripts/e2e-find-button.py) rather than by a fixed position.
+# Start agent is Activity's (Agent Session control): its filled black button in the Activity
+# header, found by pixels (scripts/e2e-find-button.py box) rather than by a fixed position.
+key ctrl+2
 wait_for 20 "Start agent" start_button
-click 1280 "$(start_button)" 1
+XY=$(start_button)
+click ${XY% *} ${XY#* } 1
 wait_for 60 "sandboxed worker started" session_ready
 wait_for 30 "worktree" wt
 sleep 3

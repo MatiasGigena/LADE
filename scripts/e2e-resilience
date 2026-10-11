@@ -102,6 +102,15 @@ click_inspector() {
   click 1280 "$y" 1
 }
 click_primary() { click_inspector "$1" black; }
+# Activity's Start agent (Agent Session control): its filled black button in the Activity header.
+click_start() {
+  key ctrl+2
+  tries=0
+  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260); do
+    tries=$((tries + 1)); [ $tries -le 40 ] || fail "no Start agent button"; sleep 0.5
+  done
+  click ${XY% *} ${XY#* } 1
+}
 wait_for() {
   limit=$1; what=$2; shift 2
   n=0
@@ -192,7 +201,7 @@ click 469 625 2
 
 step "start the agent (sandboxed worker, fixture model) and let it write hello.txt"
 sleep 2
-click_primary "Start agent"
+click_start
 wait_for 60 "sandboxed worker started" session_ready
 inspector_top
 key ctrl+2
@@ -203,9 +212,9 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 
 step "IMP-005: a draft save the service refuses stays visibly unsaved with Retry"
 key ctrl+1
-click 1057 295 2   # Refresh the inspected capture
-click 330 308 2    # hello.txt
-x mousemove 622 388 click --repeat 2 --delay 80 1
+click 1057 249 2   # Refresh the inspected capture
+click 330 262 2    # hello.txt
+x mousemove 622 342 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"            # refuse every draft.save
 key ctrl+shift+m
@@ -321,9 +330,9 @@ click 1201 516 1   # Remove draft… (the stale draft would block the whole batc
 click 359 160 2    # Remove draft (confirmation)
 wait_for 10 "the stale draft removed" no_drafts
 key ctrl+1
-click 1057 295 2   # Refresh (the worktree changed after the inspected capture)
-click 330 308 2    # hello.txt
-x mousemove 625 388 click --repeat 2 --delay 80 1
+click 1057 249 2   # Refresh (the worktree changed after the inspected capture)
+click 330 262 2    # hello.txt
+x mousemove 625 342 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"
 mark=$(wc -l <"$T/trace.log")

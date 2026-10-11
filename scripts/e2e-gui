@@ -63,6 +63,10 @@ find_button() {
       python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
   esac
 }
+# Activity's Start agent: the filled black button in the Activity header ("X Y").
+start_button() {
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
+}
 reveal() {
   x mousemove 1280 600; i=0; while [ $i -lt 20 ]; do x click 4; i=$((i + 1)); done; sleep 1
   tries=0
@@ -121,14 +125,17 @@ shot 02-new-objective
 click 469 625 2
 
 step "start the agent with the fixture model (sandboxed worker)"
-# Start agent (black, once the inspector has the session controls; retried on a loaded host)
+# Start agent is Activity's (Agent Session control): its black button in the Activity header,
+# found by pixels; retried on a loaded host.
+key ctrl+2
 tries=0
 until session_ready; do
   tries=$((tries + 1))
   [ $tries -le 3 ] || fail "sandboxed worker did not start"
   sleep 3
-  reveal black
-  click 1280 "$BUTTON_Y" 1
+  if XY=$(start_button); then
+    click ${XY% *} ${XY#* } 1
+  fi
   n=0; while ! session_ready && [ $n -lt 160 ]; do n=$((n + 1)); sleep 0.25; done
 done
 sleep 4
@@ -147,12 +154,12 @@ shot 04-activity
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
 sleep 1
-click 1057 295 2   # Refresh the inspected capture (explicit, never silent)
-click 330 308 2    # hello.txt
+click 1057 249 2   # Refresh the inspected capture (explicit, never silent)
+click 330 262 2    # hello.txt
 shot 05-change-set
 
 step "select text, add feedback, wait until Saved"
-x mousemove 622 388 click --repeat 2 --delay 80 1
+x mousemove 622 342 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Please greet more warmly."
@@ -176,16 +183,17 @@ shot 08-remove-draft-confirm
 click 359 160 2
 
 step "new draft on the current bytes, submitted as steer"
-click 1057 295 2   # Refresh
-click 330 308 2    # hello.txt
-x mousemove 625 388 click --repeat 2 --delay 80 1
+click 1057 249 2   # Refresh
+click 330 262 2    # hello.txt
+x mousemove 625 342 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Greet warmly."
 key shift+Return
 typ "lade-fixture: write hello.txt hello there"
 sleep 3
-click 1279 680 1   # Review and submit
+reveal black       # Review and submit (the Feedback tab's black button)
+click 1280 "$BUTTON_Y" 1
 shot 09-submit-dialog
 click 479 300 1    # Submit 1 item
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
@@ -198,7 +206,7 @@ key ctrl+1
 
 step "edit the intent"
 click 1175 78 1    # Overview tab
-click 1200 520 1   # Edit intent (quiet action below the intent)
+click 1200 458 1   # Edit intent (quiet action below the intent)
 key Tab
 typ "Only touch hello.txt"
 key Tab
@@ -213,11 +221,11 @@ wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
 sleep 3
 d=$(wt)
 [ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
-click 972 222 1    # inspected version: open the list ...
+click 972 176 1    # inspected version: open the list ...
 key Down           # ... Candidate 1 (current)
 key Return
 sleep 2
-click 330 308 2    # hello.txt in the frozen candidate
+click 330 262 2    # hello.txt in the frozen candidate
 shot 13-frozen
 
 step "Evidence: service-observed check"
@@ -270,7 +278,7 @@ x windowsize "$WID" 1280 800
 sleep 2
 park
 import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
-click 1020 213 1   # open More actions (collapsed by default): every other action with its reason
+click 1020 166 1   # open More actions (collapsed by default): every other action with its reason
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"
