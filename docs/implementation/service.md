@@ -9,11 +9,16 @@ Source: `crates/lade-system/src/{bin/laded.rs,service,storage,transport}`.
 ```sh
 laded --version
 laded serve [--state-dir DIR] [--runtime-dir DIR]
+laded store info [--state-dir DIR]                 # schema this build understands, database schema, backups
+laded store restore --schema N [--state-dir DIR]   # rollback restore (used by scripts/install --rollback)
+laded diagnostics export OUT [--state-dir DIR]     # redacted diagnostics bundle, new 0600 file
 ```
 
 Defaults: state `$XDG_STATE_HOME/lade` (`~/.local/state/lade`), runtime `$XDG_RUNTIME_DIR/lade` (fallback
 `$STATE/run`). Both must be absolute. Exit statuses: `0` version, `64` usage, `78` refused to start (unsafe directory,
-unopenable/corrupt/newer store, another instance holds the state directory), `70` internal. The process sets umask
+unopenable/corrupt/newer store, pre-migration backup failed, another instance holds the state directory), `70`
+internal; `store restore`: `75` while a service holds the state directory, `1` refused (no intact backup of that
+schema, or the database is not newer); `diagnostics export`: `73` the output exists (never overwritten), `74` I/O. The process sets umask
 `077`. It runs until the controlling client asks it to stop (`service.stop`, explicit Exit or logout: exit status
 `0`, see [Lifetime](#lifetime-close-exit-logout)) or until killed; `SIGTERM` is not trapped (no `unsafe` signal
 handlers) — workers and terminals die with their sandbox (`--die-with-parent`) and the next start recovers.
@@ -30,6 +35,8 @@ handlers) — workers and terminals die with their sandbox (`--die-with-parent`)
 | `$STATE/verify/<verification>/` | disposable verification copies (removed after each run and swept on start) |
 | `$STATE/run/` | launcher and terminal pidfiles (`worker-*.pid`, `terminal-*.pid`; swept on start) |
 | `$STATE/tmp/` | temporary capture indexes and artifact staging (cleared on start) |
+| `$STATE/backups/` (0700) | pre-migration backups `lade.db.schema-<n>.<ms>.bak` (0600, at most 3), the append-only `migrations.journal`, and newer databases set aside by a rollback restore (`lade.db.newer-schema-<n>.<ms>`, never pruned) |
+| `$STATE/logs/` (0700) | redacted diagnostics `laded.log`, `laded.log.1` … `.3` (0600, JSON lines, 4 × 1 MiB) |
 | `$RUNTIME/control.cap`, `control.sock` | admission capability and control socket (0600, directory 0700) |
 | `$RUNTIME/g/<12 hex>-<gen>.sock` | per-launch gateway sockets (0600, directory 0700; swept on start) |
 
@@ -73,7 +80,27 @@ Schema v1 tables:
 | `integration_journal` | intent (expected target, candidate tree, message, commit time) before mutation, outcome after |
 
 Never stored: the capability, provider credentials, environment values. Diagnostics go to stderr with codes and ids
-only, never prompt, source or secret bodies.
+only, never prompt, source or secret bodies (see [Diagnostics](#diagnostics)).
+
+### Migration safety (IMP-014)
+
+Before migrating an **existing** database (a fresh one has nothing to lose), `Store::open` writes a consistent copy
+with `VACUUM INTO` to `$STATE/backups/lade.db.schema-<from>.<unix ms>.bak` (created 0600 first; the directory is a
+private 0700 directory of the service user, fsynced), records `backup <from> <to> <file> <sha256> <bundle>` in
+`$STATE/backups/migrations.journal`, prunes all but the newest 3 backups (journaling `pruned`), and only then runs the
+migrations; `applied <from> <to>` is journaled after they commit. If the backup cannot be written (disk full,
+permissions) the service refuses to start (exit 78) **without migrating**. An interrupted migration rolls back its
+own transaction; the backup stays.
+
+`laded store restore --schema N` is the rollback half: under the service's state lock (refused with exit 75 while a
+service runs) it picks the newest journaled backup of schema `N` whose digest still matches, checks it
+(`quick_check`, schema `N`), folds the WAL of the current database (`wal_checkpoint(TRUNCATE)`), moves the current
+database to `$STATE/backups/lade.db.newer-schema-<n>.<ms>` (kept, never pruned — it is the only copy of what happened
+after the upgrade), stages the backup as a 0600 copy, renames it into place, fsyncs and journals `restored`.
+`scripts/install --rollback` uses it (with the newer bundle's `laded`) when the database schema is newer than the
+`schema=` recorded in the previous bundle's `VERSION`; see the [user guide](../user-guide.md#1-install). Tests:
+`storage::tests` (forward migration backs up, restore, the old schema starts again, bounded backups, tampered/missing
+backup and running service refused) and `tests/laded_cli.rs` (the same through the executable).
 
 ### What is durable
 
@@ -281,6 +308,32 @@ A second client never gets authority: the window application is single-instance 
 launch activates the existing window), and the service refuses any second link while the lease is held (one
 `service.notice {code: unauthorized}`, then the link closes).
 
+## Diagnostics
+
+`laded serve` points its own stderr at a pipe read by the `laded-diagnostics` thread (`lade_system::diagnostics`), so
+every line written to stderr by the service, its libraries, a panic or the forwarded worker stderr goes through one
+path: cut to 2,048 bytes, **redacted**, then written to the original stderr (the user journal under systemd) and as a
+JSON object `{ts, pid, source, line}` to `$STATE/logs/laded.log`. Rotation is by size: when the next record would
+pass 1 MiB the files shift (`laded.log` → `.1` … `.3`, the oldest is deleted), so the logs never exceed 4 MiB. The
+log is opened lazily, only once the state directory exists as a private directory of the service user; a log
+write failure never stops stderr forwarding. These numeric bounds are the implementation driver's proposal under the
+#14 policy and still need Matias's approval.
+
+Redaction (#14: credentials, prompts, source and tool-output bodies are excluded by default; redaction is tested,
+not infallible): `NAME=value`, `"name": "value"` and `name: value` where the name contains `KEY`, `TOKEN`,
+`SECRET`, `PASSW`, `AUTH`, `CREDENTIAL`, `COOKIE` or `CAPABILITY`; the value after `Bearer`/`Basic`; URL user-info;
+well-known token prefixes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, `eyJ` …); and opaque strings of
+32+ characters mixing upper case, lower case and digits become `<redacted>`; the home directory becomes `~`; control
+characters become spaces. Ids, hex digests and error codes are kept. The service itself never writes prompts,
+source, tool or terminal output to stderr.
+
+`laded diagnostics export OUT` writes a new 0600 plain-text file (never overwrites; `73`): a header (bundle,
+protocol, supported/database schema, kernel release, what is included and excluded), then each log file and the
+migration journal, every line redacted again. It never includes the database, artifacts, worktrees, session files,
+credentials or the environment. Review it before sharing it. The desktop client has no menu yet, so there is no
+"Export diagnostics" action in the window; the command is the export path. The unit sets `LimitCORE=0`, so no core
+dump of `laded` or a worker (whose memory can hold the released key) reaches `systemd-coredump`.
+
 ## Restart recovery
 
 Before the socket exists: (1) operations left `pending` are recorded `uncertain` with an `interrupted` outcome
@@ -306,6 +359,10 @@ target refused and untouched; moved target → `stale_target`, approval invalida
 and the real sandboxed launcher when bubblewrap works.
 
 ## Known gaps
+
+- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending Matias's approval
+  (#14); a secret in an unusual shape can pass redaction. Lines written to stderr while the log file is unavailable
+  (state directory not yet created) reach only the journal.
 
 - The working-basis Change Set compares against the current target commit; if the target moved after the start
   commit, target-side changes appear as reverted until a candidate is frozen (candidates merge onto the target).
