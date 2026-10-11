@@ -7,12 +7,13 @@ use lade_protocol::client::{self as wire, Rejection, ReplyData, Request};
 use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 
 use super::convert::{self, Invalid, id, to_basis, to_path};
-use crate::presentation::intents::{Intent, StartPoint};
+use crate::presentation::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::model::{
     self as view, Basis, DraftId, NoticeLevel, ObjectiveId, RepoPath, SearchScope, ServiceNotice,
     Side,
 };
 use crate::presentation::store::StoreUpdate;
+use crate::presentation::terminal::TerminalMode;
 
 /// Newest activity page size.
 pub const ACTIVITY_PAGE: u32 = 100;
@@ -38,6 +39,10 @@ pub enum Context {
         objective_id: Option<ObjectiveId>,
         basis: Option<Basis>,
     },
+    /// Terminal interaction for an Objective; outcomes are shown in its terminal pane.
+    Terminal(ObjectiveId, &'static str),
+    /// `service.stop` (Exit / logout).
+    Stop,
     /// A mutating request. `objective_id` scopes where its outcome is shown.
     Command {
         label: &'static str,
@@ -60,7 +65,8 @@ impl Context {
 
     pub fn objective_id(&self) -> Option<&ObjectiveId> {
         match self {
-            Self::Snapshot | Self::Search { .. } => None,
+            Self::Snapshot | Self::Search { .. } | Self::Stop => None,
+            Self::Terminal(o, _) => Some(o),
             Self::Objective(o)
             | Self::Activity(o)
             | Self::Changes(o, _)
@@ -83,7 +89,8 @@ impl Context {
             Self::Drafts(_) => "Load drafts",
             Self::Inputs(_) => "Load inputs",
             Self::Search { .. } => "Search",
-            Self::Command { label, .. } => label,
+            Self::Command { label, .. } | Self::Terminal(_, label) => label,
+            Self::Stop => "Exit and stop the service",
         }
     }
 }
@@ -441,6 +448,60 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::command(intent.label(), None),
         ),
+        I::OpenTerminal {
+            objective_id,
+            cols,
+            rows,
+        } => (
+            Request::TerminalOpen(wire::TerminalOpenCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                cols: Counter::new(u64::from(*cols)),
+                rows: Counter::new(u64::from(*rows)),
+            }),
+            Context::Terminal(objective_id.clone(), intent.label()),
+        ),
+        I::TerminalInput {
+            objective_id,
+            terminal_id,
+            data,
+        } => (
+            Request::TerminalInput(wire::TerminalInputCommand {
+                terminal_id: id(terminal_id, "terminal id")?,
+                data: data.clone(),
+            }),
+            Context::Terminal(objective_id.clone(), intent.label()),
+        ),
+        I::ResizeTerminal {
+            objective_id,
+            terminal_id,
+            cols,
+            rows,
+        } => (
+            Request::TerminalResize(wire::TerminalResizeCommand {
+                terminal_id: id(terminal_id, "terminal id")?,
+                cols: Counter::new(u64::from(*cols)),
+                rows: Counter::new(u64::from(*rows)),
+            }),
+            Context::Terminal(objective_id.clone(), intent.label()),
+        ),
+        I::CloseTerminal {
+            objective_id,
+            terminal_id,
+        } => (
+            Request::TerminalClose(wire::TerminalSelector {
+                terminal_id: id(terminal_id, "terminal id")?,
+            }),
+            Context::Terminal(objective_id.clone(), intent.label()),
+        ),
+        I::StopService { reason } => (
+            Request::ServiceStop(wire::ServiceStopCommand {
+                reason: match reason {
+                    StopReason::Exit => wire::StopReason::Exit,
+                    StopReason::Logout => wire::StopReason::Logout,
+                },
+            }),
+            Context::Stop,
+        ),
     };
     Ok(Some(mapped))
 }
@@ -591,6 +652,27 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             updates.push(StoreUpdate::Settings(convert::settings(&s)));
         }
         (_, ReplyData::OperationGet(_)) => {}
+        (Context::Terminal(o, _), ReplyData::TerminalOpen(info)) => {
+            let size = |c: &Counter| u16::try_from(c.value()).unwrap_or(u16::MAX);
+            updates.push(StoreUpdate::TerminalOpened {
+                objective_id: o.clone(),
+                terminal_id: info.terminal_id.as_str().to_owned(),
+                mode: match info.mode {
+                    wire::TerminalMode::ReadWrite => TerminalMode::ReadWrite,
+                    wire::TerminalMode::ReadOnly => TerminalMode::ReadOnly,
+                },
+                cols: size(&info.cols),
+                rows: size(&info.rows),
+            });
+        }
+        (_, ReplyData::ServiceStop(_)) => updates.push(StoreUpdate::ServiceStopped),
+        (
+            _,
+            ReplyData::TerminalInput(_)
+            | ReplyData::TerminalResize(_)
+            | ReplyData::TerminalClose(_)
+            | ReplyData::TerminalOpen(_),
+        ) => {}
         // Data that does not match its context: the reply is ignored rather than misfiled.
         (
             _,
@@ -649,6 +731,15 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             });
         }
         Context::Search { .. } => updates.push(StoreUpdate::SearchFailed { message }),
+        Context::Terminal(o, _) => updates.push(StoreUpdate::TerminalProblem {
+            objective_id: o.clone(),
+            message,
+        }),
+        Context::Stop => updates.push(StoreUpdate::Notice(ServiceNotice {
+            level: NoticeLevel::Warning,
+            code,
+            message,
+        })),
         Context::Snapshot | Context::Activity(_) | Context::Drafts(_) | Context::Inputs(_) => {
             updates.push(StoreUpdate::Notice(ServiceNotice {
                 level: NoticeLevel::Warning,

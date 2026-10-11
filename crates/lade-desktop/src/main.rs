@@ -122,15 +122,57 @@ fn main() -> glib::ExitCode {
         },
         Mode::Preview(_) => None,
     };
+    // Live windows are single-instance: a second launch activates the running window (GApplication
+    // on the session bus) instead of opening another approval authority; the service's single
+    // controlling lease refuses any other client anyway. Without a session bus GApplication runs
+    // non-unique and the lease is the only guard. Preview windows are fixture data and may coexist.
+    let live = matches!(mode, Mode::Live(_));
     let app = Application::builder()
-        .application_id("dev.lade.Desktop")
-        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .application_id(if live {
+            "dev.lade.Desktop"
+        } else {
+            "dev.lade.Desktop.Preview"
+        })
+        .flags(if live {
+            gio::ApplicationFlags::FLAGS_NONE
+        } else {
+            gio::ApplicationFlags::NON_UNIQUE
+        })
+        // Logout: the session manager asks before ending the session (`query-end`).
+        .register_session(live)
         .build();
     app.connect_startup(|_| views::load_css());
     let mode = Rc::new(mode);
     // The views are owned here for the lifetime of the application.
     let windows: Rc<std::cell::RefCell<Vec<Rc<views::App>>>> = Rc::default();
+    if live {
+        // Notification clicks navigate in the existing window; they never approve or send.
+        let action = gio::SimpleAction::new(
+            views::notify::OPEN_OBJECTIVE_ACTION,
+            Some(glib::VariantTy::STRING),
+        );
+        let open = windows.clone();
+        action.connect_activate(move |_, target| {
+            let target = target.and_then(glib::Variant::str);
+            if let (Some(window), Some(target)) = (open.borrow().first(), target) {
+                window.open_from_notification(target);
+            }
+        });
+        app.add_action(&action);
+        // Logout stops the service according to policy: no lingering work, nothing resumes.
+        let ending = windows.clone();
+        app.connect_query_end(move |_| {
+            for window in ending.borrow().iter() {
+                window.logout();
+            }
+        });
+    }
     app.connect_activate(move |app| {
+        // A second activation (another launch, or a notification) focuses the existing window.
+        if let Some(existing) = windows.borrow().first() {
+            existing.present();
+            return;
+        }
         let window = match (&*mode, &config) {
             (Mode::Preview(variant), _) => {
                 let now = Timestamp(glib::real_time() / 1000);
@@ -145,6 +187,7 @@ fn main() -> glib::ExitCode {
                 let store = Store::new(PresentationState::new(ConnectionState::Connecting));
                 let transport = Rc::new(Transport::new());
                 let window = views::App::new(app, store, transport.clone());
+                window.set_notifier(Rc::new(views::notify::DesktopNotifier::new(app)));
                 if transport
                     .start(config.clone(), window.update_sender())
                     .is_err()

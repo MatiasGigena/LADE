@@ -335,6 +335,9 @@ struct Driver<S: UpdateSink> {
     link: Option<ActiveLink>,
     generation: u64,
     phase: Phase,
+    /// `service.stop` was sent: a closed link is the service exiting on request, so the driver
+    /// neither reconnects nor starts a new service (no automatic resume after Exit/logout).
+    stopping: bool,
 }
 
 /// Runs the driver on a dedicated thread. `rx` receives intents from the main context.
@@ -356,6 +359,7 @@ pub fn spawn_driver<S: UpdateSink>(
                 link: None,
                 generation: 0,
                 phase: Phase::connecting(false, Duration::ZERO),
+                stopping: false,
             };
             driver.run(&rx);
         })
@@ -381,6 +385,9 @@ impl<S: UpdateSink> Driver<S> {
                     true
                 }
                 Ok(Input::Intent(intent)) => {
+                    if matches!(intent, Intent::StopService { .. }) && self.link.is_some() {
+                        self.stopping = true;
+                    }
                     let step = self.core.submit(intent);
                     self.deliver(step)
                 }
@@ -566,6 +573,12 @@ impl<S: UpdateSink> Driver<S> {
             let _ = link.stream.shutdown(Shutdown::Both);
         }
         self.core.on_link_lost();
+        if self.stopping {
+            self.phase = Phase::Waiting;
+            return self.status(ConnectionState::Disconnected {
+                reason: "The service was stopped.".into(),
+            });
+        }
         self.phase = Phase::connecting(true, backoff(0, true));
         self.status(ConnectionState::Reconnecting { attempt: 0 })
     }

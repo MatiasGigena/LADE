@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use super::drafts::{DraftEditor, Millis};
 use super::format;
-use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint};
+use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
 use super::model::{
@@ -18,6 +18,7 @@ use super::model::{
     VerificationState,
 };
 use super::store::{Change, InspectorTab, MainView, Store, ViewerContent, ViewerKey, ViewerMode};
+use super::terminal::{TerminalSession, TerminalStatus, input_chunks};
 use super::text_map::{MappedSelection, SelectionError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1048,6 +1049,133 @@ impl Controller {
         });
     }
 
+    // -----------------------------------------------------------------------------------------
+    // Contained terminal (IMP-012).
+
+    /// Opens a terminal for the selected Objective unless one is open or opening. The service
+    /// decides the scope (read-write, read-only under review, or refused).
+    pub fn open_terminal(&self, cols: u16, rows: u16) -> Result<(), String> {
+        let id = self.selected_or_err()?;
+        let opened = self.store.update(|s| {
+            if s.terminal_for(&id)
+                .is_some_and(|t| !matches!(t.status, TerminalStatus::Ended(_)))
+            {
+                return (false, Vec::new());
+            }
+            s.push_terminal(TerminalSession::opening(
+                id.clone(),
+                usize::from(cols),
+                usize::from(rows),
+            ));
+            (true, vec![Change::Terminal(id.clone())])
+        });
+        if opened {
+            self.emit(Intent::OpenTerminal {
+                objective_id: id,
+                cols,
+                rows,
+            });
+        }
+        Ok(())
+    }
+
+    /// The open terminal of the selected Objective: `(objective, terminal id)`.
+    fn open_terminal_id(&self) -> Option<(ObjectiveId, String)> {
+        let state = self.store.state();
+        let id = state.ui.selected.clone()?;
+        let session = state.terminal_for(&id).filter(|t| t.is_open())?;
+        Some((id, session.terminal_id.clone()?))
+    }
+
+    /// Sends typed or pasted text to the selected Objective's open terminal (in bounded chunks).
+    /// Returns `false` when no terminal is open.
+    pub fn terminal_input(&self, text: &str) -> bool {
+        let Some((objective_id, terminal_id)) = self.open_terminal_id() else {
+            return false;
+        };
+        for data in input_chunks(text) {
+            self.emit(Intent::TerminalInput {
+                objective_id: objective_id.clone(),
+                terminal_id: terminal_id.clone(),
+                data,
+            });
+        }
+        true
+    }
+
+    /// Applies a new grid size locally and tells the service (only when it changed).
+    pub fn resize_terminal(&self, cols: u16, rows: u16) {
+        let send = self.store.update(|s| {
+            let Some(id) = s.ui.selected.clone() else {
+                return (None, Vec::new());
+            };
+            let Some(session) = s.terminal_for_mut(&id) else {
+                return (None, Vec::new());
+            };
+            let before = session.screen.size();
+            session.screen.resize(usize::from(cols), usize::from(rows));
+            if session.screen.size() == before {
+                return (None, Vec::new());
+            }
+            let (c, r) = session.screen.size();
+            let send = session
+                .is_open()
+                .then(|| session.terminal_id.clone())
+                .flatten()
+                .map(|t| {
+                    (
+                        id.clone(),
+                        t,
+                        u16::try_from(c).unwrap_or(u16::MAX),
+                        u16::try_from(r).unwrap_or(u16::MAX),
+                    )
+                });
+            (send, vec![Change::Terminal(id)])
+        });
+        if let Some((objective_id, terminal_id, cols, rows)) = send {
+            self.emit(Intent::ResizeTerminal {
+                objective_id,
+                terminal_id,
+                cols,
+                rows,
+            });
+        }
+    }
+
+    pub fn close_terminal(&self) {
+        if let Some((objective_id, terminal_id)) = self.open_terminal_id() {
+            self.emit(Intent::CloseTerminal {
+                objective_id,
+                terminal_id,
+            });
+        }
+    }
+
+    /// Contextual navigation from attention (a desktop notification or a board item): selects the
+    /// Objective and shows its review context. Only projections are requested; nothing is
+    /// approved, sent or changed in the service.
+    pub fn navigate_to(&self, id: &ObjectiveId, review: bool) {
+        self.select_objective(id);
+        self.set_view(MainView::Workbench);
+        self.set_inspector_tab(if review {
+            InspectorTab::Evidence
+        } else {
+            InspectorTab::Overview
+        });
+    }
+
+    /// Explicit Exit (or session logout). With control of the service, asks it to stop its agents
+    /// and terminals and exit (nothing resumes on the next start) and returns `true`; the window
+    /// closes once the service confirms. Without control (disconnected, another window holds the
+    /// lease) the window cannot stop the service and only closes: returns `false`.
+    pub fn exit(&self, reason: StopReason) -> bool {
+        let connected = self.store.state().connection.is_connected();
+        if connected && !self.store.state().is_preview() {
+            self.emit(Intent::StopService { reason });
+        }
+        connected
+    }
+
     /// Execution label for the status line.
     pub fn execution_line(&self) -> Option<String> {
         self.with_detail(|d| {
@@ -1127,6 +1255,126 @@ mod tests {
         assert!(controller.store.state().ui.compact_details);
         controller.set_layout_width(1280);
         assert_eq!(controller.store.state().ui.layout, LayoutClass::Wide);
+    }
+
+    #[test]
+    fn notification_navigation_only_requests_projections() {
+        let (controller, sink) = setup();
+        controller.navigate_to(&ObjectiveId::new(preview::SECOND_OBJECTIVE), true);
+        let state = controller.store.state();
+        assert_eq!(
+            state.ui.selected.as_ref().map(ObjectiveId::as_str),
+            Some(preview::SECOND_OBJECTIVE)
+        );
+        assert_eq!(state.ui.view, MainView::Workbench);
+        assert_eq!(state.ui.inspector_tab, InspectorTab::Evidence);
+        let intents = sink.intents.borrow();
+        assert!(!intents.is_empty());
+        assert!(
+            intents.iter().all(Intent::is_query),
+            "navigation never sends a command: {intents:?}"
+        );
+    }
+
+    #[test]
+    fn terminal_lifecycle_in_the_controller() {
+        use crate::presentation::store::StoreUpdate;
+        use crate::presentation::terminal::{TerminalEnd, TerminalMode};
+        let (controller, sink) = setup();
+        let id = ObjectiveId::new(preview::MAIN_OBJECTIVE);
+        controller.select_objective(&id);
+        sink.intents.borrow_mut().clear();
+        assert!(!controller.terminal_input("ls\r"), "no terminal yet");
+        controller.open_terminal(80, 24).unwrap();
+        controller.open_terminal(80, 24).unwrap();
+        assert_eq!(
+            sink.intents
+                .borrow()
+                .iter()
+                .filter(|i| matches!(i, Intent::OpenTerminal { .. }))
+                .count(),
+            1,
+            "one open in flight"
+        );
+        controller.store.apply(StoreUpdate::TerminalOpened {
+            objective_id: id.clone(),
+            terminal_id: "00000000-0000-4000-8000-000000000042".into(),
+            mode: TerminalMode::ReadOnly,
+            cols: 80,
+            rows: 24,
+        });
+        assert!(controller.terminal_input(&"x".repeat(5000)));
+        let inputs = sink
+            .intents
+            .borrow()
+            .iter()
+            .filter(|i| matches!(i, Intent::TerminalInput { .. }))
+            .count();
+        assert_eq!(inputs, 2, "long input is chunked");
+        controller.resize_terminal(100, 30);
+        controller.resize_terminal(100, 30);
+        assert_eq!(
+            sink.intents
+                .borrow()
+                .iter()
+                .filter(|i| matches!(
+                    i,
+                    Intent::ResizeTerminal {
+                        cols: 100,
+                        rows: 30,
+                        ..
+                    }
+                ))
+                .count(),
+            1
+        );
+        controller.store.apply(StoreUpdate::TerminalOutput {
+            terminal_id: "00000000-0000-4000-8000-000000000042".into(),
+            seq: 1,
+            data: "hello".into(),
+            dropped: 0,
+        });
+        controller.store.apply(StoreUpdate::TerminalClosed {
+            terminal_id: "00000000-0000-4000-8000-000000000042".into(),
+            end: TerminalEnd::ReviewFreeze,
+        });
+        assert!(
+            !controller.terminal_input("x"),
+            "an ended terminal takes no input"
+        );
+        // A lost connection ends terminals locally too (the service ended them with the lease).
+        controller.open_terminal(80, 24).unwrap();
+        controller.store.apply(StoreUpdate::Connection(
+            super::super::model::ConnectionState::Reconnecting { attempt: 1 },
+        ));
+        assert_eq!(
+            controller
+                .store
+                .state()
+                .terminal_for(&id)
+                .map(|t| t.status.clone()),
+            Some(TerminalStatus::Ended(TerminalEnd::ConnectionLost))
+        );
+    }
+
+    #[test]
+    fn exit_stops_the_service_only_with_control() {
+        let (controller, sink) = setup();
+        assert!(controller.exit(StopReason::Exit));
+        assert!(sink.intents.borrow().contains(&Intent::StopService {
+            reason: StopReason::Exit
+        }));
+        sink.intents.borrow_mut().clear();
+        controller
+            .store
+            .apply(crate::presentation::store::StoreUpdate::Connection(
+                super::super::model::ConnectionState::LeaseHeld,
+            ));
+        assert!(!controller.exit(StopReason::Logout));
+        assert!(
+            sink.intents.borrow().is_empty(),
+            "no authority, nothing sent"
+        );
     }
 
     #[test]

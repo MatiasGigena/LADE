@@ -202,6 +202,19 @@ impl Core {
             }
         };
         let mutating = request.name().is_mutating();
+        if !self.connected
+            && let Some(objective_id) = intent.terminal_objective()
+        {
+            // Terminal interaction is never deferred or replayed on reconnect.
+            step.updates.push(StoreUpdate::TerminalProblem {
+                objective_id: objective_id.clone(),
+                message: format!(
+                    "{} was not sent: the window is not connected to the service.",
+                    intent.label()
+                ),
+            });
+            return step;
+        }
         if !self.connected {
             if mutating {
                 let message = format!(
@@ -632,6 +645,16 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
             StoreUpdate::VerificationChanged(convert::verification(&v))
         }
         Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
+        Event::TerminalOutput(o) => StoreUpdate::TerminalOutput {
+            terminal_id: o.terminal_id.as_str().to_owned(),
+            seq: o.seq.value(),
+            data: o.data,
+            dropped: o.dropped_bytes.value(),
+        },
+        Event::TerminalClosed(c) => StoreUpdate::TerminalClosed {
+            terminal_id: c.terminal_id.as_str().to_owned(),
+            end: convert::terminal_end(&c),
+        },
     }]
 }
 

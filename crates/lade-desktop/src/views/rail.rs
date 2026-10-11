@@ -21,6 +21,8 @@ pub struct Rail {
     controller: Rc<Controller>,
     content: gtk::Box,
     lists: RefCell<Vec<(gtk::ListBox, Vec<ObjectiveId>)>>,
+    /// Quiet note when desktop notifications are unavailable (attention stays here).
+    channel_note: gtk::Label,
     pub new_button: gtk::Button,
     on_new: RefCell<Option<ButtonHandler>>,
     on_open: RefCell<Option<Rc<dyn Fn()>>>,
@@ -42,6 +44,9 @@ impl Rail {
         outer.append(&heading_row);
         let content = vbox(16);
         outer.append(&content);
+        let channel_note = widgets::label("", &["meta"]);
+        channel_note.set_visible(false);
+        outer.append(&channel_note);
         let root = widgets::region_scroll(&outer);
         root.add_css_class("rail-scroll");
         set_accessible_label(&root, "Objectives");
@@ -50,6 +55,7 @@ impl Rail {
             controller: controller.clone(),
             content,
             lists: RefCell::new(Vec::new()),
+            channel_note,
             new_button,
             on_new: RefCell::new(None),
             on_open: RefCell::new(None),
@@ -77,6 +83,20 @@ impl Rail {
     }
 
     pub fn refresh(&self, changes: &[Change]) {
+        if changes.contains(&Change::DesktopAttention) {
+            let reason = self
+                .controller
+                .store
+                .state()
+                .notifications_unavailable
+                .clone();
+            if let Some(reason) = reason {
+                self.channel_note.set_text(&format!(
+                    "Desktop notifications are unavailable ({reason}); Objectives that need you are marked here."
+                ));
+                self.channel_note.set_visible(true);
+            }
+        }
         if changes.iter().any(|c| {
             matches!(
                 c,
