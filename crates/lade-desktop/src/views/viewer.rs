@@ -1,8 +1,12 @@
 //! Read-only diff / full-file viewer (GtkSourceView). Old/new line gutters and a sign column are
 //! custom gutter renderers; added/deleted lines get semantic paragraph fills. Selections map to
-//! exact source bytes through `presentation::text_map`.
+//! exact source bytes through `presentation::text_map`. Syntax is highlighted with the language
+//! GtkSourceView detects from the file name and the token-based `assets/code-scheme.xml`, except
+//! for large text (`presentation::syntax`); highlighting never changes the buffer text.
 
 use std::cell::{Cell, RefCell};
+use std::fs::DirBuilder;
+use std::os::unix::fs::DirBuilderExt;
 use std::rc::Rc;
 
 use gtk::glib;
@@ -14,7 +18,32 @@ use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{FileEncoding, Load, Side};
 use crate::presentation::store::{Change, ViewerContent, ViewerMode};
+use crate::presentation::syntax::{self, Highlight};
 use crate::presentation::text_map::{self, TextPos, ViewLine, ViewLineKind};
+
+const CODE_SCHEME: &str = include_str!("../assets/code-scheme.xml");
+const CODE_SCHEME_ID: &str = "lade-code";
+
+/// The LADE code scheme. GtkSourceView reads schemes only from files, so the embedded scheme is
+/// written to a private directory under the user's runtime directory and read by a scheme manager
+/// that searches only there. `None` (plain text) if that fails.
+fn code_scheme() -> Option<sourceview5::StyleScheme> {
+    let dir = glib::user_runtime_dir().join("lade-desktop").join("styles");
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)
+        .ok()?;
+    let path = dir.join(format!("{CODE_SCHEME_ID}.xml"));
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(CODE_SCHEME) {
+        let staged = dir.join(format!("{CODE_SCHEME_ID}.xml.{}", std::process::id()));
+        std::fs::write(&staged, CODE_SCHEME).ok()?;
+        std::fs::rename(&staged, &path).ok()?;
+    }
+    let manager = sourceview5::StyleSchemeManager::new();
+    manager.set_search_path(&[dir.to_str()?]);
+    manager.scheme(CODE_SCHEME_ID)
+}
 
 pub struct Viewer {
     pub root: gtk::Box,
@@ -36,6 +65,8 @@ pub struct Viewer {
     lines: Rc<RefCell<Vec<ViewLine>>>,
     updating: Rc<Cell<bool>>,
     on_add_feedback: RefCell<Option<Rc<dyn Fn()>>>,
+    /// Whether the last shown text is highlighted, plain, or plain because it is too large.
+    highlight: Cell<Highlight>,
 }
 
 fn number_renderer(
@@ -115,7 +146,7 @@ impl Viewer {
         let buffer = sourceview5::Buffer::new(None);
         buffer.set_highlight_syntax(false);
         buffer.set_highlight_matching_brackets(false);
-        buffer.set_style_scheme(None);
+        buffer.set_style_scheme(code_scheme().as_ref());
         let table = buffer.tag_table();
         for (name, background) in [("add", "#EEF8F1"), ("del", "#FFF0EF"), ("sep", "#F5F5F5")] {
             let tag = gtk::TextTag::builder()
@@ -127,6 +158,16 @@ impl Viewer {
             }
             table.add(&tag);
         }
+        // Highlighting tags are created lazily and take priority over earlier tags: keep the
+        // hunk separator's own ink on top.
+        buffer.connect_highlight_updated(|buffer, _, _| {
+            let table = buffer.tag_table();
+            if let Some(sep) = table.lookup("sep")
+                && sep.priority() < table.size() - 1
+            {
+                sep.set_priority(table.size() - 1);
+            }
+        });
         let view = sourceview5::View::with_buffer(&buffer);
         view.set_editable(false);
         view.set_cursor_visible(true);
@@ -194,6 +235,7 @@ impl Viewer {
             lines,
             updating: Rc::new(Cell::new(false)),
             on_add_feedback: RefCell::new(None),
+            highlight: Cell::new(Highlight::NoLanguage),
         });
         viewer.connect();
         viewer.render();
@@ -286,14 +328,25 @@ impl Viewer {
         self.stack.set_visible_child_name("message");
     }
 
-    fn set_lines(&self, lines: Vec<ViewLine>, mode: ViewerMode, side: Side) {
+    fn set_lines(&self, lines: Vec<ViewLine>, mode: ViewerMode, side: Side, path: &str) {
         self.updating.set(true);
         let text = lines
             .iter()
             .map(|l| l.display.as_str())
             .collect::<Vec<_>>()
             .join("\n");
+        // Decide before the text goes in, so large text is never highlighted even briefly.
+        let language = sourceview5::LanguageManager::default()
+            .guess_language(Some(syntax::file_name(path)), None);
+        let highlight = Highlight::decide(language.is_some(), text.len(), lines.len());
+        self.highlight.set(highlight);
+        self.buffer.set_highlight_syntax(false);
+        self.buffer.set_language(None);
         self.buffer.set_text(&text);
+        if highlight == Highlight::On {
+            self.buffer.set_language(language.as_ref());
+            self.buffer.set_highlight_syntax(true);
+        }
         for (index, line) in lines.iter().enumerate() {
             let tag = match line.kind {
                 ViewLineKind::Add => "add",
@@ -397,7 +450,13 @@ impl Viewer {
                         false,
                     );
                 } else {
-                    self.set_lines(text_map::diff_lines(&diff), ViewerMode::Diff, Side::New);
+                    self.set_lines(
+                        text_map::diff_lines(&diff),
+                        ViewerMode::Diff,
+                        Side::New,
+                        &key.path.display,
+                    );
+                    self.show_highlight_note();
                     if diff.truncated {
                         self.footer.append(&widgets::warning_line(
                             "The service truncated this diff. Open Full file to page through every byte.",
@@ -426,6 +485,7 @@ impl Viewer {
                         text_map::file_lines(&content),
                         ViewerMode::FullFile,
                         content.side,
+                        &key.path.display,
                     );
                     let shown = label(
                         &format!(
@@ -439,6 +499,9 @@ impl Viewer {
                     );
                     shown.set_hexpand(true);
                     self.footer.append(&shown);
+                    if let Some(note) = self.highlight.get().note() {
+                        self.footer.append(&label(&note, &["meta"]));
+                    }
                     if content.chunked && !content.eof {
                         self.footer.append(&label(
                             &format!(
@@ -489,6 +552,14 @@ impl Viewer {
                     }
                 }
             }
+        }
+    }
+
+    /// States in the footer that large text is shown without highlighting.
+    fn show_highlight_note(&self) {
+        if let Some(note) = self.highlight.get().note() {
+            self.footer.append(&label(&note, &["meta"]));
+            self.footer.set_visible(true);
         }
     }
 
