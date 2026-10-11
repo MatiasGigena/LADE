@@ -230,13 +230,13 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
             &mut client,
             &terminal,
             &format!(
-                "test -e {}; echo W_$?; test -e {}; echo S_$?; test -e {}/f0.txt; echo O_$?",
+                "test -e {}; echo W_$?; test -e {}; echo S_$?; test -e {}/f0.txt; echo O_$?; echo END_$((3+4))",
                 trees[1].display(),
                 sessions.display(),
                 trees[0].display()
             ),
         );
-        let seen = output_until(&mut client, &terminal, "O_");
+        let seen = output_until(&mut client, &terminal, "END_7");
         assert!(seen.contains("W_1"), "{seen}");
         assert!(seen.contains("S_1"), "{seen}");
         assert!(seen.contains("O_0"), "{seen}");
