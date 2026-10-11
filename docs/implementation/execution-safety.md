@@ -220,7 +220,9 @@ interrupts it.
   root.
 - **Supervisor-loss race**: if `laded` dies in the first milliseconds of a launch, before bwrap armed its
   parent-death signal, or before the pidfile (or its namespace-init line) was written, the sandbox can survive
-  unrecorded; the startup sweep covers only recorded processes.
+  unrecorded; the startup sweep covers only recorded processes (plus `bwrap`/`prlimit` roots naming the state
+  directory). Outside that window, killing `laded` with four running workers and four terminals (each with a
+  `setsid nohup` daemon) leaves no process behind (`service_crash.rs`, IMP-013).
 - **Network scope**: the allowlist is per provider host, not per request; any code in the sandbox (tools,
   extensions) can use the provider tunnel with the released key. Destination filtering is not data-loss
   prevention: content sent to an allowed host is not inspected. Through an upstream proxy, DNS-based
@@ -232,7 +234,10 @@ interrupts it.
   otherwise filtered.
 - **Terminal quotas** are the worker's per-process `prlimit` values, not an aggregate per-Objective budget: a terminal
   and the agent of the same Objective each get them, and `RLIMIT_NPROC` is still per real UID (root: not enforced).
-  No CPU limit, no disk quota (as for workers).
+  No CPU limit, no disk quota (as for workers). IMP-013 adds **counting** across Objectives in the service
+  (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new writers; see
+  [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many sandboxes exist,
+  not what each may consume.
 - **Terminal and agent write concurrently** while the Objective is active: the terminal is a second writer of the
   worktree until a freeze excludes both. Changes a terminal makes appear in the Change Set like the agent's.
 - **Terminal output** is untrusted bytes shown as text; escape sequences are interpreted by the client's minimal
