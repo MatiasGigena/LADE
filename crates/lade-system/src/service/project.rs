@@ -251,6 +251,13 @@ impl Service {
         let record = objective.record();
         let view = derive_attention(objective, &self.facts(st, target));
         let mut badges: Vec<Badge> = view.badges.into_iter().filter_map(wire_badge).collect();
+        if matches!(
+            record.execution.state(),
+            lade_core::domain::execution::ExecutionState::Failed { reason }
+                if reason.starts_with(super::execution::LIMIT_REACHED)
+        ) {
+            badges.insert(0, Badge::LimitReached);
+        }
         if record.lifecycle == Lifecycle::Frozen
             && st
                 .review

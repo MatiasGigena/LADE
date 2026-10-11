@@ -4,7 +4,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -22,9 +22,10 @@ use crate::adapters::git::{
     self, ChangedFile, CommitSpec, GitError, MergeOutcome, Repository, SquashOutcome, SquashRequest,
 };
 use crate::adapters::sandbox::{
-    Limits, SandboxTools, VERIFICATION_OUTPUT_LIMIT, VERIFICATION_TIMEOUT, VerificationLaunch,
-    run_bounded, verification_spec,
+    Limits, SandboxCgroups, SandboxTools, VERIFICATION_OUTPUT_LIMIT, VERIFICATION_TIMEOUT,
+    VerificationLaunch, run_bounded_with, verification_spec,
 };
+use crate::supervision::sweep::place_sandbox;
 use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
 };
@@ -422,6 +423,26 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
     }
 }
 
+/// Disk space used below `roots` (allocated blocks, symbolic links not followed, hard links
+/// counted per name, so the result never under-counts what the sandbox can reach). Unreadable
+/// entries count as zero.
+pub fn disk_usage(roots: &[PathBuf]) -> u64 {
+    let mut total = 0u64;
+    let mut pending: Vec<PathBuf> = roots.to_vec();
+    while let Some(path) = pending.pop() {
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        total = total.saturating_add(meta.blocks().saturating_mul(512));
+        if meta.is_dir()
+            && let Ok(entries) = fs::read_dir(&path)
+        {
+            pending.extend(entries.flatten().map(|entry| entry.path()));
+        }
+    }
+    total
+}
+
 // ---------------------------------------------------------------------------------------------
 // Verification.
 
@@ -434,6 +455,10 @@ pub struct VerifyInput {
     pub tree: GitId,
     pub base_target: GitId,
     pub argv: Vec<String>,
+    pub objective: String,
+    /// Sweep marker of the service's sandboxes.
+    pub marker: String,
+    pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 #[derive(Debug)]
@@ -509,20 +534,45 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
         .ok_or_else(|| "verification program not found in /usr/bin or /bin".to_string())?;
     let mut argv: Vec<OsString> = vec![program.into_os_string()];
     argv.extend(input.argv.iter().skip(1).map(OsString::from));
-    let spec = verification_spec(&VerificationLaunch {
+    let built = |e: crate::adapters::sandbox::SandboxError| {
+        format!("verification sandbox could not be built: {}", e.code())
+    };
+    let mut spec = verification_spec(&VerificationLaunch {
         work_dir: input.copy_dir.clone(),
         argv,
         extra_ro: vec![input.repo.common_dir().to_path_buf()],
         env: Vec::new(),
         limits: Limits::VERIFICATION,
     })
-    .map_err(|e| format!("verification sandbox could not be built: {}", e.code()))?;
-    let outcome = run_bounded(
-        spec.command(tools),
+    .map_err(built)?;
+    spec.marker(&input.marker).map_err(built)?;
+    let leaf = match &input.cgroups {
+        Some(cgroups) => {
+            let name = format!(
+                "verify-{}",
+                input.branch.rsplit('/').next().unwrap_or("run")
+            );
+            Some(
+                cgroups
+                    .leaf(&input.objective, &name)
+                    .map_err(|e| format!("verification cgroup: {}", e.kind()))?,
+            )
+        }
+        None => None,
+    };
+    let outcome = run_bounded_with(
+        spec.command(tools).map_err(built)?,
         VERIFICATION_TIMEOUT,
         VERIFICATION_OUTPUT_LIMIT,
+        |pid| match &leaf {
+            Some(leaf) => place_sandbox(pid, leaf, || {
+                crate::supervision::sweep::PidRecord::of(pid).is_none()
+            }),
+            None => Ok(()),
+        },
     )
     .map_err(|e| format!("verification could not start: {}", e.kind()))?;
+    drop(leaf);
     let end = match (outcome.timed_out, outcome.exit_code) {
         (true, _) => VerificationEnd::Interrupted,
         (false, Some(code)) => VerificationEnd::Exited { code },

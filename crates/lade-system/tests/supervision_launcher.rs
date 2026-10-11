@@ -94,6 +94,7 @@ impl Fixture {
             credentials: CredentialSource::empty(),
             upstream_proxy: None,
             extra_ro: Vec::new(),
+            cgroups: None,
         }
     }
 
@@ -451,7 +452,7 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     server.join().unwrap();
     assert!(
         text.contains(
-            r#""envKeys":["HOME","LADE_GATEWAY_SOCKET","LANG","OPENAI_API_KEY","PATH","PI_CODING_AGENT_DIR","PI_CODING_AGENT_SESSION_DIR","PI_OFFLINE","PI_SKIP_VERSION_CHECK","PI_TELEMETRY","PWD","TERM"]"#
+            r#""envKeys":["HOME","LADE_GATEWAY_SOCKET","LANG","OPENAI_API_KEY","PATH","PI_CODING_AGENT_DIR","PI_CODING_AGENT_SESSION_DIR","PI_OFFLINE","PI_SKIP_VERSION_CHECK","PI_TELEMETRY","TERM"]"#
         ),
         "{text}"
     );

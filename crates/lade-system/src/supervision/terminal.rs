@@ -31,8 +31,11 @@ use std::time::{Duration, Instant};
 use rustix::pty::{OpenptFlags, grantpt, ioctl_tiocgptpeer, openpt, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
-use super::sweep::{PidRecord, children_of, kill_record, write_pidfile};
-use crate::adapters::sandbox::{Limits, SandboxTools, TerminalLaunch, terminal_spec};
+use super::sweep::{PidRecord, kill_record, record_sandbox, sandbox_marker};
+pub use crate::adapters::sandbox::TERMINAL_LIMITS;
+use crate::adapters::sandbox::{
+    CgroupLeaf, Limits, SandboxCgroups, SandboxTools, TerminalLaunch, terminal_spec,
+};
 
 /// Output retained per terminal between service drains.
 pub const RING_BYTES: usize = 1 << 20;
@@ -44,11 +47,7 @@ const INPUT_QUEUE_FRAMES: usize = 256;
 /// Accepted terminal sizes.
 pub const MAX_COLS: u16 = 500;
 pub const MAX_ROWS: u16 = 200;
-/// Terminal processes get the worker's limits (§7 defaults: 4 GiB address space, 512 processes,
-/// 1024 files, 512 MiB file size). A shell does not need Node's 8 GiB reservation.
-pub const TERMINAL_LIMITS: Limits = Limits::WORKER;
 const KILL_WAIT: Duration = Duration::from_secs(10);
-const INIT_DISCOVERY: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(20);
 const SHELLS: &[&str] = &["/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh"];
 const SETSID: &[&str] = &["/usr/bin/setsid", "/bin/setsid"];
@@ -67,6 +66,8 @@ pub struct TerminalRequest {
     /// Private directory for the pidfile the startup sweep reads (`$STATE/run`).
     pub run_dir: PathBuf,
     pub limits: Limits,
+    /// Delegated cgroup subtree: the terminal runs in a leaf of its Objective's cgroup.
+    pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 /// Output taken from a terminal's ring.
@@ -98,6 +99,7 @@ struct Shared {
     init: Mutex<Option<PidRecord>>,
     ring: Mutex<Ring>,
     space: Condvar,
+    leaf: Mutex<Option<CgroupLeaf>>,
     pidfile: PathBuf,
 }
 
@@ -141,20 +143,10 @@ impl Shared {
         let _ = child.kill();
     }
 
-    fn record_pids(&self, pid: u32) -> io::Result<()> {
-        let Some(outer) = PidRecord::of(pid) else {
-            return Ok(());
-        };
-        write_pidfile(&self.pidfile, &[outer])?;
-        let deadline = Instant::now() + INIT_DISCOVERY;
-        while Instant::now() < deadline && self.poll_exit().is_none() {
-            if let Some(init) = children_of(pid).into_iter().find_map(PidRecord::of) {
-                *lock(&self.init) = Some(init);
-                return write_pidfile(&self.pidfile, &[outer, init]);
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        Ok(())
+    /// After the exit: removes the pidfile and the cgroup leaf.
+    fn release(&self) {
+        drop(lock(&self.leaf).take());
+        let _ = std::fs::remove_file(&self.pidfile);
     }
 
     /// Appends output, waiting briefly for room, then discarding the oldest bytes.
@@ -237,7 +229,10 @@ impl Terminal {
         let size = winsize(request.cols, request.rows)?;
         let shell =
             first_existing(SHELLS).ok_or_else(|| invalid("no shell in /usr/bin or /bin"))?;
-        let spec = terminal_spec(&TerminalLaunch {
+        let spec_error = |e: crate::adapters::sandbox::SandboxError| {
+            io::Error::new(ErrorKind::InvalidInput, e.to_string())
+        };
+        let mut spec = terminal_spec(&TerminalLaunch {
             shell,
             setsid: first_existing(SETSID),
             worktree: request.worktree.clone(),
@@ -245,7 +240,16 @@ impl Terminal {
             writable: request.writable,
             limits: request.limits,
         })
-        .map_err(|e| io::Error::new(ErrorKind::InvalidInput, e.to_string()))?;
+        .map_err(spec_error)?;
+        spec.marker(&sandbox_marker(&request.run_dir))
+            .map_err(spec_error)?;
+        let leaf = match &request.cgroups {
+            Some(cgroups) => Some(cgroups.leaf(
+                &request.objective_id,
+                &format!("terminal-{}", request.terminal_id),
+            )?),
+            None => None,
+        };
 
         let flags = OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC;
         let controller = openpt(flags)?;
@@ -253,15 +257,15 @@ impl Terminal {
         unlockpt(&controller)?;
         tcsetwinsize(&controller, size)?;
         let user = ioctl_tiocgptpeer(&controller, flags)?;
-        let mut cmd = spec.command(tools);
-        cmd.stdin(Stdio::from(user.try_clone()?))
+        let mut cmd = spec.command(tools).map_err(spec_error)?;
+        cmd.command_mut()
+            .stdin(Stdio::from(user.try_clone()?))
             .stdout(Stdio::from(user.try_clone()?))
             .stderr(Stdio::from(user))
             .process_group(0);
-        let spawned = cmd.spawn();
-        // The command holds this process's only other copies of the user side.
-        drop(cmd);
-        let child = spawned?;
+        // Spawning consumes the command, which holds this process's only other copies of the
+        // user side.
+        let (child, mut gate) = cmd.spawn()?;
         let pid = child.id();
         let pidfile = request.run_dir.join(format!(
             "terminal-{}-{}.pid",
@@ -273,6 +277,7 @@ impl Terminal {
             init: Mutex::new(None),
             ring: Mutex::new(Ring::default()),
             space: Condvar::new(),
+            leaf: Mutex::new(None),
             pidfile,
         });
         let controller = File::from(controller);
@@ -284,7 +289,16 @@ impl Terminal {
             link_failed: Arc::new(AtomicBool::new(false)),
             killed: false,
         };
-        if let Err(e) = shared.record_pids(pid) {
+        // The shell starts only once the sandbox is recorded and placed.
+        let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
+            shared.poll_exit().is_some()
+        })
+        .and_then(|init| {
+            *lock(&shared.init) = init;
+            *lock(&shared.leaf) = leaf;
+            gate.open()
+        });
+        if let Err(e) = recorded {
             terminal.kill();
             return Err(e);
         }
@@ -401,7 +415,7 @@ impl Terminal {
         self.shared.kill();
         loop {
             if self.shared.wait_exit(KILL_WAIT).is_some() {
-                let _ = std::fs::remove_file(&self.shared.pidfile);
+                self.shared.release();
                 break;
             }
             self.shared.kill();
@@ -446,7 +460,7 @@ fn read_output(shared: &Shared, mut controller: File) {
         shared.kill();
     }
     if shared.wait_exit(KILL_WAIT).is_some() {
-        let _ = std::fs::remove_file(&shared.pidfile);
+        shared.release();
     }
 }
 

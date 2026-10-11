@@ -25,21 +25,15 @@ use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode
 
 use super::credentials::CredentialSource;
 use super::gateway::{EgressPolicy, Gateway, UpstreamProxy, default_policies, ensure_private_dir};
-use super::sweep::{PidRecord, children_of, kill_record, write_pidfile};
+use super::sweep::{PidRecord, kill_record, record_sandbox, sandbox_marker};
 use super::{
     LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent,
     WorkerLauncher,
 };
+pub use crate::adapters::sandbox::WORKER_LIMITS;
 use crate::adapters::sandbox::{
-    Limits, SandboxTools, WorkerLaunch, find_program, sandbox_available, worker_spec,
-};
-
-/// Worker sandbox limits used by the launcher: [`Limits::WORKER`] with 8 GiB of address space.
-/// Node 22 cannot start under the 4 GiB §7 default: V8 reserves its heap and code ranges up
-/// front. `RLIMIT_AS` bounds virtual address space only, never resident memory.
-pub const WORKER_LIMITS: Limits = Limits {
-    address_space_bytes: 8 << 30,
-    ..Limits::WORKER
+    CgroupLeaf, Limits, SandboxCgroups, SandboxError, SandboxTools, WorkerLaunch, find_program,
+    sandbox_available, worker_spec,
 };
 
 /// Node options for the worker. `--disable-wasm-trap-handler` makes V8 bounds-check
@@ -58,7 +52,6 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 pub const STDERR_LINE_BYTES: usize = 512;
 pub const STDERR_LINES_PER_SECOND: u32 = 100;
 const KILL_WAIT: Duration = Duration::from_secs(10);
-const INIT_DISCOVERY: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(10);
 /// `sockaddr_un.sun_path` holds 108 bytes including the terminating NUL.
 pub const MAX_SOCKET_PATH: usize = 107;
@@ -109,6 +102,9 @@ pub struct LauncherConfig {
     pub upstream_proxy: Option<UpstreamProxy>,
     /// Further read-only binds inside the sandbox.
     pub extra_ro: Vec<PathBuf>,
+    /// Delegated cgroup subtree: each sandbox then runs in a leaf of its Objective's limited
+    /// cgroup. `None` (no delegation): the `prlimit` limits only.
+    pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 impl LauncherConfig {
@@ -129,6 +125,7 @@ impl LauncherConfig {
             credentials: CredentialSource::from_process(),
             upstream_proxy: UpstreamProxy::from_env(),
             extra_ro: Vec::new(),
+            cgroups: None,
         })
     }
 }
@@ -356,19 +353,33 @@ impl WorkerLauncher for SandboxLauncher {
             extra_ro: config.extra_ro.clone(),
             limits: config.limits,
         };
-        let spec = worker_spec(&launch)
-            .map_err(|e| LaunchError::Io(io::Error::new(ErrorKind::InvalidInput, e.to_string())))?;
+        let spec_error = |e: SandboxError| {
+            LaunchError::Io(io::Error::new(ErrorKind::InvalidInput, e.to_string()))
+        };
+        let mut spec = worker_spec(&launch).map_err(spec_error)?;
         drop(launch);
-        let mut cmd = spec.command(&self.tools);
+        spec.marker(&sandbox_marker(&config.run_dir))
+            .map_err(spec_error)?;
+        let leaf = match &config.cgroups {
+            Some(cgroups) => Some(
+                cgroups
+                    .leaf(
+                        &binding.objective_id,
+                        &format!("worker-{}", binding.execution_generation),
+                    )
+                    .map_err(LaunchError::Io)?,
+            ),
+            None => None,
+        };
+        let mut cmd = spec.command(&self.tools).map_err(spec_error)?;
         drop(spec);
-        cmd.stdin(Stdio::piped())
+        cmd.command_mut()
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let spawned = cmd.spawn();
-        // The command holds the credential environment; release it right away.
-        drop(cmd);
-        let mut child = spawned.map_err(LaunchError::Io)?;
+        // Spawning consumes the command, which holds the credential environment.
+        let (mut child, mut gate) = cmd.spawn().map_err(LaunchError::Io)?;
         let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
         else {
@@ -384,9 +395,19 @@ impl WorkerLauncher for SandboxLauncher {
             exited: Condvar::new(),
             init: Mutex::new(None),
             gateway: Mutex::new(Some(gateway)),
+            leaf: Mutex::new(None),
             pidfile,
         });
-        if let Err(e) = shared.record_pids(pid) {
+        // The program starts only once the sandbox is recorded and placed.
+        let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
+            shared.poll_exit().is_some()
+        })
+        .and_then(|init| {
+            *lock(&shared.init) = init;
+            *lock(&shared.leaf) = leaf;
+            gate.open()
+        });
+        if let Err(e) = recorded {
             shared.kill();
             shared.wait_exit(KILL_WAIT);
             shared.finish();
@@ -437,6 +458,8 @@ struct Shared {
     /// The sandbox's PID-namespace init (child of bwrap), once discovered.
     init: Mutex<Option<PidRecord>>,
     gateway: Mutex<Option<Gateway>>,
+    /// The sandbox's cgroup leaf under a delegated subtree (removed after the exit).
+    leaf: Mutex<Option<CgroupLeaf>>,
     pidfile: PathBuf,
 }
 
@@ -445,24 +468,6 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Shared {
-    /// Write the pidfile for the outer process, then again with the namespace init once bwrap
-    /// has forked it (bounded wait).
-    fn record_pids(&self, pid: u32) -> io::Result<()> {
-        let Some(outer) = PidRecord::of(pid) else {
-            return Ok(()); // already exited; the monitor reports it
-        };
-        write_pidfile(&self.pidfile, &[outer])?;
-        let deadline = Instant::now() + INIT_DISCOVERY;
-        while Instant::now() < deadline && self.poll_exit().is_none() {
-            if let Some(init) = children_of(pid).into_iter().find_map(PidRecord::of) {
-                *lock(&self.init) = Some(init);
-                return write_pidfile(&self.pidfile, &[outer, init]);
-            }
-            thread::sleep(POLL);
-        }
-        Ok(())
-    }
-
     fn poll_exit(&self) -> Option<ExitStatus> {
         if let Some(status) = *lock(&self.status) {
             return Some(status);
@@ -504,10 +509,20 @@ impl Shared {
         let _ = child.kill();
     }
 
-    /// Revoke network access and drop the pidfile. Only after the process has exited.
+    /// Revoke network access, drop the pidfile and remove the cgroup leaf (killing anything left
+    /// in it). Only after the process has exited.
     fn finish(&self) {
         if let Some(mut gateway) = lock(&self.gateway).take() {
             gateway.stop();
+        }
+        if let Some(leaf) = lock(&self.leaf).take()
+            && leaf.oom_kills() > 0
+        {
+            eprintln!(
+                "laded: sandbox memory limit reached ({} OOM kill(s)) cgroup={}",
+                leaf.oom_kills(),
+                leaf.path().display()
+            );
         }
         let _ = std::fs::remove_file(&self.pidfile);
     }

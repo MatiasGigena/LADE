@@ -2,9 +2,10 @@
 //! activity persistence/broadcast.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use lade_core::domain::execution::{ExecutionState, ModelRef};
+use lade_core::domain::execution::{ExecutionGeneration, ExecutionState, ModelRef};
 use lade_core::domain::feedback::{BlockedReason, DeliveryState, DispatchDecision};
 use lade_core::domain::ids::{InputId, ObjectiveId, SessionId, Timestamp};
 use lade_protocol::client::{
@@ -27,6 +28,28 @@ use super::{JobOutput, ReqCtx, Service};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_ITEM_RETENTION: Duration = Duration::from_secs(60);
+/// Prefix of a failure reason caused by an enforced limit; the summary shows `limit_reached`.
+pub(crate) const LIMIT_REACHED: &str = "limit_reached";
+
+/// `1.5 GiB`, `12.0 MiB`, `256 KiB`.
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1 << 10;
+    const MIB: u64 = 1 << 20;
+    const GIB: u64 = 1 << 30;
+    let tenths = |unit: u64| (bytes.saturating_mul(10) / unit) as f64 / 10.0;
+    match bytes {
+        b if b >= GIB => format!("{:.1} GiB", tenths(GIB)),
+        b if b >= MIB => format!("{:.1} MiB", tenths(MIB)),
+        b => format!("{} KiB", b.div_ceil(KIB)),
+    }
+}
+
+/// One writable-storage measurement of a live execution.
+pub(crate) struct StorageUsage {
+    oid: ObjectiveId,
+    generation: u64,
+    bytes: u64,
+}
 
 /// Streaming activity held in memory between periodic flushes.
 #[derive(Default)]
@@ -819,6 +842,108 @@ impl Service {
             .items
             .get(item_id)
             .map(|l| (l.row.text.as_str(), l.row.truncated))
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Writable-storage monitor (§7).
+
+    /// Measures the worktree and session directory of every live execution on the pool (one job
+    /// at a time); [`Self::storage_measured`] enforces the limit.
+    pub(crate) fn check_storage(&mut self) {
+        if self.storage_check {
+            return;
+        }
+        let targets: Vec<(ObjectiveId, u64, [PathBuf; 2])> = self
+            .objectives
+            .iter()
+            .filter(|(_, st)| st.objective().execution().state().is_live())
+            .filter_map(|(oid, st)| {
+                let worktree = st.row.worktree.clone()?;
+                let generation = st.objective().execution().generation().value();
+                Some((
+                    *oid,
+                    generation,
+                    [worktree, self.paths.sessions.join(oid.to_string())],
+                ))
+            })
+            .collect();
+        if targets.is_empty() {
+            return;
+        }
+        self.storage_check = true;
+        self.spawn(Pending::Storage, move || {
+            JobOutput::Storage(
+                targets
+                    .into_iter()
+                    .map(|(oid, generation, paths)| StorageUsage {
+                        oid,
+                        generation,
+                        bytes: jobs::disk_usage(&paths),
+                    })
+                    .collect(),
+            )
+        });
+    }
+
+    pub(crate) fn storage_measured(&mut self, usage: Vec<StorageUsage>) {
+        self.storage_check = false;
+        for measured in usage {
+            if measured.bytes > self.storage_limit {
+                self.storage_exceeded(measured);
+            }
+        }
+    }
+
+    /// Stops the agent of the measured generation with a `limit_reached` failure, a notice and
+    /// an activity item. Nothing restarts or raises the limit automatically; resuming is the
+    /// developer's explicit decision (and is stopped again while the usage stays above it).
+    fn storage_exceeded(&mut self, measured: StorageUsage) {
+        let StorageUsage {
+            oid,
+            generation,
+            bytes,
+        } = measured;
+        let Some(mut st) = self.objectives.get(&oid).cloned() else {
+            return;
+        };
+        let execution = st.objective().execution();
+        if execution.generation().value() != generation || !execution.state().is_live() {
+            return;
+        }
+        let reason = format!(
+            "{LIMIT_REACHED}: writable storage {} exceeds the {} limit (worktree and session directory)",
+            human_bytes(bytes),
+            human_bytes(self.storage_limit)
+        );
+        if st
+            .objective_mut()
+            .observe_failure(ExecutionGeneration::new(generation), &reason, ts_now())
+            .is_err()
+        {
+            return;
+        }
+        if self.commit_obj(None, None, st).is_err() {
+            eprintln!("laded: could not record the storage limit objective={oid}");
+            return;
+        }
+        eprintln!("laded: writable storage limit reached objective={oid} bytes={bytes}");
+        if let Some(mut control) = self.rt(oid).control.take() {
+            self.spawn(Pending::Ignore, move || {
+                control.terminate();
+                JobOutput::Done
+            });
+        }
+        self.notice(NoticeLevel::Error, LIMIT_REACHED, &reason);
+        self.system_item(
+            oid,
+            "Storage limit reached",
+            &format!(
+                "The agent was stopped: {reason}. Free space in the worktree, then resume explicitly; the limit is never raised automatically."
+            ),
+            true,
+        );
+        self.emit_objective(oid);
+        self.continue_freeze(oid);
     }
 
     pub(crate) fn check_timeouts(&mut self) {
