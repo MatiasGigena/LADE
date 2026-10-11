@@ -42,7 +42,7 @@ cleanup() {
   [ "${E2E_KEEP:-0}" = 1 ] || rm -rf "$T"
 }
 trap cleanup EXIT INT TERM
-fail() { echo "e2e-gui: FAILED: $*" >&2; [ -f "$T/laded.log" ] && tail -20 "$T/laded.log" >&2; exit 1; }
+fail() { echo "e2e-gui: FAILED: $*" >&2; import -window root "$T/failed.png" 2>/dev/null || true; [ -f "$T/laded.log" ] && tail -20 "$T/laded.log" >&2; exit 1; }
 step() { echo "e2e-gui: $*"; }
 
 export DISPLAY=$DPY
@@ -121,9 +121,16 @@ shot 02-new-objective
 click 469 625 2
 
 step "start the agent with the fixture model (sandboxed worker)"
-reveal black       # Start agent
-click 1280 "$BUTTON_Y" 1
-wait_for 60 "sandboxed worker started" session_ready
+# Start agent (black, once the inspector has the session controls; retried on a loaded host)
+tries=0
+until session_ready; do
+  tries=$((tries + 1))
+  [ $tries -le 3 ] || fail "sandboxed worker did not start"
+  sleep 3
+  reveal black
+  click 1280 "$BUTTON_Y" 1
+  n=0; while ! session_ready && [ $n -lt 160 ]; do n=$((n + 1)); sleep 0.25; done
+done
 sleep 4
 shot 03-agent-started
 
