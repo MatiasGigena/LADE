@@ -387,6 +387,13 @@ fn serve(parsed: &Args) -> ExitCode {
         cgroups: delegated_cgroups(),
         ..config
     };
+    if let Some(dir) = lade_system::fault::directory() {
+        eprintln!(
+            "laded: warning: test fault injection enabled ({}={}); not for real use",
+            lade_system::fault::FAULTS_ENV,
+            dir.display()
+        );
+    }
     let launcher = make_launcher(&config);
     let code = match service::start(config, launcher) {
         Ok(running) => {

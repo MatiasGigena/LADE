@@ -11,6 +11,9 @@ pub type Millis = u64;
 
 pub const QUIET_MS: Millis = 300;
 pub const MAX_INTERVAL_MS: Millis = 2_000;
+/// How long closing the window waits for the service to acknowledge flushed drafts before it
+/// asks the developer (the durable acknowledgement target is 1 s after the request).
+pub const CLOSE_WAIT_MS: Millis = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveStatus {
@@ -146,6 +149,23 @@ impl DraftEditor {
             && self.durable_revision > 0
     }
 
+    /// Whether closing now would lose text the developer typed: the latest text is not durably
+    /// acknowledged (unsaved, saving, failed, disconnected or in conflict). An untouched new draft
+    /// has nothing to lose.
+    pub fn has_unsaved_text(&self) -> bool {
+        let untouched = self.durable_revision == 0 && self.body.is_empty();
+        !untouched && (self.dirty() || self.in_flight.is_some() || self.conflict.is_some())
+    }
+
+    /// Makes a pending save due now (closing the window flushes instead of waiting for the quiet
+    /// period). A failed save stays failed until an explicit Retry; a conflict or an outcome
+    /// awaiting reconciliation is never overwritten.
+    pub fn flush(&mut self, now: Millis) {
+        if self.dirty() && self.failed.is_none() {
+            self.last_edit = Some(now.saturating_sub(QUIET_MS));
+        }
+    }
+
     pub fn edit(&mut self, body: &str, now: Millis) {
         if self.body == body {
             return;
@@ -235,6 +255,9 @@ impl DraftEditor {
         // re-queried, no new save is sent so a landed write is never blindly overwritten.
         if self.in_flight.take().is_some() {
             self.awaiting_reconcile = true;
+            // The text is unsaved again: once reconciled it is due without a new keystroke.
+            self.first_unsaved_edit
+                .get_or_insert(self.last_edit.unwrap_or(0));
         }
     }
 
@@ -431,6 +454,31 @@ mod tests {
         let request = e.poll(5_000, true).unwrap();
         assert_eq!(request.expected_revision, 4);
         assert_eq!(request.body, "mine");
+    }
+
+    #[test]
+    fn flush_saves_without_waiting_and_unsaved_text_is_reported_until_acknowledged() {
+        let mut e = editor();
+        assert!(
+            !e.has_unsaved_text(),
+            "an untouched draft has nothing to lose"
+        );
+        e.edit("close soon", 1_000);
+        assert!(e.has_unsaved_text());
+        assert!(e.poll(1_010, true).is_none(), "quiet period not over");
+        e.flush(1_010);
+        let request = e.poll(1_010, true).expect("flushed save is due now");
+        assert!(e.has_unsaved_text(), "in flight is not saved");
+        e.acknowledge(&durable(&request.body, 1));
+        assert!(!e.has_unsaved_text());
+        // A failed save is not retried by a flush; it stays visibly unsaved.
+        e.edit("close soon!", 2_000);
+        e.flush(2_000);
+        e.poll(2_000, true).unwrap();
+        e.fail("durability_failure");
+        e.flush(2_100);
+        assert!(e.poll(2_100, true).is_none());
+        assert!(e.has_unsaved_text());
     }
 
     #[test]

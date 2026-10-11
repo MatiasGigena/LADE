@@ -18,6 +18,7 @@ pub mod notify;
 mod rail;
 mod session;
 mod terminal;
+pub mod trace;
 mod viewer;
 mod widgets;
 mod workbench;
@@ -33,13 +34,23 @@ use gtk4 as gtk;
 
 use crate::presentation::attention::{self, AttentionWatcher, Delivery, Notifier};
 use crate::presentation::controller::Controller;
+use crate::presentation::drafts::CLOSE_WAIT_MS;
 use crate::presentation::intents::{IntentSink, StopReason};
 use crate::presentation::keys::{self, AppAction};
 use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
 use crate::presentation::model::{Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice};
-use crate::presentation::store::{Change, MainView, Store, StoreUpdate};
+use crate::presentation::store::{Change, MainView, Store, StoreUpdate, ViewerContent};
 
 const CSS: &str = include_str!("../assets/style.css");
+
+/// What happens once no draft text would be lost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CloseAfter {
+    /// The window closes; the service keeps running.
+    Window,
+    /// Explicit Exit: the service is asked to stop.
+    Exit,
+}
 
 /// Loads the single application stylesheet. Call once after GTK is initialised.
 pub fn load_css() {
@@ -96,6 +107,13 @@ pub struct App {
     /// place when the keymap changes so there is exactly one dispatch path.
     shortcuts: RefCell<Vec<(AppAction, gtk::Shortcut)>>,
     keys_path: Option<PathBuf>,
+    /// Safe close: the action waiting for flushed drafts to be acknowledged.
+    close_pending: Cell<Option<CloseAfter>>,
+    /// The developer chose to close (nothing unsaved, or unsaved text explicitly discarded).
+    close_confirmed: Cell<bool>,
+    close_timer: RefCell<Option<glib::SourceId>>,
+    loss_dialog: RefCell<Option<gtk::Window>>,
+    trace: Option<Rc<trace::Trace>>,
 }
 
 impl App {
@@ -104,6 +122,14 @@ impl App {
         store: Rc<Store>,
         sink: Rc<dyn IntentSink>,
     ) -> Rc<Self> {
+        let trace = trace::Trace::from_env();
+        let sink: Rc<dyn IntentSink> = match &trace {
+            Some(trace) => Rc::new(trace::TracingSink {
+                inner: sink,
+                trace: trace.clone(),
+            }),
+            None => sink,
+        };
         let controller = Controller::new(store.clone(), sink);
         let window = gtk::ApplicationWindow::builder()
             .application(application)
@@ -239,7 +265,15 @@ impl App {
             updating_layout: Cell::new(false),
             shortcuts: RefCell::new(Vec::new()),
             keys_path: keys::config_path(|name| std::env::var(name).ok()),
+            close_pending: Cell::new(None),
+            close_confirmed: Cell::new(false),
+            close_timer: RefCell::new(None),
+            loss_dialog: RefCell::new(None),
+            trace,
         });
+        if let Some(trace) = &app.trace {
+            trace.watch_paints(&app.window);
+        }
         app.connect();
         let weak = Rc::downgrade(&app);
         store.subscribe(move |changes| {
@@ -285,9 +319,25 @@ impl App {
         let weak = Rc::downgrade(self);
         self.inspector.set_on_draft_edit(Rc::new(move || {
             if let Some(app) = weak.upgrade() {
+                if let Some(trace) = &app.trace {
+                    trace.event("draft-edit", "");
+                }
                 app.schedule_drafts();
             }
         }));
+        // Safe close: unsaved draft text is flushed and acknowledged, or explicitly discarded.
+        let weak = Rc::downgrade(self);
+        self.window
+            .connect_close_request(move |_| match weak.upgrade() {
+                Some(app) if !app.close_confirmed.get() && !app.store.state().is_preview() => {
+                    if app.guard_unsaved(CloseAfter::Window) {
+                        glib::Propagation::Proceed
+                    } else {
+                        glib::Propagation::Stop
+                    }
+                }
+                _ => glib::Propagation::Proceed,
+            });
         let weak = Rc::downgrade(self);
         self.probe.connect_resize(move |_, width, _| {
             if let Some(app) = weak.upgrade() {
@@ -511,9 +561,9 @@ impl App {
             controls,
             move || {
                 if let Some(app) = weak.upgrade()
-                    && !app.controller.exit(StopReason::Exit)
+                    && app.guard_unsaved(CloseAfter::Exit)
                 {
-                    app.quit();
+                    app.finish_close(CloseAfter::Exit);
                 }
                 Ok(())
             },
@@ -521,8 +571,184 @@ impl App {
     }
 
     /// The desktop session is ending: stop the service per policy (no lingering, no resume).
+    /// Pending draft saves are sent first; the service handles them before the stop request.
     pub fn logout(&self) {
+        self.controller.flush_drafts(widgets::monotonic_ms());
         self.controller.exit(StopReason::Logout);
+    }
+
+    /// Returns `true` when closing now loses no draft text. Otherwise flushes pending saves and
+    /// waits (up to [`CLOSE_WAIT_MS`]) for the service's acknowledgements, then finishes `after`
+    /// on its own; a failed, conflicting or disconnected draft asks the developer instead.
+    fn guard_unsaved(self: &Rc<Self>, after: CloseAfter) -> bool {
+        if self.controller.unsaved_drafts().is_empty() {
+            return true;
+        }
+        if self.close_pending.replace(Some(after)).is_some() {
+            return false; // Already waiting or asking.
+        }
+        if self.store.state().connection.is_connected() {
+            self.controller.flush_drafts(widgets::monotonic_ms());
+            self.schedule_drafts();
+            widgets::announce(
+                &self.window,
+                "Saving feedback drafts before closing",
+                gtk::AccessibleAnnouncementPriority::Medium,
+            );
+            let weak = Rc::downgrade(self);
+            let id =
+                glib::timeout_add_local_once(Duration::from_millis(CLOSE_WAIT_MS), move || {
+                    if let Some(app) = weak.upgrade() {
+                        app.close_timer.borrow_mut().take();
+                        app.confirm_loss();
+                    }
+                });
+            if let Some(old) = self.close_timer.borrow_mut().replace(id) {
+                old.remove();
+            }
+            self.check_pending_close();
+        } else {
+            self.confirm_loss();
+        }
+        false
+    }
+
+    /// Re-evaluates a waiting close after draft or connection changes.
+    fn check_pending_close(self: &Rc<Self>) {
+        let Some(after) = self.close_pending.get() else {
+            return;
+        };
+        let unsaved = self.controller.unsaved_drafts();
+        if unsaved.is_empty() {
+            self.finish_close(after);
+        } else if unsaved.iter().any(|d| !d.pending) && self.loss_dialog.borrow().is_none() {
+            // Failed, conflicting or disconnected: waiting cannot help.
+            self.confirm_loss();
+        }
+    }
+
+    /// Asks whether to keep the window open or discard the unsaved text.
+    fn confirm_loss(self: &Rc<Self>) {
+        let Some(after) = self.close_pending.get() else {
+            return;
+        };
+        if let Some(timer) = self.close_timer.borrow_mut().take() {
+            timer.remove();
+        }
+        if self.loss_dialog.borrow().is_some() {
+            return;
+        }
+        let unsaved = self.controller.unsaved_drafts();
+        if unsaved.is_empty() {
+            self.finish_close(after);
+            return;
+        }
+        let connected = self.store.state().connection.is_connected();
+        let weak = Rc::downgrade(self);
+        let dialog = dialogs::unsaved_drafts(
+            &self.window,
+            after == CloseAfter::Exit,
+            &unsaved,
+            connected,
+            move || {
+                if let Some(app) = weak.upgrade() {
+                    app.finish_close(after);
+                }
+            },
+        );
+        // Keep window open (or Escape): the close request is withdrawn.
+        let weak = Rc::downgrade(self);
+        dialog.connect_close_request(move |_| {
+            if let Some(app) = weak.upgrade() {
+                app.loss_dialog.borrow_mut().take();
+                app.close_pending.set(None);
+            }
+            glib::Propagation::Proceed
+        });
+        *self.loss_dialog.borrow_mut() = Some(dialog);
+    }
+
+    /// Closes (or exits) now: nothing is unsaved, or the developer discarded it.
+    fn finish_close(&self, after: CloseAfter) {
+        self.close_pending.set(None);
+        if let Some(timer) = self.close_timer.borrow_mut().take() {
+            timer.remove();
+        }
+        if let Some(dialog) = self.loss_dialog.borrow_mut().take() {
+            dialog.close();
+        }
+        match after {
+            CloseAfter::Window => {
+                self.close_confirmed.set(true);
+                self.window.close();
+            }
+            CloseAfter::Exit => {
+                if !self.controller.exit(StopReason::Exit) {
+                    self.close_confirmed.set(true);
+                    self.quit();
+                }
+            }
+        }
+    }
+
+    /// Records the semantic state behind `changes` in the opt-in timing trace.
+    fn trace_changes(&self, changes: &[Change]) {
+        let Some(trace) = &self.trace else { return };
+        let state = self.store.state();
+        for change in changes {
+            match change {
+                Change::DraftStatus(id) => {
+                    if let Some(editor) =
+                        state.drafts.values().flatten().find(|d| &d.draft_id == id)
+                    {
+                        let status = editor.status(state.connection.is_connected());
+                        trace.changed("draft", &format!("{} {}", id.short(), status.label()));
+                    }
+                }
+                Change::Viewer => {
+                    let detail = match &state.viewer.content {
+                        ViewerContent::Empty => "empty".to_owned(),
+                        ViewerContent::Loading => "loading".to_owned(),
+                        ViewerContent::Failed(_) => "failed".to_owned(),
+                        ViewerContent::File(f) => {
+                            format!("file {} of {} bytes", f.loaded_bytes, f.total_bytes)
+                        }
+                        ViewerContent::Diff(d) => format!("diff {} hunks", d.hunks.len()),
+                    };
+                    trace.changed("viewer", &detail);
+                }
+                Change::Activity(id, _) => {
+                    if let Some(log) = state.activity.get(id) {
+                        let last = log
+                            .items
+                            .last()
+                            .map_or_else(|| "none".to_owned(), |i| format!("{:?}", i.role));
+                        trace.changed("activity", &format!("{} {last}", log.items.len()));
+                    }
+                }
+                Change::Detail(id) => {
+                    if let Some(d) = state.detail(id) {
+                        trace.changed(
+                            "detail",
+                            &format!(
+                                "{:?} {:?} candidates={} approved={}",
+                                d.summary.lifecycle,
+                                d.summary.execution.state,
+                                d.candidates.len(),
+                                d.approval.is_some()
+                            ),
+                        );
+                    }
+                }
+                Change::Connection => {
+                    trace.changed("connection", &format!("{:?}", state.connection));
+                }
+                Change::Objectives => {
+                    trace.changed("objectives", &state.objectives.len().to_string());
+                }
+                _ => {}
+            }
+        }
     }
 
     fn quit(&self) {
@@ -676,6 +902,7 @@ impl App {
     }
 
     fn refresh(self: &Rc<Self>, changes: &[Change]) {
+        self.trace_changes(changes);
         self.header.refresh(changes);
         self.rail.refresh(changes);
         self.workbench.refresh(changes);
@@ -712,6 +939,7 @@ impl App {
             )
         }) {
             self.schedule_drafts();
+            self.check_pending_close();
         }
     }
 

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LADE syntax highlighting scheme for the file and diff viewer (GtkSourceView 5).
+
+  Every colour below is a named token of src/assets/style.css with the same value
+  (scripts/check-contrast.py enforces it and computes each ink on the code surface, the diff
+  fills and the selection overlay). Restrained on purpose (design.md §3): keywords are weight
+  only, comments a neutral grey, strings and constants low-saturation inks that do not compete
+  with the green/red diff signs or the feedback selection. The scheme styles syntax only; text,
+  background, selection and gutters keep the stylesheet's treatment.
+-->
+<style-scheme id="lade-code" name="LADE code" version="1.0">
+  <description>Restrained syntax colours from the LADE visual tokens.</description>
+
+  <color name="syntax_comment" value="#474747"/>
+  <color name="syntax_string" value="#1F4E79"/>
+  <color name="syntax_constant" value="#5B3A82"/>
+
+  <style name="def:comment" foreground="syntax_comment" italic="true"/>
+  <style name="def:shebang" foreground="syntax_comment" italic="true"/>
+  <style name="def:doc-comment-element" foreground="syntax_comment" italic="true" bold="true"/>
+
+  <style name="def:keyword" bold="true"/>
+  <style name="def:statement" bold="true"/>
+  <style name="def:builtin" bold="true"/>
+  <style name="def:preprocessor" bold="true"/>
+
+  <style name="def:string" foreground="syntax_string"/>
+  <style name="def:special-char" foreground="syntax_string" bold="true"/>
+  <style name="def:character" foreground="syntax_string"/>
+
+  <style name="def:constant" foreground="syntax_constant"/>
+  <style name="def:special-constant" foreground="syntax_constant"/>
+  <style name="def:number" foreground="syntax_constant"/>
+  <style name="def:boolean" foreground="syntax_constant"/>
+</style-scheme>

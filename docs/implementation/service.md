@@ -505,6 +505,17 @@ are not stopped. Bounded spools: link queues (8 MiB), worker queues (8 MiB), ter
 and activity items (192 KiB each) are unchanged; streamed activity text is still flushed
 every second (a crash loses at most ~1 s of streamed text; accepted input and decisions are durable).
 
+## Test-only fault injection
+
+Both mechanisms live in `lade_system::fault` and exist only in **debug builds** (release builds compile them to
+nothing; the unit never sets either variable): `LADE_FAULT_POINT` aborts the process at a crash point (see the
+[crash-window matrix](#crash-window-matrix-a09a10)); `LADE_TEST_FAULTS_DIR=<absolute dir>` makes operations fail
+while the service keeps running. With the latter, `laded serve` logs `test fault injection enabled` and reads that
+directory at every `draft.save`: a file `draft.save` that is empty refuses the save with `durability_failure` before
+anything is written; containing `delay <ms>` (≤ 10 s) it holds the save on the service thread and then saves
+normally. It exists so that `scripts/e2e-resilience` can show the client's save-failure, retry and "Saved only after
+the acknowledgement" behaviour against the real service; it is **not a product setting**.
+
 ## Tests
 
 `crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage,inspect}.rs` run the real socket, real SQLite and disposable Git

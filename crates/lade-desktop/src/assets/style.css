@@ -34,6 +34,10 @@
 @define-color fill_band #F5F5F5;
 @define-color fill_inset #F7F7F7;
 @define-color fill_user #FAFAFA;
+/* Syntax highlighting inks (also named in code-scheme.xml; restrained, see design.md §3). */
+@define-color syntax_comment #474747;
+@define-color syntax_string #1F4E79;
+@define-color syntax_constant #5B3A82;
 
 /* Base surfaces ---------------------------------------------------------------------------- */
 

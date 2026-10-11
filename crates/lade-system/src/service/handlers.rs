@@ -37,6 +37,7 @@ use super::jobs::{self, CaptureInput, CaptureOut};
 use super::project::{core_mode, wire_draft, wire_input};
 use super::state::{ObjState, Runtime, WsState};
 use super::{Flow, JobOutput, ReqCtx, Service};
+use crate::fault::{self, Fault};
 
 /// What a pool job's completion continues.
 pub(crate) enum Pending {
@@ -672,6 +673,14 @@ impl Service {
         st.draft_stale.insert(draft_id, false);
         let wire = wire_draft(&st, &draft);
         let data = ReplyData::DraftSave(wire.clone());
+        // Test-only (scripts/e2e-resilience): inert unless LADE_TEST_FAULTS_DIR is set.
+        match fault::operation("draft.save") {
+            Some(Fault::Refuse) => {
+                return Err(durability("injected test fault: the draft was not written"));
+            }
+            Some(Fault::Delay(delay)) => std::thread::sleep(delay),
+            None => {}
+        }
         self.commit(Some(ctx), Some(&data), |tx| {
             storage::save_draft(tx, &draft, true)
         })?;

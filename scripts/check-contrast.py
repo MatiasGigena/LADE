@@ -6,6 +6,9 @@ stylesheet crates/lade-desktop/src/assets/style.css. It checks that:
 
 - every colour in the stylesheet is a named @define-color token (no scattered literals);
 - the colours the viewer sets from Rust (diff signs, line fills) are the same tokens;
+- every colour of the syntax scheme (assets/code-scheme.xml) is the style.css token of the same
+  name and value, and each syntax ink stays readable on the code surface, the diff fills and the
+  selection overlay;
 - each specified ink/fill pair, alpha-composited onto the white surface as GTK draws it, meets
   WCAG 2.2 AA: 4.5:1 for functional text, 3:1 for required non-text indicators (control
   boundaries, focus outline, the inverse focus ring of black buttons, journey markers).
@@ -22,6 +25,7 @@ import sys
 root = Path(__file__).resolve().parent.parent
 css_path = root / 'crates/lade-desktop/src/assets/style.css'
 viewer_path = root / 'crates/lade-desktop/src/views/viewer.rs'
+scheme_path = root / 'crates/lade-desktop/src/assets/code-scheme.xml'
 css = css_path.read_text()
 errors = []
 
@@ -82,6 +86,20 @@ for literal in sorted(set(re.findall(r'#[0-9A-Fa-f]{6}', viewer))):
         errors.append(f'viewer.rs: {literal} is not a style.css token')
 tokens['viewer_separator_ink'] = parse('#5C5C5C')
 
+# The syntax scheme names its colours; each must be the style.css token of that name and value,
+# and every style may use only those named colours (no literal foreground/background).
+scheme = scheme_path.read_text()
+scheme_colours = dict(re.findall(r'<color name="(\w+)" value="([^"]+)"', scheme))
+for name, value in scheme_colours.items():
+    if name not in tokens:
+        errors.append(f'code-scheme.xml: colour {name} is not a style.css token')
+    elif parse(value) != tokens[name]:
+        errors.append(f'code-scheme.xml: {name} {value} differs from the style.css token')
+for attribute, value in re.findall(r'(foreground|background)="([^"]+)"', scheme):
+    if value not in scheme_colours:
+        errors.append(f'code-scheme.xml: {attribute}="{value}" is not a named token colour')
+syntax_inks = sorted(set(re.findall(r'foreground="(\w+)"', scheme)))
+
 TEXT, NON_TEXT = 4.5, 3.0
 text_fills = ['surface', 'fill_hover', 'fill_selected', 'fill_band', 'fill_inset', 'fill_user']
 pairs = []
@@ -109,6 +127,10 @@ pairs += [
     ('del_ink', ['del_fill'], TEXT, 'text'),
     # Diff separator lines in the viewer.
     ('viewer_separator_ink', ['fill_band'], TEXT, 'text'),
+    # Syntax inks (code-scheme.xml) on the code surface, the diff line fills and the selection.
+    *[(ink, fills, TEXT, 'syntax text') for ink in syntax_inks
+      for fills in (['surface'], ['add_fill'], ['del_fill'], ['text_selection'],
+                    ['add_fill', 'text_selection'], ['del_fill', 'text_selection'])],
     # Required non-text indicators.
     ('border_control', ['surface'], NON_TEXT, 'control boundary'),
     ('border_control', ['fill_hover'], NON_TEXT, 'control boundary'),
@@ -134,7 +156,8 @@ for ink, fills, threshold, kind in pairs:
         errors.append(f'{ink} on {" + ".join(fills)} ({kind}): {measured:.2f} < {threshold}')
 
 print(json.dumps({'stylesheet': str(css_path.relative_to(root)), 'tokens': len(tokens) - 1,
-                  'viewer_colours': viewer_colours, 'pairs': results,
+                  'viewer_colours': viewer_colours,
+                  'syntax_scheme': {'colours': scheme_colours, 'inks': syntax_inks}, 'pairs': results,
                   'limits': 'Computed token pairs only; rendered contrast, Orca and human review are separate.'},
                  indent=2))
 if errors:

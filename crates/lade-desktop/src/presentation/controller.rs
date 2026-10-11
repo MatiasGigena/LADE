@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use super::drafts::{DraftEditor, Millis};
+use super::drafts::{DraftEditor, Millis, SaveStatus};
 use super::format;
 use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
 use super::keys::Keymap;
@@ -39,6 +39,18 @@ pub struct FeedbackBatch {
     pub mode: DeliveryMode,
     /// Reasons the batch cannot be submitted now; empty means the request may be sent.
     pub blockers: Vec<String>,
+}
+
+/// A draft that closing now would lose, as listed by the close/Exit guard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsavedDraft {
+    pub draft_id: DraftId,
+    pub objective: String,
+    pub reference_label: String,
+    pub status: String,
+    /// A save may still be acknowledged (unsaved or saving while connected); `false` for failed,
+    /// disconnected or conflicting drafts, which need the developer.
+    pub pending: bool,
 }
 
 pub struct Controller {
@@ -536,6 +548,47 @@ impl Controller {
             });
         }
         next
+    }
+
+    /// Drafts whose latest text the service has not acknowledged, for the close/Exit guard.
+    pub fn unsaved_drafts(&self) -> Vec<UnsavedDraft> {
+        let state = self.store.state();
+        let connected = state.connection.is_connected();
+        let mut unsaved: Vec<UnsavedDraft> = state
+            .drafts
+            .values()
+            .flatten()
+            .filter(|d| d.has_unsaved_text())
+            .map(|d| {
+                let status = d.status(connected);
+                UnsavedDraft {
+                    draft_id: d.draft_id.clone(),
+                    objective: state
+                        .objective(&d.objective_id)
+                        .map_or_else(|| d.objective_id.short().to_owned(), |o| o.title.clone()),
+                    reference_label: format::reference_label(
+                        &d.reference,
+                        state.detail(&d.objective_id),
+                    ),
+                    pending: matches!(status, SaveStatus::Unsaved | SaveStatus::Saving),
+                    status: status.label(),
+                }
+            })
+            .collect();
+        unsaved.sort_by(|a, b| a.draft_id.as_str().cmp(b.draft_id.as_str()));
+        unsaved
+    }
+
+    /// Closing: sends every pending draft save now instead of after the quiet period. Returns the
+    /// next scheduler deadline like [`Controller::poll_drafts`].
+    pub fn flush_drafts(&self, now: Millis) -> Option<Millis> {
+        self.store.update(|s| {
+            for editor in s.drafts.values_mut().flatten() {
+                editor.flush(now);
+            }
+            ((), Vec::new())
+        });
+        self.poll_drafts(now)
     }
 
     pub fn retry_draft(&self, draft_id: &DraftId, now: Millis) {
@@ -1548,6 +1601,38 @@ mod tests {
         assert!(batch.blockers.iter().any(|b| b.contains("stale")));
         assert!(controller.submit_feedback(&batch).is_err());
         assert!(sink.intents.borrow().is_empty());
+    }
+
+    #[test]
+    fn closing_flushes_drafts_and_lists_what_is_not_yet_saved() {
+        let (controller, sink) = setup();
+        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        sink.intents.borrow_mut().clear();
+        let draft = DraftId::new(preview::SAVED_DRAFT);
+        let before = controller.unsaved_drafts().len();
+        controller.edit_draft(&draft, "Closing right after typing.", 1_000);
+        let unsaved = controller.unsaved_drafts();
+        assert_eq!(unsaved.len(), before + 1);
+        assert!(
+            unsaved
+                .iter()
+                .any(|d| d.draft_id == draft && d.status == "Unsaved")
+        );
+        controller.flush_drafts(1_010);
+        assert!(
+            sink.intents
+                .borrow()
+                .iter()
+                .any(|i| matches!(i, Intent::SaveDraft { draft_id, .. } if draft_id == &draft)),
+            "the flush does not wait for the quiet period"
+        );
+        assert!(
+            controller
+                .unsaved_drafts()
+                .iter()
+                .any(|d| d.draft_id == draft && d.status == "Saving…"),
+            "in flight is still unsaved until the service acknowledges it"
+        );
     }
 
     #[test]
