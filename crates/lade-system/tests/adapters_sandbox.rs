@@ -150,6 +150,19 @@ fn sandbox_tmp_is_size_limited() {
     assert!(size <= 1 << 20, "{out}");
 }
 
+/// The program's own descriptors: `ls -l /proc/<shell>/fd` run by the shell without a pipeline
+/// (a pipeline would show the shell's transient pipe ends), as fd numbers.
+const LIST_FDS: &str = "ls -l /proc/$$/fd";
+
+fn open_fds(listing: &str) -> Vec<u32> {
+    let mut fds: Vec<u32> = listing
+        .lines()
+        .filter_map(|line| line.split_once(" -> ")?.0.rsplit(' ').next()?.parse().ok())
+        .collect();
+    fds.sort_unstable();
+    fds
+}
+
 #[test]
 fn only_stdio_reaches_the_sandboxed_program() {
     let Some(tools) = tools() else { return };
@@ -158,15 +171,45 @@ fn only_stdio_reaches_the_sandboxed_program() {
     let outcome = run(
         &tools,
         &sh_spec(
-            "ls /proc/$$/fd | tr '\\n' ' '; test -e /tmp/.lade-gate && echo GATE_LEFT",
+            &format!("{LIST_FDS}; test -e /tmp/.lade-gate && echo GATE_LEFT"),
             tmp.path(),
         ),
     );
     let out = String::from_utf8_lossy(&outcome.output_tail);
-    assert_eq!(
-        out, "0 1 2 ",
-        "the gate file is removed and only stdio is open"
+    assert!(
+        !out.contains("GATE_LEFT"),
+        "the gate file is removed: {out}"
     );
+    assert_eq!(open_fds(&out), [0, 1, 2], "only stdio is open: {out}");
+}
+
+/// Many sandboxes spawned at once (as by concurrent Objectives, terminals and checks), while
+/// this process also holds a descriptor without close-on-exec (as a careless parent of `laded`
+/// could leave): every sandboxed program still sees exactly stdin, stdout and stderr — no other
+/// sandbox's seccomp or gate pipe, no inherited host descriptor.
+#[test]
+fn concurrent_sandboxes_get_only_their_own_stdio() {
+    let Some(tools) = tools() else { return };
+    let tmp = TempDir::new("sbx-fds-concurrent");
+    let (leaked, _writer) = std::io::pipe().unwrap();
+    rustix::io::fcntl_setfd(&leaked, rustix::io::FdFlags::empty()).unwrap();
+    let runs: Vec<_> = (0..16)
+        .map(|i| {
+            let tools = tools.clone();
+            let dir = tmp.path().join(format!("s{i}"));
+            fs::create_dir(&dir).unwrap();
+            thread::spawn(move || {
+                let spec = sh_spec(&format!("sleep 0.2; {LIST_FDS}"), &dir);
+                let outcome = run(&tools, &spec);
+                String::from_utf8_lossy(&outcome.output_tail).into_owned()
+            })
+        })
+        .collect();
+    for run in runs {
+        let out = run.join().unwrap();
+        assert_eq!(open_fds(&out), [0, 1, 2], "{out}");
+    }
+    drop(leaked);
 }
 
 #[test]

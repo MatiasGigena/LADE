@@ -1,6 +1,6 @@
 //! bubblewrap sandbox construction for the pi worker, contained terminals and verification runs.
 //!
-//! The command line is `prlimit <limits> -- bwrap <isolation> -- sh -c <gate> lade-gate rm env -u
+//! The command line is `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm env -u
 //! PWD -- <argv>`: `prlimit` sets the resource limits on itself and `exec`s bwrap, so the limits are inherited by
 //! everything inside. Isolation: every namespace unshared (network always), nested user
 //! namespaces disabled, all capabilities dropped, a new session (no controlling-terminal
@@ -14,7 +14,7 @@
 //! Launch gate: bwrap copies a pipe into `/tmp/.lade-gate` (`--file`) while it sets up the
 //! sandbox, so it blocks until the supervisor opens the [`Gate`] (writes `go`) or loses it (the
 //! pipe closes empty); meanwhile only the outer bwrap and its fork, the future PID-namespace init,
-//! exist. A small `sh` gate inside the sandbox then starts the program only after `go`; an empty
+//! exist. A small bash gate inside the sandbox then starts the program only after `go`; an empty
 //! gate ends the sandbox with status 125 before anything runs. Supervisors record the sandbox
 //! (pidfile, cgroup placement) before opening the gate, so the program never runs unrecorded or
 //! unplaced, and a supervisor that dies first leaves nothing running. Every command line also
@@ -24,8 +24,10 @@
 //! File descriptors: children receive only stdin/stdout/stderr. The standard library opens every
 //! descriptor with `O_CLOEXEC`; the two pipe ends bwrap reads (`--seccomp`, `--file`) are made
 //! inheritable only while one sandbox is spawned (sandbox spawns are serialized) and bwrap closes
-//! both before the sandboxed program starts. Nothing else the service holds (control socket,
-//! database, capability file) is inherited.
+//! both before the sandboxed program starts. bwrap forwards any other inheritable descriptor, so
+//! the gate closes every descriptor above stderr right before `exec`: the program gets exactly
+//! stdin, stdout and stderr even if `laded` inherited a stray descriptor. Nothing else the service
+//! holds (control socket, database, capability file) is inherited.
 
 pub mod cgroup;
 pub mod limits;
@@ -139,16 +141,20 @@ pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
 
 /// Programs that remove `PWD` (exported by bwrap for `--chdir`) before the sandboxed program.
 const ENV_PROGRAMS: &[&str] = &["/usr/bin/env", "/bin/env"];
-/// POSIX shells that run the launch gate inside the sandbox.
-const SHELL_PROGRAMS: &[&str] = &["/usr/bin/sh", "/bin/sh"];
+/// Shells that run the launch gate inside the sandbox. bash (Essential on Debian, Ubuntu and
+/// Mint) is required: closing descriptors above 9 needs multi-digit redirections, which POSIX
+/// `sh` (dash) does not support.
+const SHELL_PROGRAMS: &[&str] = &["/usr/bin/bash", "/bin/bash"];
 const RM_PROGRAMS: &[&str] = &["/usr/bin/rm", "/bin/rm"];
 /// Where bwrap writes the launch gate's content inside the sandbox (private tmpfs).
 const GATE_FILE: &str = "/tmp/.lade-gate";
 /// The launch gate: the sandboxed program starts only if the supervisor wrote `go`. A gate the
 /// supervisor never opened (it died, or gave up on the launch) is empty, and the sandbox ends
-/// with status 125 before running anything. The file is removed first.
-/// `$1` is `rm`.
-const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; exec "$@""#;
+/// with status 125 before running anything. The file is removed first, then every descriptor
+/// above stderr is closed, so the program gets exactly stdin/stdout/stderr whatever bwrap
+/// passed through (bwrap forwards every inheritable descriptor it received, including ones a
+/// concurrent spawn or `laded`'s own parent left inheritable). `$1` is `rm`.
+const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; exec "$@""#;
 
 /// Serializes sandbox spawns: the pipe ends bwrap reads are inheritable only inside this lock, so
 /// no sandbox can inherit another sandbox's descriptors.
@@ -190,7 +196,7 @@ impl SandboxSpec {
                 .ok_or(SandboxError::ToolMissing { tool })
         };
         let env_program = first(ENV_PROGRAMS, "env")?;
-        let shell_program = first(SHELL_PROGRAMS, "sh")?;
+        let shell_program = first(SHELL_PROGRAMS, "bash")?;
         let rm_program = first(RM_PROGRAMS, "rm")?;
         Ok(Self {
             ro_binds: Vec::new(),
@@ -376,13 +382,16 @@ impl SandboxSpec {
             self.env_program.as_os_str(),
             "-u".as_ref(),
             "PWD".as_ref(),
+            // bash, which runs the gate, exports SHLVL.
+            "-u".as_ref(),
+            "SHLVL".as_ref(),
             "--".as_ref(),
         ]);
         args.extend(self.argv.iter().cloned());
         args
     }
 
-    /// `prlimit … -- bwrap … -- sh -c <gate> lade-gate env -u PWD -- argv`, with the outer
+    /// `prlimit … -- bwrap … -- bash -c <gate> lade-gate rm env -u PWD -u SHLVL -- argv`, with the outer
     /// environment cleared (except the secret variables), stdin closed, the seccomp program on a
     /// pipe (`--seccomp`) and the launch gate pipe (`--file`). Fails when this architecture has no
     /// seccomp program.

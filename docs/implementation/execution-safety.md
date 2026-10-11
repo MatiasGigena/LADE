@@ -20,7 +20,7 @@ canonicalizes the Node runtime and worker package, and creates the run directory
 4. Starts the per-launch gateway on `<socket_dir>/<first 12 hex of the objective id>-<generation>.sock`
    (`socket_dir` = `$RUNTIME/g` in `laded`; socket 0600, directory 0700; socket paths over 107 bytes are refused,
    and `laded` checks the widest one at startup). Pidfiles stay in `run_dir` (`$STATE/run`), whose length is free.
-5. Spawns `prlimit <limits> -- bwrap <isolation> -- sh -c <gate> lade-gate rm env -u PWD -- node
+5. Spawns `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm env -u PWD -u SHLVL -- node
    --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped stdin/stdout/stderr,
    with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
    records `STATE/run/worker-<objective>-<generation>.pid` (outer bwrap, then the PID-namespace init; each line `pid
@@ -74,9 +74,15 @@ provider's credential variables; the `PWD` bwrap exports for `--chdir` is remove
 starts. No control socket, capability file, database or other Objective is reachable. File descriptors: only the
 three pipes. std opens everything else `O_CLOEXEC`; the two pipe ends bwrap reads (the seccomp program and the
 gate) are made inheritable only while one sandbox spawns (sandbox spawns are serialized by one lock), and bwrap and
-the gate close both before the program starts (`adapters_sandbox.rs::only_stdio_reaches_the_sandboxed_program`). A
-host helper (Git, `kill`) that `laded` starts in that instant may inherit a copy of those read ends; they hold only
-the public filter program and the gate byte.
+the gate close both before the program starts. bwrap forwards every inheritable descriptor it receives, so the
+guarantee does not rest on that lock: right before `exec` the gate closes **every descriptor above stderr** it
+finds in `/proc/<gate>/fd`, so the program gets exactly 0, 1 and 2 even if `laded` itself inherited a stray
+descriptor from its parent or a concurrent spawn leaked one (CI observed two foreign descriptors before this; the
+gate therefore needs bash, which is Essential on Debian, Ubuntu and Mint, for multi-digit redirections). Evidence:
+`adapters_sandbox.rs::only_stdio_reaches_the_sandboxed_program` and
+`concurrent_sandboxes_get_only_their_own_stdio` (16 sandboxes at once while the test process holds a descriptor
+without close-on-exec: each program sees only 0, 1, 2). A host helper (Git, `kill`) that `laded` starts in the spawn
+instant may still inherit a copy of the read ends; they hold only the public filter program and the gate byte.
 
 Two minimal changes to the WP-C sandbox adapter were needed:
 
@@ -159,7 +165,7 @@ every terminal test passes under the filter.
 ### Launch gate and supervisor loss
 
 Every sandbox command line contains bwrap's `--file` operation copying a gate pipe to `/tmp/.lade-gate`, and the
-program is started by a small `sh` gate script. bwrap copies the pipe into the file while it sets up the sandbox, so
+program is started by a small bash gate script. bwrap copies the pipe into the file while it sets up the sandbox, so
 it blocks until the supervisor either writes `go` and closes the pipe (`Gate::open`) or loses it (the pipe closes
 empty: the supervisor died or abandoned the launch). Meanwhile the sandbox is only the outer bwrap and its fork (the
 future PID-namespace init); the program has not started. The gate script reads the file, removes it, and executes the
