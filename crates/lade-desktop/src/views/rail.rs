@@ -7,10 +7,11 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, vbox};
+use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{ObjectiveId, ObjectiveSummary};
+use crate::presentation::panel;
 use crate::presentation::store::Change;
 
 /// Handler invoked with the button that opened a dialog (focus returns there).
@@ -30,9 +31,9 @@ pub struct Rail {
 
 impl Rail {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let outer = vbox(16);
+        let outer = vbox(space::SECTION);
         outer.add_css_class("rail");
-        let heading_row = hbox(8);
+        let heading_row = hbox(space::ITEM);
         let heading = widgets::heading("Objectives", "section-title");
         heading.set_hexpand(true);
         heading_row.append(&heading);
@@ -42,9 +43,11 @@ impl Rail {
         set_accessible_label(&new_button, "New Objective");
         heading_row.append(&new_button);
         outer.append(&heading_row);
-        let content = vbox(16);
+        let content = vbox(space::SECTION);
         outer.append(&content);
         let channel_note = widgets::label("", &["meta"]);
+        channel_note.set_wrap(false);
+        channel_note.set_ellipsize(gtk::pango::EllipsizeMode::End);
         channel_note.set_visible(false);
         outer.append(&channel_note);
         let root = widgets::region_scroll(&outer);
@@ -91,9 +94,14 @@ impl Rail {
                 .notifications_unavailable
                 .clone();
             if let Some(reason) = reason {
-                self.channel_note.set_text(&format!(
+                // One quiet line; the reason and what still works are its tooltip and name.
+                let full = format!(
                     "Desktop notifications are unavailable ({reason}); Objectives that need you are marked here."
-                ));
+                );
+                self.channel_note
+                    .set_text("○ Desktop notifications unavailable");
+                self.channel_note.set_tooltip_text(Some(&full));
+                set_accessible_label(&self.channel_note, &full);
                 self.channel_note.set_visible(true);
             }
         }
@@ -116,27 +124,23 @@ impl Rail {
             &row,
             &format!("objective:{}", objective.objective_id.as_str()),
         );
-        let content = vbox(4);
+        // Title plus one secondary line: sign, status and attention reasons as text. The outcome
+        // is the row's tooltip (and stays in the work area and the Overview).
+        let content = vbox(space::TIGHT);
         let title = label(&objective.title, &["objective-title"]);
+        title.set_lines(2);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.append(&title);
-        if !objective.outcome.is_empty() {
-            let outcome = label(&objective.outcome, &["secondary", "objective-outcome"]);
-            outcome.set_lines(2);
-            outcome.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            outcome.set_tooltip_text(Some(&objective.outcome));
-            content.append(&outcome);
-        }
-        let status = hbox(8);
-        status.set_margin_top(4);
-        status.append(&widgets::status_pill(
-            objective.lifecycle,
-            objective.attention,
+        let line = panel::objective_row_line(objective);
+        content.append(&widgets::line_label(
+            &line,
+            &["meta", "objective-status"],
+            gtk::pango::EllipsizeMode::End,
         ));
-        content.append(&status);
-        if !objective.badges.is_empty() {
-            content.append(&label(&objective.badge_text(), &["meta"]));
-        }
         row.set_child(Some(&content));
+        if !objective.outcome.is_empty() {
+            row.set_tooltip_text(Some(&format!("{}\n{}", objective.title, objective.outcome)));
+        }
         let (_, state) = format::status_pill(objective.lifecycle, objective.attention);
         let badges = if objective.badges.is_empty() {
             String::new()
@@ -144,6 +148,9 @@ impl Rail {
             format!(", {}", objective.badge_text())
         };
         set_accessible_label(&row, &format!("{}, {state}{badges}", objective.title));
+        if !objective.outcome.is_empty() {
+            widgets::set_accessible_description(&row, &objective.outcome);
+        }
         row
     }
 
@@ -198,7 +205,7 @@ impl Rail {
         }
         let mut lists = Vec::new();
         for (attention, objectives) in &board.groups {
-            let group = vbox(4);
+            let group = vbox(space::TIGHT);
             let name = format::attention_label(*attention);
             let heading = widgets::heading(name, "group-heading");
             group.append(&heading);
