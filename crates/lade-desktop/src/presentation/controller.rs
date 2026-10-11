@@ -52,6 +52,11 @@ impl Controller {
         self.sink.submit(intent);
     }
 
+    /// The intent sink, for the IMP-011 gestures in `controller_compat`.
+    pub(super) fn submit_intent(&self, intent: Intent) {
+        self.emit(intent);
+    }
+
     fn selected(&self) -> Option<ObjectiveId> {
         self.store.state().ui.selected.clone()
     }
@@ -742,7 +747,11 @@ impl Controller {
         )
     }
 
-    pub fn start_execution(&self, model: ModelRef) -> Result<(), String> {
+    pub fn start_execution(
+        &self,
+        model: ModelRef,
+        thinking: Option<super::compat::ThinkingLevel>,
+    ) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         let is_default = self.store.state().settings.default_model.as_ref() == Some(&model);
         self.command(
@@ -750,6 +759,7 @@ impl Controller {
             Intent::StartExecution {
                 objective_id,
                 model: model.clone(),
+                thinking,
             },
         )?;
         // Picking a model makes it the default for the next execution.

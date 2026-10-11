@@ -16,6 +16,7 @@ use lade_protocol::types::Id;
 
 use super::convert;
 use super::requests::{self, Context, Effects};
+use crate::presentation::compat::CompatUpdate;
 use crate::presentation::intents::Intent;
 use crate::presentation::model::{ConnectionState, NoticeLevel, ObjectiveId, ServiceNotice};
 use crate::presentation::store::StoreUpdate;
@@ -605,15 +606,6 @@ impl Core {
 
 /// Maps one service event onto the store.
 pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
-    if matches!(
-        event,
-        Event::SessionChanged(_)
-            | Event::UiRequest(_)
-            | Event::UiClosed(_)
-            | Event::ResourcesChanged(_)
-    ) {
-        return Vec::new();
-    }
     vec![match event {
         Event::ObjectiveChanged(s) => StoreUpdate::ObjectiveChanged(convert::summary(&s)),
         Event::ObjectiveDetail(d) => StoreUpdate::ObjectiveDetail(Box::new(convert::detail(&d))),
@@ -641,10 +633,22 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
             StoreUpdate::VerificationChanged(convert::verification(&v))
         }
         Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
-        Event::SessionChanged(_)
-        | Event::UiRequest(_)
-        | Event::UiClosed(_)
-        | Event::ResourcesChanged(_) => return Vec::new(),
+        Event::SessionChanged(s) => {
+            let (objective_id, session) = super::compat::session(&s);
+            StoreUpdate::Compat(CompatUpdate::Session {
+                objective_id,
+                session,
+            })
+        }
+        Event::UiRequest(r) => {
+            StoreUpdate::Compat(CompatUpdate::DialogOpened(super::compat::dialog(&r)))
+        }
+        Event::UiClosed(c) => StoreUpdate::Compat(CompatUpdate::DialogClosed {
+            ui_id: c.ui_id.as_str().to_owned(),
+        }),
+        Event::ResourcesChanged(i) => {
+            StoreUpdate::Compat(CompatUpdate::Inventory(super::compat::inventory(&i)))
+        }
     }]
 }
 

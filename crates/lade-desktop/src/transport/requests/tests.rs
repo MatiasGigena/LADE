@@ -9,6 +9,7 @@ use lade_protocol::types::{Counter, Digest, GitAlgorithm, GitId, Id, Timestamp};
 use lade_protocol::{Framing, encode};
 
 use super::*;
+use crate::presentation::compat::{CompatUpdate, ForkPosition, ThinkingLevel, UiAnswerView};
 use crate::presentation::intents::DraftRevisionRef;
 use crate::presentation::model::{
     ApprovalId, ArtifactDigest, CandidateId, CaptureId, DeliveryMode, ModelRef, Reference,
@@ -150,6 +151,7 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             I::StartExecution {
                 objective_id: oid(),
                 model: ModelRef::new("lade-fixture", "scripted"),
+                thinking: Some(ThinkingLevel::High),
             },
             Some(N::ExecutionStart),
         ),
@@ -273,6 +275,90 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::SettingsUpdate),
         ),
+        (
+            I::LoadModels {
+                provider: Some("lade-fixture".into()),
+            },
+            Some(N::ModelsList),
+        ),
+        (
+            I::LoadSessionTree {
+                objective_id: oid(),
+            },
+            Some(N::SessionTree),
+        ),
+        (
+            I::NavigateSession {
+                objective_id: oid(),
+                entry_id: "a1b2c3d4".into(),
+            },
+            Some(N::SessionNavigate),
+        ),
+        (
+            I::ForkSession {
+                objective_id: oid(),
+                entry_id: "a1b2c3d4".into(),
+                position: ForkPosition::At,
+            },
+            Some(N::SessionFork),
+        ),
+        (
+            I::ImportSession {
+                objective_id: oid(),
+                path: PathBuf::from("/tmp/session.jsonl"),
+            },
+            Some(N::SessionImport),
+        ),
+        (
+            I::ExportSession {
+                objective_id: oid(),
+            },
+            Some(N::SessionExport),
+        ),
+        (
+            I::CompactSession {
+                objective_id: oid(),
+            },
+            Some(N::SessionCompact),
+        ),
+        (
+            I::ReloadSession {
+                objective_id: oid(),
+            },
+            Some(N::SessionReload),
+        ),
+        (
+            I::ConfigureSession {
+                objective_id: oid(),
+                model: ModelRef::new("lade-fixture", "scripted"),
+                thinking: ThinkingLevel::Off,
+            },
+            Some(N::SessionConfigure),
+        ),
+        (I::LoadResources, Some(N::ResourcesList)),
+        (
+            I::DecideResource {
+                name: "ask.js".into(),
+                sha256: "ab".repeat(32),
+                approve: true,
+            },
+            Some(N::ResourceDecide),
+        ),
+        (
+            I::ImportProfile {
+                source: PathBuf::from("/home/me/.pi/agent"),
+            },
+            Some(N::ProfileImport),
+        ),
+        (
+            I::RespondDialog {
+                objective_id: oid(),
+                ui_id: D.into(),
+                generation: 2,
+                answer: UiAnswerView::Confirm(false),
+            },
+            Some(N::UiRespond),
+        ),
     ];
     // Compile-time reminder: a new intent variant must be added above.
     for (intent, _) in &all {
@@ -305,7 +391,20 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             | I::Complete { .. }
             | I::Discard { .. }
             | I::Cleanup { .. }
-            | I::UpdateSettings { .. } => {}
+            | I::UpdateSettings { .. }
+            | I::LoadModels { .. }
+            | I::LoadSessionTree { .. }
+            | I::NavigateSession { .. }
+            | I::ForkSession { .. }
+            | I::ImportSession { .. }
+            | I::ExportSession { .. }
+            | I::CompactSession { .. }
+            | I::ReloadSession { .. }
+            | I::ConfigureSession { .. }
+            | I::LoadResources
+            | I::DecideResource { .. }
+            | I::ImportProfile { .. }
+            | I::RespondDialog { .. } => {}
         }
     }
     all
@@ -707,5 +806,107 @@ fn settings_offer_known_models_with_the_default_selected() {
         settings.default_model,
         Some(ModelRef::new("lade-fixture", "scripted"))
     );
-    assert!(settings.available_models.len() > 1);
+}
+
+#[test]
+fn compat_replies_and_events_reach_the_store() {
+    let models = reply_effects(
+        &Context::Models(Some("lade-fixture".into())),
+        ReplyData::ModelsList(wire::ModelCatalog {
+            sdk_version: "0.85.1".into(),
+            providers: vec![wire::ProviderInfo {
+                provider: "openai-codex".into(),
+                name: "OpenAI Codex".into(),
+                auth: vec![wire::ProviderAuth::OauthLogin],
+                status: wire::ProviderStatus::Restricted,
+                models: Counter::new(8),
+                reason: Some("interactive OAuth login is restricted".into()),
+                variables: None,
+            }],
+            models: vec![wire::ModelInfo {
+                provider: "lade-fixture".into(),
+                id: "scripted".into(),
+                name: "Scripted".into(),
+                reasoning: false,
+                thinking_levels: vec![lade_protocol::types::ThinkingLevel::Off],
+            }],
+            truncated: false,
+            error: None,
+        }),
+    );
+    assert!(matches!(
+        models.updates.as_slice(),
+        [
+            StoreUpdate::Compat(CompatUpdate::Catalog(c)),
+            StoreUpdate::Compat(CompatUpdate::Models { provider, models }),
+        ] if c.providers[0].status == crate::presentation::compat::ProviderStatus::Restricted
+            && c.providers[0].reason.is_some()
+            && provider == "lade-fixture"
+            && models.len() == 1
+    ));
+    let state = wire::SessionState {
+        objective_id: Id::parse(O).unwrap(),
+        generation: Counter::new(2),
+        reason: lade_protocol::types::SessionChangeReason::Fork,
+        model: lade_protocol::types::Model {
+            provider: "lade-fixture".into(),
+            id: "scripted".into(),
+        },
+        thinking: lade_protocol::types::ThinkingLevel::Off,
+        session_id: None,
+        association_revision: Some(Counter::new(2)),
+        pi_session_id: Some("pi".into()),
+        leaf_id: None,
+    };
+    let forked = reply_effects(
+        &Context::command("Fork session", Some(&oid())),
+        ReplyData::SessionFork(state.clone()),
+    );
+    assert!(forked.updates.iter().any(|u| matches!(
+        u,
+        StoreUpdate::Compat(CompatUpdate::Session { session, .. }) if session.generation == 2
+    )));
+    assert!(
+        forked
+            .follow_ups
+            .iter()
+            .any(|i| matches!(i, Intent::LoadSessionTree { .. }))
+    );
+    let changed = crate::transport::core::event_updates(wire::Event::SessionChanged(state));
+    assert!(matches!(
+        changed.as_slice(),
+        [StoreUpdate::Compat(CompatUpdate::Session { .. })]
+    ));
+    let opened = crate::transport::core::event_updates(wire::Event::UiRequest(wire::UiRequest {
+        objective_id: Id::parse(O).unwrap(),
+        ui_id: Id::parse(D).unwrap(),
+        generation: Counter::new(2),
+        prompt: lade_protocol::types::UiPrompt::Confirm {
+            title: "Proceed?".into(),
+            message: "m".into(),
+        },
+    }));
+    assert!(matches!(
+        opened.as_slice(),
+        [StoreUpdate::Compat(CompatUpdate::DialogOpened(d))] if d.generation == 2
+    ));
+    let snapshot = reply_effects(
+        &Context::Snapshot,
+        ReplyData::Snapshot(wire::SnapshotData {
+            service_epoch: Id::parse(O).unwrap(),
+            sequence: Counter::new(0),
+            workspaces: Vec::new(),
+            objectives: Vec::new(),
+            settings: wire::Settings {
+                verification_commands: Vec::new(),
+                default_model: None,
+            },
+        }),
+    );
+    assert!(
+        snapshot
+            .follow_ups
+            .contains(&Intent::LoadModels { provider: None })
+    );
+    assert!(snapshot.follow_ups.contains(&Intent::LoadResources));
 }

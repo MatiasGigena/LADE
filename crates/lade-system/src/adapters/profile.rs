@@ -676,10 +676,7 @@ mod tests {
         let a = sha256(b"a");
         let entries = scan(&profile);
         assert_eq!(
-            entries
-                .iter()
-                .filter(|e| e.kind == Kind::Extension)
-                .count(),
+            entries.iter().filter(|e| e.kind == Kind::Extension).count(),
             2
         );
         let dest = dir.join("session/profile");
@@ -688,7 +685,10 @@ mod tests {
         assert_eq!(loaded[0].name, "a.js");
         assert!(dest.join("AGENTS.md").is_file());
         assert!(dest.join("skills/demo/SKILL.md").is_file());
-        assert!(!dest.join("extensions/b.js").exists(), "unapproved code is never copied");
+        assert!(
+            !dest.join("extensions/b.js").exists(),
+            "unapproved code is never copied"
+        );
         // A changed file no longer matches its approval.
         fs::write(profile.join("extensions/a.js"), "changed").unwrap();
         let loaded = materialize(&profile, &dest, |name, sha| name == "a.js" && sha == a).unwrap();

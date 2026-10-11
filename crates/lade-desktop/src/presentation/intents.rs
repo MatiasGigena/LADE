@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use super::compat::{ForkPosition, ThinkingLevel, UiAnswerView};
 use super::model::{
     ApprovalId, Basis, CandidateId, DeliveryMode, DraftId, GitId, Intent as ObjectiveIntent,
     ModelRef, ObjectiveId, Reference, RepoPath, SearchScope, SessionId, Side, WorkspaceId,
@@ -85,6 +86,7 @@ pub enum Intent {
     StartExecution {
         objective_id: ObjectiveId,
         model: ModelRef,
+        thinking: Option<ThinkingLevel>,
     },
     Cancel {
         objective_id: ObjectiveId,
@@ -157,6 +159,56 @@ pub enum Intent {
     UpdateSettings {
         default_model: ModelRef,
     },
+    // IMP-011: model catalogue, Agent Session operations, profile resources, dialogs.
+    /// The provider list (and, with `provider`, that provider's models).
+    LoadModels {
+        provider: Option<String>,
+    },
+    LoadSessionTree {
+        objective_id: ObjectiveId,
+    },
+    NavigateSession {
+        objective_id: ObjectiveId,
+        entry_id: String,
+    },
+    ForkSession {
+        objective_id: ObjectiveId,
+        entry_id: String,
+        position: ForkPosition,
+    },
+    ImportSession {
+        objective_id: ObjectiveId,
+        path: PathBuf,
+    },
+    ExportSession {
+        objective_id: ObjectiveId,
+    },
+    CompactSession {
+        objective_id: ObjectiveId,
+    },
+    ReloadSession {
+        objective_id: ObjectiveId,
+    },
+    ConfigureSession {
+        objective_id: ObjectiveId,
+        model: ModelRef,
+        thinking: ThinkingLevel,
+    },
+    LoadResources,
+    DecideResource {
+        name: String,
+        sha256: String,
+        approve: bool,
+    },
+    ImportProfile {
+        source: PathBuf,
+    },
+    RespondDialog {
+        objective_id: ObjectiveId,
+        ui_id: String,
+        generation: u64,
+        answer: UiAnswerView,
+    },
 }
 
 impl Intent {
@@ -192,6 +244,27 @@ impl Intent {
             Self::Discard { .. } => "Discard",
             Self::Cleanup { .. } => "Clean up",
             Self::UpdateSettings { .. } => "Save default model",
+            Self::LoadModels { .. } => "Load models",
+            Self::LoadSessionTree { .. } => "Load session tree",
+            Self::NavigateSession { .. } => "Go to session entry",
+            Self::ForkSession {
+                position: ForkPosition::Before,
+                ..
+            } => "Fork session",
+            Self::ForkSession {
+                position: ForkPosition::At,
+                ..
+            } => "Clone session",
+            Self::ImportSession { .. } => "Import session",
+            Self::ExportSession { .. } => "Export session",
+            Self::CompactSession { .. } => "Compact context",
+            Self::ReloadSession { .. } => "Reload session resources",
+            Self::ConfigureSession { .. } => "Change model and thinking",
+            Self::LoadResources => "Load profile resources",
+            Self::DecideResource { approve: true, .. } => "Approve extension",
+            Self::DecideResource { approve: false, .. } => "Reject extension",
+            Self::ImportProfile { .. } => "Import pi profile",
+            Self::RespondDialog { .. } => "Answer extension dialog",
         }
     }
 
@@ -207,6 +280,9 @@ impl Intent {
                 | Self::LoadDrafts { .. }
                 | Self::LoadInputs { .. }
                 | Self::Search { .. }
+                | Self::LoadModels { .. }
+                | Self::LoadSessionTree { .. }
+                | Self::LoadResources
         )
     }
 }

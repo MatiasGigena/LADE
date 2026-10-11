@@ -15,6 +15,7 @@ mod dialogs;
 mod header;
 mod inspector;
 mod rail;
+mod session;
 mod viewer;
 mod widgets;
 mod workbench;
