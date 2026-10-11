@@ -310,7 +310,7 @@ fn private_dir(path: &Path) -> Result<(), StartError> {
         .map_err(|e| StartError::StateDir(format!("{}: {}", path.display(), e.kind())))
 }
 
-fn lock_state(state: &Path) -> Result<File, StartError> {
+pub(crate) fn lock_state(state: &Path) -> Result<File, StartError> {
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)

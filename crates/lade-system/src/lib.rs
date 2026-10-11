@@ -10,6 +10,7 @@ pub mod adapters {
     pub mod git;
     pub mod sandbox;
 }
+pub mod diagnostics;
 pub mod service;
 pub mod storage;
 pub mod supervision;
