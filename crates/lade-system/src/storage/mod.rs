@@ -18,7 +18,12 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 pub use rows::*;
 
 /// Ordered schema migrations. Never edit an applied entry; append a new one.
-const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, SCHEMA_V2)];
+
+/// v2: the Objective's Git history (retention refs, branch) was deleted on explicit request.
+const SCHEMA_V2: &str = r"
+ALTER TABLE objectives ADD COLUMN history_deleted INTEGER NOT NULL DEFAULT 0;
+";
 
 const SCHEMA_V1: &str = r"
 CREATE TABLE settings (

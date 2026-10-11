@@ -7,13 +7,14 @@ use std::sync::Arc;
 use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId};
 use lade_protocol::client::{
     ActivityPage, ActivityPageQuery, Basis, ChangeList, ChangeStatus, ChangedFile,
-    ChangesListQuery, DiffGetQuery, DiffHunk, DiffLine, DiffLineKind, FileContent, FileDiff,
-    FileEncoding, FileReadQuery, Rejection, ReplyData, Request, SearchQuery, SearchResult,
-    SearchResultKind, SearchResults, SearchScope, Side, TargetRef,
+    ChangesListQuery, ContentNotice, ContentNoticeKind, DiffGetQuery, DiffHunk, DiffLine,
+    DiffLineKind, FileContent, FileDiff, FileEncoding, FileReadQuery, Rejection, ReplyData,
+    Request, SearchQuery, SearchResult, SearchResultKind, SearchResults, SearchScope, Side,
+    TargetRef,
 };
 use lade_protocol::types::Digest;
 
-use crate::adapters::artifacts::ArtifactStore;
+use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore, MAX_ARTIFACT_PAGE};
 use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::{self, CaptureRow};
 
@@ -23,7 +24,7 @@ use super::convert::{
 };
 use super::execution::wire_activity;
 use super::handlers::{CapturePurpose, Pending, sql};
-use super::jobs::{self, CaptureOut};
+use super::jobs::{self, CaptureOut, FileBytes, LargeBlobs};
 use super::{Flow, JobOutput, ReqCtx, Service};
 
 const MAX_FILES: usize = 1024;
@@ -59,7 +60,44 @@ fn wire_status(status: git::ChangeStatus) -> ChangeStatus {
     }
 }
 
-fn change_list(resolved: &Resolved, files: &[git::ChangedFile]) -> ChangeList {
+/// Why parts of a Change Set are not fully represented (bounded to the schema's 64 notices).
+fn content_notices(skipped: &[git::RepoPath], filtered: &[git::RepoPath]) -> Vec<ContentNotice> {
+    let mut notices: Vec<ContentNotice> = skipped
+        .iter()
+        .take(63)
+        .map(|path| ContentNotice {
+            kind: ContentNoticeKind::NestedRepository,
+            message: "Nested repository without a commit: its files are not part of this capture. \
+                      Commit inside it (it is then recorded as a submodule entry) or move it out."
+                .into(),
+            path: Some(wire_path(path.as_bytes())),
+        })
+        .collect();
+    if !filtered.is_empty() {
+        notices.push(ContentNotice {
+            kind: ContentNoticeKind::FilteredContent,
+            message: preview(
+                &format!(
+                    "Filtered repository content (Git LFS or clean/smudge filters): {} changed \
+                     file(s) are compared and stored as raw working-tree bytes because LADE never \
+                     runs filter drivers. Their content is unsupported: a checked-out LFS file \
+                     shows as modified and would be committed unfiltered.",
+                    filtered.len()
+                ),
+                512,
+            ),
+            path: None,
+        });
+    }
+    notices
+}
+
+fn change_list(
+    resolved: &Resolved,
+    files: &[git::ChangedFile],
+    filtered: &[git::RepoPath],
+    notices: Vec<ContentNotice>,
+) -> ChangeList {
     ChangeList {
         basis_label: preview(&resolved.label, 256),
         target: resolved.target.clone(),
@@ -73,6 +111,7 @@ fn change_list(resolved: &Resolved, files: &[git::ChangedFile]) -> ChangeList {
                 removed: counter(f.removed),
                 binary: f.binary,
                 old_path: f.old_path.as_ref().map(|p| wire_path(p.as_bytes())),
+                filtered: filtered.contains(&f.path).then_some(true),
             })
             .collect(),
         truncated: files.len() > MAX_FILES,
@@ -80,6 +119,7 @@ fn change_list(resolved: &Resolved, files: &[git::ChangedFile]) -> ChangeList {
         total_removed: counter(files.iter().map(|f| f.removed).sum()),
         capture_id: resolved.capture_id.map(|c| wire_id(c.uuid())),
         candidate_id: resolved.candidate_id.map(|c| wire_id(c.uuid())),
+        notices: (!notices.is_empty()).then_some(notices),
     }
 }
 
@@ -141,6 +181,78 @@ fn file_page(
         eof: end as u64 >= total,
         version_label: preview(label, 256),
         text,
+        chunked: None,
+    })
+}
+
+/// One chunk of a file above the whole-file bound, read from its (whole-file) artifact. The
+/// file is binary when its first 8000 bytes hold a NUL; otherwise each chunk must be UTF-8 (cut
+/// back to a character boundary at its end), and a chunk that is not is refused rather than
+/// leaving a gap in the text.
+fn chunk_page(
+    artifacts: &ArtifactStore,
+    digest: &ArtifactDigest,
+    query: &FileReadQuery,
+    label: &str,
+) -> Result<FileContent, Rejection> {
+    let unreadable = |_| super::convert::durability("retained content unreadable");
+    let probe = artifacts.read_page(digest, 0, 8000).map_err(unreadable)?;
+    let binary = probe.data.contains(&0);
+    let page = artifacts
+        .read_page(
+            digest,
+            query.offset.value(),
+            (query.limit.value() as usize).min(MAX_ARTIFACT_PAGE),
+        )
+        .map_err(unreadable)?;
+    let mut length = page.data.len();
+    let text = if binary {
+        None
+    } else {
+        if page.data.first().is_some_and(|b| (0x80..0xc0).contains(b)) {
+            return Err(invalid("offset is not at a character boundary"));
+        }
+        let valid = match std::str::from_utf8(&page.data) {
+            Ok(text) => text,
+            // An incomplete character at the end continues in the next chunk.
+            Err(e) if e.error_len().is_none() => {
+                std::str::from_utf8(&page.data[..e.valid_up_to()]).map_err(|_| invalid("utf-8"))?
+            }
+            Err(e) => {
+                return Err(Rejection::new(
+                    lade_protocol::client::ErrorCode::UnsupportedContent,
+                    lade_protocol::client::SafeAction::None,
+                    &format!(
+                        "not UTF-8 text at byte {}; the rest cannot be shown as text",
+                        page.offset + e.valid_up_to() as u64
+                    ),
+                ));
+            }
+        };
+        let mut end = valid.len();
+        while end > 0 && json_cost(&valid[..end]) > MAX_PAGE_JSON {
+            end /= 2;
+            while !valid.is_char_boundary(end) {
+                end -= 1;
+            }
+        }
+        length = end;
+        Some(valid[..end].to_string())
+    };
+    Ok(FileContent {
+        artifact_digest: Digest::parse(digest.to_hex()).map_err(|_| invalid("digest"))?,
+        total_bytes: counter(page.total_bytes),
+        offset: counter(page.offset),
+        length: counter(length as u64),
+        encoding: if binary {
+            FileEncoding::Binary
+        } else {
+            FileEncoding::Utf8
+        },
+        eof: page.offset + length as u64 >= page.total_bytes,
+        version_label: preview(label, 256),
+        text,
+        chunked: Some(true),
     })
 }
 
@@ -154,6 +266,7 @@ fn retain(artifacts: &ArtifactStore, bytes: &[u8]) -> Result<Digest, Rejection> 
 fn read_file(
     repo: &Repository,
     artifacts: &ArtifactStore,
+    large: &LargeBlobs,
     resolved: &Resolved,
     query: &FileReadQuery,
 ) -> Result<ReplyData, Rejection> {
@@ -162,20 +275,22 @@ fn read_file(
         Side::Old => &resolved.old,
         Side::New => &resolved.new,
     };
-    let bytes =
-        jobs::read_whole(repo, tree, &path)?.ok_or_else(|| not_found("path in this version"))?;
-    let digest = retain(artifacts, &bytes)?;
     let side = match query.side {
         Side::Old => "old side",
         Side::New => "new side",
     };
-    file_page(
-        &bytes,
-        digest,
-        query,
-        &format!("{} ({side})", resolved.label),
-    )
-    .map(ReplyData::FileRead)
+    let label = format!("{} ({side})", resolved.label);
+    match jobs::read_file_bytes(repo, tree, &path)? {
+        None => Err(not_found("path in this version")),
+        Some(FileBytes::Whole(bytes)) => {
+            let digest = retain(artifacts, &bytes)?;
+            file_page(&bytes, digest, query, &label).map(ReplyData::FileRead)
+        }
+        Some(FileBytes::Large { blob }) => {
+            let digest = large.retain(repo, artifacts, &blob)?;
+            chunk_page(artifacts, &digest, query, &label).map(ReplyData::FileRead)
+        }
+    }
 }
 
 fn read_diff(
@@ -295,6 +410,8 @@ fn search_tree(
                     path: Some(wire_path(e.path.as_bytes())),
                     line: None,
                     byte_start: None,
+                    column: None,
+                    byte_end: None,
                 })
                 .collect();
             let truncated = matched.len() > limit;
@@ -325,7 +442,9 @@ fn search_tree(
                     objective_id: query.objective_id.clone(),
                     path: Some(wire_path(m.path.as_bytes())),
                     line: Some(counter(m.line)),
-                    byte_start: None,
+                    byte_start: m.byte_start.map(counter),
+                    column: Some(counter(m.column)),
+                    byte_end: m.byte_end.map(counter),
                 })
                 .collect();
             (results, found.truncated)
@@ -517,10 +636,15 @@ impl Service {
             &basis,
             Request::ChangesList(query),
             |repo, _, resolved| {
+                let new = adapter_git(&resolved.new);
                 let files = repo
-                    .diff_numstat(&adapter_git(&resolved.old), &adapter_git(&resolved.new))
+                    .diff_numstat(&adapter_git(&resolved.old), &new)
                     .map_err(|e| super::convert::git_rejection(&e))?;
-                Ok(ReplyData::ChangesList(change_list(&resolved, &files)))
+                let filtered = jobs::filtered_paths(&repo, &new, &files)?;
+                let notices = content_notices(&[], &filtered);
+                Ok(ReplyData::ChangesList(change_list(
+                    &resolved, &files, &filtered, notices,
+                )))
             },
         )
     }
@@ -549,19 +673,26 @@ impl Service {
             capture_id: Some(row.id),
             candidate_id: None,
         };
-        Ok(ReplyData::ChangesList(change_list(&resolved, &out.files)))
+        let notices = content_notices(&out.skipped_nested, &out.filtered);
+        Ok(ReplyData::ChangesList(change_list(
+            &resolved,
+            &out.files,
+            &out.filtered,
+            notices,
+        )))
     }
 
     pub(crate) fn file_read(&mut self, ctx: ReqCtx, query: FileReadQuery) -> Flow {
         let oid = self.objective_id(&query.objective_id);
         let basis = query.basis.clone();
         let q = query.clone();
+        let large = Arc::clone(&self.large_blobs);
         self.query_on_basis(
             ctx,
             oid,
             &basis,
             Request::FileRead(query),
-            move |repo, artifacts, resolved| read_file(&repo, &artifacts, &resolved, &q),
+            move |repo, artifacts, resolved| read_file(&repo, &artifacts, &large, &resolved, &q),
         )
     }
 
@@ -610,6 +741,8 @@ impl Service {
                     path: None,
                     line: None,
                     byte_start: None,
+                    column: None,
+                    byte_end: None,
                 })
                 .collect();
             let truncated = results.len() > limit;
