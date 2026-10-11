@@ -258,8 +258,13 @@ fn real_worker_writes_file_with_fixture_model_and_terminates_cleanly() {
         ),
         "{exited:?}"
     );
+    // PID-namespace teardown after the init exits is asynchronous; allow the kernel to finish.
     for record in records {
-        assert!(!alive(record.pid), "pid {} survived", record.pid);
+        assert!(
+            wait_until(Duration::from_secs(5), || !alive(record.pid)),
+            "pid {} survived",
+            record.pid
+        );
     }
     assert!(!fx.pidfile(1).exists());
     assert!(!fx.socket(1).exists());
