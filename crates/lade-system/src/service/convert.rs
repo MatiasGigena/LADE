@@ -154,6 +154,26 @@ pub fn git_rejection(error: &GitError) -> Rejection {
         GitError::TargetWorktreeUnavailable { .. } => {
             conflict("integration target checkout is missing on disk")
         }
+        GitError::TargetUntracked { paths, .. } => {
+            let names: Vec<String> = paths.iter().take(8).map(git::RepoPath::display).collect();
+            let more = if paths.len() > names.len() {
+                ", …"
+            } else {
+                ""
+            };
+            let detail = if names.is_empty() {
+                "integration target checkout cannot take the candidate (untracked files would be \
+                 overwritten); target left untouched"
+                    .to_string()
+            } else {
+                format!(
+                    "untracked files in the target checkout would be overwritten: {}{more}; move \
+                     or remove them — target left untouched",
+                    names.join(", ")
+                )
+            };
+            conflict(&preview(&detail, 512))
+        }
         GitError::CheckoutFailed { reverted: true, .. } => {
             conflict("target checkout could not be updated; target ref restored")
         }

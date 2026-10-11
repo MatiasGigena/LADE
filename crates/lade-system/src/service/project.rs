@@ -383,6 +383,7 @@ impl Service {
             available_actions: self.actions(st, target),
             session,
             approval,
+            history_deleted: st.row.history_deleted.then_some(true),
         }
     }
 
@@ -406,7 +407,7 @@ impl Service {
             (Some(c), Some(t)) => c.base_target_commit != *t,
             _ => false,
         };
-        let mut out = Vec::with_capacity(15);
+        let mut out = Vec::with_capacity(16);
         out.push(gate(
             ActionName::ObjectiveUpdateIntent,
             busy_reason.or((!matches!(
@@ -635,6 +636,10 @@ impl Service {
                 None
             }),
         ));
+        out.push(gate(
+            ActionName::ObjectiveDeleteHistory,
+            busy_reason.or(delete_history_blocker(st)),
+        ));
         out
     }
 
@@ -670,5 +675,17 @@ impl Service {
         self.emit(Event::ObjectiveChanged(detail.summary()));
         self.emit(Event::ObjectiveDetail(Box::new(detail)));
         self.enforce_terminal_scope(oid);
+    }
+}
+
+/// Why `objective.delete_history` is not available (it also needs explicit confirmation).
+pub(crate) fn delete_history_blocker(st: &ObjState) -> Option<&'static str> {
+    let record = st.objective().record();
+    if !record.cleaned_up {
+        Some("deleting history requires a cleaned-up objective")
+    } else if st.row.history_deleted {
+        Some("history already deleted")
+    } else {
+        None
     }
 }

@@ -175,6 +175,19 @@ pub fn file_lines(content: &FileContent) -> Vec<ViewLine> {
     out
 }
 
+/// Display position of source byte `byte` on `side` — the inverse of the selection map — when a
+/// displayed line holds it.
+pub fn position_at(lines: &[ViewLine], side: Side, byte: u64) -> Option<TextPos> {
+    lines.iter().enumerate().find_map(|(index, line)| {
+        let within = usize::try_from(byte.checked_sub(line.start(side)?)?).ok()?;
+        if within > line.source.len() {
+            return None;
+        }
+        let offset = line.char_bytes.iter().position(|b| *b >= within)?;
+        Some(TextPos::new(index, offset))
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TextPos {
     pub line: usize,
@@ -312,6 +325,21 @@ mod tests {
         ArtifactDigest, Basis, DiffHunk, DiffLine, FileEncoding, ObjectiveId, RepoPath,
     };
 
+    #[test]
+    fn search_ranges_map_back_to_the_same_bytes() {
+        let text = "ab\r\nαβ Needle x\n";
+        let lines = file(text);
+        let start = text.find("Needle").unwrap() as u64;
+        let from = position_at(&lines, Side::New, start).unwrap();
+        let to = position_at(&lines, Side::New, start + 6).unwrap();
+        assert_eq!((from, to), (TextPos::new(1, 3), TextPos::new(1, 9)));
+        let mapped = map_selection(&lines, from, to).unwrap();
+        assert_eq!((mapped.start, mapped.end), (start, start + 6));
+        assert_eq!(mapped.selected_text, "Needle");
+        assert_eq!(position_at(&lines, Side::Old, start), None);
+        assert_eq!(position_at(&lines, Side::New, 1_000), None);
+    }
+
     fn file(text: &str) -> Vec<ViewLine> {
         file_lines(&FileContent {
             objective_id: ObjectiveId::new("o"),
@@ -325,6 +353,7 @@ mod tests {
             loaded_bytes: text.len() as u64,
             eof: true,
             version_label: "Working".into(),
+            chunked: false,
         })
     }
 

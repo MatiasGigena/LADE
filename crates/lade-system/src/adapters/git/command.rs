@@ -6,12 +6,19 @@
 //! command-line precedence, so they win over the untrusted repository configuration, they accept
 //! arbitrary bytes in subsection names, and Git propagates them to any Git child process.
 //!
+//! Before every invocation the configuration visible to it (repository, worktree and included
+//! files) is enumerated once and every repository-defined filter driver, merge driver and
+//! configuration-defined hook (`hook.<name>.command`, newer Git) is overridden in the same way,
+//! so nothing the untrusted configuration names can run, whatever the subcommand or Git version.
+//!
 //! Children receive only stdin/stdout/stderr: the standard library opens every descriptor with
 //! `O_CLOEXEC`, so nothing else the service holds is inherited.
 
+use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
@@ -21,6 +28,7 @@ use super::GitError;
 /// Maximum stderr bytes retained for diagnostics.
 pub const STDERR_LIMIT: usize = 2048;
 const DEFAULT_STDOUT_LIMIT: usize = 64 << 20;
+const CONFIG_SCAN_LIMIT: usize = 4 << 20;
 const GIT_PROGRAM: &str = "git";
 const FALLBACK_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 
@@ -112,6 +120,9 @@ pub(crate) struct GitCommand {
     read_only: bool,
     stdin: Option<Vec<u8>>,
     stdout_limit: usize,
+    /// Enumerate the visible configuration first and neutralise what it defines (see
+    /// [`untrusted_overrides`]). Off only for the enumeration itself and `git version`.
+    scan_config: bool,
 }
 
 impl GitCommand {
@@ -128,7 +139,15 @@ impl GitCommand {
             read_only: false,
             stdin: None,
             stdout_limit: DEFAULT_STDOUT_LIMIT,
+            scan_config: true,
         }
+    }
+
+    /// Skip the configuration scan: only for commands that read no repository configuration
+    /// (`git version`) and for the scan itself.
+    pub(crate) fn without_config_scan(mut self) -> Self {
+        self.scan_config = false;
+        self
     }
 
     /// Explicit `--git-dir`; repository discovery through a (possibly worker-written) `.git` file
@@ -178,11 +197,6 @@ impl GitCommand {
         self
     }
 
-    pub(crate) fn configs(mut self, pairs: &[(OsString, OsString)]) -> Self {
-        self.config.extend_from_slice(pairs);
-        self
-    }
-
     /// Read-only invocation: `GIT_OPTIONAL_LOCKS=0` so no opportunistic index refresh is written.
     pub(crate) fn read_only(mut self) -> Self {
         self.read_only = true;
@@ -199,7 +213,9 @@ impl GitCommand {
         self
     }
 
-    fn build(&self) -> Command {
+    /// The process for this invocation; `scanned` are the overrides derived from the visible
+    /// configuration (they follow the fixed ones and precede explicit [`Self::config`] values).
+    fn build(&self, scanned: &[(OsString, OsString)]) -> Command {
         let mut cmd = Command::new(GIT_PROGRAM);
         cmd.env_clear();
         cmd.env(
@@ -223,14 +239,15 @@ impl GitCommand {
         if self.read_only {
             cmd.env("GIT_OPTIONAL_LOCKS", "0");
         }
-        let total = HARDENED_CONFIG.len() + self.config.len();
+        let total = HARDENED_CONFIG.len() + scanned.len() + self.config.len();
         cmd.env("GIT_CONFIG_COUNT", total.to_string());
         let pairs = HARDENED_CONFIG
             .iter()
             .map(|(k, v)| (OsStr::new(k), OsStr::new(v)))
             .chain(
-                self.config
+                scanned
                     .iter()
+                    .chain(&self.config)
                     .map(|(k, v)| (k.as_os_str(), v.as_os_str())),
             );
         for (i, (key, value)) in pairs.enumerate() {
@@ -258,9 +275,27 @@ impl GitCommand {
         cmd
     }
 
+    /// The configuration scan for this invocation: same repository selection, only the fixed
+    /// overrides (`git config` itself runs no hooks, filters or drivers).
+    fn scan(&self) -> Result<Vec<(OsString, OsString)>, GitError> {
+        if !self.scan_config {
+            return Ok(Vec::new());
+        }
+        let mut scan = GitCommand::new("config-scan")
+            .without_config_scan()
+            .read_only()
+            .args(["config", "--list", "-z", "--name-only"])
+            .stdout_limit(CONFIG_SCAN_LIMIT);
+        scan.git_dir.clone_from(&self.git_dir);
+        scan.work_tree.clone_from(&self.work_tree);
+        scan.cwd.clone_from(&self.cwd);
+        Ok(untrusted_overrides(&scan.run()?))
+    }
+
     fn spawn(self) -> Result<Running, GitError> {
         let op = self.op;
-        let mut cmd = self.build();
+        let scanned = self.scan()?;
+        let mut cmd = self.build(&scanned);
         cmd.stdin(if self.stdin.is_some() {
             Stdio::piped()
         } else {
@@ -362,6 +397,69 @@ impl GitCommand {
     }
 }
 
+/// Command-scope overrides that neutralise everything the (untrusted) configuration names in
+/// `names` (`git config --list -z --name-only` output):
+///
+/// - filter drivers become no-ops (content passes through unconverted, `required` off);
+/// - custom merge drivers become `false`, so affected paths report conflicts instead of running;
+/// - configuration-defined hooks (`hook.<name>.command`/`.event`/`.enabled`, newer Git) lose
+///   their command and events and are disabled. An empty `event` resets that multi-valued list
+///   where Git supports resetting and is an inert extra value otherwise.
+///
+/// Git versions without a feature ignore its keys, so the overrides are unconditional.
+pub(crate) fn untrusted_overrides(names: &[u8]) -> Vec<(OsString, OsString)> {
+    let mut filters = BTreeSet::new();
+    let mut merges = BTreeSet::new();
+    let mut hooks = BTreeSet::new();
+    for name in names.split(|b| *b == 0).filter(|n| !n.is_empty()) {
+        let split = |rest: &[u8]| {
+            rest.iter()
+                .rposition(|b| *b == b'.')
+                .map(|dot| (rest[..dot].to_vec(), rest[dot + 1..].to_ascii_lowercase()))
+        };
+        let section = |prefix: &[u8]| {
+            (name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(prefix))
+                .then(|| &name[prefix.len()..])
+                .and_then(split)
+        };
+        if let Some((sub, key)) = section(b"filter.")
+            && matches!(&key[..], b"clean" | b"smudge" | b"process" | b"required")
+        {
+            filters.insert(sub);
+        } else if let Some((sub, key)) = section(b"merge.")
+            && matches!(&key[..], b"driver" | b"recursive")
+        {
+            merges.insert(sub);
+        } else if let Some((sub, _)) = section(b"hook.") {
+            hooks.insert(sub);
+        }
+    }
+    let key = |section: &[u8], sub: &[u8], name: &[u8]| {
+        OsString::from_vec([section, b".", sub, b".", name].concat())
+    };
+    let mut pairs = Vec::new();
+    for sub in &filters {
+        for (name, value) in [
+            (&b"clean"[..], ""),
+            (b"smudge", ""),
+            (b"process", ""),
+            (b"required", "false"),
+        ] {
+            pairs.push((key(b"filter", sub, name), OsString::from(value)));
+        }
+    }
+    for sub in &merges {
+        pairs.push((key(b"merge", sub, b"driver"), OsString::from("false")));
+        pairs.push((key(b"merge", sub, b"recursive"), OsString::from("binary")));
+    }
+    for sub in &hooks {
+        for (name, value) in [(&b"command"[..], ""), (b"event", ""), (b"enabled", "false")] {
+            pairs.push((key(b"hook", sub, name), OsString::from(value)));
+        }
+    }
+    pairs
+}
+
 struct Running {
     op: &'static str,
     child: Child,
@@ -420,5 +518,106 @@ impl GitStream {
 
     pub(crate) fn op(&self) -> &'static str {
         self.running.op
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(names: &[u8]) -> Vec<(String, String)> {
+        untrusted_overrides(names)
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    String::from_utf8_lossy(k.as_encoded_bytes()).into_owned(),
+                    v.into_string().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn configuration_hooks_filters_and_merge_drivers_are_overridden() {
+        let names = b"core.bare\0hook.evil.command\0hook.evil.event\0hook.a.b.enabled\0\
+            filter.lfs.clean\0filter.lfs.smudge\0merge.ours.driver\0hookx.y.command\0hook.command\0";
+        let got = pairs(names);
+        let has = |k: &str, v: &str| got.iter().any(|(gk, gv)| gk == k && gv == v);
+        for name in ["evil", "a.b"] {
+            assert!(has(&format!("hook.{name}.command"), ""), "{got:?}");
+            assert!(has(&format!("hook.{name}.event"), ""), "{got:?}");
+            assert!(has(&format!("hook.{name}.enabled"), "false"), "{got:?}");
+        }
+        assert!(has("filter.lfs.clean", "") && has("filter.lfs.required", "false"));
+        assert!(has("merge.ours.driver", "false"));
+        assert!(
+            !got.iter()
+                .any(|(k, _)| k.starts_with("hookx.") || k == "hook.command")
+        );
+        // Two hooks (3 keys each), one filter (4), one merge driver (2).
+        assert_eq!(got.len(), 12, "{got:?}");
+    }
+
+    #[test]
+    fn subsection_bytes_are_kept_exactly() {
+        let got = untrusted_overrides(b"hook.caf\xe9 X.command\0");
+        assert_eq!(got[0].0.as_encoded_bytes(), b"hook.caf\xe9 X.command");
+    }
+
+    /// Every invocation carries the overrides derived from the repository's configuration.
+    #[test]
+    fn invocations_emit_the_scanned_overrides() {
+        let dir = std::env::temp_dir().join(format!(
+            "lade-command-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let setup = |args: &[&str]| {
+            let status = GitCommand::new("test-setup")
+                .without_config_scan()
+                .cwd(&dir)
+                .args(args)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "{args:?}");
+        };
+        setup(&["init", "-q"]);
+        setup(&["config", "hook.marker.command", "touch /nonexistent/marker"]);
+        setup(&["config", "hook.marker.event", "pre-commit"]);
+        let cmd = GitCommand::new("rev-parse")
+            .git_dir(&dir.join(".git"))
+            .work_tree(&dir)
+            .args(["rev-parse", "--git-dir"]);
+        let scanned = cmd.scan().unwrap();
+        let built = cmd.build(&scanned);
+        let env: Vec<(String, String)> = built
+            .get_envs()
+            .filter_map(|(k, v)| Some((k.to_str()?.to_owned(), v?.to_str()?.to_owned())))
+            .collect();
+        let value_of = |key: &str| {
+            env.iter()
+                .find(|(k, v)| k.starts_with("GIT_CONFIG_KEY_") && v == key)
+                .and_then(|(k, _)| {
+                    let index = k.trim_start_matches("GIT_CONFIG_KEY_");
+                    env.iter()
+                        .find(|(vk, _)| *vk == format!("GIT_CONFIG_VALUE_{index}"))
+                        .map(|(_, v)| v.clone())
+                })
+        };
+        assert_eq!(value_of("hook.marker.command").as_deref(), Some(""));
+        assert_eq!(value_of("hook.marker.event").as_deref(), Some(""));
+        assert_eq!(value_of("hook.marker.enabled").as_deref(), Some("false"));
+        assert_eq!(value_of("core.hooksPath").as_deref(), Some("/dev/null"));
+        let count: usize = env
+            .iter()
+            .find(|(k, _)| k == "GIT_CONFIG_COUNT")
+            .map(|(_, v)| v.parse().unwrap())
+            .unwrap();
+        assert_eq!(count, HARDENED_CONFIG.len() + scanned.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

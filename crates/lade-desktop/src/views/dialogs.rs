@@ -113,6 +113,40 @@ pub fn cleanup(
     dialog.present();
 }
 
+/// The deliberate deletion of a cleaned-up Objective's Git history. The button stays disabled
+/// until the user ticks the acknowledgement; nothing else ever sends this request.
+pub fn delete_history(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>, title: &str) {
+    let dialog = Dialog::new(opener, "Delete Git history", 500);
+    dialog.body.append(&label(
+        &format!(
+            "This deletes the retention references (refs/lade/retain/…) that keep every inspected capture and candidate of “{title}”, and its lade/ branch if it still exists. Git may then garbage-collect that content: candidates and captures of this Objective can no longer be inspected, and draft or feedback references into them cannot be re-checked. Integrated commits on the target, the Objective record, accepted inputs and review evidence are kept."
+        ),
+        &[],
+    ));
+    let check =
+        gtk::CheckButton::with_label("I understand this history cannot be restored by LADE");
+    dialog.body.append(&check);
+    dialog.add_cancel().grab_focus();
+    let ok = dialog.add_button("Delete history", &["destructive"]);
+    ok.set_sensitive(false);
+    let button = ok.clone();
+    check.connect_toggled(move |c| button.set_sensitive(c.is_active()));
+    let window = dialog.window.clone();
+    let controller = controller.clone();
+    let dialog = Rc::new(dialog);
+    let d = dialog.clone();
+    ok.connect_clicked(move |_| {
+        if !check.is_active() {
+            return;
+        }
+        match controller.delete_history() {
+            Ok(()) => window.close(),
+            Err(message) => d.show_error(&message),
+        }
+    });
+    dialog.present();
+}
+
 /// Lists the exact items, destination and mode before the explicit submission request.
 pub fn submit_feedback(
     opener: &impl IsA<gtk::Widget>,

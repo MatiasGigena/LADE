@@ -135,6 +135,8 @@ pub struct ObjectiveRow {
     pub git_branch: Option<String>,
     pub worktree: Option<PathBuf>,
     pub integration_conflict: bool,
+    /// The retention refs and branch were deleted by `objective.delete_history`.
+    pub history_deleted: bool,
 }
 
 pub fn save_objective(conn: &Connection, row: &ObjectiveRow) -> Sql<()> {
@@ -150,9 +152,9 @@ pub fn save_objective(conn: &Connection, row: &ObjectiveRow) -> Sql<()> {
             intent_revision, integration_target, start_algorithm, start_commit, branch, lifecycle,
             exec_state, exec_interrupted, exec_reason, exec_generation, session_id,
             association_revision, model_provider, model_id, cleaned_up, created_at, updated_at,
-            revision, git_branch, worktree_path, integration_conflict)
+            revision, git_branch, worktree_path, integration_conflict, history_deleted)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+            ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, outcome = excluded.outcome,
             constraints_text = excluded.constraints_text, acceptance = excluded.acceptance,
             intent_revision = excluded.intent_revision, lifecycle = excluded.lifecycle,
@@ -163,7 +165,8 @@ pub fn save_objective(conn: &Connection, row: &ObjectiveRow) -> Sql<()> {
             cleaned_up = excluded.cleaned_up, updated_at = excluded.updated_at,
             revision = excluded.revision, git_branch = excluded.git_branch,
             worktree_path = excluded.worktree_path,
-            integration_conflict = excluded.integration_conflict",
+            integration_conflict = excluded.integration_conflict,
+            history_deleted = excluded.history_deleted",
         params![
             r.id.to_string(),
             r.workspace_id.to_string(),
@@ -194,6 +197,7 @@ pub fn save_objective(conn: &Connection, row: &ObjectiveRow) -> Sql<()> {
                 .as_ref()
                 .map(|p| p.as_os_str().as_bytes().to_vec()),
             row.integration_conflict,
+            row.history_deleted,
         ],
     )?;
     Ok(())
@@ -255,6 +259,7 @@ fn objective_from_row(row: &Row<'_>) -> Sql<ObjectiveRow> {
         git_branch: row.get(24)?,
         worktree: worktree.map(|bytes| PathBuf::from(OsString::from_vec(bytes))),
         integration_conflict: row.get(26)?,
+        history_deleted: row.get(27)?,
     })
 }
 
@@ -264,7 +269,7 @@ pub fn load_objectives(conn: &Connection) -> Sql<Vec<ObjectiveRow>> {
             integration_target, start_algorithm, start_commit, branch, lifecycle, exec_state,
             exec_interrupted, exec_reason, exec_generation, session_id, association_revision,
             model_provider, model_id, cleaned_up, created_at, updated_at, revision, git_branch,
-            worktree_path, integration_conflict
+            worktree_path, integration_conflict, history_deleted
          FROM objectives ORDER BY created_at, id",
     )?;
     let rows = stmt.query_map([], objective_from_row)?;
@@ -372,6 +377,14 @@ pub fn load_capture(conn: &Connection, id: CaptureId) -> Sql<Option<CaptureRow>>
         capture_from_row,
     )
     .optional()
+}
+
+/// Every retention ref recorded for the captures of `objective`.
+pub fn capture_retention_refs(conn: &Connection, objective: ObjectiveId) -> Sql<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT retention_ref FROM captures WHERE objective_id = ?1 ORDER BY rowid")?;
+    let rows = stmt.query_map(params![objective.to_string()], |row| row.get(0))?;
+    rows.collect()
 }
 
 pub fn latest_captures(conn: &Connection) -> Sql<Vec<CaptureRow>> {

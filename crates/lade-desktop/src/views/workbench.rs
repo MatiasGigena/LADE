@@ -494,6 +494,15 @@ impl Workbench {
             self.version.append(&row);
         }
 
+        // Content the Change Set cannot fully represent (nested repositories without a commit,
+        // filtered/LFS files) is stated explicitly instead of looking like ordinary changes.
+        for notice in &list.notices {
+            let text = match &notice.path {
+                Some(path) => format!("{}: {}", path.display, notice.message),
+                None => notice.message.clone(),
+            };
+            self.version.append(&widgets::warning_line(&text));
+        }
         if list.files.is_empty() {
             self.files_status
                 .append(&label("No changes against the target.", &["meta"]));
@@ -546,6 +555,9 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
         widgets::counts(file.added, file.removed).upcast::<gtk::Widget>()
     };
     text.append(&detail);
+    if file.filtered {
+        text.append(&label("filtered (LFS) — raw bytes, unsupported", &["meta"]));
+    }
     content.append(&text);
     row.set_child(Some(&content));
     let mut spoken = format!("{}, {status}", file.path.display);
@@ -556,6 +568,9 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
         spoken.push_str(", binary");
     } else {
         spoken.push_str(&format!(", {} added, {} removed", file.added, file.removed));
+    }
+    if file.filtered {
+        spoken.push_str(", filtered content compared as raw bytes, unsupported");
     }
     set_accessible_label(&row, &spoken);
     row.set_tooltip_text(Some(&file.path.display));

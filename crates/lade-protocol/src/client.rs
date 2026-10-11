@@ -211,6 +211,7 @@ requests! {
     TerminalResize = "terminal.resize", false, TerminalResizeCommand => Empty;
     TerminalClose = "terminal.close", false, TerminalSelector => Empty;
     ServiceStop = "service.stop", true, ServiceStopCommand => Empty;
+    ObjectiveDeleteHistory = "objective.delete_history", true, ObjectiveHistoryDeleteCommand => Box<ObjectiveDetail>;
 }
 
 impl Serialize for RequestName {
@@ -795,6 +796,8 @@ pub enum ActionName {
     ObjectiveDiscard,
     #[serde(rename = "objective.cleanup")]
     ObjectiveCleanup,
+    #[serde(rename = "objective.delete_history")]
+    ObjectiveDeleteHistory,
 }
 impl From<ActionName> for RequestName {
     fn from(action: ActionName) -> Self {
@@ -814,6 +817,7 @@ impl From<ActionName> for RequestName {
             ActionName::ObjectiveComplete => Self::ObjectiveComplete,
             ActionName::ObjectiveDiscard => Self::ObjectiveDiscard,
             ActionName::ObjectiveCleanup => Self::ObjectiveCleanup,
+            ActionName::ObjectiveDeleteHistory => Self::ObjectiveDeleteHistory,
         }
     }
 }
@@ -956,6 +960,9 @@ wire_struct!(ObjectiveDetail {
     session: Option<SessionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval: Option<ApprovalSummary>,
+    /// The Objective's Git history (retention refs, branch) was deleted on explicit request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_deleted: Option<bool>,
 });
 impl ObjectiveDetail {
     pub fn summary(&self) -> ObjectiveSummary {
@@ -993,7 +1000,23 @@ wire_struct!(ChangedFile {
     binary: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     old_path: Option<WirePath>,
+    /// The path's `filter` attribute names a filter driver: raw bytes compared (unsupported).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filtered: Option<bool>,
 });
+wire_enum!(ContentNoticeKind {
+    NestedRepository,
+    FilteredContent,
+});
+wire_struct!(
+    /// Why part of a Change Set is not (fully) represented.
+    ContentNotice {
+        kind: ContentNoticeKind,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<WirePath>,
+    }
+);
 
 /// Comparison basis for Change Set queries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1097,8 +1120,15 @@ wire_struct!(SearchResult {
     path: Option<WirePath>,
     #[serde(skip_serializing_if = "Option::is_none")]
     line: Option<Counter>,
+    /// Start of the first match in the raw file bytes (content results).
     #[serde(skip_serializing_if = "Option::is_none")]
     byte_start: Option<Counter>,
+    /// 1-based byte column of the first match in its line.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<Counter>,
+    /// End (exclusive) of the first match in the raw file bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    byte_end: Option<Counter>,
 });
 
 // Request payloads.
@@ -1206,6 +1236,13 @@ wire_struct!(ObjectiveCleanupCommand {
     objective_id: Id,
     confirm_data_loss: bool,
 });
+wire_struct!(
+    /// Deliberate deletion of a cleaned-up Objective's retention refs and branch.
+    ObjectiveHistoryDeleteCommand {
+        objective_id: Id,
+        confirm_history_loss: bool,
+    }
+);
 wire_struct!(SettingsUpdateCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     default_model: Option<Model>,
@@ -1236,6 +1273,8 @@ wire_struct!(ChangeList {
     capture_id: Option<Id>,
     #[serde(skip_serializing_if = "Option::is_none")]
     candidate_id: Option<Id>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notices: Option<Vec<ContentNotice>>,
 });
 wire_struct!(FileContent {
     artifact_digest: Digest,
@@ -1247,6 +1286,9 @@ wire_struct!(FileContent {
     version_label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    /// Served in bounded chunks: the file exceeds the whole-file inspection bound.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chunked: Option<bool>,
 });
 wire_struct!(FileDiff {
     binary: bool,

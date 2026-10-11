@@ -155,7 +155,7 @@ client.update({
     'ActionName': enum('objective.update_intent', 'execution.start', 'execution.cancel', 'execution.resume',
                        'message.send', 'feedback.submit', 'review.freeze', 'review.return', 'review.verify',
                        'review.approve', 'review.refresh', 'review.integrate', 'objective.complete',
-                       'objective.discard', 'objective.cleanup'),
+                       'objective.discard', 'objective.cleanup', 'objective.delete_history'),
     'AvailableAction': obj({'action': ref('ActionName'), 'enabled': BOOL}, {'reason': ref('ShortText')}),
     'CandidateSummary': obj({'candidate_id': ID, 'ordinal': COUNTER, 'commit': ref('GitId'),
                              'base_target_commit': ref('GitId'),
@@ -178,14 +178,23 @@ client['ObjectiveDetail'] = obj({
     'candidates': array(ref('CandidateSummary'), 256), 'verifications': array(ref('VerificationSummary'), 256),
     'change_counts': ref('ChangeCounts'), 'unsent_drafts': COUNTER,
     'available_actions': array(ref('AvailableAction'), 32),
-}, {'session': ref('SessionInfo'), 'approval': ref('ApprovalSummary')})
+}, {'session': ref('SessionInfo'), 'approval': ref('ApprovalSummary'),
+    # The Objective's Git history (retention refs, branch) was deleted on the user's explicit request.
+    'history_deleted': BOOL})
 client.update({
     'ActivityItem': obj({'item_id': ID, 'seq': COUNTER, 'at': TS, 'role': ref('ActivityRole'),
                          'title': ref('Preview'), 'text': string(), 'is_error': BOOL, 'truncated': BOOL},
                         {'tool_name': ref('Label')}),
     'ChangedFile': obj({'path': ref('Path'),
                         'status': enum('added', 'modified', 'deleted', 'renamed', 'type_changed'),
-                        'added': COUNTER, 'removed': COUNTER, 'binary': BOOL}, {'old_path': ref('Path')}),
+                        'added': COUNTER, 'removed': COUNTER, 'binary': BOOL},
+                       # filtered: the path's `filter` attribute names a filter driver (Git LFS, clean/smudge);
+                       # LADE never runs filters, so its raw working-tree bytes are compared (unsupported content).
+                       {'old_path': ref('Path'), 'filtered': BOOL}),
+    # Why part of a Change Set is not (fully) represented: a nested repository without a commit left out of
+    # the capture, or filtered content stored raw. Repository-wide notices carry no path.
+    'ContentNotice': obj({'kind': enum('nested_repository', 'filtered_content'), 'message': ref('ShortText')},
+                         {'path': ref('Path')}),
     'ReferenceVersion': one_of(obj({'kind': const('working'), 'capture_id': ID}),
                                obj({'kind': const('candidate'), 'candidate_id': ID})),
     'Reference': obj({'artifact_digest': ref('Digest'), 'path': ref('Path'), 'version': ref('ReferenceVersion'),
@@ -203,8 +212,11 @@ client.update({
                     {'old_no': COUNTER, 'new_no': COUNTER, 'old_byte_start': COUNTER, 'new_byte_start': COUNTER}),
     'DiffHunk': obj({'old_start': COUNTER, 'old_lines': COUNTER, 'new_start': COUNTER, 'new_lines': COUNTER,
                      'lines': array(ref('DiffLine'), 1024)}),
+    # Content results: 1-based line and byte column, and the exact byte range [byte_start, byte_end) of the first
+    # match in the raw file bytes (the bytes file.read retains), when the file is small enough to locate it.
     'SearchResult': obj({'kind': enum('objective', 'file', 'content'), 'preview': ref('Preview')},
-                        {'objective_id': ID, 'path': ref('Path'), 'line': COUNTER, 'byte_start': COUNTER}),
+                        {'objective_id': ID, 'path': ref('Path'), 'line': COUNTER, 'byte_start': COUNTER,
+                         'column': COUNTER, 'byte_end': COUNTER}),
     # Payloads (request name -> payload def).
     'ObjectiveSelector': obj(O),
     'ActivityPageQuery': obj({**O, 'limit': ref('PageLimit')}, {'before': COUNTER}),
@@ -234,6 +246,8 @@ client.update({
                                 {'override_reason': string(min_length=1, max_length=2048)}),
     'ReviewIntegrateCommand': obj({**O, 'approval_id': ID}),
     'ObjectiveCleanupCommand': obj({**O, 'confirm_data_loss': BOOL}),
+    # Deliberate, user-confirmed deletion of a cleaned-up Objective's retention refs and branch; never automatic.
+    'ObjectiveHistoryDeleteCommand': obj({**O, 'confirm_history_loss': BOOL}),
     'SettingsUpdateCommand': obj({}, {'default_model': ref('Model'),
                                       'verification_commands': array(ref('Argv'), 32)}),
     # Reply data.
@@ -243,10 +257,13 @@ client.update({
     'ChangeList': obj({'basis_label': ref('Label'), 'target': ref('TargetRef'),
                        'files': array(ref('ChangedFile'), 1024), 'truncated': BOOL,
                        'total_added': COUNTER, 'total_removed': COUNTER},
-                      {'capture_id': ID, 'candidate_id': ID}),
+                      {'capture_id': ID, 'candidate_id': ID, 'notices': array(ref('ContentNotice'), 64)}),
     'FileContent': obj({'artifact_digest': ref('Digest'), 'total_bytes': COUNTER, 'offset': COUNTER,
                         'length': COUNTER, 'encoding': enum('utf8', 'binary'), 'eof': BOOL,
-                        'version_label': ref('Label')}, {'text': string()}),
+                        'version_label': ref('Label')},
+                       # chunked: the file exceeds the whole-file inspection bound and is served in bounded chunks
+                       # (encoding judged per chunk); the artifact still holds the whole file.
+                       {'text': string(), 'chunked': BOOL}),
     'FileDiff': obj({'binary': BOOL, 'hunks': array(ref('DiffHunk'), 512), 'truncated': BOOL},
                     {'old_digest': ref('Digest'), 'new_digest': ref('Digest')}),
     'SearchResults': obj({'scope_label': ref('Label'), 'results': array(ref('SearchResult'), 200),
@@ -375,6 +392,7 @@ REQUESTS = [
     ('resource.decide', True, 'ResourceDecideCommand', 'ResourceInventory'),
     ('profile.import', True, 'ProfileImportCommand', 'ProfileImportResult'),
     ('ui.respond', True, 'UiRespondCommand', 'Empty'),
+    ('objective.delete_history', True, 'ObjectiveHistoryDeleteCommand', 'ObjectiveDetail'),
 ]
 EVENTS = [
     ('objective.changed', 'ObjectiveSummary'),

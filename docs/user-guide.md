@@ -91,9 +91,21 @@ Text you type or paste into drafts, messages and intents is limited to 256 KiB p
 
 ## 3. Open a repository (Workspace)
 
-Ctrl+O and choose the **top-level directory** of a non-bare Git repository. LADE never runs the repository's hooks,
-filters or credential helpers, and never edits your checkout except when you integrate into a checked-out target
-branch (§7). Repositories using Git LFS or other filters are not supported.
+Ctrl+O and choose the **top-level directory** of a non-bare Git repository. LADE never runs the repository's hooks
+(including hooks defined in configuration), filters or credential helpers, and never edits your checkout except when
+you integrate into a checked-out target branch (§7).
+
+- **Git LFS and other filters are not supported.** LADE compares and stores the raw bytes in the worktree; files whose
+  `filter` attribute names a driver are marked *filtered (LFS) — raw bytes, unsupported* in the Change Set, with a
+  notice above the file list.
+- A nested repository without any commit inside the Objective's worktree is left out of the Change Set and named in a
+  notice (commit inside it, or move it out). A nested repository with a commit is recorded as a submodule entry.
+- Ignore rules are the repository's `.gitignore` files and `.git/info/exclude` plus **your own global excludes
+  file** (`core.excludesFile` in `~/.gitconfig` or `~/.config/git/config`, else `~/.config/git/ignore`). A
+  `core.excludesFile` set in the repository's own configuration is ignored. File modes and symlinks are always
+  recorded exactly, whatever the repository's `core.fileMode`/`core.symlinks`.
+- Branch names that are not valid UTF-8 are listed with `\xHH` escapes; they cannot be chosen as an integration
+  target.
 
 ## 4. Create an Objective
 
@@ -163,7 +175,10 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 ## 7. Inspect, give feedback, review and integrate
 
 1. **Inspect.** The Workbench lists the changed files of the Change Set with a diff or full-file view. Each view
-   names its version (working copy capture or a frozen candidate). Ctrl+K searches Objectives, paths or content.
+   names its version (working copy capture or a frozen candidate). Ctrl+K searches Objectives, paths or content;
+   opening a content result shows the full file with the first match selected, ready for *Add feedback*. Files
+   larger than 64 MiB (up to 1 GiB) open in chunks of up to 256 KiB — *Load more* continues; larger files cannot be
+   inspected.
 2. **Feedback.** Select text in a diff or file and press Ctrl+Shift+M (or *Add feedback*). Drafts are stored by the
    service (each shows whether its latest edit is saved) and survive closing the window. **Submit** sends all selected drafts together to the identified
    Agent Session after you confirm the destination. If any referenced text changed since you selected it, the
@@ -180,7 +195,8 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
    candidate on the new target (or reports a conflict), then verify and approve again.
 6. **Integrate.** A separate, explicit action creates one squash commit on the target branch. If the target is
    checked out, it must be clean and not mid-merge/rebase; otherwise integration is refused and nothing changes.
-   LADE never stashes, resets or force-updates.
+   An untracked file in the target checkout where the candidate adds one is named in the refusal; move or remove it
+   and integrate again. LADE never stashes, resets or force-updates.
 
 ## 8. Finish: complete, discard, clean up
 
@@ -189,6 +205,10 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 - **Clean up** — after integration, completion or discard, removes the Objective's worktree and branch. If the
   worktree holds work not in the branch, LADE asks you to confirm the data loss. Records, history, retention refs
   (`refs/lade/retain/*`) and artifacts stay.
+- **Delete Git history** — only after Clean up, and only when you confirm the dialog: deletes the Objective's retention
+  refs (and its `lade/*` branch if one is left), so Git may later garbage-collect its captures and candidates; they can
+  then no longer be inspected. Integrated commits, the Objective record, accepted inputs, review evidence and stored
+  artifacts stay. LADE never does this on its own.
 
 ## 9. Where data lives
 
@@ -201,7 +221,8 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 | In your repositories | branches `lade/*`, retention refs `refs/lade/retain/*`, registered worktrees |
 
 Uninstalling never deletes `~/.local/state/lade` unless you ask with `--purge-data` and confirm. Back it up like any
-other project data; its history is kept until you delete it.
+other project data; its history is kept until you delete it. Retention refs in your repositories are removed only by
+*Delete Git history* (§8).
 
 ## 10. Troubleshooting
 

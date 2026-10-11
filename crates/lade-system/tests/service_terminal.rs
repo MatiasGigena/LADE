@@ -250,11 +250,12 @@ fn lease_loss_kills_terminals_and_a_second_client_gets_none() {
         }))
         .unwrap_err();
     assert_eq!(gone.code, ErrorCode::NotFound);
+    // The reaper removes the pidfile after the sandbox exits, which can lag the lease loss.
     assert!(
-        fs::read_dir(env.root.path().join("state/run"))
+        wait_until(|| fs::read_dir(env.root.path().join("state/run"))
             .unwrap()
             .flatten()
-            .all(|e| !e.file_name().to_string_lossy().starts_with("terminal-")),
+            .all(|e| !e.file_name().to_string_lossy().starts_with("terminal-"))),
         "pidfile removed"
     );
 }

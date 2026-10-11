@@ -13,6 +13,10 @@ pub const MAX_GREP_RESULTS: usize = 1000;
 const MAX_GREP_PREVIEW: usize = 512;
 const MAX_GREP_OUTPUT: u64 = 16 << 20;
 const MAX_GREP_QUERY: usize = 1024;
+/// Matched blobs larger than this get no byte offsets (line and column only).
+pub const MAX_GREP_OFFSET_BLOB: u64 = 16 << 20;
+/// Total matched-blob bytes read per search to compute byte offsets.
+const MAX_GREP_OFFSET_TOTAL: u64 = 64 << 20;
 
 /// Kind of a tree entry's object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +68,12 @@ pub struct GrepMatch {
     pub line: u64,
     /// 1-based byte column of the first match in the line.
     pub column: u64,
+    /// Byte range `[byte_start, byte_end)` of the first match within the blob (the exact raw
+    /// bytes `file.read` retains), confirmed against those bytes. Both `None` when the blob
+    /// exceeds [`MAX_GREP_OFFSET_BLOB`], the per-search offset budget was spent or the match
+    /// could not be confirmed.
+    pub byte_start: Option<u64>,
+    pub byte_end: Option<u64>,
     /// Line bytes, at most 512.
     pub preview: Vec<u8>,
     pub preview_truncated: bool,
@@ -218,6 +228,34 @@ impl Repository {
         })
     }
 
+    /// Stream the raw bytes of blob `id` (no filters) to `consume`, which may read as much as it
+    /// needs; the process is reaped afterwards. A Git failure after `consume` returned is an
+    /// error, so a consumer that read to the end saw the complete blob.
+    pub fn with_blob_reader<R>(
+        &self,
+        id: &GitId,
+        consume: impl FnOnce(&mut dyn Read) -> R,
+    ) -> Result<R> {
+        self.check_id(id)?;
+        let mut stream = self
+            .git("cat-file")
+            .read_only()
+            .args(["cat-file", "blob", id.hex()])
+            .stream()?;
+        let op = stream.op();
+        let result = consume(stream.stdout());
+        let (status, stderr) = stream.finish()?;
+        if status.success() {
+            Ok(result)
+        } else {
+            Err(GitError::Failed {
+                op,
+                exit_code: status.code(),
+                stderr,
+            })
+        }
+    }
+
     /// Whole blob by id if it is at most `cap` bytes (`Ok(None)` when larger).
     pub(crate) fn read_blob_capped(&self, id: &GitId, cap: u64) -> Result<Option<Vec<u8>>> {
         let size = self
@@ -313,6 +351,8 @@ impl Repository {
                     path: RepoPath::from_git("grep", path)?,
                     line: number(&line)?,
                     column: number(&column)?,
+                    byte_start: None,
+                    byte_end: None,
                     preview,
                     preview_truncated,
                 });
@@ -325,18 +365,94 @@ impl Repository {
         if truncated {
             matches.truncate(max);
             stream.abort();
-            return Ok(GrepResults { matches, truncated });
+        } else {
+            let (status, stderr) = stream.finish()?;
+            if !matches!(status.code(), Some(0 | 1)) {
+                return Err(GitError::Failed {
+                    op,
+                    exit_code: status.code(),
+                    stderr,
+                });
+            }
         }
-        let (status, stderr) = stream.finish()?;
-        match status.code() {
-            Some(0 | 1) => Ok(GrepResults { matches, truncated }),
-            code => Err(GitError::Failed {
-                op,
-                exit_code: code,
-                stderr,
-            }),
-        }
+        self.grep_offsets(tree, query, &mut matches)?;
+        Ok(GrepResults { matches, truncated })
     }
+
+    /// Fill in exact byte offsets: the start of line `line` plus `column - 1`, and the match end
+    /// once the matched bytes are confirmed against the query (case-insensitively when asked).
+    fn grep_offsets(
+        &self,
+        tree: &GitId,
+        query: &GrepQuery,
+        matches: &mut [GrepMatch],
+    ) -> Result<()> {
+        let mut budget = MAX_GREP_OFFSET_TOTAL;
+        let mut index = 0;
+        while index < matches.len() {
+            let path = matches[index].path.clone();
+            let same = matches[index..]
+                .iter()
+                .take_while(|m| m.path == path)
+                .count();
+            let group = &mut matches[index..index + same];
+            index += same;
+            let Some(entry) = self.tree_entry(tree, &path)? else {
+                continue;
+            };
+            let Some(size) = entry
+                .size
+                .filter(|s| *s <= MAX_GREP_OFFSET_BLOB && *s <= budget)
+            else {
+                continue;
+            };
+            let Some(blob) = self.read_blob_capped(&entry.id, size)? else {
+                continue;
+            };
+            budget -= size;
+            let starts = line_starts(&blob);
+            for found in group {
+                let line_start = usize::try_from(found.line)
+                    .ok()
+                    .and_then(|n| n.checked_sub(1))
+                    .and_then(|n| starts.get(n).copied());
+                let column = usize::try_from(found.column)
+                    .ok()
+                    .and_then(|c| c.checked_sub(1));
+                let range = line_start
+                    .zip(column)
+                    .map(|(line, col)| line + col)
+                    .filter(|s| *s <= blob.len())
+                    .and_then(|s| {
+                        match_end(&blob[s..], &query.text, query.ignore_case).map(|n| (s, s + n))
+                    });
+                found.byte_start = range.map(|(s, _)| s as u64);
+                found.byte_end = range.map(|(_, e)| e as u64);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Byte start of every line of `bytes` (line `n` starts at `starts[n - 1]`).
+fn line_starts(bytes: &[u8]) -> Vec<usize> {
+    std::iter::once(0)
+        .chain(
+            bytes
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b == b'\n')
+                .map(|(i, _)| i + 1),
+        )
+        .collect()
+}
+
+/// Length in bytes of `needle` matched at the start of `hay`. Git runs with `LC_ALL=C`, so a
+/// case-insensitive match folds ASCII only and always has the needle's byte length.
+fn match_end(hay: &[u8], needle: &str, ignore_case: bool) -> Option<usize> {
+    let exact = needle.as_bytes();
+    let head = hay.get(..exact.len())?;
+    (head == exact || (ignore_case && head.eq_ignore_ascii_case(exact))).then_some(exact.len())
 }
 
 /// Read through `delim` (consumed, not stored), keeping at most `keep` bytes in `out`.

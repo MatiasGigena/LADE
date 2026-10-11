@@ -456,6 +456,13 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::command(intent.label(), Some(objective_id)),
         ),
+        I::DeleteHistory { objective_id } => (
+            Request::ObjectiveDeleteHistory(wire::ObjectiveHistoryDeleteCommand {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                confirm_history_loss: true,
+            }),
+            Context::command(intent.label(), Some(objective_id)),
+        ),
         I::UpdateSettings { default_model } => (
             Request::SettingsUpdate(wire::SettingsUpdateCommand {
                 default_model: Some(convert::to_model(default_model)),
@@ -797,7 +804,8 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             | ReplyData::ReviewIntegrate(d)
             | ReplyData::ObjectiveComplete(d)
             | ReplyData::ObjectiveDiscard(d)
-            | ReplyData::ObjectiveCleanup(d),
+            | ReplyData::ObjectiveCleanup(d)
+            | ReplyData::ObjectiveDeleteHistory(d),
         ) => updates.push(StoreUpdate::ObjectiveDetail(Box::new(convert::detail(&d)))),
         (Context::Activity(o), ReplyData::ActivityPage(p)) => {
             updates.push(StoreUpdate::ActivityPage {
