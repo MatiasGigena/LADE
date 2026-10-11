@@ -239,7 +239,14 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
 #[test]
 fn every_projected_action_agrees_with_its_request() {
     let env = Env::new("svc-actions");
-    let service = env.start(FakeLauncher::shared());
+    // Many live Objectives at once: the aggregate worker quota is not under test here.
+    let service = env.start_limited(
+        FakeLauncher::shared(),
+        lade_system::service::ResourceLimits {
+            max_workers: 256,
+            ..Default::default()
+        },
+    );
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
     let mut failures = Vec::new();
