@@ -422,6 +422,16 @@ not, then pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/
 arguments reference the state directory, leftover verification copies and `lade/verify/*` branches, and
 `$STATE/tmp`. With delegated cgroups `laded` has already killed and removed leftover sandbox cgroups.
 
+## Test-only fault injection
+
+`laded serve` started with `LADE_TEST_FAULTS_DIR=<absolute dir>` logs `test fault injection enabled` and then
+reads that directory at every `draft.save`: a file `draft.save` that is empty refuses the save with
+`durability_failure` before anything is written; containing `delay <ms>` (≤ 10 s) it holds the save on the service
+thread and then saves normally. Without the variable nothing is read. It exists only so that
+`scripts/e2e-resilience` can show the client's save-failure, retry and "Saved only after the acknowledgement"
+behaviour against the real service; it is **not a product setting** and the unit never sets it
+(`service/faults.rs`).
+
 ## Tests
 
 `crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage,inspect}.rs` run the real socket, real SQLite and disposable Git

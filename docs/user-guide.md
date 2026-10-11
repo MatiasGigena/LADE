@@ -85,7 +85,10 @@ sandbox with the service. LADE runs as one window: launching it again brings the
 opening a second one (and the service accepts only one controlling window anyway).
 
 - **Close the window** to step away: the service and running agents **keep working**; terminals end. Reopening the
-  window shows the same state.
+  window shows the same state. A feedback draft you were still typing is saved first (the window waits up to 2 s
+  for the service to confirm). If a draft cannot be saved — the save failed, it conflicts, or the service is not
+  reachable — the window asks: *Keep window open* (the default; retry beside the draft) or *Close and discard
+  unsaved text* (the draft keeps the last revision the service saved). Exit asks the same way.
 - **Exit** (the power button in the header, or Ctrl+Q, after a confirmation) stops LADE: running agents are stopped
   and recorded as interrupted, terminals end, the service exits. Nothing resumes on its own when LADE starts again —
   you resume each Objective explicitly. A window that does not control the service (another window does, or it is
@@ -229,9 +232,11 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
    names its version (working copy capture or a frozen candidate). Ctrl+K searches Objectives, paths or content;
    opening a content result shows the full file with the first match selected, ready for *Add feedback*. Files
    larger than 64 MiB (up to 1 GiB) open in chunks of up to 256 KiB — *Load more* continues; larger files cannot be
-   inspected.
+   inspected. Syntax is highlighted for languages GtkSourceView recognises by file name; text over 2 MiB or 40,000
+   lines is shown plain (the viewer says so) to stay responsive.
 2. **Feedback.** Select text in a diff or file and press Ctrl+Shift+M (or *Add feedback*). Drafts are stored by the
-   service (each shows whether its latest edit is saved) and survive closing the window. **Submit** sends all selected drafts together to the identified
+   service (each shows whether its latest edit is saved: *Saved rN* appears only after the service confirmed that
+   revision; a refused save shows *Save failed* with *Retry*) and survive closing the window. **Submit** sends all selected drafts together to the identified
    Agent Session after you confirm the destination. If any referenced text changed since you selected it, the
    **whole batch** is refused as stale and nothing is sent; re-select and resubmit. Feedback is guidance, never
    approval.
