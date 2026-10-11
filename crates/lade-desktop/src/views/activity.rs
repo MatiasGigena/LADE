@@ -1,5 +1,9 @@
 //! Activity: the Agent Session transcript with incremental appends and in-place delta updates,
 //! plus a composer (Prompt / Steer / Follow-up) and Cancel / Resume. New items never take focus.
+//!
+//! The agent's contextual tools live here, collapsed under one disclosure: the model and thinking
+//! picker, the Agent Session section (tree, apply, compact, reload, export, import) and the LADE
+//! profile resources.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -7,7 +11,10 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, action_row, hbox, label, set_accessible_label, set_focus_key, vbox};
+use super::session;
+use super::widgets::{
+    self, action_row, hbox, label, set_accessible_label, set_focus_key, space, vbox,
+};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
@@ -42,14 +49,20 @@ pub struct Activity {
     follow: Cell<bool>,
     auto_scrolling: Cell<bool>,
     scroll_pending: Cell<bool>,
+    /// Content of the collapsed agent tools (model, Agent Session, profile resources).
+    agent_panel: gtk::Box,
+    agent_error: RefCell<Option<String>>,
 }
+
+/// Title (and accessible name) of the agent tools disclosure.
+pub const AGENT_TOOLS_TITLE: &str = "Model, Agent Session and profile";
 
 impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let root = vbox(16);
+        let root = vbox(space::SECTION);
         root.add_css_class("activity");
-        let head = hbox(16);
-        let titles = vbox(4);
+        let head = hbox(space::SECTION);
+        let titles = vbox(space::TIGHT);
         titles.set_hexpand(true);
         let title = widgets::heading("Activity", "objective-heading");
         set_focus_key(&title, "activity:title");
@@ -58,11 +71,29 @@ impl Activity {
         let status = label("", &["meta"]);
         titles.append(&status);
         head.append(&titles);
-        let controls = hbox(8);
+        let controls = hbox(space::ITEM);
         controls.set_hexpand(false);
         controls.set_valign(gtk::Align::Start);
         head.append(&controls);
         root.append(&head);
+
+        // Contextual agent tools, on demand: collapsed, bounded in height when open.
+        let agent_panel = vbox(space::PAGE);
+        agent_panel.add_css_class("agent-panel");
+        let agent_scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(360)
+            .overlay_scrolling(false)
+            .child(&agent_panel)
+            .build();
+        set_accessible_label(&agent_scroll, AGENT_TOOLS_TITLE);
+        root.append(&widgets::disclosure(
+            AGENT_TOOLS_TITLE,
+            false,
+            &agent_scroll,
+            |_| {},
+        ));
 
         let earlier = widgets::button("Load earlier activity", &["quiet"]);
         earlier.set_halign(gtk::Align::Start);
@@ -76,7 +107,7 @@ impl Activity {
         scroll.set_min_content_height(160);
         root.append(&scroll);
 
-        let composer_box = vbox(8);
+        let composer_box = vbox(space::ITEM);
         composer_box.add_css_class("composer");
         let composer = gtk::TextView::new();
         set_accessible_label(&composer, "Message to the agent");
@@ -84,7 +115,7 @@ impl Activity {
         let composer_input =
             widgets::LimitedInput::new(&composer, TEXT_LIMIT, "this message to the agent");
         composer_box.append(&composer_input.field(&widgets::bounded_text(&composer, 64, 160)));
-        let row = hbox(12);
+        let row = hbox(space::GROUP);
         let mode = gtk::DropDown::from_strings(&["Prompt", "Steer", "Follow-up"]);
         set_accessible_label(&mode, "Delivery mode");
         mode.set_valign(gtk::Align::Start);
@@ -92,7 +123,7 @@ impl Activity {
         let explain = label("", &["meta"]);
         explain.set_hexpand(true);
         row.append(&explain);
-        let send_area = vbox(4);
+        let send_area = vbox(space::TIGHT);
         send_area.set_hexpand(false);
         send_area.set_size_request(160, -1);
         row.append(&send_area);
@@ -121,6 +152,8 @@ impl Activity {
             follow: Cell::new(true),
             auto_scrolling: Cell::new(false),
             scroll_pending: Cell::new(false),
+            agent_panel,
+            agent_error: RefCell::new(None),
         });
         let set_explain = move |d: &gtk::DropDown| {
             explain.set_text(match MODES.get(d.selected() as usize) {
@@ -189,7 +222,53 @@ impl Activity {
             .connect_clicked(move |_| controller.load_older_activity());
         activity.render_header();
         activity.render_items();
+        activity.render_agent();
         activity
+    }
+
+    /// The agent tools: model and thinking, the Agent Session section and the LADE profile
+    /// resources, with the latest local error of a session operation.
+    fn render_agent(self: &Rc<Self>) {
+        widgets::clear(&self.agent_panel);
+        let detail = self.controller.store.state().selected_detail().cloned();
+        let Some(detail) = detail else {
+            self.agent_panel
+                .append(&label("Select an Objective to see its agent.", &["meta"]));
+            return;
+        };
+        if let Some(error) = self.agent_error.borrow().as_ref() {
+            self.agent_panel.append(&widgets::error_line(error));
+        }
+        let model = vbox(space::GROUP);
+        model.append(&widgets::section_title("Model and thinking"));
+        model.append(&label(
+            "Used by Start agent and by Apply model and thinking.",
+            &["meta"],
+        ));
+        model.append(&session::model_picker(&self.controller));
+        self.agent_panel.append(&model);
+        if detail.session.is_some() {
+            let this = Rc::downgrade(self);
+            let report: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
+                if let Some(this) = this.upgrade() {
+                    let changed = match result {
+                        Ok(()) => this.agent_error.replace(None).is_some(),
+                        Err(message) => {
+                            this.agent_error.replace(Some(message));
+                            true
+                        }
+                    };
+                    if changed {
+                        let panel = this.agent_panel.clone();
+                        widgets::rebuild_preserving_focus(&panel, || this.render_agent());
+                    }
+                }
+            });
+            self.agent_panel
+                .append(&session::session_section(&self.controller, &detail, report));
+        }
+        self.agent_panel
+            .append(&session::resources_section(&self.controller));
     }
 
     fn composer_text(&self) -> String {
@@ -220,14 +299,22 @@ impl Activity {
 
     pub fn refresh(self: &Rc<Self>, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
+        let mut agent = false;
         for change in changes {
             match change {
                 Change::Selection => {
+                    self.agent_error.replace(None);
                     self.restore_composer();
                     self.render_header();
                     self.render_items();
+                    agent = true;
                 }
-                Change::Detail(id) if Some(id) == selected.as_ref() => self.render_header(),
+                Change::Detail(id) if Some(id) == selected.as_ref() => {
+                    self.render_header();
+                    agent = true;
+                }
+                Change::Session(id) if Some(id) == selected.as_ref() => agent = true,
+                Change::Catalog | Change::Resources => agent = true,
                 Change::Connection => self.render_header(),
                 Change::Activity(id, kind) if Some(id) == selected.as_ref() => match kind {
                     ActivityChange::Reset => self.render_items(),
@@ -236,6 +323,10 @@ impl Activity {
                 },
                 _ => {}
             }
+        }
+        if agent {
+            let panel = self.agent_panel.clone();
+            widgets::rebuild_preserving_focus(&panel, || self.render_agent());
         }
     }
 
@@ -273,19 +364,20 @@ impl Activity {
         widgets::clear(&self.controls);
         widgets::clear(&self.send_area);
         let Some(detail) = detail else { return };
+        // The status line beside them states why one is unavailable; the reason is also the
+        // button's tooltip and accessible description.
         for (text, kind) in [
             ("Cancel agent", ActionName::ExecutionCancel),
             ("Resume agent", ActionName::ExecutionResume),
         ] {
             let controller = self.controller.clone();
-            let row = action_row(text, &detail.availability(kind), &[], move |_| {
+            let button = widgets::compact_action(text, &detail.availability(kind), move |_| {
                 let _ = match kind {
                     ActionName::ExecutionCancel => controller.cancel(),
                     _ => controller.resume(),
                 };
             });
-            row.set_size_request(160, -1);
-            self.controls.append(&row);
+            self.controls.append(&button);
         }
         let this = Rc::downgrade(self);
         self.send_area.append(&action_row(
@@ -307,8 +399,8 @@ impl Activity {
         if item.role == ActivityRole::User {
             row.add_css_class("from-user");
         }
-        let content = vbox(4);
-        let meta = hbox(8);
+        let content = vbox(space::TIGHT);
+        let meta = hbox(space::ITEM);
         let role = format::role_label(item.role, item.tool_name.as_deref());
         meta.append(&label(&role, &["strong", "role"]));
         if !item.title.is_empty() && item.title != role && item.role != ActivityRole::Assistant {

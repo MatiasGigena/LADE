@@ -11,7 +11,7 @@ use gtk::gio;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, Dialog, action_row, field, hbox, label, set_accessible_label, vbox};
+use super::widgets::{self, Dialog, field, hbox, label, set_accessible_label, space, vbox};
 use crate::presentation::compat::{
     ForkPosition, ModelChoice, ProviderStatus, ResourceKind, ResourceState, ThinkingLevel,
     UiAnswerView, UiDialog, UiPromptView,
@@ -23,7 +23,7 @@ use crate::presentation::model::{ActionAvailability, ExecutionState, ObjectiveDe
 const TREE_ROWS: usize = 60;
 
 fn section(title: &str) -> gtk::Box {
-    let section = vbox(12);
+    let section = vbox(space::GROUP);
     section.append(&widgets::section_title(title));
     section
 }
@@ -31,7 +31,7 @@ fn section(title: &str) -> gtk::Box {
 /// Provider, model and thinking drop-downs bound to the controller's picker choice.
 pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     controller.picker_defaults();
-    let block = vbox(6);
+    let block = vbox(space::ITEM);
     let state = controller.store.state();
     let compat = &state.compat;
     let Some(catalog) = compat.catalog.clone() else {
@@ -223,47 +223,53 @@ pub fn session_section(
         s.append(&field("Last export", &line));
     }
 
+    let tools = vbox(space::TIGHT);
     let button = |text: &str, allow_running: bool, run: Rc<dyn Fn() -> Result<(), String>>| {
         let report = report.clone();
-        action_row(text, &availability(detail, allow_running), &[], move |_| {
-            report(run());
-        })
+        widgets::list_action_row(
+            text,
+            &availability(detail, allow_running),
+            false,
+            move |_| {
+                report(run());
+            },
+        )
     };
     let c = controller.clone();
-    s.append(&button(
+    tools.append(&button(
         "Show session tree",
         true,
         Rc::new(move || c.load_session_tree()),
     ));
     let c = controller.clone();
-    s.append(&button(
+    tools.append(&button(
         "Apply model and thinking",
         false,
         Rc::new(move || c.configure_session()),
     ));
     let c = controller.clone();
-    s.append(&button(
+    tools.append(&button(
         "Compact context",
         false,
         Rc::new(move || c.compact_session()),
     ));
     let c = controller.clone();
-    s.append(&button(
+    tools.append(&button(
         "Reload session resources",
         false,
         Rc::new(move || c.reload_session()),
     ));
     let c = controller.clone();
-    s.append(&button(
+    tools.append(&button(
         "Export session",
         true,
         Rc::new(move || c.export_session()),
     ));
     let c = controller.clone();
-    let import = action_row(
+    let import = widgets::list_action_row(
         "Import session…",
         &availability(detail, false),
-        &[],
+        false,
         move |b| {
             let Some(window) = b.root().and_downcast::<gtk::Window>() else {
                 return;
@@ -281,7 +287,8 @@ pub fn session_section(
             });
         },
     );
-    s.append(&import);
+    tools.append(&import);
+    s.append(&tools);
     s.append(&label(
         "Fork, clone and import start a new pi session; feedback addressed to the previous one is \
          refused. Moving in the tree changes only the conversation, never files. Imports keep the \
@@ -290,14 +297,14 @@ pub fn session_section(
     ));
 
     if let Some(tree) = tree {
-        let list = vbox(4);
+        let list = vbox(space::TIGHT);
         list.append(&widgets::section_title("Session tree"));
         if tree.truncated {
             list.append(&label("Older entries are not shown.", &["meta"]));
         }
         let start = tree.entries.len().saturating_sub(TREE_ROWS);
         for node in &tree.entries[start..] {
-            let row = hbox(6);
+            let row = hbox(space::ITEM);
             let current = tree.leaf_id.as_deref() == Some(node.entry_id.as_str());
             let text = format!(
                 "{}{}{}: {}{}",
@@ -362,7 +369,7 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
         ));
     }
     for entry in &inventory.entries {
-        let row = vbox(4);
+        let row = vbox(space::TIGHT);
         row.append(&label(
             &format!(
                 "{}: {} — {}",
@@ -394,7 +401,7 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
             && let Some(sha) = entry.sha256.clone()
             && entry.state != ResourceState::Refused
         {
-            let buttons = hbox(8);
+            let buttons = hbox(space::ITEM);
             if entry.state != ResourceState::Active {
                 let approve = widgets::button("Approve this content", &["primary"]);
                 let (c, name, sha) = (controller.clone(), entry.name.clone(), sha.clone());
@@ -412,7 +419,7 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
         s.append(&row);
     }
     let rules = gtk::Expander::new(Some("Trust rules and restrictions"));
-    let list = vbox(4);
+    let list = vbox(space::TIGHT);
     for restriction in &inventory.restrictions {
         list.append(&label(restriction, &["meta"]));
     }

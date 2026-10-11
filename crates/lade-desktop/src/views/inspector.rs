@@ -1,8 +1,10 @@
-//! Right inspector: Overview (summary, intent, actions), Evidence (candidates, service-observed
-//! checks) and Feedback (drafts with save state, submission, accepted inputs).
+//! Right inspector: Overview (status, the one next action, More actions, intent and Details),
+//! Evidence (candidates, service-observed checks) and Feedback (drafts with save state,
+//! submission, accepted inputs).
 //!
-//! Every action's availability comes from `available_actions`; disabled actions keep their place
-//! and show the service's reason.
+//! Every action's availability comes from `available_actions` (`presentation::panel` only picks
+//! which offered action is the next step); disabled actions keep their place and their reason.
+//! The model picker, Agent Session tools and LADE profile resources live in Activity.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -14,7 +16,8 @@ use gtk4 as gtk;
 use super::dialogs;
 use super::session;
 use super::widgets::{
-    self, action_row, field, hbox, label, set_accessible_label, set_focus_key, vbox,
+    self, action_row, field, hbox, label, set_accessible_description, set_accessible_label,
+    set_focus_key, space, vbox,
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::drafts::SaveStatus;
@@ -23,6 +26,7 @@ use crate::presentation::model::{
     ActionAvailability, ActionName, CandidateStatus, DeliveryMode, DraftId, NoticeLevel,
     ObjectiveDetail, Timestamp, VerificationState,
 };
+use crate::presentation::panel::{self, PanelAction, Tone};
 use crate::presentation::store::{Change, InspectorTab};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -55,10 +59,14 @@ pub struct Inspector {
     on_draft_edit: RefCell<Option<Rc<dyn Fn()>>>,
     /// Extension dialogs of the live sessions (IMP-011), answered only by the developer.
     dialogs: session::DialogHost,
+    /// Disclosure states, kept across rebuilds (presentation only; collapsed by default).
+    more_open: Cell<bool>,
+    details_open: Cell<bool>,
+    model_open: Cell<bool>,
 }
 
 fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
-    let content = vbox(24);
+    let content = vbox(space::PAGE);
     content.add_css_class("inspector-page");
     // No horizontal scrolling: content is width-constrained to the column (labels wrap, ids
     // ellipsize with tooltips, drop-downs ellipsize, buttons wrap).
@@ -70,9 +78,16 @@ fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
 }
 
 fn section(title: &str) -> gtk::Box {
-    let section = vbox(12);
+    let section = vbox(space::GROUP);
     section.append(&widgets::section_title(title));
     section
+}
+
+/// A quiet separator between groups of one list (the destructive actions).
+fn group_separator() -> gtk::Separator {
+    let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    separator.add_css_class("list-separator");
+    separator
 }
 
 impl Inspector {
@@ -87,13 +102,13 @@ impl Inspector {
         root.append_page(&evidence_scroll, Some(&gtk::Label::new(Some("Evidence"))));
         root.append_page(&feedback_scroll, Some(&gtk::Label::new(Some("Feedback"))));
 
-        let drafts_heading = vbox(8);
+        let drafts_heading = vbox(space::TIGHT);
         feedback.append(&drafts_heading);
-        let drafts_box = vbox(16);
+        let drafts_box = vbox(space::SECTION);
         feedback.append(&drafts_box);
-        let submit_box = vbox(12);
+        let submit_box = vbox(space::GROUP);
         feedback.append(&submit_box);
-        let inputs_box = vbox(12);
+        let inputs_box = vbox(space::GROUP);
         feedback.append(&inputs_box);
 
         let check_entry = gtk::Entry::builder()
@@ -118,6 +133,9 @@ impl Inspector {
             updating: Cell::new(false),
             on_draft_edit: RefCell::new(None),
             dialogs: session::DialogHost::default(),
+            more_open: Cell::new(false),
+            details_open: Cell::new(false),
+            model_open: Cell::new(false),
         });
         let this = Rc::downgrade(&inspector);
         inspector.root.connect_switch_page(move |_, _, index| {
@@ -232,92 +250,102 @@ impl Inspector {
                 if self.controller.store.state().ui.selected.is_some() {
                     "Loading Objective…"
                 } else {
-                    "Select an Objective to see its summary and actions."
+                    "Select an Objective to see its status and next step."
                 },
                 &["meta"],
             ));
             return;
         };
         let summary = &detail.summary;
-        let s = section("Objective summary");
-        s.append(&label(&detail.intent.outcome, &["secondary"]));
-        let status = vbox(4);
-        status.append(&widgets::status_pill(summary.lifecycle, summary.attention));
-        status.append(&label(
-            &format!(
-                "Updated {}",
-                format::relative_time(Timestamp(widgets::now_ms()), summary.updated_at)
-            ),
-            &["meta"],
-        ));
-        s.append(&field("Status", &status));
-        s.append(&field(
-            "Lifecycle",
-            &label(format::lifecycle_label(summary.lifecycle), &[]),
-        ));
-        let agent = vbox(2);
-        match &detail.session {
-            Some(session) => {
-                agent.append(&label(&session.model.label(), &[]));
-                agent.append(&label(&format::execution_label_for(&detail), &["meta"]));
-                let ids = label(
-                    &format!(
-                        "Session {} · generation {}",
-                        session.session_id.short(),
-                        session.execution_generation
-                    ),
-                    &["meta"],
-                );
-                ids.set_tooltip_text(Some(&format!(
-                    "Agent Session {} · execution generation {}",
-                    session.session_id.as_str(),
-                    session.execution_generation
-                )));
-                agent.append(&ids);
-            }
-            None => agent.append(&label("No Agent Session yet", &["meta"])),
-        }
-        s.append(&field("Agent", &agent));
-        let files = hbox(12);
-        files.append(&label(
-            &format!(
-                "{} file{}",
-                detail.change_counts.files,
-                if detail.change_counts.files == 1 {
-                    ""
-                } else {
-                    "s"
-                }
-            ),
-            &[],
-        ));
-        files.append(&widgets::counts(
-            detail.change_counts.added,
-            detail.change_counts.removed,
-        ));
-        s.append(&field("Files changed", &files));
-        let ellipsized =
-            |text: &str| widgets::line_label(text, &["mono"], gtk::pango::EllipsizeMode::Middle);
-        s.append(&field("Branch", &ellipsized(&detail.branch)));
-        s.append(&field(
-            "Target",
-            &ellipsized(&detail.integration_target.label()),
-        ));
-        let start = ellipsized(detail.start_commit.short());
-        start.set_tooltip_text(Some(&detail.start_commit.hex));
-        s.append(&field("Started at", &start));
-        if !summary.badges.is_empty() {
-            s.append(&field("Badges", &label(&summary.badge_text(), &[])));
-        }
-        self.overview.append(&s);
 
+        // Status, once on this surface, and the essentials: agent model and execution state.
+        let status = vbox(space::TIGHT);
+        status.add_css_class("panel-status");
+        let (sign, text) = panel::status_line(summary);
+        let line = widgets::sign_text(sign, &text);
+        line.add_css_class("strong");
+        set_accessible_label(&line, &format!("Status: {text}"));
+        status.append(&line);
+        status.append(&label(&panel::agent_line(&detail), &["meta"]));
+        if let Some(approval) = &detail.approval {
+            status.append(&label(format::approval_label(approval.state), &["meta"]));
+        }
+        self.overview.append(&status);
+
+        // The one next action, with the service's answer to the latest command below it.
+        let next_area = vbox(space::ITEM);
+        next_area.add_css_class("next-action");
+        let next = panel::next_action(&detail);
+        match &next {
+            Some(next) => next_area.append(&self.action_widget(&detail, next, true)),
+            None if !summary.lifecycle.is_archived() => {
+                next_area.append(&label("No step is available right now.", &["meta"]))
+            }
+            None => {}
+        }
+        if let Some(error) = self.last_error.borrow().as_ref() {
+            next_area.append(&widgets::error_line(error));
+        }
+        let command = self
+            .controller
+            .store
+            .state()
+            .command_status
+            .get(&summary.objective_id)
+            .cloned();
+        if let Some(command) = command {
+            next_area.append(&match command.level {
+                NoticeLevel::Info => label(&command.message, &["meta"]).upcast::<gtk::Widget>(),
+                NoticeLevel::Warning => widgets::warning_line(&command.message).upcast(),
+                NoticeLevel::Error => widgets::error_line(&command.message).upcast(),
+            });
+        }
+        if next_area.first_child().is_some() {
+            self.overview.append(&next_area);
+        }
+
+        // Every other offered action, collapsed; destructive ones last and separated.
+        let (regular, destructive) = panel::more_actions(&detail, next.as_ref());
+        if !regular.is_empty() || !destructive.is_empty() || detail.history_deleted {
+            let list = vbox(space::TIGHT);
+            for action in &regular {
+                list.append(&self.action_widget(&detail, action, false));
+            }
+            if !destructive.is_empty() || detail.history_deleted {
+                if !regular.is_empty() {
+                    list.append(&group_separator());
+                }
+                for action in &destructive {
+                    list.append(&self.action_widget(&detail, action, false));
+                }
+                if detail.history_deleted {
+                    list.append(&label(
+                        "Git history deleted: retention references and branch were removed on request.",
+                        &["meta"],
+                    ));
+                }
+            }
+            let this = Rc::downgrade(self);
+            self.overview.append(&widgets::disclosure(
+                panel::MORE_ACTIONS_TITLE,
+                self.more_open.get(),
+                &list,
+                move |open| {
+                    if let Some(this) = this.upgrade() {
+                        this.more_open.set(open);
+                    }
+                },
+            ));
+        }
+
+        // Intent: what the developer agreed to, editable until approval.
         let intent = section("Intent");
         for (key, value) in [
             ("Outcome", &detail.intent.outcome),
             ("Constraints", &detail.intent.constraints),
             ("Acceptance", &detail.intent.acceptance),
         ] {
-            let block = vbox(2);
+            let block = vbox(space::TIGHT);
             block.append(&label(key, &["meta"]));
             block.append(&label(if value.is_empty() { "—" } else { value }, &[]));
             intent.append(&block);
@@ -327,10 +355,10 @@ impl Inspector {
             &["meta"],
         ));
         let this = Rc::downgrade(self);
-        intent.append(&action_row(
+        intent.append(&widgets::list_action_row(
             "Edit intent",
             &detail.availability(ActionName::ObjectiveUpdateIntent),
-            &[],
+            false,
             move |b| {
                 if let Some(this) = this.upgrade() {
                     dialogs::edit_intent(b, &this.controller);
@@ -339,276 +367,196 @@ impl Inspector {
         ));
         self.overview.append(&intent);
 
-        let actions = section("Actions");
-        if let Some(error) = self.last_error.borrow().as_ref() {
-            actions.append(&widgets::error_line(error));
-        }
-        // The service's answer to the latest command (rejection with its code, or recovery).
-        let status = self
-            .controller
-            .store
-            .state()
-            .command_status
-            .get(&summary.objective_id)
-            .cloned();
-        if let Some(status) = status {
-            actions.append(&match status.level {
-                NoticeLevel::Info => label(&status.message, &["meta"]).upcast::<gtk::Widget>(),
-                NoticeLevel::Warning => widgets::warning_line(&status.message).upcast(),
-                NoticeLevel::Error => widgets::error_line(&status.message).upcast(),
-            });
-        }
-        // Agent session.
-        let start = detail.availability(ActionName::ExecutionStart);
-        let stopped = detail.session.is_some()
-            && !matches!(
-                detail.summary.execution.state,
-                crate::presentation::model::ExecutionState::Running
-                    | crate::presentation::model::ExecutionState::Starting
-            );
-        if start != ActionAvailability::NotOffered || stopped {
-            // Provider, model and thinking from the service's SDK catalogue; restricted providers
-            // stay listed with their reason. The same choice applies to "Apply model and thinking".
-            let picker = session::model_picker(&self.controller);
-            picker.set_visible(start == ActionAvailability::Enabled || stopped);
-            actions.append(&picker);
-        }
-        if start != ActionAvailability::NotOffered {
-            let this = Rc::downgrade(self);
-            actions.append(&action_row(
-                "Start agent",
-                &start,
-                &["primary"],
-                move |_| {
-                    if let Some(this) = this.upgrade() {
-                        let result =
-                            this.controller
-                                .chosen_model()
-                                .and_then(|(model, thinking)| {
-                                    this.controller.start_execution(model, Some(thinking))
-                                });
-                        this.report(result);
-                    }
-                },
-            ));
+        // Details: identities and metadata, collapsed.
+        let rows = vbox(space::ITEM);
+        for row in panel::details_rows(&detail, Timestamp(widgets::now_ms())) {
+            let value = if row.mono {
+                widgets::line_label(&row.value, &["mono"], gtk::pango::EllipsizeMode::Middle)
+            } else {
+                label(&row.value, &[])
+            };
+            if let Some(full) = &row.full {
+                value.set_tooltip_text(Some(full));
+                set_accessible_description(&value, full);
+            }
+            rows.append(&field(row.key, &value));
         }
         let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Cancel agent",
-            &detail.availability(ActionName::ExecutionCancel),
-            &[],
-            move |_| {
+        self.overview.append(&widgets::disclosure(
+            panel::DETAILS_TITLE,
+            self.details_open.get(),
+            &rows,
+            move |open| {
                 if let Some(this) = this.upgrade() {
-                    this.report(this.controller.cancel());
+                    this.details_open.set(open);
                 }
             },
         ));
-        let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Resume agent",
-            &detail.availability(ActionName::ExecutionResume),
-            &[],
-            move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.report(this.controller.resume());
-                }
-            },
-        ));
-        let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Freeze for review",
-            &detail.availability(ActionName::ReviewFreeze),
-            &[],
-            move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.report(this.controller.freeze());
-                }
-            },
-        ));
-        let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Return for revision",
-            &detail.availability(ActionName::ReviewReturn),
-            &[],
-            move |b| {
-                if let Some(this) = this.upgrade() {
-                    let controller = this.controller.clone();
-                    dialogs::confirm(
-                        b,
-                        "Return for revision",
-                        "The current candidate becomes historical and any approval or override is invalidated before the agent may change the work again.",
-                        "Return for revision",
-                        false,
-                        move || controller.return_for_revision(),
-                    );
-                }
-            },
-        ));
-        let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Refresh against target",
-            &detail.availability(ActionName::ReviewRefresh),
-            &[],
-            move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.report(this.controller.refresh_candidate());
-                }
-            },
-        ));
-        let approve = detail.availability(ActionName::ReviewApprove);
-        let needs_override = self.controller.approval_needs_override();
-        let this = Rc::downgrade(self);
-        let approve_label = match detail.current_candidate() {
-            Some(c) => format!("Approve Candidate {}", c.ordinal),
-            None => "Approve".to_owned(),
-        };
-        actions.append(&action_row(
-            &approve_label,
-            &approve,
-            &["primary"],
-            move |b| {
-                if let Some(this) = this.upgrade() {
-                    if needs_override {
-                        dialogs::approve_with_override(b, &this.controller);
-                    } else {
-                        this.report(this.controller.approve(None));
-                    }
-                }
-            },
-        ));
-        if approve == ActionAvailability::Enabled && needs_override {
-            actions.append(&label(
-                "Checks are missing or not all passed — approval requires a recorded override reason.",
-                &["meta"],
-            ));
-        }
-        if let Some(approval) = &detail.approval {
-            actions.append(&label(format::approval_label(approval.state), &["meta"]));
-        }
+    }
 
-        // Protected integration.
-        let integrate = detail.availability(ActionName::ReviewIntegrate);
-        if integrate != ActionAvailability::NotOffered {
-            let protected = vbox(8);
-            protected.add_css_class("protected");
-            protected.append(&label("Protected integration", &["strong"]));
-            protected.append(&label(
+    /// One Overview action. `prominent`: the next action (full width, primary only when enabled,
+    /// with its note or reason in one line); otherwise a quiet row of More actions.
+    fn action_widget(
+        self: &Rc<Self>,
+        detail: &ObjectiveDetail,
+        action: &PanelAction,
+        prominent: bool,
+    ) -> gtk::Box {
+        let this = Rc::downgrade(self);
+        let name = action.action;
+        let on_click = move |b: &gtk::Button| {
+            if let Some(this) = this.upgrade() {
+                this.activate(name, b);
+            }
+        };
+        let destructive = action.tone == Tone::Destructive;
+        let enabled = action.availability == ActionAvailability::Enabled;
+        // The service's caveat on an enabled action; an approval that needs an override reason is
+        // also stated when the service gave no note (the dialog asks for the reason).
+        let note = match name {
+            ActionName::ReviewApprove if enabled && self.controller.approval_needs_override() => {
+                Some(action.note.clone().unwrap_or_else(|| {
+                    "Checks missing or not all passed: approval needs a recorded override reason."
+                        .to_owned()
+                }))
+            }
+            _ => action.note.clone(),
+        }
+        .filter(|_| enabled);
+        let row = if prominent {
+            // Black only for a cleanly available step: never with a caveat.
+            let classes: &[&str] = match action.tone {
+                Tone::Primary if note.is_none() => &["primary"],
+                Tone::Destructive => &["destructive"],
+                Tone::Primary | Tone::Neutral => &[],
+            };
+            action_row(&action.label, &action.availability, classes, on_click)
+        } else {
+            widgets::list_action_row(&action.label, &action.availability, destructive, on_click)
+        };
+        if let Some(note) = note {
+            row.append(&label(&note, &["meta", "list-action-reason"]));
+        }
+        if !prominent {
+            return row;
+        }
+        match name {
+            ActionName::ReviewIntegrate => row.append(&label(
                 &format!(
-                    "Creates one squash commit on {} only for the approved candidate and target commit. Integration is a separate, explicit step.",
+                    "One squash commit on {} from the approved candidate and target commit — a separate, explicit step.",
                     detail.integration_target.branch
                 ),
-                &["secondary"],
-            ));
-            let this = Rc::downgrade(self);
-            let target = detail.integration_target.label();
-            protected.append(&action_row(
-                &format!("Integrate into {}", detail.integration_target.branch),
-                &integrate,
-                &["primary"],
-                move |b| {
-                    if let Some(this) = this.upgrade() {
-                        let controller = this.controller.clone();
-                        dialogs::confirm(
-                            b,
-                            "Integrate approved candidate",
-                            &format!(
-                                "Create a squash commit on {target} from the approved candidate. The target must be unchanged and its checkout clean."
-                            ),
-                            "Integrate",
-                            false,
-                            move || controller.integrate(),
-                        );
-                    }
-                },
-            ));
-            actions.append(&protected);
-        }
-        let this = Rc::downgrade(self);
-        actions.append(&action_row(
-            "Complete without changes",
-            &detail.availability(ActionName::ObjectiveComplete),
-            &[],
-            move |b| {
-                if let Some(this) = this.upgrade() {
-                    let controller = this.controller.clone();
-                    dialogs::confirm(
-                        b,
-                        "Complete without changes",
-                        "The Objective is completed with no repository change.",
-                        "Complete",
-                        false,
-                        move || controller.complete(),
-                    );
-                }
-            },
-        ));
-        let this = Rc::downgrade(self);
-        let title = summary.title.clone();
-        actions.append(&action_row(
-            "Discard Objective",
-            &detail.availability(ActionName::ObjectiveDiscard),
-            &["destructive"],
-            move |b| {
-                if let Some(this) = this.upgrade() {
-                    let controller = this.controller.clone();
-                    dialogs::confirm(
-                        b,
-                        "Discard Objective",
-                        &format!(
-                            "“{title}” will be abandoned without integration and its agent stopped. Branch and worktree stay until you clean up."
-                        ),
-                        "Discard",
-                        true,
-                        move || controller.discard(),
-                    );
-                }
-            },
-        ));
-        let this = Rc::downgrade(self);
-        let branch = detail.branch.clone();
-        let unsent = detail.unsent_drafts;
-        actions.append(&action_row(
-            "Clean up branch and worktree",
-            &detail.availability(ActionName::ObjectiveCleanup),
-            &["destructive"],
-            move |b| {
-                if let Some(this) = this.upgrade() {
-                    dialogs::cleanup(b, &this.controller, &branch, unsent);
-                }
-            },
-        ));
-        if detail.history_deleted {
-            actions.append(&label(
-                "Git history deleted: retention references and branch were removed on request.",
                 &["meta"],
-            ));
-        } else {
-            let this = Rc::downgrade(self);
-            let title = summary.title.clone();
-            actions.append(&action_row(
-                "Delete Git history",
-                &detail.availability(ActionName::ObjectiveDeleteHistory),
-                &["destructive"],
-                move |b| {
-                    if let Some(this) = this.upgrade() {
-                        dialogs::delete_history(b, &this.controller, &title);
-                    }
-                },
-            ));
+            )),
+            ActionName::ObjectiveCleanup => row.append(&label(
+                "Removes the Objective's branch and worktree; records and evidence stay.",
+                &["meta"],
+            )),
+            ActionName::ExecutionStart if enabled => {
+                // Choosing the model is part of starting: one line, the picker on demand.
+                let chosen = vbox(space::TIGHT);
+                self.controller.picker_defaults();
+                chosen.append(&label(&self.model_summary(), &["meta"]));
+                let this = Rc::downgrade(self);
+                chosen.append(&widgets::disclosure(
+                    "Model and thinking",
+                    self.model_open.get(),
+                    &session::model_picker(&self.controller),
+                    move |open| {
+                        if let Some(this) = this.upgrade() {
+                            this.model_open.set(open);
+                        }
+                    },
+                ));
+                row.append(&chosen);
+            }
+            _ => {}
         }
-        self.overview.append(&actions);
-        if detail.session.is_some() {
-            let this = Rc::downgrade(self);
-            let report: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
-                if let Some(this) = this.upgrade() {
-                    this.report(result);
+        row
+    }
+
+    fn model_summary(&self) -> String {
+        match self.controller.chosen_model() {
+            Ok((model, thinking)) => {
+                format!("Model {} · thinking {}", model.label(), thinking.label())
+            }
+            Err(message) => message,
+        }
+    }
+
+    /// Runs an Overview action; confirmations open as dialogs that return focus to `button`.
+    fn activate(self: &Rc<Self>, action: ActionName, button: &gtk::Button) {
+        let Some(detail) = self.detail() else { return };
+        let controller = self.controller.clone();
+        match action {
+            ActionName::ExecutionStart => {
+                let result = controller.chosen_model().and_then(|(model, thinking)| {
+                    controller.start_execution(model, Some(thinking))
+                });
+                self.report(result);
+            }
+            ActionName::ExecutionCancel => self.report(controller.cancel()),
+            ActionName::ExecutionResume => self.report(controller.resume()),
+            ActionName::ReviewFreeze => self.report(controller.freeze()),
+            ActionName::ReviewRefresh => self.report(controller.refresh_candidate()),
+            ActionName::ReviewReturn => dialogs::confirm(
+                button,
+                "Return for revision",
+                "The current candidate becomes historical and any approval or override is invalidated before the agent may change the work again.",
+                "Return for revision",
+                false,
+                move || controller.return_for_revision(),
+            ),
+            ActionName::ReviewApprove => {
+                if controller.approval_needs_override() {
+                    dialogs::approve_with_override(button, &controller);
+                } else {
+                    self.report(controller.approve(None));
                 }
-            });
-            self.overview
-                .append(&session::session_section(&self.controller, &detail, report));
+            }
+            ActionName::ReviewIntegrate => {
+                let target = detail.integration_target.label();
+                dialogs::confirm(
+                    button,
+                    "Integrate approved candidate",
+                    &format!(
+                        "Create a squash commit on {target} from the approved candidate. The target must be unchanged and its checkout clean."
+                    ),
+                    "Integrate",
+                    false,
+                    move || controller.integrate(),
+                );
+            }
+            ActionName::ObjectiveComplete => dialogs::confirm(
+                button,
+                "Complete without changes",
+                "The Objective is completed with no repository change.",
+                "Complete",
+                false,
+                move || controller.complete(),
+            ),
+            ActionName::ObjectiveDiscard => {
+                let title = detail.summary.title.clone();
+                dialogs::confirm(
+                    button,
+                    "Discard Objective",
+                    &format!(
+                        "“{title}” will be abandoned without integration and its agent stopped. Branch and worktree stay until you clean up."
+                    ),
+                    "Discard",
+                    true,
+                    move || controller.discard(),
+                );
+            }
+            ActionName::ObjectiveCleanup => {
+                dialogs::cleanup(button, &controller, &detail.branch, detail.unsent_drafts);
+            }
+            ActionName::ObjectiveDeleteHistory => {
+                dialogs::delete_history(button, &controller, &detail.summary.title);
+            }
+            ActionName::ObjectiveUpdateIntent => dialogs::edit_intent(button, &controller),
+            ActionName::MessageSend | ActionName::FeedbackSubmit | ActionName::ReviewVerify => {}
         }
-        self.overview
-            .append(&session::resources_section(&self.controller));
     }
 
     fn render_evidence(self: &Rc<Self>) {
@@ -630,7 +578,7 @@ impl Inspector {
         let mut sorted = detail.candidates.clone();
         sorted.sort_by_key(|c| std::cmp::Reverse(c.ordinal));
         for c in &sorted {
-            let row = vbox(2);
+            let row = vbox(space::TIGHT);
             row.add_css_class("evidence-row");
             row.append(&label(
                 &format!(
@@ -640,7 +588,7 @@ impl Inspector {
                 ),
                 &["strong"],
             ));
-            let detail_line = hbox(8);
+            let detail_line = hbox(space::ITEM);
             detail_line.append(&label(
                 &format!(
                     "{} on {}@{} · {} file{}",
@@ -678,7 +626,7 @@ impl Inspector {
 
         let checks = section("Checks");
         checks.append(&label(
-            "Service-observed: LADE ran these commands and recorded exit and output. Agent statements in Activity are claims, not evidence.",
+            "Service-observed: LADE ran these commands and recorded exit and output. Agent statements are claims, not evidence.",
             &["meta"],
         ));
         let current = detail.current_candidate().map(|c| c.candidate_id.clone());
@@ -695,7 +643,7 @@ impl Inspector {
                 .iter()
                 .any(|v| Some(&v.candidate_id) == current.as_ref() && &v.command == command);
             if current.is_some() && !ran {
-                let row = vbox(2);
+                let row = vbox(space::TIGHT);
                 row.add_css_class("evidence-row");
                 row.append(&label(&format::command_line(command), &["mono"]));
                 row.append(&label(
@@ -715,9 +663,9 @@ impl Inspector {
                 .then(b.started_at.cmp(&a.started_at))
         });
         for v in &verifications {
-            let row = vbox(4);
+            let row = vbox(space::TIGHT);
             row.add_css_class("evidence-row");
-            let top = hbox(8);
+            let top = hbox(space::ITEM);
             let command = widgets::line_label(
                 &format::command_line(&v.command),
                 &["mono"],
@@ -845,12 +793,12 @@ impl Inspector {
             editors.len()
         )));
         self.drafts_heading.append(&label(
-            "Drafts are saved to the service but not sent until you submit them together.",
+            "Saved to the service; sent only when you submit them together.",
             &["meta"],
         ));
         if editors.is_empty() {
             self.drafts_heading.append(&label(
-                "Select text in the viewer and choose Add feedback to start a draft.",
+                "Select text in the viewer, then Add feedback to start a draft.",
                 &["meta"],
             ));
         }
@@ -901,7 +849,7 @@ impl Inspector {
     }
 
     fn draft_widgets(self: &Rc<Self>, draft_id: &DraftId) -> DraftWidgets {
-        let root = vbox(8);
+        let root = vbox(space::ITEM);
         root.add_css_class("draft");
         let reference = label("", &["meta", "draft-reference"]);
         root.append(&reference);
@@ -914,11 +862,11 @@ impl Inspector {
         set_focus_key(&view, &format!("draft:{}", draft_id.as_str()));
         let input = widgets::LimitedInput::new(&view, TEXT_LIMIT, "this feedback draft");
         root.append(&input.field(&widgets::bounded_text(&view, 88, 200)));
-        let status_row = vbox(4);
+        let status_row = vbox(space::TIGHT);
         let status = label("", &["meta", "save-state"]);
         status.set_hexpand(true);
         status_row.append(&status);
-        let actions = hbox(8);
+        let actions = hbox(space::ITEM);
         status_row.append(&actions);
         root.append(&status_row);
         let controller = self.controller.clone();
@@ -1138,7 +1086,7 @@ impl Inspector {
             s.append(&label("Nothing accepted yet.", &["meta"]));
         }
         for input in inputs.iter().rev() {
-            let row = vbox(2);
+            let row = vbox(space::TIGHT);
             row.add_css_class("evidence-row");
             let line = format::input_line(input);
             let state_label = label(&line, &["strong"]);
