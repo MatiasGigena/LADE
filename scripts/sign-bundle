@@ -1,0 +1,43 @@
+#!/bin/sh
+# Sign a LADE bundle with an SSH key (IMP-014).
+#
+#   scripts/sign-bundle DIR KEY
+#
+# Marks DIR/VERSION signed=yes with the key's fingerprint (signer=SHA256:…), regenerates
+# DIR/MANIFEST.sha256 (VERSION is listed in it) and writes the detached signature
+# DIR/MANIFEST.sha256.sig with `ssh-keygen -Y sign -n lade-release`. KEY is a private key file, or
+# a public key whose private half is loaded in ssh-agent. scripts/install verifies the signature
+# against an allowed-signers file (--allowed-signers FILE or ~/.config/lade/allowed_signers).
+# Which key signs releases and how users obtain its public half (the trust bootstrap) is pending
+# Matias's decision: no release key is shipped or assumed.
+set -eu
+
+die() { printf 'sign-bundle: %s\n' "$*" >&2; exit 1; }
+
+[ $# -eq 2 ] || die "usage: scripts/sign-bundle DIR KEY"
+dir=$1
+key=$2
+[ -f "$dir/VERSION" ] && [ -f "$dir/MANIFEST.sha256" ] || die "$dir is not a bundle (VERSION, MANIFEST.sha256)"
+[ -f "$key" ] || die "key $key not found"
+command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen not found (install openssh-client)"
+
+fingerprint=$(ssh-keygen -l -E sha256 -f "$key" | awk '{print $2}')
+case $fingerprint in SHA256:*) ;; *) die "cannot read the fingerprint of $key" ;; esac
+
+sed -e '/^signed=/d' -e '/^signer=/d' "$dir/VERSION" >"$dir/VERSION.new"
+printf 'signed=yes\nsigner=%s\n' "$fingerprint" >>"$dir/VERSION.new"
+chmod 644 "$dir/VERSION.new"
+mv -f "$dir/VERSION.new" "$dir/VERSION"
+
+rm -f "$dir/MANIFEST.sha256.sig"
+manifest=$(mktemp)
+trap 'rm -f "$manifest"' EXIT
+(cd "$dir" && find . -type f ! -path ./MANIFEST.sha256 ! -path ./MANIFEST.sha256.sig -print0 \
+    | LC_ALL=C sort -z | xargs -0 sha256sum --) >"$manifest"
+chmod 644 "$manifest"
+mv -f "$manifest" "$dir/MANIFEST.sha256"
+ssh-keygen -q -Y sign -f "$key" -n lade-release "$dir/MANIFEST.sha256" </dev/null >/dev/null \
+    || die "ssh-keygen could not sign with $key"
+[ -f "$dir/MANIFEST.sha256.sig" ] || die "no signature was written"
+chmod 644 "$dir/MANIFEST.sha256.sig"
+printf 'sign-bundle: signed %s with %s\n' "$dir/MANIFEST.sha256" "$fingerprint"

@@ -1,12 +1,18 @@
 #!/bin/sh
 # Build a self-contained per-user LADE bundle in dist/lade-<bundle>/.
 #
-#   scripts/bundle [--skip-build] [--out DIR]
+#   scripts/bundle [--skip-build] [--out DIR] [--with-node DIR] [--sign KEY]
 #
 # Layout: install, uninstall, bin/{laded,lade-desktop}, lib/lade/pi-worker/ (production node_modules only),
-# share/{applications,icons,systemd,doc}, VERSION and MANIFEST.sha256 (every other file).
-# The bundle carries checksums only; it is NOT signed (IMP-014). Node is not bundled: the
-# installer requires the host's Node 22 and records its path in the user unit.
+# [lib/lade/node/ (bin/node, LICENSE, VERSION)], share/{applications,icons,systemd,doc} with the
+# shipped-dependency license inventory (share/doc/lade/THIRD_PARTY.{json,md}, LICENSES/), VERSION
+# and MANIFEST.sha256 (every other file) [+ MANIFEST.sha256.sig].
+#
+# --with-node DIR  copy DIR/bin/node (a Node distribution root at exactly the pinned version, e.g.
+#                  the official node-v22.23.1-linux-x64 tarball) into the bundle; the installer then
+#                  uses it instead of the host's Node (about +120 MB unpacked)
+# --sign KEY       sign MANIFEST.sha256 with the SSH key KEY (scripts/sign-bundle, ssh-keygen -Y sign,
+#                  namespace lade-release). Without it the bundle carries checksums only.
 set -eu
 cd "$(dirname "$0")/.."
 root=$PWD
@@ -15,11 +21,15 @@ die() { printf 'bundle: %s\n' "$*" >&2; exit 1; }
 
 build=1
 out=
+with_node=
+sign_key=
 while [ $# -gt 0 ]; do
     case $1 in
         --skip-build) build=0 ;;
         --out) [ $# -ge 2 ] || die "--out needs a directory"; out=$2; shift ;;
-        -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+        --with-node) [ $# -ge 2 ] || die "--with-node needs a Node distribution directory"; with_node=$2; shift ;;
+        --sign) [ $# -ge 2 ] || die "--sign needs a key file"; sign_key=$2; shift ;;
+        -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
         *) die "unknown argument: $1" ;;
     esac
     shift
@@ -41,6 +51,16 @@ id="$bundle_version+$commit"
 
 [ -n "$out" ] || out="dist/lade-$bundle_version"
 case $out in /*) ;; *) out="$root/$out" ;; esac
+if [ -n "$with_node" ]; then
+    [ -x "$with_node/bin/node" ] || die "--with-node: $with_node/bin/node is not an executable"
+    [ "$("$with_node/bin/node" --version)" = "v$node_pin" ] \
+        || die "--with-node: $with_node/bin/node is not Node $node_pin"
+    [ -f "$with_node/LICENSE" ] || die "--with-node: $with_node/LICENSE missing (use an official distribution)"
+fi
+if [ -n "$sign_key" ]; then
+    [ -f "$sign_key" ] || die "--sign: key $sign_key not found"
+    command -v ssh-keygen >/dev/null 2>&1 || die "--sign needs ssh-keygen (openssh-client)"
+fi
 
 if [ "$build" = 1 ]; then
     ./scripts/cargo build --release --locked -p lade-system -p lade-desktop
@@ -52,6 +72,11 @@ target/release/laded --version | grep -q "^laded $bundle_version protocol $proto
     || die "target/release/laded does not report bundle $bundle_version protocol $protocol"
 target/release/lade-desktop --version | grep -q "^LADE $bundle_version protocol $protocol\$" \
     || die "target/release/lade-desktop does not report bundle $bundle_version protocol $protocol"
+smoke=$(mktemp -d)
+trap 'rm -rf "$smoke"' EXIT
+# The schema this laded creates: the installer compares it on --rollback (pre-migration backups).
+schema=$(target/release/laded store info --state-dir "$smoke/no-state" | sed -n 's/^supported_schema=//p')
+[ -n "$schema" ] || die "target/release/laded does not report its supported schema"
 
 umask 022
 rm -rf "$out"
@@ -76,11 +101,20 @@ install -m 0644 packaging/systemd/lade.service "$out/share/systemd/user/lade.ser
 install -m 0644 docs/user-guide.md docs/implementation/limitations.md "$out/share/doc/lade/"
 install -m 0644 vendor/pi-coding-agent/upstream/LICENSE "$out/share/doc/lade/pi-coding-agent.LICENSE"
 
+node=node
+node_bundled=no
+if [ -n "$with_node" ]; then
+    mkdir -p "$out/lib/lade/node/bin"
+    install -m 0755 "$with_node/bin/node" "$out/lib/lade/node/bin/node"
+    install -m 0644 "$with_node/LICENSE" "$out/lib/lade/node/LICENSE"
+    printf '%s\n' "$node_pin" >"$out/lib/lade/node/VERSION"
+    node="$out/lib/lade/node/bin/node"
+    node_bundled=yes
+fi
+
 # The worker must load with production dependencies only: stdin EOF before worker.start exits 0
 # after every module (pi SDK, undici, the protocol code) has been imported.
-smoke=$(mktemp -d)
-trap 'rm -rf "$smoke"' EXIT
-if ! HOME="$smoke" node "$worker/src/worker.ts" </dev/null >"$smoke/out" 2>"$smoke/err"; then
+if ! HOME="$smoke" "$node" "$worker/src/worker.ts" </dev/null >"$smoke/out" 2>"$smoke/err"; then
     cat "$smoke/err" >&2
     die "the bundled worker does not start with production dependencies"
 fi
@@ -89,6 +123,9 @@ fi
 links=$(find "$out" -type l | head -5)
 [ -z "$links" ] || die "bundle contains symlinks: $links"
 
+# Licence inventory of what actually ships (fails when a dependency has no licence information).
+python3 scripts/license-inventory.py --bundle "$out" >&2
+
 cat >"$out/VERSION" <<EOF
 id=$id
 bundle=$bundle_version
@@ -96,6 +133,8 @@ protocol=$protocol
 commit=$commit
 rust=$rust_pin
 node=$node_pin
+node_bundled=$node_bundled
+schema=$schema
 pi_coding_agent=$pi_pin
 platform=linux-x86_64
 signed=no
@@ -103,6 +142,7 @@ EOF
 
 (cd "$out" && find . -type f ! -path ./MANIFEST.sha256 -print0 | LC_ALL=C sort -z \
     | xargs -0 sha256sum -- >MANIFEST.sha256)
+[ -z "$sign_key" ] || ./scripts/sign-bundle "$out" "$sign_key" >&2
 
 files=$(wc -l <"$out/MANIFEST.sha256")
 size=$(du -sh "$out" | cut -f1)

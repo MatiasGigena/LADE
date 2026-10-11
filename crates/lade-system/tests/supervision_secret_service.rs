@@ -286,6 +286,8 @@ fn laded_credentials_stores_and_clears_through_secret_tool_stdin() {
         String::from_utf8_lossy(&stored.stderr)
     );
     assert!(!printed.contains("sk-cli-value"), "{printed}");
+    // `credentials` never starts the persistent diagnostics capture of `serve`.
+    assert!(!fake.dir().join(".local/state").exists());
 
     let token = laded_credentials(
         &fake,

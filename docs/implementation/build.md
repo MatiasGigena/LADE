@@ -74,7 +74,7 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 ./scripts/cargo test -p lade-system --test service_admission --test service_operations --test service_flow
 ```
 
-`laded serve` runs in the foreground until killed (stderr diagnostics only) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` model through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
+`laded serve` runs in the foreground until killed (redacted diagnostics on stderr and in the bounded `$STATE/logs`, see [service.md](service.md#diagnostics)) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` model through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
 `lade-desktop` is the live GTK client: it connects to `laded` over `$RUNTIME/control.sock` (u32-BE frames, `hello` + capability `auth`, single controlling lease), starts a detached sibling `laded serve` when none is running (unless `--no-spawn`), and offers the whole first-release loop — open a Workspace (`--open PATH` or Ctrl+O), create and start Objectives, Activity, Workbench inspection with Contextual Feedback, freeze, service-observed checks, approval, protected integration and cleanup. Every action's availability comes from the service's `available_actions`; the client never grants authority. `lade-desktop --preview` shows labelled fixture data without a service. Keyboard shortcut remaps are a client
 presentation preference in `$XDG_CONFIG_HOME/lade/keybindings.json` (else `~/.config/lade/keybindings.json`): JSON
@@ -117,8 +117,32 @@ The first-release SDK worker (`node packages/pi-worker/src/worker.ts`, delivery 
 
 ## Install
 
-`scripts/bundle` builds the release binaries and assembles the checksummed (unsigned) bundle `dist/lade-0.2.0/`;
-`scripts/install`, `scripts/install --rollback` and `scripts/uninstall` manage a per-user installation; and
-`scripts/test-install [--bundle DIR]` exercises them in a disposable HOME (the synthetic-bundle run is part of
-`scripts/verify`). Layout, prerequisites and the systemd user unit (`packaging/`) are described in the
-[user guide](../user-guide.md#1-install); open gates are in [limitations.md](limitations.md#installation-and-distribution).
+`scripts/bundle [--with-node DIR] [--sign KEY]` builds the release binaries and assembles the checksummed bundle
+`dist/lade-0.2.0/`; `scripts/install`, `scripts/install --rollback` and `scripts/uninstall` manage a per-user
+installation; and `scripts/test-install [--bundle DIR [--allowed-signers FILE]]` exercises them in a disposable HOME
+(the synthetic-bundle run is part of `scripts/verify`). Layout, prerequisites and the systemd user unit
+(`packaging/`) are described in the [user guide](../user-guide.md#1-install); open gates are in
+[limitations.md](limitations.md#installation-and-distribution).
+
+- **Signing**: `scripts/sign-bundle DIR KEY` (called by `bundle --sign`) sets `signed=yes` and `signer=SHA256:…` in
+  `VERSION`, regenerates `MANIFEST.sha256` and writes `MANIFEST.sha256.sig` with `ssh-keygen -Y sign -n
+  lade-release` (OpenSSH ≥ 8.2; Mint's `openssh-client`). The installer verifies it with `ssh-keygen -Y
+  find-principals` / `-Y verify` against an allowed-signers trust root. No key is shipped: the release key, its
+  custody and the trust bootstrap (how users obtain and pin the public key) are pending Matias's decision. Tests use
+  throwaway keys generated in `scripts/test-install`; CI generates one per run and signs the real bundle with it.
+- **Node runtime**: `--with-node DIR` copies `DIR/bin/node` (must report exactly the pinned version), its `LICENSE`
+  and a `VERSION` into `lib/lade/node/`; the bundle smoke test then runs the worker with it. Size impact: the Node
+  22.23.1 binary is ≈ 120 MB (bundle ≈ 270 MB → ≈ 390 MB unpacked, 24.8k files). In CI:
+  `--with-node "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")"` (the `setup-node` toolcache
+  distribution); locally any official `node-v22.23.1-linux-x64` directory.
+- **Licence inventory**: `python3 scripts/license-inventory.py --check` (in `scripts/verify`) walks `cargo metadata
+  --offline --locked` from `lade-system` and `lade-desktop` over normal dependencies for x86_64 Linux (proc-macro and
+  build-only crates are not shipped) and the production entries of the worker's `package-lock.json`, and fails when
+  any of them has neither a licence expression nor a licence file. `--bundle DIR` (run by `scripts/bundle`) writes
+  `share/doc/lade/THIRD_PARTY.{json,md}` from what is actually in the bundle (including the bundled Node) and copies
+  every Rust crate's licence files to `share/doc/lade/LICENSES/rust/`; npm packages keep their own licence files in
+  `node_modules`.
+- **Schema**: `VERSION` records `schema=` (from `laded store info`), which `install --rollback` compares with the
+  database to decide on a pre-migration backup restore ([service.md](service.md#migration-safety-imp-014)).
+- `scripts/verify` needs `ssh-keygen` for the signature cases of `scripts/test-install` (skipped with a note when
+  absent) and `systemd-analyze` for the unit check (likewise).

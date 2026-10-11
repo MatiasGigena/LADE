@@ -15,9 +15,11 @@ host (the installer checks each and refuses to install with a list of what is mi
 | --- | --- |
 | bubblewrap, working unprivileged user namespaces | `bubblewrap` |
 | `prlimit` | `util-linux` |
+| `bash` in `/usr/bin` or `/bin` (sandbox launch gate) | `bash` |
 | Git ≥ 2.38 | `git` |
-| Node.js 22 (tested 22.23.1) on `PATH`, or pass `--node` | NodeSource or an official Node 22 tarball |
+| Node.js 22 (tested 22.23.1) on `PATH`, or pass `--node` — not needed when the bundle carries its own Node | NodeSource or an official Node 22 tarball |
 | GTK ≥ 4.14 and GtkSourceView ≥ 5.12 runtime libraries | `libgtk-4-1`, `libgtksourceview-5-0` |
+| `ssh-keygen` (only to verify a signed bundle) | `openssh-client` |
 
 Optional: `libsecret-tools` (`secret-tool`) to keep provider keys in your keyring (§5); the installer does not
 check it.
@@ -33,16 +35,36 @@ systemctl --user enable --now lade.service
 
 `scripts/install --enable` does the last two steps for you; `--prefix DIR` installs elsewhere. A bundle directory
 carries its own `install` and `uninstall` scripts (`dist/lade-0.2.0/install`). The installer verifies every file
-against `MANIFEST.sha256` before and after copying and refuses a modified bundle. The bundle is **not signed**: only
-install bundles you built or obtained from a trusted source.
+against `MANIFEST.sha256` before and after copying and refuses a modified bundle.
+
+- **Signatures.** `./scripts/bundle --sign KEY` (or `scripts/sign-bundle DIR KEY`) signs `MANIFEST.sha256` with an
+  SSH key (`ssh-keygen -Y sign`, namespace `lade-release`). The installer checks the signature against an
+  *allowed-signers* file — `--allowed-signers FILE`, or `~/.config/lade/allowed_signers` when it exists (yours, mode
+  0600 or 0644, one line per trusted key: `name namespaces="lade-release" ssh-ed25519 AAAA…`). With such a trust root
+  a bundle with a bad or foreign signature, or no signature, is refused before anything is written
+  (`--allow-unsigned` accepts an unsigned one with a warning). Without a trust root the installer warns that the
+  signature (or the bundle) is **not verified**. There is no official LADE release key yet: which key signs releases
+  and how you get its public half is still to be decided, so for now trust only bundles you built or whose signer
+  you know.
+- **Node.** `./scripts/bundle --with-node DIR` copies the pinned Node (`DIR/bin/node` of an official
+  `node-v22.23.1-linux-x64` distribution) into the bundle (about +120 MB, the bundle is then ≈ 390 MB unpacked). The
+  installer then uses that Node — it becomes part of the matched set and a host Node upgrade no longer changes the
+  worker runtime — and falls back to the host's Node 22 (checked as above) only for bundles without one, or when
+  you pass `--node`.
+- **Licences.** `share/doc/lade/THIRD_PARTY.md` (and `.json`) lists every shipped Rust crate, npm package and the
+  bundled Node with its licence; Rust licence texts are in `share/doc/lade/LICENSES/`.
 
 Installed layout: `~/.local/lib/lade/<version>/` (with `current` and `previous` links), `~/.local/bin/laded`,
 `~/.local/bin/lade-desktop`, the menu entry and icon under `~/.local/share`, and the user unit
 `~/.config/systemd/user/lade.service`.
 
 - **Update**: build or obtain the new bundle and run its `install` again; the previous version is kept.
-- **Roll back**: `~/.local/lib/lade/current/install --rollback`, then `systemctl --user restart lade.service`. If the
-  newer version already migrated the database, the older service refuses to start and leaves the data untouched.
+- **Roll back**: `~/.local/lib/lade/current/install --rollback`, then `systemctl --user restart lade.service`.
+  Before a version migrates your database to a newer format it saves a backup (in
+  `~/.local/state/lade/backups/`, the last three kept). If you roll back past such a change, the installer explains
+  what will happen, asks you to type `restore` (or accepts `--yes`), stops the service and puts the backup back:
+  **work recorded after the upgrade is not in it**, but the newer database is kept next to the backups, never
+  deleted, and rolling forward again works. Without a matching backup the rollback is refused and nothing changes.
 - **Uninstall**: `~/.local/lib/lade/current/uninstall`. Your data is kept (see §9). `--purge-data` also deletes it
   after you type a confirmation at the terminal.
 
@@ -246,7 +268,8 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 | Database, artifacts, Objective worktrees, Agent Session files, verification copies | `~/.local/state/lade/` (`$XDG_STATE_HOME/lade`) |
 | Control socket and capability (private, rotated at every start) | `$XDG_RUNTIME_DIR/lade/` |
 | Credentials (optional, yours) | your keyring (items `service=lade provider=…`, see `laded credentials`) or `~/.config/lade/credentials.env` |
-| Service diagnostics | the user journal: `journalctl --user -u lade.service` (codes and ids, no prompts, source or keys) |
+| Service diagnostics | `~/.local/state/lade/logs/` (at most 4 × 1 MiB, redacted) and the user journal: `journalctl --user -u lade.service` (codes and ids, no prompts, source or keys) |
+| Pre-migration backups | `~/.local/state/lade/backups/` (the last three, plus databases set aside by a rollback) |
 | In your repositories | branches `lade/*`, retention refs `refs/lade/retain/*`, registered worktrees |
 
 Uninstalling never deletes `~/.local/state/lade` unless you ask with `--purge-data` and confirm. Back it up like any
@@ -279,5 +302,11 @@ other project data; its history is kept until you delete it. Retention refs in y
   says why the keyring could not be asked when it could not ("Secret Service unavailable: …"). A **locked keyring**
   is reported as such: unlock it (for example in *Passwords and Keys*) and start again. Under the systemd unit the
   keyring needs the desktop session's bus (`DBUS_SESSION_BUS_ADDRESS`, normally provided by the user manager).
+- **Sending diagnostics.** `laded diagnostics export ~/lade-diagnostics.txt` writes the recent service logs and the
+  migration journal, redacted (keys, tokens and your home directory are masked), to a new private file. Nothing
+  leaves your machine by itself; read the file before you share it — redaction is careful but not infallible.
+- **Rollback refused: "no pre-migration backup".** The newer version migrated the database and no backup of the
+  older format exists (for example it was pruned after several upgrades). Stay on the newer version, or restore a
+  copy of `~/.local/state/lade` you made yourself.
 - **Integration refused.** The checked-out target branch has uncommitted changes or a merge/rebase in progress, or
   the target moved since approval (refresh, verify and approve again).
