@@ -34,7 +34,7 @@ use super::convert::{adapter_git, conflict, core_git, git_rejection, hex, not_fo
 /// Files larger than this are not loaded whole (staleness, artifacts, reads).
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
 
-type Task = Box<dyn FnOnce() + Send>;
+pub(crate) type Task = Box<dyn FnOnce() + Send>;
 
 /// A small fixed set of worker threads.
 pub struct Pool {
@@ -246,6 +246,7 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
                 &adapter_git(&tree),
             )
             .map_err(|e| git_err(&e))?;
+            crate::fault::point("capture.retained");
             (input.capture_id, false)
         }
     };
@@ -338,6 +339,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let old = repo.resolve_ref(&branch_ref).map_err(|e| git_err(&e))?;
     repo.update_ref_cas(&branch_ref, &commit, old.as_ref())
         .map_err(|e| git_err(&e))?;
+    crate::fault::point("freeze.branch_moved");
     repo.retain(&input.candidate_ref, &commit)
         .map_err(|e| git_err(&e))?;
     // The worktree's own index (and HEAD) follow the candidate commit, so `git status` inside
@@ -494,6 +496,7 @@ pub fn verify(input: VerifyInput) -> VerifyOut {
         Ok(worktree) => worktree,
         Err(e) => return error(&format!("verification copy failed: {}", e.code())),
     };
+    crate::fault::point("verify.copy");
     let result = run_verification(&input, tools);
     let _ = repo.worktree_remove(&worktree, true);
     let _ = fs::remove_dir_all(&input.copy_dir);
@@ -658,7 +661,10 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     let request = input.request;
     if let Some((base, start)) = &input.provision {
         match provision(&input.repo, base, start, &request.worktree) {
-            Ok(branch) => provisioned_branch = Some(branch),
+            Ok(branch) => {
+                crate::fault::point("launch.provisioned");
+                provisioned_branch = Some(branch);
+            }
             Err(reason) => {
                 return LaunchOut {
                     provisioned_branch: None,
@@ -715,7 +721,10 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
 /// Creates the Objective branch and worktree; never falls back to the shared checkout.
 fn provision(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Result<String, String> {
     if path.exists() {
-        return Err("worktree_path_occupied".into());
+        // A crash between provisioning and recording it (`launch.provisioned`) leaves this
+        // Objective's own worktree unrecorded; no agent ran in it yet, so adopt it.
+        return adopt_provisioned(repo, base, start, path)
+            .ok_or_else(|| "worktree_path_occupied".into());
     }
     let mut branch = base.to_string();
     for attempt in 2..=32 {
@@ -728,4 +737,33 @@ fn provision(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Resul
     repo.worktree_add(&branch, &adapter_git(start), path)
         .map_err(|e| format!("provision: {}", e.code()))?;
     Ok(branch)
+}
+
+/// The branch of an unrecorded worktree at `path` that provisioning created for this Objective:
+/// registered in the repository, on `base` or `base-<n>`, still at the start commit.
+fn adopt_provisioned(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Option<String> {
+    let wanted = path.canonicalize().ok()?;
+    let entry = repo
+        .worktree_entries()
+        .ok()?
+        .into_iter()
+        .find(|e| !e.prunable && e.path.canonicalize().ok().as_ref() == Some(&wanted))?;
+    let branch = String::from_utf8(entry.branch?)
+        .ok()?
+        .strip_prefix("refs/heads/")?
+        .to_string();
+    let ours = branch == base
+        || branch
+            .strip_prefix(base)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|n| n.parse::<u8>().is_ok());
+    let at_start = repo
+        .resolve_ref(&format!("refs/heads/{branch}"))
+        .ok()
+        .flatten()
+        .is_some_and(|id| core_git(&id) == *start);
+    (ours && at_start).then(|| {
+        eprintln!("laded: adopted an unrecorded provisioned worktree");
+        branch
+    })
 }

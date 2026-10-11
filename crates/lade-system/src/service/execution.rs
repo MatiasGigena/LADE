@@ -100,6 +100,9 @@ impl Service {
             .objective_mut()
             .start_execution(session, model, ts_now())
             .map_err(|e| domain_rejection(&e))?;
+        if let Some(why) = self.worker_blocker(oid) {
+            return Err(Self::quota_rejection(why));
+        }
         self.preflight(&cmd.model.provider)?;
         if let Some(thinking) = cmd.thinking {
             self.record_start_thinking(oid, thinking)?;
@@ -161,6 +164,9 @@ impl Service {
             .objective_mut()
             .resume_execution(ts_now())
             .map_err(|e| domain_rejection(&e))?;
+        if let Some(why) = self.worker_blocker(oid) {
+            return Err(Self::quota_rejection(why));
+        }
         if let Some(session) = st.objective().execution().session() {
             self.preflight(session.model.provider())?;
         }
@@ -294,10 +300,9 @@ impl Service {
                         self.stop_worker(oid);
                     }
                 } else {
-                    self.spawn(Pending::Ignore, move || {
+                    self.reap(move || {
                         let mut control = control;
                         control.terminate();
-                        JobOutput::Done
                     });
                 }
             }
@@ -338,10 +343,9 @@ impl Service {
         let rt = self.rt(oid);
         if let Some(mut control) = rt.control.take() {
             let _ = control.send(WorkerBody::Abort);
-            self.spawn(Pending::Ignore, move || {
+            self.reap(move || {
                 control.terminate();
                 drop(control);
-                JobOutput::Done
             });
             return;
         }
@@ -666,6 +670,7 @@ impl Service {
             return false;
         }
         if let DispatchDecision::Dispatch { .. } = decision {
+            crate::fault::point("dispatch.recorded");
             let body = WorkerBody::Deliver {
                 input_id: wire_id(id.uuid()),
                 mode: super::project::wire_mode(input.mode),

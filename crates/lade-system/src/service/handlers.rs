@@ -95,7 +95,6 @@ pub(crate) enum Pending {
         writable: bool,
         size: (u16, u16),
     },
-    Ignore,
 }
 
 /// Why a working capture was taken.
@@ -742,6 +741,7 @@ impl Service {
             self.finish(ctx, Err(rejection));
             return;
         }
+        crate::fault::point("input.accepted");
         self.input_seq = seq;
         for draft in &submitted {
             if let Some(slot) = st.drafts.iter_mut().find(|d| d.id() == draft.id()) {

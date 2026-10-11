@@ -2,8 +2,12 @@
 //!
 //! ```text
 //! laded --version
-//! laded serve [--state-dir DIR] [--runtime-dir DIR]
+//! laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
+//!             [--storage-warn-mib N] [--storage-reserve-mib N]
 //! ```
+//!
+//! The limit flags set the aggregate accounting across Objectives (`ResourceLimits`); the
+//! defaults are printed at startup.
 //!
 //! Exit statuses: 0 version, 64 usage error, 78 refused to start (unsafe directory, unopenable or
 //! corrupt store, another instance), 70 internal failure. Diagnostics go to stderr only.
@@ -13,14 +17,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use lade_system::service::{self, ServiceConfig, StartError};
+use lade_system::service::{self, ResourceLimits, ServiceConfig, StartError};
 use lade_system::supervision::{
     GATEWAY_SOCKET_DIR, LaunchError, LaunchRequest, LauncherConfig, SupervisorEvent, WorkerControl,
     WorkerLauncher, default_launcher,
 };
 
-const USAGE: &str =
-    "usage: laded serve [--state-dir DIR] [--runtime-dir DIR]\n       laded --version";
+const USAGE: &str = "usage: laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N]\n                   [--max-terminals N] [--storage-warn-mib N] [--storage-reserve-mib N]\n       laded --version";
 
 /// Launcher used when the sandboxed launcher cannot be constructed: every launch is refused, so
 /// execution fails closed and never runs unsandboxed.
@@ -61,19 +64,34 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
 struct Args {
     state: Option<PathBuf>,
     runtime: Option<PathBuf>,
+    limits: ResourceLimits,
 }
 
 fn parse_serve(args: &[OsString]) -> Option<Args> {
     let mut parsed = Args {
         state: None,
         runtime: None,
+        limits: ResourceLimits::default(),
     };
+    let mut seen = Vec::new();
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
-        let value = iter.next().map(PathBuf::from)?;
-        match flag.to_str()? {
-            "--state-dir" if parsed.state.is_none() => parsed.state = Some(value),
-            "--runtime-dir" if parsed.runtime.is_none() => parsed.runtime = Some(value),
+        let flag = flag.to_str()?;
+        if seen.contains(&flag) {
+            return None;
+        }
+        seen.push(flag);
+        let value = iter.next()?;
+        let number = || value.to_str()?.parse::<u64>().ok();
+        let count = || usize::try_from(number()?).ok().filter(|n| *n > 0);
+        let mib = || number()?.checked_mul(1 << 20);
+        match flag {
+            "--state-dir" => parsed.state = Some(PathBuf::from(value)),
+            "--runtime-dir" => parsed.runtime = Some(PathBuf::from(value)),
+            "--max-workers" => parsed.limits.max_workers = count()?,
+            "--max-terminals" => parsed.limits.max_terminals = count()?,
+            "--storage-warn-mib" => parsed.limits.storage_warn_bytes = mib()?,
+            "--storage-reserve-mib" => parsed.limits.storage_reserve_bytes = mib()?,
             _ => return None,
         }
     }
@@ -102,10 +120,11 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(64);
     };
-    let Some(config) = ServiceConfig::from_environment(parsed.state, parsed.runtime) else {
+    let Some(mut config) = ServiceConfig::from_environment(parsed.state, parsed.runtime) else {
         eprintln!("laded: no state directory (set XDG_STATE_HOME or HOME, or pass --state-dir)");
         return ExitCode::from(64);
     };
+    config.limits = parsed.limits;
     // Every file the service creates is private to its user.
     rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
     if !config.state_dir.is_absolute() || !config.runtime_dir.is_absolute() {

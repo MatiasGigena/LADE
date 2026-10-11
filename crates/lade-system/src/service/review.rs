@@ -5,7 +5,9 @@
 use std::time::Instant;
 
 use lade_core::domain::execution::ExecutionState;
-use lade_core::domain::ids::{ApprovalId, CandidateId, ObjectiveId, Timestamp, VerificationId};
+use lade_core::domain::ids::{
+    ApprovalId, CandidateId, ObjectiveId, Timestamp, VerificationId, WorkspaceId,
+};
 use lade_core::domain::inspection::ArtifactDigest;
 use lade_core::domain::objectives::Lifecycle;
 use lade_core::domain::review::{
@@ -24,7 +26,7 @@ use super::convert::{
     adapter_git, conflict, domain_rejection, durability, from_wire_git, git_rejection, invalid,
     new_uuid, not_found, now_ms, parse_uuid, rejection,
 };
-use super::handlers::{Pending, sql};
+use super::handlers::Pending;
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::project::{wire_approval, wire_candidate, wire_verification};
 use super::{Flow, JobOutput, ReqCtx, Service};
@@ -214,6 +216,7 @@ impl Service {
                 .ok_or_else(|| not_found("candidate"))?;
             let data = ReplyData::ReviewFreeze(wire_candidate(candidate));
             self.commit_obj(Some(&mut ctx), Some(&data), st)?;
+            crate::fault::point("freeze.recorded");
             Ok((data, out.changed))
         })();
         match outcome {
@@ -261,6 +264,9 @@ impl Service {
         let oid = self.objective_id(&cmd.objective_id)?;
         self.check_idle(oid)?;
         let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
+        if let Some(why) = self.storage_blocker() {
+            return Err(Self::quota_rejection(why));
+        }
         let tools = self.sandbox_tools().ok_or_else(|| {
             rejection(
                 ErrorCode::ExecutionUnavailable,
@@ -309,7 +315,7 @@ impl Service {
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit(Event::VerificationChanged(summary));
         self.emit_objective(oid);
-        self.spawn(
+        self.spawn_long(
             Pending::Verify {
                 oid,
                 verification_id,
@@ -551,7 +557,37 @@ impl Service {
     // -----------------------------------------------------------------------------------------
     // Integration.
 
+    /// The (Workspace, target branch) an Objective integrates into.
+    fn integration_key(&self, oid: ObjectiveId) -> Option<(WorkspaceId, String)> {
+        self.objectives.get(&oid).map(|st| {
+            let record = st.objective().record();
+            (
+                record.workspace_id,
+                record.integration_target.as_str().to_string(),
+            )
+        })
+    }
+
     pub(crate) fn review_integrate(&mut self, ctx: ReqCtx, cmd: &ReviewIntegrateCommand) -> Flow {
+        // Same-target integrations are serialized: while one runs, later requests wait and are
+        // then checked against the target it moved (normally `stale_target`).
+        let queued = self
+            .objective_id(&cmd.objective_id)
+            .ok()
+            .and_then(|oid| Some((oid, self.integration_key(oid)?)))
+            .filter(|(_, key)| self.integrating.contains_key(key));
+        if let Some((oid, key)) = queued {
+            if let Err(rejection) = self.check_idle(oid) {
+                self.finish(ctx, Err(rejection));
+                return Flow::Done;
+            }
+            self.rt(oid).busy = Some("integrate");
+            if let Some(waiting) = self.integrating.get_mut(&key) {
+                waiting.push_back((ctx, cmd.clone()));
+            }
+            self.emit_objective(oid);
+            return Flow::Deferred;
+        }
         let prepared = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;
             self.check_idle(oid)?;
@@ -619,16 +655,29 @@ impl Service {
             plan.candidate_id
         );
         let commit_time = now_ms() / 1000;
-        if let Err(rejection) = sql(storage::insert_journal(
-            self.store.conn(),
-            &journal,
-            &message,
-            commit_time,
-            now_ms(),
-        )) {
+        // The intent and the pending operation are one transaction: a crash after the intent
+        // leaves an operation that recovery reports `uncertain`, never an unknown one.
+        let op = ctx.op.clone();
+        let journaled = self.commit(None, None, |tx| {
+            storage::insert_journal(tx, &journal, &message, commit_time, now_ms())?;
+            if let Some(op) = &op {
+                storage::record_operation(
+                    tx,
+                    op.id.as_str(),
+                    &op.digest,
+                    ctx.name.as_str(),
+                    "pending",
+                    None,
+                    now_ms(),
+                )?;
+            }
+            Ok(())
+        });
+        if let Err(rejection) = journaled {
             self.finish(ctx, Err(rejection));
             return Flow::Done;
         }
+        crate::fault::point("integrate.intent");
         let request = SquashRequest {
             target_branch: journal.target_branch.clone(),
             expected_target: adapter_git(&plan.expected_target),
@@ -637,6 +686,9 @@ impl Service {
             timestamp: Some(commit_time),
         };
         self.rt(oid).busy = Some("integrate");
+        if let Some(key) = self.integration_key(oid) {
+            self.integrating.entry(key).or_default();
+        }
         self.spawn(
             Pending::Integrate {
                 oid,
@@ -661,6 +713,7 @@ impl Service {
         let now = now_ms();
         let outcome = match result {
             Ok(squash) => (|| {
+                crate::fault::point("integrate.applied");
                 let commit = super::convert::core_git(&squash.commit);
                 let mut st = self.obj(oid)?.clone();
                 st.review
@@ -727,6 +780,17 @@ impl Service {
             .collect();
         for sibling in siblings {
             self.emit_objective(sibling);
+        }
+        // Release the target and run the integrations that waited for it, in arrival order.
+        let waiting = self
+            .integration_key(oid)
+            .and_then(|key| self.integrating.remove(&key))
+            .unwrap_or_default();
+        for (ctx, cmd) in waiting {
+            if let Ok(next) = self.objective_id(&cmd.objective_id) {
+                self.rt(next).busy = None;
+            }
+            let _ = self.review_integrate(ctx, &cmd);
         }
     }
 
@@ -875,6 +939,9 @@ impl Service {
         result: Result<(), Rejection>,
     ) {
         self.rt(oid).busy = None;
+        if result.is_ok() {
+            crate::fault::point("cleanup.removed");
+        }
         let outcome = (|| {
             result?;
             let mut st = self.obj(oid)?.clone();
