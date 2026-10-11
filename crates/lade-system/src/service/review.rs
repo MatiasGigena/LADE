@@ -306,6 +306,9 @@ impl Service {
             tree: candidate.tree.clone(),
             base_target: candidate.base_target_commit.clone(),
             argv: cmd.command,
+            objective: oid.to_string(),
+            marker: crate::supervision::sweep::sandbox_marker(&self.paths.run),
+            cgroups: self.cgroups.clone(),
         };
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit(Event::VerificationChanged(summary));

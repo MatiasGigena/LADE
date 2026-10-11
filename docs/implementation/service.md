@@ -269,7 +269,37 @@ input is never resent automatically.
 
 Attention uses `lade_core::derive_attention` with facts the service tracks (uncertain delivery, stale unsent drafts,
 failed checks, integration conflict, cached target movement, non-empty latest capture); wire badges add
-`verification_missing`, `unsent_drafts` and `fixture_model`.
+`verification_missing`, `unsent_drafts`, `fixture_model` and `limit_reached` (first, for an execution that failed
+because an enforced limit was reached; its failure reason starts with `limit_reached:`).
+
+## Resource limits (IMP-006)
+
+Every value is a constant in `crates/lade-system/src/adapters/sandbox/limits.rs` (the §7 proposals; approving or
+changing them is Matias's decision). Enforcement per sandbox is described in
+[execution-safety.md](execution-safety.md#limits-7); the service adds two things:
+
+- **Writable-storage monitor (§7, 2 GiB).** Every 5 s (`STORAGE_CHECK_INTERVAL`) one pool job measures, for each live
+  execution, the allocated blocks of its worktree plus its session directory (symbolic links not followed, hard links
+  counted per name). Above `ServiceConfig::storage_limit_bytes` (default `WRITABLE_STORAGE_BYTES` = 2 GiB) the
+  service records the execution as `failed` with the reason `limit_reached: writable storage <used> exceeds the
+  <limit> limit (worktree and session directory)`, terminates the worker, sends `service.notice {level: error, code:
+  limit_reached}` and appends a system activity item; the summary carries the `limit_reached` badge. Nothing is
+  restarted and the limit is never raised: the developer frees space (for example in a terminal, which stays open and
+  whose writes count too) and resumes explicitly; a resume that is still over the limit is stopped again at the next
+  check. This is a **monitor, not a quota**: writes between two checks succeed, and the disk itself is not reserved.
+- **cgroup v2 placement.** At start `laded` (the binary, not `service::start`) calls
+  `adapters::sandbox::cgroup::detect`. When the unit's cgroup is delegated (`Delegate=memory pids cpu` in
+  `packaging/systemd/lade.service`: systemd marks it with the `user.delegate`/`trusted.delegate` extended attribute,
+  owned by the service user, with the three controllers available), `laded` moves itself into `<unit
+  cgroup>/service`, enables the controllers, removes sandbox cgroups a previous instance left, and passes the subtree
+  to the launcher, the terminals and verification runs: each Objective gets `<unit cgroup>/sandboxes/<objective>`
+  with `OBJECTIVE_CGROUP_LIMITS` (`memory.max` 4 GiB, `pids.max` 512, `cpu.max` unlimited), shared by its worker,
+  terminals and verification runs in one leaf each (`worker-<generation>`, `terminal-<id>`, `verify-<id>`). A
+  sandbox is moved into its leaf while its launch gate is still closed; when it ends the leaf is killed
+  (`cgroup.kill`) and removed. Without delegation (cgroup v1/hybrid, not started by the unit, a non-delegated cgroup,
+  missing controllers, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
+  prlimit limits only` and continues; it never writes into a cgroup it was not delegated. A memory OOM kill inside a
+  sandbox is logged (`sandbox memory limit reached`) and surfaces as the worker's unexpected exit.
 
 ## Contained terminals (IMP-012)
 
@@ -332,13 +362,14 @@ parent, message, identity and time) and comparing it with the actual target ref 
 (`reconciled_done`), otherwise `reconciled_aborted`; (3) per Objective `lade_core::application::recover_after_restart`:
 live executions → `cancelled` + `interrupted`, unconsumed approvals invalidated (`service_restart`), running
 verifications interrupted, `dispatched` inputs → `uncertain`; nothing resumes; (4) best-effort sweep: the launcher's
-`sweep_stale($STATE/run)` (pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/`prlimit` process of
-this uid whose arguments reference the state directory, leftover verification copies and `lade/verify/*` branches,
-and `$STATE/tmp`.
+`sweep_stale($STATE/run)` (every `prlimit`/`bwrap` process carrying this run directory's sandbox marker, recorded or
+not, then pidfile-identified sandboxes, gateway sockets), any remaining `bwrap`/`prlimit` process of this uid whose
+arguments reference the state directory, leftover verification copies and `lade/verify/*` branches, and
+`$STATE/tmp`. With delegated cgroups `laded` has already killed and removed leftover sandbox cgroups.
 
 ## Tests
 
-`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,inspect}.rs` run the real socket, real SQLite and disposable Git
+`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal,storage,inspect}.rs` run the real socket, real SQLite and disposable Git
 repositories: handshake/file modes, wrong capability and pre-auth frames, second client refused and reconnect,
 invalid request keeps the link, admission rotates on restart; duplicate operations and `operation.get`; objective and
 journal survive restart; restart interrupts a live execution and makes unacknowledged dispatch uncertain; corrupt
@@ -346,7 +377,8 @@ store refuses to start; draft CAS and whole-batch stale blocking; the full loop 
 bubblewrap launcher when it works, else the unsandboxed test launcher; `lade-fixture` model): message → working changes → draft → feedback → revision → freeze → sandboxed
 verification (or override without bubblewrap) → approve → integrate into a clean checked-out `main` → cleanup; dirty
 target refused and untouched; moved target → `stale_target`, approval invalidated, refresh, re-approve, integrate;
-and the real sandboxed launcher when bubblewrap works. `service_inspect.rs`: nested-repository and filtered-content
+the real sandboxed launcher when bubblewrap works; the writable-storage monitor with a 256 KiB budget
+(`service_storage.rs`: `failed` with `limit_reached`, badge, error notice, no automatic restart). `service_inspect.rs`: nested-repository and filtered-content
 notices (working and candidate bases); exact content-search byte ranges against the retained bytes; chunked reading of
 a > 64 MiB file (whole-file digest, exact continuation, character-boundary refusal, fresh and stale feedback on a
 chunk); an untracked collision refused before the target ref moves (reflog unchanged), then integrated once moved

@@ -100,6 +100,7 @@ pub(crate) enum Pending {
         writable: bool,
         size: (u16, u16),
     },
+    Storage,
     Ignore,
 }
 
@@ -299,6 +300,7 @@ impl Service {
             (Pending::Launch { oid, generation }, JobOutput::Launch(out)) => {
                 self.launch_done(oid, generation, out);
             }
+            (Pending::Storage, JobOutput::Storage(usage)) => self.storage_measured(usage),
             (Pending::Capture { oid, purpose }, JobOutput::Capture(result)) => {
                 self.capture_done(oid, purpose, result);
             }

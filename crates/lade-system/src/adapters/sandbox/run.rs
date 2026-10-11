@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::find_program;
+use super::{SandboxCommand, find_program};
 
 const POLL: Duration = Duration::from_millis(10);
 /// How long to wait for the output pipe to close after the command exited.
@@ -50,21 +50,41 @@ impl Tail {
 /// called `setsid`. If descendants outside a PID namespace keep the output pipe open after the
 /// command exits, their group is killed too and capture stops after a short grace period.
 pub fn run_bounded(
-    mut cmd: Command,
+    cmd: impl Into<SandboxCommand>,
     timeout: Duration,
     max_output: usize,
 ) -> io::Result<RunOutcome> {
+    run_bounded_with(cmd, timeout, max_output, |_| Ok(()))
+}
+
+/// [`run_bounded`], calling `place` with the spawned pid before a sandbox's launch gate opens
+/// (for example to move the sandbox into a cgroup). A `place` error kills the command and is
+/// returned.
+pub fn run_bounded_with(
+    cmd: impl Into<SandboxCommand>,
+    timeout: Duration,
+    max_output: usize,
+    place: impl FnOnce(u32) -> io::Result<()>,
+) -> io::Result<RunOutcome> {
+    let mut cmd = cmd.into();
     let (mut reader, writer) = io::pipe()?;
     let writer_err = writer.try_clone()?;
-    cmd.stdin(Stdio::null())
+    cmd.command_mut()
+        .stdin(Stdio::null())
         .stdout(writer)
         .stderr(writer_err)
         .process_group(0);
     let start = Instant::now();
-    let mut child = cmd.spawn()?;
-    // Drop the parent's copies of the write end so EOF arrives when the children close theirs.
-    drop(cmd);
+    // Spawning consumes the command, dropping the parent's copies of the write end so EOF
+    // arrives when the children close theirs.
+    let (mut child, mut gate) = cmd.spawn()?;
     let pgid = child.id();
+    if let Err(e) = place(pgid).and_then(|()| gate.open()) {
+        kill_group(pgid);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
     let tail = Arc::new(Mutex::new(Tail {
         bytes: VecDeque::new(),
         total: 0,

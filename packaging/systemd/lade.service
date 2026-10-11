@@ -20,6 +20,11 @@ Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
 # The sandboxed workers, their gateways and verification runs are descendants of laded: stopping the
 # service ends the whole control group, so no sandbox outlives it.
 KillMode=control-group
+# laded manages its own cgroup subtree: it moves itself into <unit>/service and runs each
+# Objective's sandboxes in <unit>/sandboxes/<objective>/<leaf> with memory.max/pids.max/cpu.max
+# (crates/lade-system/src/adapters/sandbox/limits.rs). Without these controllers it logs why and
+# falls back to the prlimit limits. Systemd still kills the whole subtree on stop.
+Delegate=memory pids cpu
 KillSignal=SIGTERM
 TimeoutStopSec=15
 Restart=on-failure

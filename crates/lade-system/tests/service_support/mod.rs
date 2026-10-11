@@ -55,6 +55,8 @@ impl Env {
         ServiceConfig {
             state_dir: self.root.path().join("state"),
             runtime_dir: self.root.path().join("run"),
+            storage_limit_bytes: lade_system::adapters::sandbox::WRITABLE_STORAGE_BYTES,
+            cgroups: None,
         }
     }
 

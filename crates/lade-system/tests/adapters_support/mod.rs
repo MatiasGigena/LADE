@@ -70,11 +70,20 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// `git status --porcelain=v1 -z --untracked-files=all` bytes.
+/// `git status --porcelain=v1 -z --untracked-files=all` bytes. `--no-optional-locks` keeps the
+/// observation read-only: a plain `git status` refreshes stale stat data (for example after a
+/// `chmod`, which changes only the ctime) and opportunistically rewrites the index, which would
+/// make "capture never touches the real index" checks fail depending on timing.
 pub fn status(dir: &Path) -> Vec<u8> {
     git_os(
         dir,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
     )
 }
 

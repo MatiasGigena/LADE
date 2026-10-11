@@ -39,7 +39,9 @@ use lade_protocol::{Framing, encode};
 use rusqlite::Transaction;
 
 use crate::adapters::artifacts::ArtifactStore;
-use crate::adapters::sandbox::SandboxTools;
+use crate::adapters::sandbox::{
+    STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxTools, WRITABLE_STORAGE_BYTES,
+};
 use crate::storage::{self, Store, StoreError};
 use crate::supervision::launcher::RESERVED_GENERATION;
 use crate::supervision::{
@@ -56,6 +58,12 @@ use state::{ObjState, Runtime, WsState};
 pub struct ServiceConfig {
     pub state_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    /// Writable-storage budget of one execution (worktree plus session directory); see
+    /// [`WRITABLE_STORAGE_BYTES`].
+    pub storage_limit_bytes: u64,
+    /// Delegated cgroup subtree for terminals and verification runs (the launcher has its own
+    /// handle); `None` without delegation.
+    pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 impl ServiceConfig {
@@ -78,6 +86,8 @@ impl ServiceConfig {
         Some(Self {
             state_dir,
             runtime_dir,
+            storage_limit_bytes: WRITABLE_STORAGE_BYTES,
+            cgroups: None,
         })
     }
 }
@@ -161,6 +171,7 @@ pub(crate) enum JobOutput {
     Profile(Result<crate::adapters::profile::ImportReport, String>),
     Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
     Terminal(Result<crate::supervision::Terminal, Rejection>),
+    Storage(Vec<execution::StorageUsage>),
     Done,
 }
 
@@ -228,6 +239,10 @@ pub(crate) struct Service {
     terminals_opening: usize,
     /// `service.stop` was answered: leave the loop and shut down.
     stopping: bool,
+    storage_limit: u64,
+    /// A writable-storage measurement job is in flight.
+    storage_check: bool,
+    cgroups: Option<Arc<SandboxCgroups>>,
 }
 
 /// A running service instance (threads and admission material).
@@ -412,6 +427,9 @@ pub fn start(
         terminals: BTreeMap::new(),
         terminals_opening: 0,
         stopping: false,
+        storage_limit: config.storage_limit_bytes,
+        storage_check: false,
+        cgroups: config.cgroups.clone(),
     };
     service.load().map_err(StartError::Recovery)?;
     service.load_compat().map_err(StartError::Recovery)?;
@@ -880,6 +898,12 @@ impl Service {
         self.pump_terminals();
         if self.ticks.is_multiple_of(10) {
             self.flush_activity();
+        }
+        if self
+            .ticks
+            .is_multiple_of(STORAGE_CHECK_INTERVAL.as_millis() as u64 / TICK.as_millis() as u64)
+        {
+            self.check_storage();
         }
         self.check_timeouts();
         self.compat_timeouts();
