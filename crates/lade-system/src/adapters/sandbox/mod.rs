@@ -498,6 +498,58 @@ pub fn verification_spec(launch: &VerificationLaunch) -> Result<SandboxSpec, San
     Ok(spec)
 }
 
+/// Inputs for one contained terminal (IMP-012): an interactive shell over a service-owned PTY in
+/// the same isolation as the worker, without network, credentials or the session directory.
+#[derive(Clone, Debug)]
+pub struct TerminalLaunch {
+    /// Shell executable (absolute, under `/usr` or `/bin`, which are bound read-only).
+    pub shell: PathBuf,
+    /// `setsid` from util-linux: makes the PTY the shell's controlling terminal inside the
+    /// sandbox (job control, `^C`). Without it the shell runs without a controlling terminal.
+    pub setsid: Option<PathBuf>,
+    /// Objective worktree: working directory; read-write only when `writable`.
+    pub worktree: PathBuf,
+    /// Repository common directory (`.git`), read-only: the terminal cannot commit or move refs.
+    pub repo_common_dir: PathBuf,
+    /// `false` while review writer exclusion holds (frozen/approved candidate): the worktree is
+    /// bound read-only, so no process of the terminal can change the reviewed content.
+    pub writable: bool,
+    pub limits: Limits,
+}
+
+/// Build a terminal sandbox: `HOME=/tmp` (private tmpfs), `TERM=vt100`, worker limits, no
+/// network, no credentials, the worktree read-write or read-only.
+pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxError> {
+    let mut argv = Vec::new();
+    if let Some(setsid) = &launch.setsid {
+        argv.extend([
+            setsid.clone().into_os_string(),
+            "--ctty".into(),
+            "--wait".into(),
+        ]);
+    }
+    argv.extend([launch.shell.clone().into_os_string(), "-i".into()]);
+    let mut spec = SandboxSpec::new(argv, &launch.worktree, launch.limits)?;
+    spec.ro_bind(&launch.repo_common_dir)?;
+    if launch.writable {
+        spec.rw_bind(&launch.worktree)?;
+    } else {
+        spec.ro_bind(&launch.worktree)?;
+    }
+    let (mode, prompt) = if launch.writable {
+        ("read_write", "[lade] \\W\\$ ")
+    } else {
+        ("read_only", "[lade read-only] \\W\\$ ")
+    };
+    spec.env("HOME", "/tmp")?
+        .env("PATH", SANDBOX_PATH)?
+        .env("LANG", "C.UTF-8")?
+        .env("TERM", "vt100")?
+        .env("PS1", prompt)?
+        .env("LADE_TERMINAL", mode)?;
+    Ok(spec)
+}
+
 /// Run a trivial command in a fully configured sandbox (worker limits). Any failure means
 /// execution must be blocked.
 pub fn sandbox_available(tools: &SandboxTools) -> Result<(), SandboxError> {
