@@ -73,6 +73,7 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `review.integrate` | command | `ReviewIntegrateCommand` | `ObjectiveDetail` |
 | `objective.complete` / `objective.discard` | command | `ObjectiveSelector` | `ObjectiveDetail` |
 | `objective.cleanup` | command | `ObjectiveCleanupCommand` | `ObjectiveDetail` |
+| `objective.delete_history` | command | `ObjectiveHistoryDeleteCommand {objective_id, confirm_history_loss}` | `ObjectiveDetail` |
 | `settings.update` | command | `SettingsUpdateCommand` | `Settings` |
 | `service.stop` | command | `ServiceStopCommand {reason: exit\|logout}` | `Empty` |
 | `terminal.open` | interaction | `TerminalOpenCommand {objective_id, cols, rows}` | `TerminalInfo {terminal_id, objective_id, mode: read_write\|read_only, cols, rows}` |
@@ -96,6 +97,28 @@ are shown to the developer as an explicit marker, never silently joined. Output 
 (invalid bytes replaced, NUL removed); input is the UTF-8 the client's VT encoder produces (no NUL).
 `service.stop` is an ordinary journaled command: the reply is sent, then the service stops its workers and
 terminals and exits; a client that sent it neither reconnects nor starts a new service.
+
+### Repository inspection additions (IMP-004/009, additive)
+
+All optional fields, so older peers' frames stay valid and an older client simply ignores what it does not know:
+
+- `ChangedFile.filtered` (`true` only): the path's `filter` attribute names a filter driver (Git LFS,
+  `clean`/`smudge`); LADE never runs filters, so raw working-tree bytes are compared — unsupported content.
+- `ChangeList.notices` (≤ 64 `ContentNotice {kind: nested_repository|filtered_content, message ≤ 512, path?}`):
+  a nested repository without a commit left out of a working capture (one per path), and one repository-level
+  notice when any listed file is filtered.
+- `SearchResult.column` (1-based byte column of the first match in its line) and `byte_end`; `byte_start` (already
+  in the schema, previously unset) is now filled for content results. `[byte_start, byte_end)` addresses the raw
+  file bytes `file.read` retains, so it can be used directly as a feedback reference range; both are omitted when
+  the file exceeds 16 MiB, the per-search 64 MiB offset budget is spent, or the match cannot be confirmed.
+- `FileContent.chunked` (`true` only): the file exceeds the 64 MiB whole-file bound (hard upper bound 1 GiB) and is
+  served in chunks of at most `limit` (≤ 256 KiB) through the existing `offset`/`limit` of `FileReadQuery`. The
+  `artifact_digest` still names the whole file; encoding is decided by a NUL in the first 8,000 bytes; a text chunk
+  is cut back to a character boundary, an offset inside a character is `invalid_request`, and a chunk that is not
+  UTF-8 is `unsupported_content` (no gaps in the text).
+- `ObjectiveDetail.history_deleted` (`true` only) and the `ActionName` `objective.delete_history`: the deliberate
+  deletion of a cleaned-up Objective's retention refs and branch. `confirm_history_loss` must be `true` (otherwise
+  `invalid_request`); it is never sent by the service or client on its own.
 
 ### Error semantics
 
