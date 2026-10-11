@@ -85,7 +85,8 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | Open extension dialogs are not durable: a worker or service restart closes them (`aborted`) and the extension sees no answer | A pending decision must be asked again | IMP-013 |
 | Images are not part of the input protocol; tool images appear as `[image]` | Image inputs/outputs are not supported | IMP-011 |
 | Activity items over 192 KiB are truncated (the full byte length is shown) | Very large tool outputs are not fully visible | IMP-011 |
-| The worker depends on a second copy of `@earendil-works/pi-ai` (≈ +130 MB) and installs with `--ignore-scripts` | Larger bundle; the narrow pi fork (IMP-008) would remove the duplicate | IMP-008 |
+| The worker imports pi-ai by a relative path into the SDK's nested install (`src/worker/pi-ai.ts`), because the shrinkwrapped SDK's tree cannot be deduplicated with a direct dependency | An SDK upgrade or a change of npm's nested layout must re-run `worker-deps.test.ts`; the path is not a public SDK export | IMP-008 |
+| The narrow pi fork is the unpatched registry tarball, checked against the pinned upstream manifest and shrinkwrap; it is not rebuilt from the pinned source archive | Byte reproducibility from source is unproven; needed before the first patch | IMP-008, IMP-014 |
 
 ## Desktop client and accessibility
 

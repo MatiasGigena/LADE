@@ -27,8 +27,12 @@ to IMP-014; this MIT notice is not blanket licensing clearance for that bundle.
 `packages/pi-worker` installs `@earendil-works/pi-coding-agent@0.85.1` from the npm
 registry (integrity recorded in `manifest.json` → `npm_distribution`, and in
 `packages/pi-worker/package-lock.json`). Its `package.json` and `npm-shrinkwrap.json`
-are byte-identical to `upstream/`, so the installed nested tree follows the upstream
-shrinkwrap. The worker imports root exports only and applies **no patches**. It also
-depends directly on `@earendil-works/pi-ai@0.85.1` (stream factory for the
-`lade-fixture` provider) and `undici@8.9.0` (gateway dispatcher). See
-[docs/implementation/worker.md](../../docs/implementation/worker.md).
+are byte-identical to `upstream/`, and the lockfile's nested tree under it is exactly
+the upstream shrinkwrap; `packages/pi-worker/test/worker-deps.test.ts` checks all
+three. With the empty patch inventory this tarball is the fork's runnable form; a
+reproducible build from the source archive is still open and needed before the first
+patch. The worker imports root exports only and applies **no patches**. Its only other
+direct dependency is `undici@8.9.0` (gateway dispatcher): the `lade-fixture` provider's
+stream factory and the thinking-level helper come from the pi-ai copy nested under the
+SDK (`packages/pi-worker/src/worker/pi-ai.ts`), so exactly one pi-ai is installed and
+loaded. See [docs/implementation/worker.md](../../docs/implementation/worker.md#dependencies).
