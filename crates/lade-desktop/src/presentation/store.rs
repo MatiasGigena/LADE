@@ -1407,14 +1407,20 @@ mod tests {
             line_hint: Some(1),
         };
         let id = DraftId::new("d");
-        let mut editor = DraftEditor::new_local(id.clone(), o.clone(), SessionId::new("s"), reference);
+        let mut editor =
+            DraftEditor::new_local(id.clone(), o.clone(), SessionId::new("s"), reference);
         editor.edit("typed", 0);
         assert!(editor.poll(300, true).is_some());
         state.drafts.insert(o.clone(), vec![editor]);
-        state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting { attempt: 1 }));
+        state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
+            attempt: 1,
+        }));
         state.apply(StoreUpdate::Connection(ConnectionState::Connected));
         let draft = state.draft_mut(&id).unwrap();
-        assert!(draft.poll(10_000, true).is_none(), "outcome unknown until drafts are listed");
+        assert!(
+            draft.poll(10_000, true).is_none(),
+            "outcome unknown until drafts are listed"
+        );
         // The service lists no such draft: the first save never landed.
         state.apply(StoreUpdate::Drafts {
             objective_id: o.clone(),

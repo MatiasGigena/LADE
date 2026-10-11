@@ -255,6 +255,9 @@ impl DraftEditor {
         // re-queried, no new save is sent so a landed write is never blindly overwritten.
         if self.in_flight.take().is_some() {
             self.awaiting_reconcile = true;
+            // The text is unsaved again: once reconciled it is due without a new keystroke.
+            self.first_unsaved_edit
+                .get_or_insert(self.last_edit.unwrap_or(0));
         }
     }
 
@@ -456,7 +459,10 @@ mod tests {
     #[test]
     fn flush_saves_without_waiting_and_unsaved_text_is_reported_until_acknowledged() {
         let mut e = editor();
-        assert!(!e.has_unsaved_text(), "an untouched draft has nothing to lose");
+        assert!(
+            !e.has_unsaved_text(),
+            "an untouched draft has nothing to lose"
+        );
         e.edit("close soon", 1_000);
         assert!(e.has_unsaved_text());
         assert!(e.poll(1_010, true).is_none(), "quiet period not over");

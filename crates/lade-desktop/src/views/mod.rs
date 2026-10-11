@@ -327,16 +327,17 @@ impl App {
         }));
         // Safe close: unsaved draft text is flushed and acknowledged, or explicitly discarded.
         let weak = Rc::downgrade(self);
-        self.window.connect_close_request(move |_| match weak.upgrade() {
-            Some(app) if !app.close_confirmed.get() && !app.store.state().is_preview() => {
-                if app.guard_unsaved(CloseAfter::Window) {
-                    glib::Propagation::Proceed
-                } else {
-                    glib::Propagation::Stop
+        self.window
+            .connect_close_request(move |_| match weak.upgrade() {
+                Some(app) if !app.close_confirmed.get() && !app.store.state().is_preview() => {
+                    if app.guard_unsaved(CloseAfter::Window) {
+                        glib::Propagation::Proceed
+                    } else {
+                        glib::Propagation::Stop
+                    }
                 }
-            }
-            _ => glib::Propagation::Proceed,
-        });
+                _ => glib::Propagation::Proceed,
+            });
         let weak = Rc::downgrade(self);
         self.probe.connect_resize(move |_, width, _| {
             if let Some(app) = weak.upgrade() {
@@ -595,15 +596,13 @@ impl App {
                 gtk::AccessibleAnnouncementPriority::Medium,
             );
             let weak = Rc::downgrade(self);
-            let id = glib::timeout_add_local_once(
-                Duration::from_millis(CLOSE_WAIT_MS),
-                move || {
+            let id =
+                glib::timeout_add_local_once(Duration::from_millis(CLOSE_WAIT_MS), move || {
                     if let Some(app) = weak.upgrade() {
                         app.close_timer.borrow_mut().take();
                         app.confirm_loss();
                     }
-                },
-            );
+                });
             if let Some(old) = self.close_timer.borrow_mut().replace(id) {
                 old.remove();
             }
@@ -699,7 +698,8 @@ impl App {
         for change in changes {
             match change {
                 Change::DraftStatus(id) => {
-                    if let Some(editor) = state.drafts.values().flatten().find(|d| &d.draft_id == id)
+                    if let Some(editor) =
+                        state.drafts.values().flatten().find(|d| &d.draft_id == id)
                     {
                         let status = editor.status(state.connection.is_connected());
                         trace.changed("draft", &format!("{} {}", id.short(), status.label()));

@@ -562,17 +562,18 @@ impl Controller {
             .map(|d| {
                 let status = d.status(connected);
                 UnsavedDraft {
-                draft_id: d.draft_id.clone(),
-                objective: state
-                    .objective(&d.objective_id)
-                    .map_or_else(|| d.objective_id.short().to_owned(), |o| o.title.clone()),
-                reference_label: format::reference_label(
-                    &d.reference,
-                    state.detail(&d.objective_id),
-                ),
-                pending: matches!(status, SaveStatus::Unsaved | SaveStatus::Saving),
-                status: status.label(),
-            }})
+                    draft_id: d.draft_id.clone(),
+                    objective: state
+                        .objective(&d.objective_id)
+                        .map_or_else(|| d.objective_id.short().to_owned(), |o| o.title.clone()),
+                    reference_label: format::reference_label(
+                        &d.reference,
+                        state.detail(&d.objective_id),
+                    ),
+                    pending: matches!(status, SaveStatus::Unsaved | SaveStatus::Saving),
+                    status: status.label(),
+                }
+            })
             .collect();
         unsaved.sort_by(|a, b| a.draft_id.as_str().cmp(b.draft_id.as_str()));
         unsaved
@@ -1612,7 +1613,11 @@ mod tests {
         controller.edit_draft(&draft, "Closing right after typing.", 1_000);
         let unsaved = controller.unsaved_drafts();
         assert_eq!(unsaved.len(), before + 1);
-        assert!(unsaved.iter().any(|d| d.draft_id == draft && d.status == "Unsaved"));
+        assert!(
+            unsaved
+                .iter()
+                .any(|d| d.draft_id == draft && d.status == "Unsaved")
+        );
         controller.flush_drafts(1_010);
         assert!(
             sink.intents
