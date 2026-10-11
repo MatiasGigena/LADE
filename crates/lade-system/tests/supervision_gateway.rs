@@ -297,3 +297,151 @@ fn unreachable_destination_is_bad_gateway() {
     );
     assert_eq!(status_line(&head), "HTTP/1.1 502 Bad Gateway");
 }
+
+/// The worker side (`packages/pi-worker/src/worker/gateway.ts`): HTTPS servers with a
+/// test-generated certificate on two loopback ports, then — once the Rust side has started the
+/// gateway allowing only the first port — `fetch` (undici) and `node:https` through the gateway.
+const TLS_CLIENT: &str = r#"
+import { readFileSync } from "node:fs";
+import https from "node:https";
+import { createInterface } from "node:readline";
+
+const [gatewayModule, key, cert] = process.argv.slice(2);
+const { installGateway } = await import(gatewayModule);
+const options = { key: readFileSync(key), cert: readFileSync(cert) };
+const listen = () => new Promise(resolve => {
+  const server = https.createServer(options, (request, response) => {
+    response.end(`tls origin saw ${request.url} over ${request.socket.getProtocol()}`);
+  });
+  server.listen(0, "127.0.0.1", () => resolve(server));
+});
+const allowed = await listen();
+const denied = await listen();
+console.log(`PORTS ${allowed.address().port} ${denied.address().port}`);
+const socket = await new Promise(resolve => createInterface({ input: process.stdin }).once("line", resolve));
+installGateway(socket);
+const get = url => new Promise((resolve, reject) => {
+  https.get(url, response => {
+    let body = "";
+    response.setEncoding("utf8");
+    response.on("data", chunk => { body += chunk; });
+    response.once("end", () => resolve(body));
+  }).once("error", reject);
+});
+const outcome = async work => {
+  try { return { ok: await work() }; } catch (error) { return { error: String(error.code ?? error.cause?.code ?? error) }; }
+};
+const base = port => `https://127.0.0.1:${port}`;
+const report = {
+  fetch: await outcome(async () => (await fetch(`${base(allowed.address().port)}/v1/models`)).text()),
+  agent: await outcome(() => get(`${base(allowed.address().port)}/v1/agent`)),
+  fetchDenied: await outcome(async () => (await fetch(`${base(denied.address().port)}/x`)).text()),
+  agentDenied: await outcome(() => get(`${base(denied.address().port)}/x`)),
+};
+console.log(`REPORT ${JSON.stringify(report)}`);
+process.exit(0);
+"#;
+
+fn on_path(program: &str) -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
+#[test]
+fn worker_https_reaches_a_local_tls_origin_through_the_gateway() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let (Some(node), Some(openssl)) = (on_path("node"), on_path("openssl")) else {
+        eprintln!("skipping TLS gateway test: node or openssl not installed");
+        return;
+    };
+    let tmp = TempDir::new("gw-tls");
+    let (key, cert) = (tmp.path().join("key.pem"), tmp.path().join("cert.pem"));
+    // A throwaway self-signed certificate for 127.0.0.1, valid for one day.
+    let generated = Command::new(&openssl)
+        .args(["req", "-x509", "-newkey", "ec"])
+        .args([
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-nodes",
+            "-days",
+            "1",
+        ])
+        .args(["-subj", "/CN=lade-test-origin"])
+        .args(["-addext", "subjectAltName=IP:127.0.0.1"])
+        .arg("-keyout")
+        .arg(&key)
+        .arg("-out")
+        .arg(&cert)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(
+        generated.success(),
+        "openssl could not generate a certificate"
+    );
+    let script = tmp.path().join("client.mjs");
+    std::fs::write(&script, TLS_CLIENT).unwrap();
+    let module = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../packages/pi-worker/src/worker/gateway.ts")
+        .canonicalize()
+        .unwrap();
+    let mut child = Command::new(node)
+        .arg("--experimental-strip-types")
+        .arg("--no-warnings")
+        .arg(&script)
+        .arg(format!("file://{}", module.display()))
+        .arg(&key)
+        .arg(&cert)
+        // The test certificate is the only extra trust anchor; verification stays on.
+        .env("NODE_EXTRA_CA_CERTS", &cert)
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("HTTP_PROXY")
+        .env_remove("http_proxy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let ports = lines.next().unwrap().unwrap();
+    let ports: Vec<u16> = ports
+        .strip_prefix("PORTS ")
+        .unwrap()
+        .split(' ')
+        .map(|p| p.parse().unwrap())
+        .collect();
+    let socket = tmp.path().join("run/gw.sock");
+    let gateway = Gateway::start(
+        &socket,
+        EgressPolicy::none().with_extra([local_rule(ports[0])]),
+        None,
+    )
+    .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", socket.display()).unwrap();
+    let report = lines
+        .map_while(Result::ok)
+        .find_map(|line| line.strip_prefix("REPORT ").map(str::to_owned))
+        .expect("client report");
+    assert!(child.wait().unwrap().success());
+    drop(gateway);
+    let value: serde_json::Value = serde_json::from_str(&report).unwrap();
+    for (name, path) in [("fetch", "/v1/models"), ("agent", "/v1/agent")] {
+        let body = value[name]["ok"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{report}"));
+        assert!(
+            body.starts_with(&format!("tls origin saw {path} over TLSv1.")),
+            "{report}"
+        );
+    }
+    // The second port is not in the policy: the gateway refuses both client paths.
+    for name in ["fetchDenied", "agentDenied"] {
+        assert_eq!(value[name]["error"], "gateway_refused", "{report}");
+    }
+}

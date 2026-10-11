@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import type { Server } from "node:http";
 import { connect, createServer as createNetServer } from "node:net";
 import type { AddressInfo, Socket } from "node:net";
@@ -88,6 +88,28 @@ test("fetch is tunnelled through the gateway socket with HTTP CONNECT", async ()
   assert.deepEqual(authorities, [`provider.lade.test:${port}`]);
 });
 
+/** GET through the `node:http` global agent. */
+function httpGet(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    http.get(url, response => {
+      let body = "";
+
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => { body += chunk; });
+      response.once("end", () => resolve(body));
+    }).once("error", reject);
+  });
+}
+
+test("node:http clients use the global agent, which tunnels through the gateway", async () => {
+  installGateway(socketPath);
+  const port = portOf(origin);
+  assert.equal(await httpGet(`http://sdk.lade.test:${port}/v1/chat`), "origin saw /v1/chat");
+  assert.equal(authorities.at(-1), `sdk.lade.test:${port}`);
+  await assert.rejects(httpGet("http://refused.lade.test:80/"), { code: "gateway_refused" });
+  http.globalAgent.destroy();
+});
+
 test("a refused tunnel fails the request", async () => {
   await assert.rejects(tunnel(socketPath, "refused.lade.test:443"), { code: "gateway_refused" });
   await assert.rejects(tunnel(socketPath, "bad host:443"), { code: "gateway_target" });
@@ -95,6 +117,7 @@ test("a refused tunnel fails the request", async () => {
 
 test("without a gateway socket every connection fails with a clear reason", async () => {
   installNoNetwork();
+  await assert.rejects(httpGet("http://provider.lade.test/"), { code: "network_unavailable" });
   await assert.rejects(fetch("http://provider.lade.test/"), (error: Error) => {
     assert.match(String(error.cause), /network disabled: no LADE gateway socket/);
 
