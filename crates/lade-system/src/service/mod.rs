@@ -10,10 +10,10 @@
 mod compat;
 pub mod convert;
 mod execution;
-pub mod faults;
 mod handlers;
 mod inspect;
 mod jobs;
+mod limits;
 mod project;
 mod recovery;
 mod review;
@@ -33,7 +33,8 @@ use std::time::Duration;
 use lade_core::domain::ids::{GitId, ObjectiveId, WorkspaceId};
 use lade_protocol::client::{
     ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeLevel, Outcome, Rejection,
-    Reply, ReplyData, ReplyResult, RequestFrame, RequestName, SafeAction, ServiceNotice, Settings,
+    Reply, ReplyData, ReplyResult, RequestFrame, RequestName, ReviewIntegrateCommand, SafeAction,
+    ServiceNotice, Settings,
 };
 use lade_protocol::types::Id;
 use lade_protocol::{Framing, encode};
@@ -50,6 +51,8 @@ use crate::supervision::{
 };
 use crate::transport::{self, Inbound, Listener, Outbound, TransportError};
 
+pub use limits::ResourceLimits;
+
 use convert::{durability, hex, new_uuid, now_ms, wire_id};
 use jobs::Pool;
 use state::{ObjState, Runtime, WsState};
@@ -59,6 +62,8 @@ use state::{ObjState, Runtime, WsState};
 pub struct ServiceConfig {
     pub state_dir: PathBuf,
     pub runtime_dir: PathBuf,
+    /// Aggregate limits across Objectives (configurable; see [`ResourceLimits`]).
+    pub limits: ResourceLimits,
     /// Writable-storage budget of one execution (worktree plus session directory); see
     /// [`WRITABLE_STORAGE_BYTES`].
     pub storage_limit_bytes: u64,
@@ -87,6 +92,7 @@ impl ServiceConfig {
         Some(Self {
             state_dir,
             runtime_dir,
+            limits: ResourceLimits::default(),
             storage_limit_bytes: WRITABLE_STORAGE_BYTES,
             cgroups: None,
         })
@@ -206,6 +212,11 @@ struct Controller {
 }
 
 const REQUEST_ID_MEMORY: usize = 4096;
+/// Thread counts of the three job lanes (see [`Service::spawn`], [`Service::spawn_long`],
+/// [`Service::reap`]).
+const GENERAL_THREADS: usize = 3;
+const VERIFY_THREADS: usize = 4;
+const REAPER_THREADS: usize = 4;
 const TICK: Duration = Duration::from_millis(100);
 
 /// The service thread's state.
@@ -218,7 +229,12 @@ pub(crate) struct Service {
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
+    /// Short Git/filesystem jobs, launches, captures, freezes and integrations.
     pool: Option<Pool>,
+    /// Verifications (up to 900 s each), so they never starve captures or launches.
+    long: Option<Pool>,
+    /// Worker terminations and terminal kills: authority loss is never queued behind other work.
+    reaper: Option<Pool>,
     epoch: Id,
     sequence: u64,
     controller: Option<Controller>,
@@ -240,6 +256,15 @@ pub(crate) struct Service {
     terminals_opening: usize,
     /// `service.stop` was answered: leave the loop and shut down.
     stopping: bool,
+    limits: ResourceLimits,
+    free_space: limits::Storage,
+    /// Facts restart recovery wants the next client to see (sent once on attach).
+    recovery_notes: Vec<String>,
+    /// Integrations in flight per (Workspace, target branch), with the requests waiting for
+    /// them: same-target integrations run one at a time and each re-checks the moved target.
+    integrating: HashMap<(WorkspaceId, String), VecDeque<(ReqCtx, ReviewIntegrateCommand)>>,
+    /// While a request is dispatched: the jobs it started, submitted once it is journaled.
+    held: Option<Vec<(bool, jobs::Task)>>,
     storage_limit: u64,
     /// A writable-storage measurement job is in flight.
     storage_check: bool,
@@ -405,7 +430,9 @@ pub fn start(
         launcher,
         supervisor_tx,
         queue_tx: queue_tx.clone(),
-        pool: Some(Pool::new(3)),
+        pool: Some(Pool::new(GENERAL_THREADS)),
+        long: Some(Pool::new(VERIFY_THREADS)),
+        reaper: Some(Pool::new(REAPER_THREADS)),
         epoch: epoch.clone(),
         sequence: 0,
         controller: None,
@@ -428,6 +455,11 @@ pub fn start(
         terminals: BTreeMap::new(),
         terminals_opening: 0,
         stopping: false,
+        limits: config.limits.clone(),
+        free_space: limits::Storage::default(),
+        recovery_notes: Vec::new(),
+        integrating: HashMap::new(),
+        held: None,
         storage_limit: config.storage_limit_bytes,
         storage_check: false,
         cgroups: config.cgroups.clone(),
@@ -435,6 +467,8 @@ pub fn start(
     service.load().map_err(StartError::Recovery)?;
     service.load_compat().map_err(StartError::Recovery)?;
     service.recover().map_err(StartError::Recovery)?;
+    service.check_free_space();
+    eprintln!("laded: limits {}", config.limits);
 
     let capability =
         transport::write_capability(&config.runtime_dir).map_err(StartError::Transport)?;
@@ -512,7 +546,10 @@ impl Service {
         if let Some(controller) = self.controller.take() {
             controller.out.close();
         }
-        if let Some(pool) = self.pool.take() {
+        for pool in [self.reaper.take(), self.pool.take(), self.long.take()]
+            .into_iter()
+            .flatten()
+        {
             pool.shutdown();
         }
     }
@@ -552,6 +589,10 @@ impl Service {
                         request_order: VecDeque::new(),
                     });
                     self.announce_dialogs();
+                    self.announce_storage(false);
+                    for note in std::mem::take(&mut self.recovery_notes) {
+                        self.notice(NoticeLevel::Warning, "recovery", &note);
+                    }
                 } else {
                     out.close();
                 }
@@ -734,7 +775,12 @@ impl Service {
             op: op.clone(),
             recorded: false,
         };
-        if let Flow::Deferred = self.dispatch(ctx, frame.request)
+        // Jobs a handler starts are held until the operation is journaled `pending`, so a crash
+        // can never leave effects of an operation the journal does not know.
+        self.held = Some(Vec::new());
+        let flow = self.dispatch(ctx, frame.request);
+        let held = self.held.take().unwrap_or_default();
+        if let Flow::Deferred = flow
             && let Some(op) = op
         {
             let recorded = storage::record_operation(
@@ -748,6 +794,12 @@ impl Service {
             );
             if recorded.is_err() {
                 eprintln!("laded: could not journal pending operation");
+            }
+        }
+        for (long, task) in held {
+            let pool = if long { &self.long } else { &self.pool };
+            if let Some(pool) = pool {
+                pool.submit(task);
             }
         }
     }
@@ -875,9 +927,27 @@ impl Service {
         Ok(())
     }
 
-    /// Queues `work` on the pool; its output comes back as [`Msg::Job`] for `pending`.
+    /// Queues `work` on the general pool; its output comes back as [`Msg::Job`] for `pending`.
     pub(crate) fn spawn(
         &mut self,
+        pending: handlers::Pending,
+        work: impl FnOnce() -> JobOutput + Send + 'static,
+    ) {
+        self.spawn_in(false, pending, work);
+    }
+
+    /// Like [`Self::spawn`], on the verification lane.
+    pub(crate) fn spawn_long(
+        &mut self,
+        pending: handlers::Pending,
+        work: impl FnOnce() -> JobOutput + Send + 'static,
+    ) {
+        self.spawn_in(true, pending, work);
+    }
+
+    fn spawn_in(
+        &mut self,
+        long: bool,
         pending: handlers::Pending,
         work: impl FnOnce() -> JobOutput + Send + 'static,
     ) {
@@ -885,11 +955,25 @@ impl Service {
         self.next_token += 1;
         self.pending.insert(token, pending);
         let tx = self.queue_tx.clone();
-        if let Some(pool) = &self.pool {
-            pool.submit(move || {
-                let output = work();
-                let _ = tx.send(Msg::Job { token, output });
-            });
+        let task: jobs::Task = Box::new(move || {
+            let output = work();
+            let _ = tx.send(Msg::Job { token, output });
+        });
+        if let Some(held) = self.held.as_mut() {
+            held.push((long, task));
+            return;
+        }
+        let pool = if long { &self.long } else { &self.pool };
+        if let Some(pool) = pool {
+            pool.submit(task);
+        }
+    }
+
+    /// Runs a teardown (worker termination, terminal kill) on the reaper lane, which nothing
+    /// else uses: revocation never waits behind captures or verifications.
+    pub(crate) fn reap(&self, work: impl FnOnce() + Send + 'static) {
+        if let Some(reaper) = &self.reaper {
+            reaper.submit(work);
         }
     }
 
@@ -899,6 +983,7 @@ impl Service {
         self.pump_terminals();
         if self.ticks.is_multiple_of(10) {
             self.flush_activity();
+            self.check_free_space();
         }
         if self
             .ticks

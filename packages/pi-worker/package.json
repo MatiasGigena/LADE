@@ -20,7 +20,6 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
     "undici": "8.9.0"
   }

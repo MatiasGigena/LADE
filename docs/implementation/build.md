@@ -76,6 +76,15 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 
 `laded serve` runs in the foreground until killed (redacted diagnostics on stderr and in the bounded `$STATE/logs`, see [service.md](service.md#diagnostics)) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` model through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
+IMP-013 adds `service_concurrency.rs` and `service_crash.rs` (part of `scripts/verify`; the crash tests run the real
+`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and skip without bubblewrap) and the long
+procedures, which are **not** part of `scripts/verify`:
+
+```sh
+scripts/load [OUT_DIR]          # canonical 1/4-worker load, launches, GTK client phases (~1 h; release build)
+scripts/load --soak [OUT_DIR]   # 5 min warmup + 30 min soak (LADE_SOAK_SECS / LADE_SOAK_WARMUP_SECS)
+```
+
 `lade-desktop` is the live GTK client: it connects to `laded` over `$RUNTIME/control.sock` (u32-BE frames, `hello` + capability `auth`, single controlling lease), starts a detached sibling `laded serve` when none is running (unless `--no-spawn`), and offers the whole first-release loop — open a Workspace (`--open PATH` or Ctrl+O), create and start Objectives, Activity, Workbench inspection with Contextual Feedback, freeze, service-observed checks, approval, protected integration and cleanup. Every action's availability comes from the service's `available_actions`; the client never grants authority. `lade-desktop --preview` shows labelled fixture data without a service. Keyboard shortcut remaps are a client
 presentation preference in `$XDG_CONFIG_HOME/lade/keybindings.json` (else `~/.config/lade/keybindings.json`): JSON
 `{"version": 1, "bindings": {"focus-search": "F8", …}}` with action ids from `DEFAULT_APP_KEYBINDINGS`; the whole
@@ -113,7 +122,19 @@ escape routes.
 
 ## Pi preservation and next gate
 
-The first-release SDK worker (`node packages/pi-worker/src/worker.ts`, delivery plan WP-D) installs the unpatched 0.85.1 npm distribution recorded under `npm_distribution` in the manifest; see [worker.md](worker.md). `vendor/pi-coding-agent/manifest.json` retains the approved pi 0.85.1 source commit, archive digest, shrinkwrap, MIT notice and currently empty patch inventory. This is provenance, not a runnable SDK fork or provider conformance. IMP-008 materializes the fork and adapter after safety gates. Independent wire/security sign-off on admission is still required to accept IMP-001; no codec test proves a worker cannot reach host control material.
+The first-release SDK worker (`node packages/pi-worker/src/worker.ts`, delivery plan WP-D) installs the unpatched 0.85.1 npm distribution recorded under `npm_distribution` in the manifest; see [worker.md](worker.md). `vendor/pi-coding-agent/manifest.json` retains the approved pi 0.85.1 source commit, archive digest, shrinkwrap, MIT notice and currently empty patch inventory. With an empty patch inventory the narrow fork's runnable form is that registry tarball: `packages/pi-worker/test/worker-deps.test.ts` checks that the installed `package.json` and `npm-shrinkwrap.json` are the pinned upstream bytes, that the lockfile's nested tree is exactly the upstream shrinkwrap (versions and integrity), and that the worker loads only the SDK's own pi-ai. Not done: a reproducible build of the coding-agent from the pinned source archive (needs the archive, upstream's build tooling and a byte comparison against the registry tarball); it becomes necessary once a patch is recorded. Provider conformance is IMP-011. Independent wire/security sign-off on admission is still required to accept IMP-001; no codec test proves a worker cannot reach host control material.
+
+### Worker dependencies and install scripts
+
+The worker's direct production dependencies are `@earendil-works/pi-coding-agent` and `undici`; pi-ai is used only through the copy nested under the shrinkwrapped SDK ([worker.md](worker.md#dependencies)). Every install, including the bundle's, uses `--ignore-scripts`. npm runs `prepare` only for git and directory dependencies, never for registry tarballs, so only `preinstall`/`install`/`postinstall` (and an implicit `node-gyp rebuild` for a `binding.gyp`, which no locked package has) would run. Of the 133 production packages, three declare one (`hasInstallScript` in `packages/pi-worker/package-lock.json`):
+
+| Package | Skipped script | Why the worker does not need it |
+| --- | --- | --- |
+| `@google/genai` 1.52.0 | `preinstall`: `echo 'preinstall: no-op'` | Does nothing. |
+| `protobufjs` 7.6.5 | `postinstall`: `node scripts/postinstall` | Only prints a warning when a dependent's version range uses another version scheme; writes nothing. |
+| `esbuild` 0.28.1 | `postinstall`: `node install.js` | Validates (and, without optional dependencies, downloads) the platform binary; `@esbuild/linux-x64` 0.28.1 is installed as a locked optional dependency anyway. esbuild is a dependency of `@earendil-works/chord`, whose bundler the SDK's root entry does not import; the worker never loads it. |
+
+Native code that does ship needs no script: `@silvia-odwyer/photon-node` is WebAssembly, the optional `@mariozechner/clipboard` 0.3.9 uses a prebuilt `.node` from its platform package (unused by the worker), and pi-tui's native prebuilds are for macOS and Windows only. Re-check this table on any dependency change.
 
 ## Install
 
@@ -132,7 +153,7 @@ installation; and `scripts/test-install [--bundle DIR [--allowed-signers FILE]]`
   throwaway keys generated in `scripts/test-install`; CI generates one per run and signs the real bundle with it.
 - **Node runtime**: `--with-node DIR` copies `DIR/bin/node` (must report exactly the pinned version), its `LICENSE`
   and a `VERSION` into `lib/lade/node/`; the bundle smoke test then runs the worker with it. Size impact: the Node
-  22.23.1 binary is ≈ 120 MB (bundle ≈ 270 MB → ≈ 390 MB unpacked, 24.8k files). In CI:
+  22.23.1 binary is ≈ 120 MB (bundle ≈ 177 MB on disk, 13.9k files → ≈ 297 MB; it was ≈ 275 MB and 24.8k files before the duplicate pi-ai was dropped). In CI:
   `--with-node "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")"` (the `setup-node` toolcache
   distribution); locally any official `node-v22.23.1-linux-x64` directory.
 - **Licence inventory**: `python3 scripts/license-inventory.py --check` (in `scripts/verify`) walks `cargo metadata

@@ -107,7 +107,12 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     fs::write(run.join("unrelated.txt"), "").unwrap();
 
     let report = sweep_stale(&run).unwrap();
-    assert!(report.killed.contains(&outer), "{report:?}");
+    // The namespace init is killed first; on a loaded host bwrap can exit before the sweep reaches
+    // it (then it is skipped as gone). Either way the recorded sandbox is killed.
+    assert!(
+        report.killed.contains(&outer) || report.killed.contains(&init),
+        "{report:?}"
+    );
     assert!(report.skipped.contains(&real.pid), "{report:?}");
     assert_eq!(report.removed_pidfiles, 2);
     assert_eq!(report.removed_sockets, 1);

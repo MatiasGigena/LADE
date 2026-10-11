@@ -414,6 +414,9 @@ impl Service {
             (Some(c), Some(t)) => c.base_target_commit != *t,
             _ => false,
         };
+        // Aggregate quota and storage pressure (service/limits.rs), named in the reason.
+        let worker_blocker = self.worker_blocker(oid);
+        let storage_blocker = self.storage_blocker();
         let mut out = Vec::with_capacity(16);
         out.push(gate(
             ActionName::ObjectiveUpdateIntent,
@@ -431,7 +434,7 @@ impl Service {
                 } else if *state != ExecutionState::None {
                     Some("execution already started; resume instead")
                 } else {
-                    None
+                    worker_blocker.as_deref()
                 },
             ),
         ));
@@ -453,7 +456,7 @@ impl Service {
             ) {
                 Some("only a cancelled or failed execution can resume")
             } else {
-                None
+                worker_blocker.as_deref()
             }),
         ));
         // Input to a stopped execution is accepted and waits (blocked) until an explicit resume.
@@ -516,6 +519,8 @@ impl Service {
                 Some("verification requires a frozen, unapproved candidate")
             } else if current.is_none() {
                 Some("no current candidate")
+            } else if let Some(why) = storage_blocker.as_deref() {
+                Some(why)
             } else if self.sandbox_tools().is_none() {
                 Some(VERIFICATION_SANDBOX_UNAVAILABLE)
             } else {

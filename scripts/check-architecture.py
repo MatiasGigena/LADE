@@ -48,7 +48,10 @@ for path in (root/'crates/lade-core/src').rglob('*.rs'):
         errors.append(f'platform/import boundary: {path.relative_to(root)}')
 worker_src = root/'packages/pi-worker/src'
 # Reviewed for the WP-D worker entry (src/worker.ts, src/worker/**) only; see docs/implementation/worker.md.
-worker_packages = {'@earendil-works/pi-coding-agent', '@earendil-works/pi-ai', 'undici'}
+worker_packages = {'@earendil-works/pi-coding-agent', 'undici'}
+# pi-ai is not a direct dependency: src/worker/pi-ai.ts alone re-exports the copy nested under the
+# shrinkwrapped SDK (its "." export target), so the worker loads the SDK's own pi-ai instance.
+nested_pi_ai = root/'packages/pi-worker/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/index.js'
 # node:http/node:https/node:tls: gateway.ts installs the global agents that tunnel through the gateway.
 worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:tls'}
 for path in worker_src.rglob('*.ts'):
@@ -60,6 +63,8 @@ for path in worker_src.rglob('*.ts'):
     def reviewed(x):
         if x.startswith(('./', '../')):
             target = (path.parent/x).resolve()
+            if path == worker_src/'worker/pi-ai.ts' and target == nested_pi_ai:
+                return True
             return target in (root/'contracts/v1/schema.json', root/'contracts/v1/worker-schema.json') or worker_src in target.parents
         return x == 'node:crypto' or (is_worker and (x in worker_packages or x in worker_builtins))
     if not all(reviewed(x) for x in imports):

@@ -18,7 +18,7 @@
 #                                          run.log in each
 #
 # Save failures are induced with the service's **test-only** fault directory
-# (LADE_TEST_FAULTS_DIR, crates/lade-system/src/service/faults.rs): `draft.save` refuses with
+# (LADE_TEST_FAULTS_DIR, crates/lade-system/src/fault.rs; debug builds only): `draft.save` refuses with
 # `durability_failure`, `delay <ms>` holds the save on the service thread. The service is "gone" by
 # SIGKILL. Requires a debug build, Xvfb, xdotool, ImageMagick `import`, git, bubblewrap, python3
 # (ctypes + libX11 for scripts/x11-close-window.py; sqlite3 to read the service database

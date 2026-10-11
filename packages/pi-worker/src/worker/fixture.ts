@@ -1,8 +1,8 @@
 // Deterministic, credential-free, offline `lade-fixture` provider. It implements the SDK's custom
 // streaming API (`streamSimple`) and is registered on the ModelRuntime like an extension provider,
 // so its responses go through pi's real agent loop and its tool calls run pi's real tools.
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
-import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, TextContent, ToolCall } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "./pi-ai.ts";
+import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, TextContent, ToolCall } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const FIXTURE_PROVIDER = "lade-fixture";

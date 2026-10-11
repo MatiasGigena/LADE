@@ -27,9 +27,8 @@ use super::convert::{
 use super::handlers::Pending;
 use super::{Flow, JobOutput, ReqCtx, Service};
 
-/// Terminals per Objective and in total (bounded load).
+/// Terminals per Objective (bounded load; the total is `ResourceLimits::max_terminals`).
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
-pub(crate) const MAX_TERMINALS: usize = 16;
 /// Output bytes per `terminal.output` event, and events per terminal per 100 ms tick.
 const EVENT_BYTES: usize = 32 << 10;
 const EVENTS_PER_TICK: usize = 2;
@@ -131,14 +130,19 @@ impl Service {
             let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
             let writable = self.terminal_scope(oid)?;
             let open = self.terminals.values().filter(|t| t.oid == oid).count();
-            if open + self.terminals_opening >= MAX_TERMINALS || open >= MAX_PER_OBJECTIVE {
+            let total = self.terminals.len() + self.terminals_opening;
+            let max = self.limits.max_terminals;
+            if total >= max || open >= MAX_PER_OBJECTIVE {
                 return Err(rejection(
                     ErrorCode::LimitReached,
                     SafeAction::None,
                     &format!(
-                        "at most {MAX_PER_OBJECTIVE} terminals per Objective and {MAX_TERMINALS} in total"
+                        "{open} of {MAX_PER_OBJECTIVE} terminals of this Objective and {total} of {max} in total are open (laded --max-terminals {max}); close one first"
                     ),
                 ));
+            }
+            if writable && let Some(why) = self.storage_blocker() {
+                return Err(Self::quota_rejection(why));
             }
             let tools = self
                 .sandbox_tools()
@@ -290,10 +294,7 @@ impl Service {
 
     /// Kills a terminal off the service thread.
     fn kill_detached(&mut self, mut handle: Terminal) {
-        self.spawn(Pending::Ignore, move || {
-            handle.kill();
-            JobOutput::Done
-        });
+        self.reap(move || handle.kill());
     }
 
     /// Removes and kills one terminal and reports it closed. `wait` kills on the service thread

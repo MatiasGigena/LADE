@@ -241,6 +241,27 @@ impl Service {
                     "laded: reconciled integration objective={} done",
                     row.objective_id
                 );
+                // A crash between the ref move and `read-tree` leaves the checked-out target
+                // behind its ref; finish that step (it refuses to overwrite local edits).
+                if let Some(commit) = &current {
+                    let finished = ws.repo.finish_integration_checkout(
+                        &row.target_branch,
+                        &adapter_git(&row.expected_target),
+                        commit,
+                    );
+                    if let Err(e) = finished {
+                        eprintln!(
+                            "laded: integrated target checkout not updated objective={} code={}",
+                            row.objective_id,
+                            e.code()
+                        );
+                        self.recovery_notes.push(format!(
+                            "The integration into {} completed before the restart, but its checked-out files could not be updated ({}); run `git status` there before continuing.",
+                            row.target_branch,
+                            e.code()
+                        ));
+                    }
+                }
             } else {
                 storage::update_journal(
                     self.store.conn(),

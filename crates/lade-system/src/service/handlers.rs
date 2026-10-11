@@ -33,11 +33,11 @@ use super::convert::{
     conflict, core_reference, counter, domain_rejection, durability, from_wire_git, git_rejection,
     invalid, new_uuid, not_found, now_ms, parse_uuid, wire_id,
 };
-use super::faults::{self, Fault};
 use super::jobs::{self, CaptureInput, CaptureOut};
 use super::project::{core_mode, wire_draft, wire_input};
 use super::state::{ObjState, Runtime, WsState};
 use super::{Flow, JobOutput, ReqCtx, Service};
+use crate::fault::{self, Fault};
 
 /// What a pool job's completion continues.
 pub(crate) enum Pending {
@@ -674,7 +674,7 @@ impl Service {
         let wire = wire_draft(&st, &draft);
         let data = ReplyData::DraftSave(wire.clone());
         // Test-only (scripts/e2e-resilience): inert unless LADE_TEST_FAULTS_DIR is set.
-        match faults::fault("draft.save") {
+        match fault::operation("draft.save") {
             Some(Fault::Refuse) => {
                 return Err(durability("injected test fault: the draft was not written"));
             }
@@ -775,6 +775,7 @@ impl Service {
             self.finish(ctx, Err(rejection));
             return;
         }
+        crate::fault::point("input.accepted");
         self.input_seq = seq;
         for draft in &submitted {
             if let Some(slot) = st.drafts.iter_mut().find(|d| d.id() == draft.id()) {
