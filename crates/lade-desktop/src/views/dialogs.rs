@@ -7,7 +7,7 @@ use gtk::gio;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, vbox};
+use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, space, vbox};
 use crate::presentation::controller::{Controller, FeedbackBatch, UnsavedDraft};
 use crate::presentation::format;
 use crate::presentation::intents::StartPoint;
@@ -71,9 +71,9 @@ pub fn unsaved_drafts(
     dialog.body.append(&widgets::warning_line(&format!(
         "{count} feedback draft{plural} not saved. {why}."
     )));
-    let items = vbox(8);
+    let items = vbox(space::ITEM);
     for draft in drafts {
-        let entry = vbox(2);
+        let entry = vbox(space::TIGHT);
         entry.add_css_class("confirm-item");
         entry.append(&label(
             &format!("{} · {}", draft.objective, draft.reference_label),
@@ -236,9 +236,9 @@ pub fn submit_feedback(
         "Delivery",
         &label(format::mode_label(batch.mode), &[]),
     ));
-    let items = vbox(8);
+    let items = vbox(space::ITEM);
     for (index, item) in batch.items.iter().enumerate() {
-        let entry = vbox(2);
+        let entry = vbox(space::TIGHT);
         entry.add_css_class("confirm-item");
         entry.append(&label(
             &format!("{}. {}", index + 1, item.reference_label),
@@ -446,9 +446,9 @@ pub fn shortcuts(
         &["secondary"],
     ));
     let grid = gtk::Grid::new();
-    grid.set_row_spacing(8);
-    grid.set_column_spacing(16);
-    grid.set_margin_end(16); // room for the (non-overlay) scrollbar
+    grid.set_row_spacing(space::ITEM.unsigned_abs());
+    grid.set_column_spacing(space::SECTION.unsigned_abs());
+    grid.set_margin_end(space::SECTION); // room for the (non-overlay) scrollbar
     let mut entries: Vec<(AppAction, gtk::Entry)> = Vec::new();
     for (row, binding) in keys::DEFAULT_APP_KEYBINDINGS.iter().enumerate() {
         let row = i32::try_from(row).unwrap_or(i32::MAX);
@@ -457,7 +457,7 @@ pub fn shortcuts(
         name.set_valign(gtk::Align::Center);
         grid.attach(&name, 0, row, 1, 1);
         if let Some(reason) = binding.fixed {
-            let fixed = vbox(2);
+            let fixed = vbox(space::TIGHT);
             fixed.append(&label(&keymap.label(binding.action), &["mono", "strong"]));
             fixed.append(&label(reason, &["meta"]));
             fixed.set_size_request(240, -1);

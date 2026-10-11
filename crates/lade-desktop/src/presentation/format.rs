@@ -232,6 +232,49 @@ pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
     }
 }
 
+/// The inspected version, once and concise ("Working capture · may change · vs main@86fc063",
+/// "Candidate 2 · frozen · vs main@4f2c9e1"), and the full statement with the service's version
+/// label and the exact target commit for the tooltip and accessible name. Working capture versus
+/// frozen candidate (and a historical or invalidated candidate) always stays in the short line.
+pub fn version_line(
+    basis: &Basis,
+    service_label: &str,
+    candidate_status: Option<CandidateStatus>,
+    detail: Option<&ObjectiveDetail>,
+    target: &super::model::TargetRef,
+) -> (String, String) {
+    let short_target = target.label();
+    let full_target = format!("{} at {}", target.branch, target.commit.hex);
+    match basis {
+        Basis::Working => (
+            format!("Working capture · may change · vs {short_target}"),
+            format!(
+                "{service_label}: working capture of ongoing work — may change. Compared with {full_target}."
+            ),
+        ),
+        Basis::Candidate { .. } => {
+            let state = match candidate_status {
+                Some(CandidateStatus::Historical) => "frozen, historical",
+                Some(CandidateStatus::Invalidated) => "frozen, invalidated",
+                _ => "frozen",
+            };
+            (
+                format!(
+                    "{} · {state} · vs {short_target}",
+                    basis_label(basis, detail)
+                ),
+                format!(
+                    "{service_label}: frozen candidate ({state}). Compared with {full_target}."
+                ),
+            )
+        }
+        Basis::Since { .. } => (
+            format!("{} · vs {short_target}", basis_label(basis, detail)),
+            format!("{service_label}: comparing two frozen candidates. Target {full_target}."),
+        ),
+    }
+}
+
 pub fn reference_version_label(
     version: &ReferenceVersion,
     detail: Option<&ObjectiveDetail>,
@@ -460,6 +503,46 @@ mod tests {
             relative_time(now, Timestamp(now.0 - 2 * 3_600_000)),
             "2 hours ago"
         );
+    }
+
+    #[test]
+    fn version_line_states_working_or_frozen_once() {
+        use crate::presentation::model::{CandidateId, GitId, TargetRef};
+        let target = TargetRef {
+            branch: "main".into(),
+            commit: GitId::sha1("86fc063aaaabbbbccccddddeeeeffff000011112"),
+        };
+        let (short, full) = version_line(
+            &Basis::Working,
+            "working capture bfe258b0",
+            None,
+            None,
+            &target,
+        );
+        assert_eq!(short, "Working capture · may change · vs main@86fc063");
+        assert_eq!(short.matches("may change").count(), 1);
+        assert!(full.contains("working capture bfe258b0"));
+        assert!(full.contains(&target.commit.hex));
+        let candidate = Basis::Candidate {
+            candidate_id: CandidateId::new("c1"),
+        };
+        for (status, word) in [
+            (CandidateStatus::Current, "· frozen ·"),
+            (CandidateStatus::Historical, "frozen, historical"),
+            (CandidateStatus::Invalidated, "frozen, invalidated"),
+        ] {
+            let (short, full) = version_line(
+                &candidate,
+                "Candidate 2 — frozen",
+                Some(status),
+                None,
+                &target,
+            );
+            assert!(short.contains(word), "{short}");
+            assert!(!short.contains("may change"));
+            assert_eq!(short.matches("frozen").count(), 1);
+            assert!(full.contains("Candidate 2 — frozen"));
+        }
     }
 
     #[test]

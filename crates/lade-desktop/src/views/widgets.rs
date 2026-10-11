@@ -7,11 +7,11 @@ use gtk4 as gtk;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::presentation::model::{ActionAvailability, Attention, Lifecycle};
+use crate::presentation::keys;
+use crate::presentation::model::ActionAvailability;
 use crate::presentation::text_bound::{
     EditGuard, EndDecision, InsertDecision, Snapshot, TextLimit,
 };
-use crate::presentation::{format, keys};
 
 /// Polite screen-reader announcement. GTK 4.14 calls a missing `announce` implementation (a
 /// NULL vfunc: segfault) when the window's accessibility context is not the AT-SPI backend, e.g.
@@ -433,18 +433,8 @@ pub fn heading(text: &str, class: &str) -> gtk::Label {
     title
 }
 
-/// An Objective's status as plain text with its sign (never colour alone, no pill box).
-pub fn status_text(lifecycle: Lifecycle, attention: Attention) -> gtk::Box {
-    let (sign, text) = format::status_pill(lifecycle, attention);
-    sign_text(sign, text)
-}
-
-/// Transitional name for [`status_text`] while the views move off the pill.
-pub fn status_pill(lifecycle: Lifecycle, attention: Attention) -> gtk::Box {
-    status_text(lifecycle, attention)
-}
-
-/// A sign followed by its (wrapping) text; the accessible name is the text.
+/// A sign followed by its (wrapping) text, never colour alone and no pill box (an Objective's
+/// status: `presentation::panel::status_line`); the accessible name is the text.
 pub fn sign_text(sign: &str, text: &str) -> gtk::Box {
     let row = hbox(6);
     row.add_css_class("status-text");
