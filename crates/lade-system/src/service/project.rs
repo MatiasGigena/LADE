@@ -668,5 +668,6 @@ impl Service {
         let detail = self.detail_of(&st);
         self.emit(Event::ObjectiveChanged(detail.summary()));
         self.emit(Event::ObjectiveDetail(Box::new(detail)));
+        self.enforce_terminal_scope(oid);
     }
 }

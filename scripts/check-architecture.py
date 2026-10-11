@@ -14,7 +14,8 @@ allowed = {
     'lade-core': set(),
     'lade-protocol': {'serde', 'serde_json', 'sha2'},
     # rusqlite (bundled SQLite) is the service-only product store; rustix provides SO_PEERCRED, flock,
-    # getuid, umask and kill without unsafe code; serde_json encodes stored outcomes. See
+    # getuid, umask, kill and the contained terminal's PTY (pty, termios) without unsafe code;
+    # serde_json encodes stored outcomes. See
     # docs/implementation/service.md. The client must still never reach SQLite (checked below).
     'lade-system': {'lade-core', 'lade-protocol', 'sha2', 'serde_json', 'rusqlite', 'rustix'},
     # sourceview5: GtkSourceView 5.12 read-only diff/file viewer (docs/implementation/build.md).

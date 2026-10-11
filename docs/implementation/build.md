@@ -99,6 +99,18 @@ kill "$pid"
 
 Inspect the resulting PNG; do not infer native rendering from source/CSS. Capture helpers are optional developer tools, not application dependencies. IMP-002 still owns workbench appearance, keyboard/Orca/200% evidence. No browser is used.
 
+Scripted native runs under Xvfb (development host): `scripts/e2e-gui` drives the whole review loop and
+`scripts/e2e-terminal` the IMP-012 terminal, single-instance, client-close, Exit and restart flows (it runs inside its
+own `dbus-run-session`). Both need a debug build, Xvfb, xdotool, ImageMagick and bubblewrap and are not part of
+`scripts/verify`.
+
+The contained terminal (IMP-012) adds no dependency: the PTY comes from rustix (`pty`, `termios` features of the
+already-reviewed `rustix =1.1.4`) and the client renders it with its own minimal VT parser
+(`presentation/terminal.rs`). VTE (`vte4`) was not adopted: it is not in the CI image or the documented host
+prerequisites, its Rust bindings would add a native dependency chain for a supporting feature, and its full
+terminal emulation (hyperlinks, clipboard escape sequences, its own key handling) would bypass the reviewed keymap
+escape routes.
+
 ## Pi preservation and next gate
 
 The first-release SDK worker (`node packages/pi-worker/src/worker.ts`, delivery plan WP-D) installs the unpatched 0.85.1 npm distribution recorded under `npm_distribution` in the manifest; see [worker.md](worker.md). `vendor/pi-coding-agent/manifest.json` retains the approved pi 0.85.1 source commit, archive digest, shrinkwrap, MIT notice and currently empty patch inventory. This is provenance, not a runnable SDK fork or provider conformance. IMP-008 materializes the fork and adapter after safety gates. Independent wire/security sign-off on admission is still required to accept IMP-001; no codec test proves a worker cannot reach host control material.

@@ -80,6 +80,13 @@ pub(crate) enum Pending {
     Query {
         ctx: ReqCtx,
     },
+    TerminalOpen {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        terminal_id: Id,
+        writable: bool,
+        size: (u16, u16),
+    },
     Ignore,
 }
 
@@ -234,6 +241,15 @@ impl Service {
                 self.objective_discard(&mut ctx, &objective_id)
             }
             Request::ObjectiveCleanup(cmd) => return self.objective_cleanup(ctx, &cmd),
+            Request::TerminalOpen(cmd) => return self.terminal_open(ctx, &cmd),
+            Request::TerminalInput(cmd) => self.terminal_input(&cmd),
+            Request::TerminalResize(cmd) => self.terminal_resize(&cmd),
+            Request::TerminalClose(cmd) => self.terminal_close(&cmd),
+            Request::ServiceStop(cmd) => {
+                eprintln!("laded: service.stop reason={:?}", cmd.reason);
+                self.stopping = true;
+                Ok(ReplyData::ServiceStop(Empty {}))
+            }
         };
         self.finish(ctx, result);
         Flow::Done
@@ -294,6 +310,16 @@ impl Service {
                 self.complete_done(oid, ctx, result);
             }
             (Pending::Query { ctx }, JobOutput::Query(result)) => self.finish(ctx, result),
+            (
+                Pending::TerminalOpen {
+                    oid,
+                    ctx,
+                    terminal_id,
+                    writable,
+                    size,
+                },
+                JobOutput::Terminal(result),
+            ) => self.terminal_open_done(oid, ctx, (terminal_id, writable, size), result),
             _ => {}
         }
     }

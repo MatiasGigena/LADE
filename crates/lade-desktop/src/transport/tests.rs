@@ -526,5 +526,77 @@ fn real_service_workspace_objective_execution_and_change_set() {
         "file page",
         |u| matches!(u, StoreUpdate::FilePage(p) if p.eof && p.text.as_deref().is_some_and(|t| t.contains("hi"))),
     );
+
+    // Contained terminal (IMP-012): the client only asks; the service runs the shell in the
+    // Objective sandbox, or refuses when the sandbox is unavailable.
+    send(Intent::OpenTerminal {
+        objective_id: objective_id.clone(),
+        cols: 80,
+        rows: 24,
+    });
+    let opened = wait_for(&updates, "terminal opened or refused", |u| {
+        matches!(
+            u,
+            StoreUpdate::TerminalOpened { .. } | StoreUpdate::TerminalProblem { .. }
+        )
+    });
+    if let StoreUpdate::TerminalOpened { terminal_id, .. } = opened {
+        send(Intent::TerminalInput {
+            objective_id: objective_id.clone(),
+            terminal_id: terminal_id.clone(),
+            data: "cat hello.txt; echo T_$((2+2))\r".into(),
+        });
+        let mut seen = String::new();
+        while !seen.contains("T_4") {
+            if let StoreUpdate::TerminalOutput { data, .. } = wait_for(
+                &updates,
+                "terminal output",
+                |u| matches!(u, StoreUpdate::TerminalOutput { terminal_id: t, .. } if *t == terminal_id),
+            ) {
+                seen.push_str(&data);
+            }
+        }
+        assert!(seen.contains("hi"), "{seen:?}");
+    } else {
+        eprintln!("note: terminal refused (no sandbox on this host): {opened:?}");
+    }
+
+    // Explicit Exit: the service stops and the window neither reconnects nor respawns it.
+    send(Intent::StopService {
+        reason: crate::presentation::intents::StopReason::Exit,
+    });
+    wait_for(&updates, "service stopped", |u| {
+        u == &StoreUpdate::ServiceStopped
+    });
+    wait_for(&updates, "no reconnect after stop", |u| {
+        matches!(
+            u,
+            StoreUpdate::Connection(ConnectionState::Disconnected { .. })
+        )
+    });
+    let mut service = _service;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = service.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "laded kept running after service.stop"
+        );
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status:?}");
+    assert!(!runtime.join(connection::SOCKET_NAME).exists());
+    thread::sleep(Duration::from_millis(500));
+    while let Ok(update) = updates.try_recv() {
+        assert!(
+            !matches!(
+                update,
+                StoreUpdate::Connection(ConnectionState::Reconnecting { .. })
+            ),
+            "reconnected after Exit"
+        );
+    }
     let _ = tx.send(Input::Shutdown);
 }

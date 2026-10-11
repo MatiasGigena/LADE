@@ -191,6 +191,11 @@ requests! {
     ObjectiveDiscard = "objective.discard", true, ObjectiveSelector => Box<ObjectiveDetail>;
     ObjectiveCleanup = "objective.cleanup", true, ObjectiveCleanupCommand => Box<ObjectiveDetail>;
     SettingsUpdate = "settings.update", true, SettingsUpdateCommand => Settings;
+    TerminalOpen = "terminal.open", false, TerminalOpenCommand => TerminalInfo;
+    TerminalInput = "terminal.input", false, TerminalInputCommand => Empty;
+    TerminalResize = "terminal.resize", false, TerminalResizeCommand => Empty;
+    TerminalClose = "terminal.close", false, TerminalSelector => Empty;
+    ServiceStop = "service.stop", true, ServiceStopCommand => Empty;
 }
 
 impl Serialize for RequestName {
@@ -532,6 +537,8 @@ events! {
     WorktreeChanged = "worktree.changed", WorktreeChanged;
     VerificationChanged = "verification.changed", VerificationSummary;
     ServiceNotice = "service.notice", ServiceNotice;
+    TerminalOutput = "terminal.output", TerminalOutput;
+    TerminalClosed = "terminal.closed", TerminalClosed;
 }
 
 impl Serialize for EventName {
@@ -718,6 +725,18 @@ wire_enum!(SearchResultKind {
     Content,
 });
 wire_enum!(FileEncoding { Utf8, Binary });
+wire_enum!(TerminalMode {
+    ReadWrite,
+    ReadOnly
+});
+wire_enum!(TerminalCloseReason {
+    Exited,
+    Closed,
+    ReviewFreeze,
+    Lifecycle,
+    Failed,
+});
+wire_enum!(StopReason { Exit, Logout });
 wire_enum!(NoticeLevel {
     Info,
     Warning,
@@ -1251,3 +1270,45 @@ wire_struct!(ServiceNotice {
     code: String,
     message: String,
 });
+
+// Contained terminal (IMP-012): ephemeral, never journaled.
+wire_struct!(TerminalOpenCommand {
+    objective_id: Id,
+    cols: Counter,
+    rows: Counter,
+});
+wire_struct!(TerminalInfo {
+    terminal_id: Id,
+    objective_id: Id,
+    mode: TerminalMode,
+    cols: Counter,
+    rows: Counter,
+});
+wire_struct!(TerminalInputCommand {
+    terminal_id: Id,
+    data: String,
+});
+wire_struct!(TerminalResizeCommand {
+    terminal_id: Id,
+    cols: Counter,
+    rows: Counter,
+});
+wire_struct!(TerminalSelector { terminal_id: Id });
+wire_struct!(TerminalOutput {
+    objective_id: Id,
+    terminal_id: Id,
+    seq: Counter,
+    data: String,
+    /// Output discarded since the previous event because the bounded buffer overflowed.
+    dropped_bytes: Counter,
+});
+wire_struct!(TerminalClosed {
+    objective_id: Id,
+    terminal_id: Id,
+    reason: TerminalCloseReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<Counter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signal: Option<Counter>,
+});
+wire_struct!(ServiceStopCommand { reason: StopReason });

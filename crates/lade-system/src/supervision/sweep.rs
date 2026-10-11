@@ -1,6 +1,7 @@
 //! Pidfiles for launched sandboxes and the startup sweep of stale ones.
 //!
-//! Each launch records `worker-<objective>-<generation>.pid` in the run directory: one line
+//! Each launch records `worker-<objective>-<generation>.pid` (a contained terminal:
+//! `terminal-<objective>-<terminal>.pid`) in the run directory: one line
 //! `<pid> <starttime>` per process to kill (the outer bwrap, then the sandbox's PID-namespace
 //! init once known). `starttime` is field 22 of `/proc/<pid>/stat` (clock ticks since boot), so
 //! a recycled pid never matches. The service calls [`sweep_stale`] at startup, before any launch,
@@ -128,9 +129,10 @@ pub struct SweepReport {
     pub removed_sockets: usize,
 }
 
-/// Kill processes recorded in `run_dir`'s worker pidfiles whose identity still matches, then
-/// remove every worker pidfile and gateway socket there. Must only run while no launcher is
-/// using `run_dir` (service startup). A missing `run_dir` is an empty sweep.
+/// Kill processes recorded in `run_dir`'s worker and terminal pidfiles whose identity still
+/// matches, then remove those pidfiles and the gateway sockets there. Must only run while no
+/// launcher or terminal is using `run_dir` (service startup). A missing `run_dir` is an empty
+/// sweep.
 pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     let mut report = SweepReport::default();
     let entries = match fs::read_dir(run_dir) {
@@ -143,7 +145,8 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if name.starts_with("worker-") && (name.ends_with(".pid") || name.ends_with(".pid.tmp")) {
+        let recorded = name.starts_with("worker-") || name.starts_with("terminal-");
+        if recorded && (name.ends_with(".pid") || name.ends_with(".pid.tmp")) {
             pidfiles.push(entry.path());
         } else if name.starts_with("gw-") && name.ends_with(".sock") {
             sockets.push(entry.path());

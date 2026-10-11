@@ -1,5 +1,5 @@
-//! Header band: mark + LADE, Workbench/Activity navigation, connection status, global search and
-//! the profile (circular placeholder avatar + name).
+//! Header band: mark + LADE, Workbench/Activity/Terminal navigation, connection status, global
+//! search, shortcuts, Exit and the profile (circular placeholder avatar + name).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -69,6 +69,7 @@ pub struct Header {
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
     activity_tab: gtk::ToggleButton,
+    terminal_tab: gtk::ToggleButton,
     status: gtk::Label,
     pub search_entry: gtk::SearchEntry,
     scope: gtk::DropDown,
@@ -80,6 +81,8 @@ pub struct Header {
     nav: gtk::Box,
     profile_name: gtk::Label,
     pub shortcuts_button: gtk::Button,
+    /// Explicit Exit: stops the service and its agents (closing the window does not).
+    pub exit_button: gtk::Button,
     updating: Cell<bool>,
 }
 
@@ -130,7 +133,9 @@ impl Header {
         let workbench_tab = gtk::ToggleButton::with_label("Workbench");
         let activity_tab = gtk::ToggleButton::with_label("Activity");
         activity_tab.set_group(Some(&workbench_tab));
-        for tab in [&workbench_tab, &activity_tab] {
+        let terminal_tab = gtk::ToggleButton::with_label("Terminal");
+        terminal_tab.set_group(Some(&workbench_tab));
+        for tab in [&workbench_tab, &activity_tab, &terminal_tab] {
             tab.add_css_class("nav-tab");
             nav.append(tab);
         }
@@ -196,6 +201,11 @@ impl Header {
         shortcuts_button.set_valign(gtk::Align::Center);
         set_accessible_label(&shortcuts_button, "Keyboard shortcuts");
         root.append(&shortcuts_button);
+        let exit_button = gtk::Button::from_icon_name("system-shutdown-symbolic");
+        exit_button.add_css_class("icon-button");
+        exit_button.set_valign(gtk::Align::Center);
+        set_accessible_label(&exit_button, "Exit LADE and stop its agents");
+        root.append(&exit_button);
 
         let profile = hbox(10);
         profile.add_css_class("profile");
@@ -224,6 +234,7 @@ impl Header {
             controller: controller.clone(),
             workbench_tab,
             activity_tab,
+            terminal_tab,
             status,
             search_entry,
             scope,
@@ -235,6 +246,7 @@ impl Header {
             nav,
             profile_name: name,
             shortcuts_button,
+            exit_button,
             updating: Cell::new(false),
         });
         header.connect();
@@ -246,6 +258,7 @@ impl Header {
         for (tab, view) in [
             (&self.workbench_tab, MainView::Workbench),
             (&self.activity_tab, MainView::Activity),
+            (&self.terminal_tab, MainView::Terminal),
         ] {
             let this = Rc::downgrade(self);
             tab.connect_toggled(move |tab| {
@@ -312,6 +325,14 @@ impl Header {
             "Global search ({})",
             keymap.label(AppAction::FocusSearch)
         )));
+        self.exit_button.set_tooltip_text(Some(&format!(
+            "Exit: stop the service, its agents and terminals ({}). Closing the window keeps them running.",
+            keymap.label(AppAction::Exit)
+        )));
+        self.terminal_tab.set_tooltip_text(Some(&format!(
+            "Terminal in the Objective sandbox ({})",
+            keymap.label(AppAction::ShowTerminal)
+        )));
     }
 
     pub fn focus_search(&self) {
@@ -324,6 +345,7 @@ impl Header {
         match view {
             MainView::Workbench => self.workbench_tab.set_active(true),
             MainView::Activity => self.activity_tab.set_active(true),
+            MainView::Terminal => self.terminal_tab.set_active(true),
         }
         self.updating.set(false);
     }
