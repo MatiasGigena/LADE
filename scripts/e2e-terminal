@@ -1,0 +1,215 @@
+#!/bin/sh
+# IMP-012 under Xvfb against a real `laded serve`: the contained terminal in the Objective
+# sandbox, both keyboard escape directions, a flood, single-instance activation, the client
+# ending (service and agent keep running, terminal dies), no resume of terminals, and explicit
+# Exit (service, agent and terminal stop; nothing lingers).
+#
+#   scripts/e2e-terminal [OUT_DIR]     (default: docs/implementation/evidence/imp-012)
+#
+# Requires: a debug build, Xvfb, xdotool, ImageMagick `import`, git, bubblewrap, dbus-run-session.
+# It runs inside its own `dbus-run-session` bus: there is no notification service and no AT-SPI
+# registry (GTK_A11Y=none), so the run also shows the client working without those desktop
+# facilities. There is no window manager: the client's end is simulated by terminating its
+# process (a window close and a crash both end the link; the service treats them alike).
+# Environment: E2E_DISPLAY (default 78), E2E_KEEP=1 keeps the temporary directory.
+set -eu
+if [ -z "${LADE_E2E_BUS:-}" ]; then
+  command -v dbus-run-session >/dev/null || { echo "e2e-terminal: dbus-run-session is required" >&2; exit 2; }
+  LADE_E2E_BUS=1 exec dbus-run-session -- "$0" "$@"
+fi
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT=${1:-$ROOT/docs/implementation/evidence/imp-012}
+DPY=:${E2E_DISPLAY:-78}
+BIN=$ROOT/target/debug
+W=1440
+H=900
+for tool in Xvfb xdotool import git bwrap; do
+  command -v "$tool" >/dev/null || { echo "e2e-terminal: $tool is required" >&2; exit 2; }
+done
+[ -x "$BIN/laded" ] && [ -x "$BIN/lade-desktop" ] || {
+  echo "e2e-terminal: build first: ./scripts/cargo build --workspace --locked" >&2
+  exit 2
+}
+mkdir -p "$OUT"
+T=$(mktemp -d /tmp/lterm.XXXXXX)
+STATE=$T/state
+RUN=$T/run
+REPO=$T/repo
+pids=""
+cleanup() {
+  for pid in $pids; do kill "$pid" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+  [ "${E2E_KEEP:-0}" = 1 ] || rm -rf "$T"
+}
+trap cleanup EXIT INT TERM
+fail() { echo "e2e-terminal: FAILED: $*" >&2; [ -f "$T/laded.log" ] && tail -20 "$T/laded.log" >&2; exit 1; }
+step() { echo "e2e-terminal: $*"; }
+export DISPLAY=$DPY
+x() { xdotool "$@"; }
+click() { x mousemove "$1" "$2" click 1; sleep "${3:-1}"; }
+key() { x key "$@"; sleep 1; }
+typ() { x type --delay 12 "$1"; }
+park() { x mousemove 700 880; sleep 0.5; }
+shot() { park; import -window root "$OUT/t-$1.png"; step "screenshot t-$1.png"; }
+wait_for() {
+  limit=$1; what=$2; shift 2
+  n=0
+  while ! "$@" >/dev/null 2>&1; do
+    n=$((n + 1))
+    [ $n -le $((limit * 4)) ] || fail "timed out waiting for $what"
+    sleep 0.25
+  done
+}
+wt() { for d in "$STATE"/worktrees/*; do [ -d "$d" ] && echo "$d" && return 0; done; return 1; }
+in_wt() { d=$(wt) && [ -e "$d/$1" ]; }
+session_ready() { ls "$STATE"/sessions/*/agent >/dev/null 2>&1; }
+terminal_open() { ls "$STATE"/run/terminal-*.pid >/dev/null 2>&1; }
+no_terminal() { ! terminal_open; }
+worker_alive() { ls "$STATE"/run/worker-*.pid >/dev/null 2>&1; }
+sleepers() { pgrep -x sleep -a 2>/dev/null | grep -c "sleep $1" || true; }
+no_sleeper() { [ "$(sleepers "$1")" = 0 ]; }
+windows() { xdotool search --onlyvisible --name '^LADE$' 2>/dev/null | wc -l; }
+rss_kib() { awk '/^VmRSS/ {print $2}' "/proc/$1/status"; }
+start_desktop() {
+  XDG_CONFIG_HOME=$T/config GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" "$@" >>"$T/desktop.log" 2>&1 &
+  DESKTOP=$!
+  pids="$pids $DESKTOP"
+  wait_for 20 "LADE window" xdotool search --onlyvisible --name '^LADE$'
+  WID=$(xdotool search --onlyvisible --name '^LADE$' | head -1)
+  x windowmove "$WID" 0 0 windowsize "$WID" $W $H
+  sleep 2
+  click 700 60 0.5   # give the window keyboard focus (no window manager)
+}
+
+step "repository and service"
+mkdir -p "$REPO" && mkdir -m 700 "$RUN"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.email dev@example.com
+git -C "$REPO" config user.name Developer
+printf '# Demo\n' >"$REPO/README.md"
+git -C "$REPO" add README.md
+git -C "$REPO" commit -q -m initial
+Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+pids="$pids $!"
+sleep 1
+"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
+LADED=$!
+pids="$pids $LADED"
+wait_for 10 "control socket" test -S "$RUN/control.sock"
+start_desktop --open "$REPO"
+
+step "single-instance activation: a second launch focuses the existing window and exits"
+XDG_CONFIG_HOME=$T/config GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" >>"$T/desktop.log" 2>&1 &
+SECOND=$!
+n=0
+while kill -0 "$SECOND" 2>/dev/null; do
+  n=$((n + 1)); [ $n -le 40 ] || fail "second launch kept running"; sleep 0.25
+done
+wait "$SECOND" || fail "second launch failed"
+[ "$(windows)" = 1 ] || fail "a second window opened"
+grep -q "refused second client" "$T/laded.log" && fail "the second launch reached the service"
+
+step "Objective with a worktree (the fixture agent starts once)"
+key ctrl+n
+click 280 106 0.3; typ "Terminal check"
+click 280 195 0.3; typ "the terminal stays in scope"
+click 469 625 2
+click 1280 804 1
+wait_for 60 "sandboxed worker started" session_ready
+wait_for 30 "worktree" wt
+sleep 3
+
+step "focus into the terminal (Ctrl+3), open it, run a command in the worktree"
+key ctrl+3
+key Return
+wait_for 20 "terminal sandbox" terminal_open
+sleep 1
+typ "echo from-terminal > term.txt; ls; echo T_\$((40+2))"
+key Return
+wait_for 20 "terminal wrote in the worktree" in_wt term.txt
+[ ! -e "$REPO/term.txt" ] || fail "the terminal wrote the shared checkout"
+MARK=4242.$$
+typ "(setsid nohup sleep $MARK >/dev/null 2>&1 &); cat /proc/self/limits | grep -E 'open files|processes'"
+key Return
+wait_for 10 "detached daemon in the terminal" sh -c "[ \"\$(pgrep -x sleep -a | grep -c 'sleep $MARK')\" = 1 ]"
+sleep 1
+shot 01-terminal-open
+
+step "focus out (Ctrl+Shift+E): typing no longer reaches the shell"
+key ctrl+shift+e
+# No space or Return here: they would activate whatever button now has focus. If these keys
+# reached the shell, the Return typed after coming back would create leaked.txt.
+typ ":>leaked.txt"
+sleep 1
+shot 02-terminal-left
+step "focus back in (Ctrl+3)"
+key ctrl+3
+key Return
+typ "touch back.txt"
+key Return
+wait_for 10 "keys reach the terminal again" in_wt back.txt
+in_wt leaked.txt && fail "keys reached the terminal after leaving it"
+
+step "output flood stays bounded; the window stays responsive"
+before=$(rss_kib "$DESKTOP")
+typ "tr '\\\\0' x < /dev/zero | head -c 8000000; echo; touch flood-done.txt"
+key Return
+wait_for 120 "flood finished" in_wt flood-done.txt
+after=$(rss_kib "$DESKTOP")
+typ "touch after-flood.txt"
+key Return
+wait_for 10 "terminal responsive after the flood" in_wt after-flood.txt
+step "client RSS before/after an 8 MB flood: ${before} KiB / ${after} KiB"
+[ "$after" -lt $((before + 200000)) ] || fail "client memory grew by more than 200 MB"
+sleep 1
+shot 03-after-flood
+
+step "the client ends: service and agent keep running, the terminal and its daemon die"
+kill "$DESKTOP"
+wait "$DESKTOP" 2>/dev/null || true
+wait_for 10 "terminal ended with the lease" no_terminal
+wait_for 10 "terminal daemon ended" no_sleeper "$MARK"
+kill -0 "$LADED" || fail "the service stopped with the window"
+worker_alive || fail "the agent stopped with the window"
+
+step "reopen the client: nothing resumes on its own"
+start_desktop
+key ctrl+3
+sleep 1
+no_terminal || fail "a terminal was resumed"
+shot 04-reopened-no-terminal
+
+step "explicit Exit (Ctrl+Q): service, agent and terminal stop"
+click 120 167 1    # select the Objective (a new window starts without a selection)
+key ctrl+3
+key Return
+wait_for 20 "terminal sandbox" terminal_open
+key ctrl+shift+e
+key ctrl+q
+shot 05-exit-confirm
+key Tab            # Cancel has focus; Tab reaches Exit
+key Return
+n=0
+while kill -0 "$LADED" 2>/dev/null; do
+  n=$((n + 1)); [ $n -le 80 ] || fail "laded kept running after Exit"; sleep 0.25
+done
+wait "$LADED" || fail "laded exited with an error after Exit"
+n=0
+while kill -0 "$DESKTOP" 2>/dev/null; do
+  n=$((n + 1)); [ $n -le 40 ] || fail "the window kept running after Exit"; sleep 0.25
+done
+sleep 1
+pgrep -f "$STATE" >/dev/null && fail "processes of this state directory linger after Exit"
+[ ! -e "$RUN/control.sock" ] || fail "control socket left behind"
+
+step "restart: the execution is interrupted, not resumed"
+"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
+LADED=$!
+pids="$pids $LADED"
+wait_for 10 "control socket" test -S "$RUN/control.sock"
+start_desktop
+sleep 2
+worker_alive && fail "the agent was resumed after restart"
+no_terminal || fail "a terminal was resumed after restart"
+shot 06-restart-interrupted
+step "PASSED; screenshots in $OUT"

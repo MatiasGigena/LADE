@@ -74,8 +74,28 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `objective.complete` / `objective.discard` | command | `ObjectiveSelector` | `ObjectiveDetail` |
 | `objective.cleanup` | command | `ObjectiveCleanupCommand` | `ObjectiveDetail` |
 | `settings.update` | command | `SettingsUpdateCommand` | `Settings` |
+| `service.stop` | command | `ServiceStopCommand {reason: exit\|logout}` | `Empty` |
+| `terminal.open` | interaction | `TerminalOpenCommand {objective_id, cols, rows}` | `TerminalInfo {terminal_id, objective_id, mode: read_write\|read_only, cols, rows}` |
+| `terminal.input` | interaction | `TerminalInputCommand {terminal_id, data (1..=16,384 code points)}` | `Empty` |
+| `terminal.resize` | interaction | `TerminalResizeCommand {terminal_id, cols, rows}` | `Empty` |
+| `terminal.close` | interaction | `TerminalSelector {terminal_id}` | `Empty` |
 
-Events: `objective.changed` → `ObjectiveSummary`; `objective.detail` → `ObjectiveDetail`; `activity.appended` → `ActivityAppended`; `activity.delta` → `ActivityDelta` (coalescible); `draft.changed` → `Draft`; `input.changed` → `InputSummary`; `worktree.changed` → `WorktreeChanged`; `verification.changed` → `VerificationSummary`; `service.notice` → `ServiceNotice`. Field-level shapes are the schema `$defs` of those names (mirrored 1:1 by Rust `lade_protocol::client` and TS `dto.ts`).
+Events: `objective.changed` → `ObjectiveSummary`; `objective.detail` → `ObjectiveDetail`; `activity.appended` → `ActivityAppended`; `activity.delta` → `ActivityDelta` (coalescible); `draft.changed` → `Draft`; `input.changed` → `InputSummary`; `worktree.changed` → `WorktreeChanged`; `verification.changed` → `VerificationSummary`; `service.notice` → `ServiceNotice`; `terminal.output` →
+`TerminalOutput {objective_id, terminal_id, seq, data (≤ 65,536 code points), dropped_bytes}`; `terminal.closed` →
+`TerminalClosed {objective_id, terminal_id, reason: exited|closed|review_freeze|lifecycle|failed, exit_code?,
+signal?}`. Field-level shapes are the schema `$defs` of those names (mirrored 1:1 by Rust `lade_protocol::client` and TS `dto.ts`).
+
+### Contained terminal and lifetime (IMP-012, additive)
+
+The `terminal.*` names are *interaction* with a service-owned PTY: like queries they carry no `operation_id`
+(the schema forbids it), are never journaled, replayed or resent after a reconnect, and create no durable state; a
+terminal is bound to the controlling lease and dies with it. Sizes are decimal strings; the service accepts
+1..=500 columns and 1..=200 rows. `terminal.output.seq` starts at 1 and increases by one per event of a terminal; a
+gap (for example after a resync) and a non-zero `dropped_bytes` (output discarded by the service's bounded buffer)
+are shown to the developer as an explicit marker, never silently joined. Output is UTF-8 text decoded by the service
+(invalid bytes replaced, NUL removed); input is the UTF-8 the client's VT encoder produces (no NUL).
+`service.stop` is an ordinary journaled command: the reply is sent, then the service stops its workers and
+terminals and exits; a client that sent it neither reconnects nor starts a new service.
 
 ### Error semantics
 
