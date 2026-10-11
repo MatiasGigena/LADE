@@ -200,6 +200,7 @@ fn action_name(a: wire::ActionName) -> view::ActionName {
         wire::ActionName::ObjectiveComplete => view::ActionName::ObjectiveComplete,
         wire::ActionName::ObjectiveDiscard => view::ActionName::ObjectiveDiscard,
         wire::ActionName::ObjectiveCleanup => view::ActionName::ObjectiveCleanup,
+        wire::ActionName::ObjectiveDeleteHistory => view::ActionName::ObjectiveDeleteHistory,
     }
 }
 
@@ -397,6 +398,7 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
                 reason: a.reason.clone(),
             })
             .collect(),
+        history_deleted: d.history_deleted == Some(true),
     }
 }
 
@@ -428,6 +430,7 @@ fn changed_file(f: &wire::ChangedFile) -> view::ChangedFile {
         added: counter(&f.added),
         removed: counter(&f.removed),
         binary: f.binary,
+        filtered: f.filtered == Some(true),
     }
 }
 
@@ -453,6 +456,23 @@ pub fn change_list(
         truncated: l.truncated,
         total_added: counter(&l.total_added),
         total_removed: counter(&l.total_removed),
+        notices: l
+            .notices
+            .iter()
+            .flatten()
+            .map(|n| view::ContentNotice {
+                kind: match n.kind {
+                    wire::ContentNoticeKind::NestedRepository => {
+                        view::ContentNoticeKind::NestedRepository
+                    }
+                    wire::ContentNoticeKind::FilteredContent => {
+                        view::ContentNoticeKind::FilteredContent
+                    }
+                },
+                message: n.message.clone(),
+                path: n.path.as_ref().map(path),
+            })
+            .collect(),
     }
 }
 
@@ -526,6 +546,7 @@ pub fn file_page(
         text: c.text.clone(),
         eof: c.eof,
         version_label: c.version_label.clone(),
+        chunked: c.chunked == Some(true),
     }
 }
 
@@ -627,6 +648,7 @@ pub fn search_result(r: &wire::SearchResult) -> view::SearchResult {
         line: r.line.as_ref().map(counter),
         preview: r.preview.clone(),
         byte_start: r.byte_start.as_ref().map(counter),
+        byte_end: r.byte_end.as_ref().map(counter),
     }
 }
 

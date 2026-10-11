@@ -555,6 +555,7 @@ fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetai
             removed,
         },
         unsent_drafts: 5,
+        history_deleted: false,
         available_actions: vec![
             action(ActionName::ReviewFreeze, Some("Already frozen as Candidate 2")),
             action(ActionName::ReviewReturn, None),
@@ -664,6 +665,7 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
         },
         unsent_drafts: 0,
         available_actions: actions,
+        history_deleted: false,
     }
 }
 
@@ -683,6 +685,7 @@ fn change_list(objective: &str, basis: Basis) -> ChangeList {
                 added,
                 removed,
                 binary: f.binary,
+                filtered: false,
             }
         })
         .collect();
@@ -715,6 +718,7 @@ fn change_list(objective: &str, basis: Basis) -> ChangeList {
         truncated: false,
         total_added: changed.iter().map(|f| f.added).sum(),
         total_removed: changed.iter().map(|f| f.removed).sum(),
+        notices: Vec::new(),
         files: changed,
     }
 }
@@ -1228,6 +1232,7 @@ impl PreviewResponder {
                         text: None,
                         eof: true,
                         version_label,
+                        chunked: false,
                     })];
                 }
                 let text = content.unwrap_or_default();
@@ -1252,6 +1257,7 @@ impl PreviewResponder {
                     text: Some(text[start..end].to_owned()),
                     eof: end == text.len(),
                     version_label,
+                    chunked: false,
                 })]
             }
             Intent::LoadActivity { objective_id, .. } => vec![StoreUpdate::ActivityPage {
@@ -1322,6 +1328,7 @@ impl PreviewResponder {
                             line: None,
                             preview: o.title.clone(),
                             byte_start: None,
+                            byte_end: None,
                         });
                     }
                 }
@@ -1352,6 +1359,7 @@ impl PreviewResponder {
                                 line: None,
                                 preview: file.path.into(),
                                 byte_start: None,
+                                byte_end: None,
                             });
                         }
                         continue;
@@ -1359,14 +1367,15 @@ impl PreviewResponder {
                     let Some(text) = &file.new else { continue };
                     let mut start = 0u64;
                     for (n, line) in text.split_inclusive('\n').enumerate() {
-                        if line.to_lowercase().contains(&needle) {
+                        if let Some(at) = line.to_lowercase().find(&needle) {
                             results.push(SearchResult {
                                 kind: SearchResultKind::Content,
                                 objective_id: objective_id.clone(),
                                 path: Some(RepoPath::utf8(file.path)),
                                 line: Some(n as u64 + 1),
                                 preview: line.trim().to_owned(),
-                                byte_start: Some(start),
+                                byte_start: Some(start + at as u64),
+                                byte_end: Some(start + (at + needle.len()) as u64),
                             });
                         }
                         start += line.len() as u64;

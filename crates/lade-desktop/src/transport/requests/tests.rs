@@ -312,6 +312,12 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::ServiceStop),
         ),
+        (
+            I::DeleteHistory {
+                objective_id: oid(),
+            },
+            Some(N::ObjectiveDeleteHistory),
+        ),
     ];
     // Compile-time reminder: a new intent variant must be added above.
     for (intent, _) in &all {
@@ -344,6 +350,7 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             | I::Complete { .. }
             | I::Discard { .. }
             | I::Cleanup { .. }
+            | I::DeleteHistory { .. }
             | I::UpdateSettings { .. }
             | I::OpenTerminal { .. }
             | I::TerminalInput { .. }
@@ -533,6 +540,7 @@ pub(crate) fn wire_detail(objective_id: &str) -> wire::ObjectiveDetail {
             },
         }),
         approval: None,
+        history_deleted: None,
     }
 }
 
@@ -628,6 +636,7 @@ fn query_replies_carry_their_request_context() {
             eof: true,
             version_label: "Working capture".into(),
             text: Some("hi\n".into()),
+            chunked: None,
         }),
     );
     assert!(matches!(

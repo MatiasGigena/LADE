@@ -581,6 +581,25 @@ impl Inspector {
                 }
             },
         ));
+        if detail.history_deleted {
+            actions.append(&label(
+                "Git history deleted: retention references and branch were removed on request.",
+                &["meta"],
+            ));
+        } else {
+            let this = Rc::downgrade(self);
+            let title = summary.title.clone();
+            actions.append(&action_row(
+                "Delete Git history",
+                &detail.availability(ActionName::ObjectiveDeleteHistory),
+                &["destructive"],
+                move |b| {
+                    if let Some(this) = this.upgrade() {
+                        dialogs::delete_history(b, &this.controller, &title);
+                    }
+                },
+            ));
+        }
         self.overview.append(&actions);
     }
 

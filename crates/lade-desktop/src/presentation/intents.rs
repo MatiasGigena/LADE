@@ -162,6 +162,11 @@ pub enum Intent {
         objective_id: ObjectiveId,
         confirm_data_loss: bool,
     },
+    /// Deletes a cleaned-up Objective's retention refs and branch; sent only after the user
+    /// confirmed the dialog (never automatic).
+    DeleteHistory {
+        objective_id: ObjectiveId,
+    },
     /// Records the model picked for an execution as the default for the next one.
     UpdateSettings {
         default_model: ModelRef,
@@ -226,6 +231,7 @@ impl Intent {
             Self::Complete { .. } => "Complete without changes",
             Self::Discard { .. } => "Discard",
             Self::Cleanup { .. } => "Clean up",
+            Self::DeleteHistory { .. } => "Delete Git history",
             Self::UpdateSettings { .. } => "Save default model",
             Self::OpenTerminal { .. } => "Open terminal",
             Self::TerminalInput { .. } => "Terminal input",

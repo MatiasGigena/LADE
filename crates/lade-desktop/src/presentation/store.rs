@@ -257,6 +257,16 @@ pub enum ViewerContent {
 pub struct Viewer {
     pub key: Option<ViewerKey>,
     pub content: ViewerContent,
+    /// A byte range to select once the file shown under `key` has loaded it (a followed
+    /// content search result), so it becomes the feedback anchor.
+    pub reveal: Option<Reveal>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reveal {
+    pub key: ViewerKey,
+    pub start: u64,
+    pub end: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -326,6 +336,7 @@ impl PresentationState {
             viewer: Viewer {
                 key: None,
                 content: ViewerContent::Empty,
+                reveal: None,
             },
             search: Load::NotLoaded,
             notices: Vec::new(),
@@ -971,6 +982,7 @@ impl PresentationState {
                     loaded_bytes: page_len,
                     eof: page.eof,
                     version_label: page.version_label,
+                    chunked: page.chunked,
                 });
             }
         }
@@ -1174,6 +1186,7 @@ mod tests {
                 text: Some(text.into()),
                 eof,
                 version_label: "working".into(),
+                chunked: false,
             })
         };
         state.apply(page(0, 6, "héllo", false));
@@ -1305,6 +1318,7 @@ mod tests {
             truncated: false,
             total_added: 0,
             total_removed: 0,
+            notices: Vec::new(),
         };
         assert!(state.apply(StoreUpdate::Changes(list)).is_empty());
         assert!(!state.changes.contains_key(&o));
