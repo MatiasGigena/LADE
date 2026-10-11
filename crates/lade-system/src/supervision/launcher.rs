@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use lade_protocol::worker::WorkerBody;
 use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode_worker, encode};
 
-use super::credentials::{CredentialSource, ReleasedCredentials};
+use super::credentials::{CredentialError, CredentialSource, ReleasedCredentials};
 use super::gateway::{
     EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies, ensure_private_dir,
 };
@@ -117,7 +117,8 @@ pub struct LauncherConfig {
 impl LauncherConfig {
     /// Defaults: `node` from `PATH`, the worker package from `LADE_WORKER_DIR` or this
     /// repository's `packages/pi-worker`, [`WORKER_LIMITS`], the default provider policies,
-    /// credentials from the process environment and credentials file, and `HTTPS_PROXY`.
+    /// credentials from the process environment, the Secret Service and the credentials file, and
+    /// `HTTPS_PROXY`.
     pub fn new(run_dir: PathBuf, socket_dir: PathBuf) -> Result<Self, LaunchError> {
         let worker_dir = default_worker_dir()?;
         Ok(Self {
@@ -274,31 +275,41 @@ impl SandboxLauncher {
     }
 
     /// The reviewed egress policy and the released credentials for `provider`: a built-in policy,
-    /// or the exact endpoint of a custom provider defined in the LADE profile.
+    /// or the exact endpoint of a custom provider defined in the LADE profile. Without `release`
+    /// only the availability of the credentials is checked (no values are returned, and the
+    /// Secret Service is asked only when the environment and the file do not suffice).
     fn resolve_provider(
         &self,
         provider: &str,
+        release: bool,
     ) -> Result<(EgressPolicy, ReleasedCredentials), LaunchError> {
-        let unavailable = |e: String| LaunchError::ProviderUnavailable(e);
+        let unavailable = |e: CredentialError| LaunchError::ProviderUnavailable(e.to_string());
+        let credentials = &self.config.credentials;
         if let Some(policy) = self.config.policies.get(provider) {
-            let released = self
-                .config
-                .credentials
-                .resolve(provider)
-                .map_err(|e| unavailable(e.to_string()))?;
+            let released = if release {
+                credentials.resolve(provider).map_err(unavailable)?
+            } else {
+                credentials.check(provider).map_err(unavailable)?;
+                ReleasedCredentials::default()
+            };
             return Ok((policy.clone(), released));
         }
         let custom = self.custom_providers();
         let Some(found) = custom.iter().find(|p| p.id == provider) else {
-            return Err(unavailable(format!(
+            return Err(LaunchError::ProviderUnavailable(format!(
                 "no egress policy for provider {provider}"
             )));
         };
-        let released = self
-            .config
-            .credentials
-            .resolve_custom(provider, &found.vars)
-            .map_err(|e| unavailable(e.to_string()))?;
+        let released = if release {
+            credentials
+                .resolve_custom(provider, &found.vars)
+                .map_err(unavailable)?
+        } else {
+            credentials
+                .check_custom(provider, &found.vars)
+                .map_err(unavailable)?;
+            ReleasedCredentials::default()
+        };
         let rule = EgressRule {
             host: found.host.clone(),
             port: found.port,
@@ -308,7 +319,7 @@ impl SandboxLauncher {
     }
 
     fn provider_ready(&self, provider: &str) -> Result<(), LaunchError> {
-        self.resolve_provider(provider).map(drop)
+        self.resolve_provider(provider, false).map(drop)
     }
 }
 
@@ -404,7 +415,7 @@ impl WorkerLauncher for SandboxLauncher {
         sandbox_available(&self.tools)
             .map_err(|e| LaunchError::SandboxUnavailable(e.to_string()))?;
         let config = &self.config;
-        let (policy, credentials) = self.resolve_provider(&provider)?;
+        let (policy, credentials) = self.resolve_provider(&provider, true)?;
 
         ensure_private_dir(&config.run_dir).map_err(LaunchError::Io)?;
         let stem = format!("{}-{}", binding.objective_id, binding.execution_generation);

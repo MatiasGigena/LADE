@@ -117,19 +117,21 @@ Classification per provider is in [`pi-compatibility.json`](pi-compatibility.jso
 providers plus the offline fixture) and **23 restricted**, each with its reason, shown in the picker. Supported
 providers work with their API key, and where pi accepts a plain variable for subscription access, with that token
 (`ANTHROPIC_OAUTH_TOKEN` for Claude Pro/Max, `KIMI_API_KEY` for Kimi Code). Credentials come from `laded`'s
-environment or `~/.config/lade/credentials.env` (0600); only the selected provider's variables are released, and the
-gateway allows only that provider's reviewed host.
+environment, the user's Secret Service (`laded credentials set <provider>`) or `~/.config/lade/credentials.env`
+(0600), in that order; only the selected provider's variables are released, and the gateway allows only that
+provider's reviewed host.
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
 | API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `providers.rs` tests, S [integrated]; **no live provider run** |
 | Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `providers.rs` tests [fixture]; **no live run** |
-| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT Plus/Pro (`openai-codex`), GitHub Copilot, xAI, OpenRouter OAuth, Radius) | Restricted | No credential custody for refresh tokens (Secret Service, IMP-007/IMP-014), and tokens in the sandbox's auth store would be readable by every tool. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
+| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT Plus/Pro (`openai-codex`), GitHub Copilot, xAI, OpenRouter OAuth, Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision (#43); tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
+| WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 0.85.1, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
 | Cloud credentials (Bedrock, Vertex) | Restricted | AWS profiles/keys and ADC files are not released; the Bedrock SDK's `node:http` transport bypasses the gateway | manifest |
 | Account-specific endpoints (Azure OpenAI, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
 | Other catalogue providers without a reviewed policy (ant-ling, baseten, minimax, minimax-cn, moonshotai-cn, qwen token plans, xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway.rs`/`credentials.rs`) | manifest |
 | Custom providers (`models.json`) | Supported with trust rules | LADE profile `models.json`: https, or http only to local hosts; credentials only as one whole `$LADE_PROVIDER_*` variable (literal keys only for local endpoints); no `!command` values or other interpolation; no `oauth`; no redefinition of a built-in provider; egress to exactly the declared host:port (private addresses only for local endpoints) | `profile.rs` tests, S catalogue test [integrated] |
-| Graphical login / logout | Restricted | Follows from the OAuth restriction; key-based access is configured in `credentials.env` | — |
+| Graphical login / logout | Restricted | Follows from the OAuth restriction; keys are stored with `laded credentials set` (Secret Service) or in `credentials.env` | — |
 
 ### Other #6 areas
 
