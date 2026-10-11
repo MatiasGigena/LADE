@@ -33,8 +33,10 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | No seccomp filter in the worker sandbox (namespaces, `--cap-drop ALL`, read-only binds only) | Kernel attack surface is not reduced beyond namespaces | IMP-006 |
 | bwrap exports `PWD` into the sandbox environment | Reveals the worktree path to the worker (already its cwd) | IMP-006 |
 | A hostile tool process can write to the worker's inherited stdout via `/proc` | Forged frames are still schema-validated and bound to one Objective/generation; content is untrusted | IMP-008 |
-| `SIGTERM` is not trapped by `laded` (no `unsafe` handlers); recovery on the next start is the contract | A stop interrupts running executions and verifications (they are marked interrupted, never resumed) | IMP-012 |
-| No contained terminal (PTY) | There is no interactive shell in the workbench; agents use pi's `bash` tool only | IMP-012 |
+| `SIGTERM` is not trapped by `laded` (no `unsafe` handlers); recovery on the next start is the contract. Graceful stops use `service.stop` (Exit; logout while the window runs) | A `systemctl stop` or session end without a window kills executions and verifications abruptly (marked interrupted on the next start, never resumed) | IMP-014 |
+| A `laded` started by hand or by the window (not the systemd unit) keeps running after a logout that happens with no window open | Its agents keep running until it is killed; use the unit (the installer's default) | IMP-014 |
+| Terminal quotas are the per-process worker `prlimit` values, not an aggregate per-Objective budget; a terminal and the agent are concurrent writers of an active Objective's worktree until a freeze | A heavy command in the terminal competes with the agent; terminal edits appear in the Change Set | IMP-013 |
+| A terminal needs an existing worktree (the agent must have run once); the shell is `bash`/`sh` from `/usr/bin`/`/bin`, not the user's login shell or dotfiles | No terminal for a never-started Objective; no personal shell configuration inside | — (by design; revisit with Matias if needed) |
 
 ## Network and credentials
 
@@ -65,7 +67,7 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | --- | --- | --- |
 | Streamed activity text is flushed every second | A crash can lose up to ~1 s of streamed agent text (accepted inputs and decisions are durable) | IMP-013 |
 | pi does not write the first user message before an assistant entry, and pi session files are not fsynced | A crash before the first reply can lose the pi-side record; LADE's own accepted input survives | IMP-008, IMP-011 |
-| The controlling-client refusal is a `service.notice` event, not a reply | A second window shows "another window controls the service" and gets no other data | IMP-012 |
+| The controlling-client refusal is a `service.notice` event, not a reply. A second launch of the window is redirected to the running one by `GApplication` only when a session bus exists | Without a session bus a second window can open; it shows "another window controls the service" and gets no other data or authority | IMP-014 |
 | Content search returns line numbers, not byte offsets | Search results cannot be used directly as exact feedback references | IMP-004 |
 | Files larger than 64 MiB are refused (`unsupported_content`) instead of being streamed | Very large files cannot be inspected | IMP-004 |
 | No persistent diagnostics/log rotation or export; diagnostics are stderr only (the user journal when run under systemd) | No bounded diagnostic history or redacted export (#14 policy) | IMP-003, IMP-014 |
@@ -90,12 +92,15 @@ explicitly revises the underlying contract ([spec §7](spec.md#7-common-definiti
 | Limitation | Impact | Tracked |
 | --- | --- | --- |
 | Orca speech has **not** been validated on this client; the IMP-002 (#40) Mint/Orca evidence applied to the superseded fixture component and must be re-run here. 200 % scaling and the compact composition are captured only under Xvfb on the development host (`scale-200-800x550.png`, `compact-800x550.png`), not on Mint/Cinnamon/X11. Contrast is computed for token pairs (`scripts/check-contrast.py`); rendered-surface sampling (`scripts/sample-rendered-contrast.py`) is optional and has no recorded run against the accepted states | A17/A18 accessibility gates are open | IMP-002, IMP-010 |
-| Shortcut remapping is limited by policy: remappable actions take their default or F1–F35 (optionally Shift/Control/Alt); F6/Shift+F6 and Escape are fixed. Remaps are a per-user client preference in `$XDG_CONFIG_HOME/lade/keybindings.json`, not synchronised and not product state | Letter/editing combinations cannot be chosen | IMP-012 |
+| Shortcut remapping is limited by policy: remappable actions take their default or F1–F35 (optionally Shift/Control/Alt); F6/Shift+F6 and Escape are fixed. Remaps are a per-user client preference in `$XDG_CONFIG_HOME/lade/keybindings.json`, not synchronised and not product state | Letter/editing combinations cannot be chosen | — (IMP-002 policy; a change needs Matias) |
+| The terminal renderer is a minimal VT100 parser in plain monospace text (no colours or attributes, wide characters count as one cell, no input method/dead keys, no mouse reporting); F6 and the window's escape keys never reach the shell | Full-screen programs (`less`, `vim`) work only roughly; IME users cannot compose text in the terminal | IMP-013 |
+| Terminal output is rendered as a whole `GtkTextView` text (2,000 lines of scrollback) per main-loop iteration | Very long sessions re-render more text; not measured against the presentation budgets | IMP-013 |
 | Under Xvfb on the development host (GTK 4.14, a GTK 4 clipboard owner), a paste of more than about 256 KiB never reached the client's buffer, so the 256 KiB size guard was exercised by pasting into existing text; behaviour with other clipboard owners and on Mint is unverified | A very large paste may fail silently at the toolkit level, before LADE can explain it | IMP-010 |
 | Syntax highlighting is off in the file and diff viewer | Plain text only | IMP-010 |
 | Dialogs (new Objective, open repository, submit feedback, approve, cleanup) are not captured as evidence | Their appearance is unverified | IMP-010 |
 | The model picker, session tree, resource approval and extension dialogs (IMP-011) are captured only with preview fixture data under Xvfb (`evidence/imp-011/`); no keyboard or Orca walk-through | Their accessibility is unverified | IMP-011, IMP-010 |
-| No notifications, background attention outside the window, or logout handling | Attention is shown only inside the open window | IMP-012 |
+| Desktop notifications rely on the session's notification service; `GApplication` reports no delivery errors, so only a missing bus or service is detected (then a quiet note under the Objectives list). Activation reaches only a running window (no D-Bus activation of a closed application) | A notification server that accepts and drops a notification is not noticed; attention stays visible in the Objectives list | IMP-014 |
+| Logout handling uses `GtkApplication::query-end` (session manager); not validated on Mint/Cinnamon | If Cinnamon does not deliver `query-end`, logout falls back to the systemd user unit stopping (abrupt, still no resume) | IMP-016 |
 | Native presentation latency and memory budgets have not been measured | Performance targets in [performance-budgets.md](../planning/performance-budgets.md) are unverified | IMP-010, IMP-013 |
 
 ## Installation and distribution

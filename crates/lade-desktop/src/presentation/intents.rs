@@ -24,6 +24,15 @@ pub struct DraftRevisionRef {
     pub revision: u64,
 }
 
+/// Why the developer asked the service to stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopReason {
+    /// Explicit Exit from the window.
+    Exit,
+    /// The desktop session is ending (logout/shutdown).
+    Logout,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
     // Connection and workspace.
@@ -209,6 +218,32 @@ pub enum Intent {
         generation: u64,
         answer: UiAnswerView,
     },
+    // Contained terminal (ephemeral interaction with a service-owned PTY; never journaled).
+    OpenTerminal {
+        objective_id: ObjectiveId,
+        cols: u16,
+        rows: u16,
+    },
+    TerminalInput {
+        objective_id: ObjectiveId,
+        terminal_id: String,
+        data: String,
+    },
+    ResizeTerminal {
+        objective_id: ObjectiveId,
+        terminal_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    CloseTerminal {
+        objective_id: ObjectiveId,
+        terminal_id: String,
+    },
+    /// Explicit Exit or logout: the service stops its agents and terminals and exits; nothing
+    /// resumes automatically.
+    StopService {
+        reason: StopReason,
+    },
 }
 
 impl Intent {
@@ -265,6 +300,33 @@ impl Intent {
             Self::DecideResource { approve: false, .. } => "Reject extension",
             Self::ImportProfile { .. } => "Import pi profile",
             Self::RespondDialog { .. } => "Answer extension dialog",
+            Self::OpenTerminal { .. } => "Open terminal",
+            Self::TerminalInput { .. } => "Terminal input",
+            Self::ResizeTerminal { .. } => "Resize terminal",
+            Self::CloseTerminal { .. } => "Close terminal",
+            Self::StopService { .. } => "Exit and stop the service",
+        }
+    }
+
+    /// Terminal interaction: answered in the terminal pane, never deferred or replayed.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Self::OpenTerminal { .. }
+                | Self::TerminalInput { .. }
+                | Self::ResizeTerminal { .. }
+                | Self::CloseTerminal { .. }
+        )
+    }
+
+    /// The Objective a terminal intent belongs to.
+    pub fn terminal_objective(&self) -> Option<&ObjectiveId> {
+        match self {
+            Self::OpenTerminal { objective_id, .. }
+            | Self::TerminalInput { objective_id, .. }
+            | Self::ResizeTerminal { objective_id, .. }
+            | Self::CloseTerminal { objective_id, .. } => Some(objective_id),
+            _ => None,
         }
     }
 

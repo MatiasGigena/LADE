@@ -22,6 +22,7 @@ const C: &str = "2b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const D: &str = "3b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const S: &str = "4b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const A: &str = "5b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
+const T: &str = "7b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const CAPTURE: &str = "6b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 
 fn oid() -> ObjectiveId {
@@ -359,6 +360,44 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::UiRespond),
         ),
+        (
+            I::OpenTerminal {
+                objective_id: oid(),
+                cols: 80,
+                rows: 24,
+            },
+            Some(N::TerminalOpen),
+        ),
+        (
+            I::TerminalInput {
+                objective_id: oid(),
+                terminal_id: T.into(),
+                data: "ls\r".into(),
+            },
+            Some(N::TerminalInput),
+        ),
+        (
+            I::ResizeTerminal {
+                objective_id: oid(),
+                terminal_id: T.into(),
+                cols: 120,
+                rows: 40,
+            },
+            Some(N::TerminalResize),
+        ),
+        (
+            I::CloseTerminal {
+                objective_id: oid(),
+                terminal_id: T.into(),
+            },
+            Some(N::TerminalClose),
+        ),
+        (
+            I::StopService {
+                reason: crate::presentation::intents::StopReason::Logout,
+            },
+            Some(N::ServiceStop),
+        ),
     ];
     // Compile-time reminder: a new intent variant must be added above.
     for (intent, _) in &all {
@@ -404,7 +443,12 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             | I::LoadResources
             | I::DecideResource { .. }
             | I::ImportProfile { .. }
-            | I::RespondDialog { .. } => {}
+            | I::RespondDialog { .. }
+            | I::OpenTerminal { .. }
+            | I::TerminalInput { .. }
+            | I::ResizeTerminal { .. }
+            | I::CloseTerminal { .. }
+            | I::StopService { .. } => {}
         }
     }
     all
@@ -909,4 +953,59 @@ fn compat_replies_and_events_reach_the_store() {
             .contains(&Intent::LoadModels { provider: None })
     );
     assert!(snapshot.follow_ups.contains(&Intent::LoadResources));
+}
+
+#[test]
+fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
+    use crate::presentation::terminal::{TerminalEnd, TerminalMode as ViewMode};
+    let context = Context::Terminal(oid(), "Open terminal");
+    let effects = reply_effects(
+        &context,
+        ReplyData::TerminalOpen(wire::TerminalInfo {
+            terminal_id: Id::parse(T.to_owned()).unwrap(),
+            objective_id: Id::parse(O.to_owned()).unwrap(),
+            mode: wire::TerminalMode::ReadOnly,
+            cols: Counter::new(80),
+            rows: Counter::new(24),
+        }),
+    );
+    assert_eq!(
+        effects.updates,
+        vec![StoreUpdate::TerminalOpened {
+            objective_id: oid(),
+            terminal_id: T.into(),
+            mode: ViewMode::ReadOnly,
+            cols: 80,
+            rows: 24,
+        }]
+    );
+    let refused = rejection_effects(
+        &context,
+        &wire::Rejection::new(
+            wire::ErrorCode::InvalidLifecycle,
+            wire::SafeAction::Refresh,
+            "the Objective has no worktree yet",
+        ),
+    );
+    assert!(matches!(
+        &refused.updates[..],
+        [StoreUpdate::TerminalProblem { message, .. }] if message.contains("no worktree")
+    ));
+    let stopped = reply_effects(&Context::Stop, ReplyData::ServiceStop(wire::Empty {}));
+    assert_eq!(stopped.updates, vec![StoreUpdate::ServiceStopped]);
+    let closed =
+        crate::transport::core::event_updates(wire::Event::TerminalClosed(wire::TerminalClosed {
+            objective_id: Id::parse(O.to_owned()).unwrap(),
+            terminal_id: Id::parse(T.to_owned()).unwrap(),
+            reason: wire::TerminalCloseReason::ReviewFreeze,
+            exit_code: None,
+            signal: None,
+        }));
+    assert_eq!(
+        closed,
+        vec![StoreUpdate::TerminalClosed {
+            terminal_id: T.into(),
+            end: TerminalEnd::ReviewFreeze,
+        }]
+    );
 }

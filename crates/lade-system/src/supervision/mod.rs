@@ -9,6 +9,7 @@ pub mod gateway;
 pub mod launcher;
 pub mod providers;
 pub mod sweep;
+pub mod terminal;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
@@ -23,6 +24,7 @@ pub use launcher::{
 };
 pub use providers::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
 pub use sweep::{SweepReport, sweep_sockets, sweep_stale};
+pub use terminal::{Terminal, TerminalExit, TerminalRequest};
 
 /// Immutable server-side binding for one launched worker.
 #[derive(Clone, Debug, Eq, PartialEq)]

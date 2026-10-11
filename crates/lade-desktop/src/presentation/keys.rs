@@ -28,6 +28,11 @@ pub enum AppAction {
     ToggleViewerMode,
     SendMessage,
     ShowShortcuts,
+    ShowTerminal,
+    LeaveTerminal,
+    TerminalCopy,
+    TerminalPaste,
+    Exit,
     CloseDialog,
 }
 
@@ -123,6 +128,41 @@ pub const DEFAULT_APP_KEYBINDINGS: &[KeyBinding] = &[
         fixed: None,
     },
     KeyBinding {
+        action: AppAction::ShowTerminal,
+        id: "show-terminal",
+        default: "<Control>3",
+        description: "Show the Objective terminal and focus it",
+        fixed: None,
+    },
+    KeyBinding {
+        action: AppAction::LeaveTerminal,
+        id: "leave-terminal",
+        default: "<Control><Shift>e",
+        description: "Leave the terminal (focus returns to where it was)",
+        fixed: None,
+    },
+    KeyBinding {
+        action: AppAction::TerminalCopy,
+        id: "terminal-copy",
+        default: "<Control><Shift>c",
+        description: "Copy the terminal selection (in the terminal)",
+        fixed: None,
+    },
+    KeyBinding {
+        action: AppAction::TerminalPaste,
+        id: "terminal-paste",
+        default: "<Control><Shift>v",
+        description: "Paste into the terminal (in the terminal)",
+        fixed: None,
+    },
+    KeyBinding {
+        action: AppAction::Exit,
+        id: "exit",
+        default: "<Control>q",
+        description: "Exit: stop the service, its agents and terminals",
+        fixed: None,
+    },
+    KeyBinding {
         action: AppAction::CloseDialog,
         id: "close-dialog",
         default: "Escape",
@@ -130,6 +170,21 @@ pub const DEFAULT_APP_KEYBINDINGS: &[KeyBinding] = &[
         fixed: Some("Fixed: Escape always closes the dialog."),
     },
 ];
+
+/// Actions a focused terminal leaves to the window: its escape routes (F6 / Shift+F6 and
+/// [`AppAction::LeaveTerminal`]), clipboard and Exit. Every other key goes to the shell, so a
+/// window shortcut never steals a key typed into the terminal.
+pub fn reaches_window_from_terminal(action: AppAction) -> bool {
+    matches!(
+        action,
+        AppAction::NextRegion
+            | AppAction::PreviousRegion
+            | AppAction::LeaveTerminal
+            | AppAction::TerminalCopy
+            | AppAction::TerminalPaste
+            | AppAction::Exit
+    )
+}
 
 pub fn binding(action: AppAction) -> &'static KeyBinding {
     DEFAULT_APP_KEYBINDINGS
@@ -514,6 +569,44 @@ mod tests {
         assert_eq!(keymap.label(AppAction::AddFeedback), "Ctrl+Shift+M");
         assert_eq!(keymap.label(AppAction::ShowShortcuts), "Ctrl+?");
         assert_eq!(keymap.label(AppAction::SendMessage), "Ctrl+Enter");
+        assert_eq!(keymap.label(AppAction::ShowTerminal), "Ctrl+3");
+        assert_eq!(keymap.label(AppAction::LeaveTerminal), "Ctrl+Shift+E");
+        assert_eq!(keymap.label(AppAction::Exit), "Ctrl+Q");
+    }
+
+    #[test]
+    fn terminal_escape_routes_are_configurable_and_reach_the_window() {
+        // Both directions can be remapped (default or function keys, like every remappable action)…
+        let keymap = Keymap::propose(&with(&[
+            (AppAction::ShowTerminal, "F7"),
+            (AppAction::LeaveTerminal, "<Shift>F7"),
+        ]))
+        .expect("valid");
+        assert_eq!(keymap.gtk(AppAction::ShowTerminal), "F7");
+        assert_eq!(keymap.gtk(AppAction::LeaveTerminal), "<Shift>F7");
+        let text = keymap.to_config();
+        assert!(text.contains("\"leave-terminal\": \"<Shift>F7\""), "{text}");
+        assert_eq!(Keymap::from_config(&text), Ok(keymap));
+        // …but cannot take a typing key from the shell.
+        assert!(Keymap::propose(&with(&[(AppAction::LeaveTerminal, "<Control>c")])).is_err());
+        // From inside the terminal only the escape routes, clipboard and Exit reach the window;
+        // the fixed F6 route always does.
+        for action in [
+            AppAction::NextRegion,
+            AppAction::PreviousRegion,
+            AppAction::LeaveTerminal,
+        ] {
+            assert!(reaches_window_from_terminal(action), "{action:?}");
+        }
+        for action in [
+            AppAction::NewObjective,
+            AppAction::FocusSearch,
+            AppAction::AddFeedback,
+            AppAction::SendMessage,
+            AppAction::ShowTerminal,
+        ] {
+            assert!(!reaches_window_from_terminal(action), "{action:?}");
+        }
     }
 
     #[test]

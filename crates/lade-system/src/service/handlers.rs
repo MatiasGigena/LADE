@@ -88,6 +88,13 @@ pub(crate) enum Pending {
         oid: ObjectiveId,
         ctx: ReqCtx,
     },
+    TerminalOpen {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        terminal_id: Id,
+        writable: bool,
+        size: (u16, u16),
+    },
     Ignore,
 }
 
@@ -262,6 +269,15 @@ impl Service {
             Request::ResourceDecide(cmd) => self.resource_decide(&mut ctx, &cmd),
             Request::ProfileImport(cmd) => return self.profile_import(ctx, &cmd),
             Request::UiRespond(cmd) => self.ui_respond(&mut ctx, cmd),
+            Request::TerminalOpen(cmd) => return self.terminal_open(ctx, &cmd),
+            Request::TerminalInput(cmd) => self.terminal_input(&cmd),
+            Request::TerminalResize(cmd) => self.terminal_resize(&cmd),
+            Request::TerminalClose(cmd) => self.terminal_close(&cmd),
+            Request::ServiceStop(cmd) => {
+                eprintln!("laded: service.stop reason={:?}", cmd.reason);
+                self.stopping = true;
+                Ok(ReplyData::ServiceStop(Empty {}))
+            }
         };
         self.finish(ctx, result);
         Flow::Done
@@ -329,6 +345,16 @@ impl Service {
             (Pending::Reload { oid, ctx }, JobOutput::Snapshot(result)) => {
                 self.reload_snapshot_done(oid, ctx, result);
             }
+            (
+                Pending::TerminalOpen {
+                    oid,
+                    ctx,
+                    terminal_id,
+                    writable,
+                    size,
+                },
+                JobOutput::Terminal(result),
+            ) => self.terminal_open_done(oid, ctx, (terminal_id, writable, size), result),
             _ => {}
         }
     }

@@ -18,9 +18,12 @@ use super::model::{
     ObjectiveId, ObjectiveSummary, Reference, RepoPath, SearchResults, ServiceNotice, Settings,
     Side, VerificationSummary, Workspace, WorkspaceId,
 };
+use super::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
 /// Maximum retained notices (older ones are dropped from presentation only).
 const MAX_NOTICES: usize = 20;
+/// Terminal sessions kept for display (ended ones are dropped oldest first).
+pub const MAX_TERMINAL_SESSIONS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoreUpdate {
@@ -105,6 +108,34 @@ pub enum StoreUpdate {
     },
     /// IMP-011 projections (catalogue, session, resources, dialogs).
     Compat(CompatUpdate),
+    TerminalOpened {
+        objective_id: ObjectiveId,
+        terminal_id: String,
+        mode: TerminalMode,
+        cols: u16,
+        rows: u16,
+    },
+    TerminalOutput {
+        terminal_id: String,
+        seq: u64,
+        data: String,
+        dropped: u64,
+    },
+    TerminalClosed {
+        terminal_id: String,
+        end: TerminalEnd,
+    },
+    /// A terminal request was refused or could not be sent; shown in the terminal pane.
+    TerminalProblem {
+        objective_id: ObjectiveId,
+        message: String,
+    },
+    /// The service accepted `service.stop`: the window ends without reconnecting.
+    ServiceStopped,
+    /// Desktop notifications cannot be shown (the board remains the source of attention).
+    NotificationsUnavailable {
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,6 +174,11 @@ pub enum Change {
     Resources,
     /// Extension dialogs opened or closed.
     Dialogs,
+    Terminal(ObjectiveId),
+    /// The service was stopped on request (Exit/logout).
+    Lifetime,
+    /// Availability of the desktop notification channel.
+    DesktopAttention,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -150,6 +186,7 @@ pub enum MainView {
     #[default]
     Workbench,
     Activity,
+    Terminal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -271,6 +308,12 @@ pub struct PresentationState {
     pub compat: CompatState,
     /// Labelled development fixture (`--preview`); never service authority.
     pub preview: bool,
+    /// Contained terminals of this window, newest last.
+    pub terminals: Vec<TerminalSession>,
+    /// `service.stop` was accepted.
+    pub service_stopped: bool,
+    /// Why desktop notifications are unavailable, once known.
+    pub notifications_unavailable: Option<String>,
 }
 
 impl Default for PresentationState {
@@ -303,6 +346,9 @@ impl PresentationState {
             ui: UiState::default(),
             compat: CompatState::default(),
             preview: false,
+            terminals: Vec::new(),
+            service_stopped: false,
+            notifications_unavailable: None,
         }
     }
 
@@ -392,6 +438,41 @@ impl PresentationState {
             .find(|d| &d.draft_id == draft_id)
     }
 
+    /// The latest terminal session of an Objective.
+    pub fn terminal_for(&self, id: &ObjectiveId) -> Option<&TerminalSession> {
+        self.terminals.iter().rev().find(|t| &t.objective_id == id)
+    }
+
+    pub fn terminal_for_mut(&mut self, id: &ObjectiveId) -> Option<&mut TerminalSession> {
+        self.terminals
+            .iter_mut()
+            .rev()
+            .find(|t| &t.objective_id == id)
+    }
+
+    fn terminal_by_id(&mut self, terminal_id: &str) -> Option<&mut TerminalSession> {
+        self.terminals
+            .iter_mut()
+            .find(|t| t.terminal_id.as_deref() == Some(terminal_id))
+    }
+
+    /// Adds a session, dropping the oldest ended ones beyond [`MAX_TERMINAL_SESSIONS`].
+    pub fn push_terminal(&mut self, session: TerminalSession) {
+        self.terminals.push(session);
+        while self.terminals.len() > MAX_TERMINAL_SESSIONS {
+            match self
+                .terminals
+                .iter()
+                .position(|t| matches!(t.status, TerminalStatus::Ended(_)))
+            {
+                Some(index) => {
+                    self.terminals.remove(index);
+                }
+                None => break,
+            }
+        }
+    }
+
     fn push_notice(&mut self, notice: ServiceNotice) {
         self.notices.push(notice);
         if self.notices.len() > MAX_NOTICES {
@@ -410,6 +491,13 @@ impl PresentationState {
                     for editor in self.drafts.values_mut().flatten() {
                         editor.connection_lost();
                         changes.push(Change::DraftStatus(editor.draft_id.clone()));
+                    }
+                    // The service ends terminals with the lease.
+                    for session in &mut self.terminals {
+                        if !matches!(session.status, TerminalStatus::Ended(_)) {
+                            session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
+                            changes.push(Change::Terminal(session.objective_id.clone()));
+                        }
                     }
                 }
                 changes
@@ -771,6 +859,86 @@ impl PresentationState {
                     CompatChange::Dialogs => Change::Dialogs,
                 })
                 .collect(),
+            StoreUpdate::TerminalOpened {
+                objective_id,
+                terminal_id,
+                mode,
+                cols,
+                rows,
+            } => {
+                let session = match self
+                    .terminal_for_mut(&objective_id)
+                    .filter(|t| t.status == TerminalStatus::Opening)
+                {
+                    Some(session) => session,
+                    None => {
+                        self.push_terminal(TerminalSession::opening(
+                            objective_id.clone(),
+                            usize::from(cols),
+                            usize::from(rows),
+                        ));
+                        let Some(session) = self.terminals.last_mut() else {
+                            return Vec::new();
+                        };
+                        session
+                    }
+                };
+                session.terminal_id = Some(terminal_id);
+                session.mode = Some(mode);
+                session.status = TerminalStatus::Open;
+                session.problem = None;
+                session.screen.resize(usize::from(cols), usize::from(rows));
+                vec![Change::Terminal(objective_id)]
+            }
+            StoreUpdate::TerminalOutput {
+                terminal_id,
+                seq,
+                data,
+                dropped,
+            } => match self.terminal_by_id(&terminal_id) {
+                Some(session) => {
+                    session.output(seq, &data, dropped);
+                    vec![Change::Terminal(session.objective_id.clone())]
+                }
+                None => Vec::new(),
+            },
+            StoreUpdate::TerminalClosed { terminal_id, end } => {
+                match self.terminal_by_id(&terminal_id) {
+                    Some(session) => {
+                        session.status = TerminalStatus::Ended(end);
+                        vec![Change::Terminal(session.objective_id.clone())]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            StoreUpdate::TerminalProblem {
+                objective_id,
+                message,
+            } => {
+                match self.terminal_for_mut(&objective_id) {
+                    Some(session) => {
+                        if session.status == TerminalStatus::Opening {
+                            session.status = TerminalStatus::Ended(TerminalEnd::Failed);
+                        }
+                        session.problem = Some(message);
+                    }
+                    None => {
+                        let mut session = TerminalSession::opening(objective_id.clone(), 80, 24);
+                        session.status = TerminalStatus::Ended(TerminalEnd::Failed);
+                        session.problem = Some(message);
+                        self.push_terminal(session);
+                    }
+                }
+                vec![Change::Terminal(objective_id)]
+            }
+            StoreUpdate::ServiceStopped => {
+                self.service_stopped = true;
+                vec![Change::Lifetime]
+            }
+            StoreUpdate::NotificationsUnavailable { reason } => {
+                self.notifications_unavailable = Some(reason);
+                vec![Change::DesktopAttention]
+            }
         }
     }
 

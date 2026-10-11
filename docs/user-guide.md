@@ -56,14 +56,28 @@ Installed layout: `~/.local/lib/lade/<version>/` (with `current` and `previous` 
 Open **LADE** from the applications menu (or run `lade-desktop`). The window connects to the per-user service
 `laded`; if it is not running, the window starts the `laded` installed next to it in the background (`--no-spawn`
 disables that; `--open PATH` opens a repository at start). Prefer the systemd unit, which also stops every agent
-sandbox with the service. Closing the window does **not** stop the service or running agents; reopening the window shows the same
-state. Stop everything with `systemctl --user stop lade.service` (running executions are marked interrupted and are
-never resumed automatically).
+sandbox with the service. LADE runs as one window: launching it again brings the open window to the front instead of
+opening a second one (and the service accepts only one controlling window anyway).
 
-Keyboard: F6 / Shift+F6 move between regions, Ctrl+1 Workbench, Ctrl+2 Activity, Ctrl+K search, Ctrl+N new
-Objective, Ctrl+O open repository, Ctrl+Shift+M add feedback on the selection, Ctrl+Shift+F switch diff/full file,
-Ctrl+Enter send a message, Escape closes a dialog, Ctrl+? (or the keyboard button in the header) lists every
-shortcut. In that dialog each action except F6 / Shift+F6 and Escape can be given a function key F1–F35, optionally
+- **Close the window** to step away: the service and running agents **keep working**; terminals end. Reopening the
+  window shows the same state.
+- **Exit** (the power button in the header, or Ctrl+Q, after a confirmation) stops LADE: running agents are stopped
+  and recorded as interrupted, terminals end, the service exits. Nothing resumes on its own when LADE starts again —
+  you resume each Objective explicitly. A window that does not control the service (another window does, or it is
+  disconnected) only closes.
+- **Logging out** with the window open does the same as Exit. Without a window, the per-user unit stops with your
+  session and ends every agent sandbox with it. `systemctl --user stop lade.service` also stops everything; in every
+  case running executions are marked interrupted and never resumed automatically.
+- **Notifications.** When an Objective starts to need you, or becomes ready for review, while the window is not in
+  front, LADE shows a desktop notification. Clicking it brings the window forward on that Objective (its Evidence
+  for a review) — it never approves or sends anything. The Objectives list always shows the same attention, so if
+  your desktop has no notification service, nothing is lost: the window says once that notifications are
+  unavailable.
+
+Keyboard: F6 / Shift+F6 move between regions, Ctrl+1 Workbench, Ctrl+2 Activity, Ctrl+3 Terminal (and focus it),
+Ctrl+Shift+E leave the terminal, Ctrl+K search, Ctrl+N new Objective, Ctrl+O open repository, Ctrl+Shift+M add
+feedback on the selection, Ctrl+Shift+F switch diff/full file, Ctrl+Enter send a message, Ctrl+Q Exit, Escape
+closes a dialog, Ctrl+? (or the keyboard button in the header) lists every shortcut. In that dialog each action except F6 / Shift+F6 and Escape can be given a function key F1–F35, optionally
 with Shift, Control or Alt (other combinations stay with text fields for typing, editing and the clipboard); Apply
 checks the whole set, including duplicates, before using it and saves it to
 `$XDG_CONFIG_HOME/lade/keybindings.json` (default `~/.config/lade/keybindings.json`). An invalid file is ignored with
@@ -126,6 +140,25 @@ session directory. If the sandbox cannot be created, execution is refused — LA
   (delivered when the agent would stop). Every message is durably accepted before it is delivered; its state
   (queued, dispatched, received, uncertain, blocked) is shown. An *uncertain* message is never resent automatically.
 - **Cancel** stops the agent and keeps its work and session; **Resume** continues the same session.
+
+### Terminal
+
+**Terminal** (Ctrl+3) opens a shell for the selected Objective — for running its tests, `git status`, `ls` and the
+like next to the agent. It is not a general shell: it runs inside the same sandbox as the agent, in the Objective's
+worktree only, with the same limits, **no network** and **no API keys**; the repository's `.git` is read-only, so
+commits and branch changes are LADE's (freeze and integrate). The prompt starts with `[lade]`.
+
+- While the Objective is in progress the terminal can change the worktree, and those changes show up in the Change
+  Set like the agent's. **Freeze for review** first closes every such terminal. While a candidate is frozen or
+  approved, a terminal opens **read-only** (`[lade read-only]`) for inspection.
+- An Objective needs a worktree first: start its agent once.
+- Keys go to the shell (Tab, Ctrl+C, Ctrl+D, arrows…). Leave the terminal with **Ctrl+Shift+E** (focus returns to
+  where it was) or F6; come back with Ctrl+3. Ctrl+Shift+C / Ctrl+Shift+V copy and paste (pastes up to 256 KiB).
+  All of these can be remapped in the shortcuts dialog (function keys).
+- The terminal is plain text (no colours); full-screen programs work in a basic way. Very fast output is slowed down
+  and, if it still cannot keep up, shortened with a visible `[… N bytes of output skipped …]` marker.
+- Closing the window, losing the connection, Exit or logout ends the terminal and everything started in it; it is
+  never reopened automatically.
 
 ## 7. Inspect, give feedback, review and integrate
 

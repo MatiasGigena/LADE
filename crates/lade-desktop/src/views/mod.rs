@@ -14,8 +14,10 @@ pub mod bridge;
 mod dialogs;
 mod header;
 mod inspector;
+pub mod notify;
 mod rail;
 mod session;
+mod terminal;
 mod viewer;
 mod widgets;
 mod workbench;
@@ -29,11 +31,12 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use crate::presentation::attention::{self, AttentionWatcher, Delivery, Notifier};
 use crate::presentation::controller::Controller;
-use crate::presentation::intents::IntentSink;
+use crate::presentation::intents::{IntentSink, StopReason};
 use crate::presentation::keys::{self, AppAction};
 use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
-use crate::presentation::model::{ConnectionState, DraftId, NoticeLevel, ServiceNotice};
+use crate::presentation::model::{Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice};
 use crate::presentation::store::{Change, MainView, Store, StoreUpdate};
 
 const CSS: &str = include_str!("../assets/style.css");
@@ -64,6 +67,13 @@ pub struct App {
     workbench: Rc<workbench::Workbench>,
     activity: Rc<activity::Activity>,
     inspector: Rc<inspector::Inspector>,
+    terminal: Rc<terminal::TerminalPane>,
+    /// Where focus was before the terminal took it (restored by Leave terminal).
+    before_terminal: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
+    watcher: RefCell<AttentionWatcher>,
+    delivery: RefCell<Delivery>,
+    /// Desktop notifications (live windows only; never for preview data).
+    notifier: RefCell<Option<Rc<dyn Notifier>>>,
     body: gtk::Stack,
     centre: gtk::Stack,
     /// The work area's region viewport: scrolls vertically when the window is short and bounds
@@ -108,6 +118,7 @@ impl App {
         let workbench = workbench::Workbench::new(&controller);
         let activity = activity::Activity::new(&controller);
         let inspector = inspector::Inspector::new(&controller);
+        let terminal = terminal::TerminalPane::new(&controller);
 
         let root = widgets::vbox(0);
         root.add_css_class("lade-root");
@@ -144,6 +155,7 @@ impl App {
         let centre = gtk::Stack::new();
         centre.add_named(&workbench.root, Some("workbench"));
         centre.add_named(&activity.root, Some("activity"));
+        centre.add_named(&terminal.root, Some("terminal"));
         centre.set_hexpand(true);
         centre.set_vexpand(true);
         centre.add_css_class("centre-stack");
@@ -204,6 +216,11 @@ impl App {
             workbench,
             activity,
             inspector,
+            terminal,
+            before_terminal: RefCell::new(None),
+            watcher: RefCell::new(AttentionWatcher::default()),
+            delivery: RefCell::new(Delivery::default()),
+            notifier: RefCell::new(None),
             body,
             centre,
             centre_region,
@@ -329,6 +346,12 @@ impl App {
                 dialogs::shortcuts(b, &app.controller, app.keys_path.clone());
             }
         });
+        let weak = Rc::downgrade(self);
+        self.header.exit_button.connect_clicked(move |_| {
+            if let Some(app) = weak.upgrade() {
+                app.confirm_exit();
+            }
+        });
         self.install_shortcuts();
     }
 
@@ -374,6 +397,7 @@ impl App {
         self.window.add_controller(controller);
         *self.shortcuts.borrow_mut() = shortcuts;
         self.header.set_shortcut_hints(&keymap);
+        self.terminal.set_shortcut_hints(&keymap);
     }
 
     /// Retargets every window shortcut to the current keymap at once.
@@ -383,10 +407,26 @@ impl App {
             shortcut.set_trigger(gtk::ShortcutTrigger::parse_string(&keymap.gtk(*action)));
         }
         self.header.set_shortcut_hints(&keymap);
+        self.terminal.set_shortcut_hints(&keymap);
     }
 
     fn run_action(self: &Rc<Self>, action: AppAction) -> glib::Propagation {
+        let in_terminal = self.terminal.has_focus();
+        // A focused terminal receives every key except its escape routes, clipboard and Exit.
+        if in_terminal && !keys::reaches_window_from_terminal(action) {
+            return glib::Propagation::Proceed;
+        }
         match action {
+            AppAction::ShowTerminal => self.enter_terminal(),
+            AppAction::LeaveTerminal | AppAction::TerminalCopy | AppAction::TerminalPaste
+                if !in_terminal =>
+            {
+                return glib::Propagation::Proceed;
+            }
+            AppAction::LeaveTerminal => self.leave_terminal(),
+            AppAction::TerminalCopy => self.terminal.copy(),
+            AppAction::TerminalPaste => self.terminal.paste(),
+            AppAction::Exit => self.confirm_exit(),
             AppAction::NextRegion => self.cycle_regions(true),
             AppAction::PreviousRegion => self.cycle_regions(false),
             AppAction::ShowWorkbench => self.controller.set_view(MainView::Workbench),
@@ -416,6 +456,141 @@ impl App {
             AppAction::CloseDialog => return glib::Propagation::Proceed,
         }
         glib::Propagation::Stop
+    }
+
+    /// Focus into the terminal: remembers where focus was, shows the terminal and focuses it.
+    fn enter_terminal(&self) {
+        if !self.terminal.has_focus() {
+            let previous = gtk::prelude::GtkWindowExt::focus(&self.window);
+            *self.before_terminal.borrow_mut() = previous.map(|w| w.downgrade());
+        }
+        self.controller.set_view(MainView::Terminal);
+        let pane = self.terminal.clone();
+        glib::idle_add_local_once(move || pane.focus());
+    }
+
+    /// Focus out of the terminal: back to where it was, else the Objectives region. The terminal
+    /// keeps running.
+    fn leave_terminal(&self) {
+        let previous = self
+            .before_terminal
+            .borrow_mut()
+            .take()
+            .and_then(|w| w.upgrade())
+            .filter(|w| w.is_mapped() && w.is_focusable() && !w.is_ancestor(&self.terminal.root));
+        match previous {
+            Some(widget) => {
+                widget.grab_focus();
+            }
+            None => self.focus_region(Region::Objectives),
+        }
+        if self.terminal.has_focus() {
+            self.focus_region(Region::Header);
+        }
+    }
+
+    /// Explicit Exit: confirms, then stops the service (agents and terminals) when this window
+    /// controls it; the window closes once the service confirms. Closing the window instead
+    /// keeps authorized background work running.
+    fn confirm_exit(self: &Rc<Self>) {
+        let controls = {
+            let state = self.store.state();
+            state.connection.is_connected() && !state.is_preview()
+        };
+        let body = if controls {
+            "Exit stops the LADE service: running agents are stopped and recorded as interrupted, terminals end, and nothing resumes on its own when LADE starts again. To keep agents working in the background, close the window instead."
+        } else {
+            "This window does not control the LADE service, so Exit only closes the window. The service and its agents are not affected."
+        };
+        let weak = Rc::downgrade(self);
+        dialogs::confirm(
+            &self.header.exit_button,
+            "Exit LADE?",
+            body,
+            "Exit",
+            controls,
+            move || {
+                if let Some(app) = weak.upgrade()
+                    && !app.controller.exit(StopReason::Exit)
+                {
+                    app.quit();
+                }
+                Ok(())
+            },
+        );
+    }
+
+    /// The desktop session is ending: stop the service per policy (no lingering, no resume).
+    pub fn logout(&self) {
+        self.controller.exit(StopReason::Logout);
+    }
+
+    fn quit(&self) {
+        match self.window.application() {
+            Some(application) => application.quit(),
+            None => self.window.close(),
+        }
+    }
+
+    /// Enables desktop notifications for this (live) window.
+    pub fn set_notifier(&self, notifier: Rc<dyn Notifier>) {
+        *self.notifier.borrow_mut() = Some(notifier);
+    }
+
+    /// A notification was activated: navigate to its Objective (never approve or send).
+    pub fn open_from_notification(&self, target: &str) {
+        let found = {
+            let state = self.store.state();
+            attention::activation_target(target, &state.objectives).map(|id| {
+                let review = state
+                    .objective(&id)
+                    .is_some_and(|o| o.attention == Attention::ReadyForReview);
+                (id, review)
+            })
+        };
+        if let Some((id, review)) = found {
+            self.controller.navigate_to(&id, review);
+            self.focus_region(Region::Main);
+        }
+        self.window.present();
+    }
+
+    /// Raises notifications for Objectives that newly need the developer, outside the window.
+    fn observe_attention(self: &Rc<Self>, changes: &[Change]) {
+        if changes.contains(&Change::Connection) && !self.store.state().connection.is_connected() {
+            self.watcher.borrow_mut().reset();
+            return;
+        }
+        if !changes
+            .iter()
+            .any(|c| matches!(c, Change::Objectives | Change::Detail(_)))
+        {
+            return;
+        }
+        let Some(notifier) = self.notifier.borrow().clone() else {
+            return;
+        };
+        let requests = {
+            let state = self.store.state();
+            if state.is_preview() {
+                return;
+            }
+            self.watcher.borrow_mut().observe(&state.objectives)
+        };
+        if requests.is_empty() {
+            return;
+        }
+        let notice = self.delivery.borrow_mut().deliver(
+            &requests,
+            self.window.is_active(),
+            notifier.as_ref(),
+        );
+        if let Some(reason) = notice {
+            let store = self.store.clone();
+            glib::idle_add_local_once(move || {
+                store.apply(StoreUpdate::NotificationsUnavailable { reason });
+            });
+        }
     }
 
     fn region_widget(&self, region: Region) -> gtk::Widget {
@@ -506,6 +681,12 @@ impl App {
         self.workbench.refresh(changes);
         self.activity.refresh(changes);
         self.inspector.refresh(changes);
+        self.terminal.refresh(changes);
+        self.observe_attention(changes);
+        if changes.contains(&Change::Lifetime) && self.store.state().service_stopped {
+            self.quit();
+            return;
+        }
         if changes
             .iter()
             .any(|c| matches!(c, Change::Connection | Change::Workspaces))
@@ -539,6 +720,7 @@ impl App {
         self.centre.set_visible_child_name(match view {
             MainView::Workbench => "workbench",
             MainView::Activity => "activity",
+            MainView::Terminal => "terminal",
         });
     }
 

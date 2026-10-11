@@ -1,6 +1,6 @@
 # Execution safety: worker sandbox, egress gateway, credentials, sweep (WP-F2)
 
-Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,sweep}.rs`.
+Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,sweep,terminal}.rs`.
 It instantiates [delivery plan §1, §5, §7](delivery-plan.md) and [architecture §5](../../architecture.md#5-host-authority-and-protected-git).
 The service (`laded`) consumes it through the `supervision` contract (`WorkerLauncher`, `WorkerControl`,
 `SupervisorEvent`); it never runs a worker outside this path. The "Not enforced" list at the end feeds
@@ -168,6 +168,49 @@ still match a live, non-zombie process — namespace init first — and skips th
 all worker pidfiles and legacy `gw-*.sock` files. The report lists killed and skipped pids and the removed counts.
 `sweep_sockets(socket_dir)` then removes the gateway sockets left in `$RUNTIME/g`.
 
+## Contained terminal (IMP-012)
+
+`supervision::terminal::Terminal::open` runs an interactive shell for the developer under the same isolation as a
+worker; the service (`service/terminal.rs`) is the only caller and the desktop client has no other way to start a
+process.
+
+1. The service allocates the PTY: `posix_openpt(O_RDWR|O_NOCTTY|O_CLOEXEC)`, `grantpt`, `unlockpt`, window size,
+   then the user side through `TIOCGPTPEER` (no path lookup) — all via rustix (`pty`, `termios` features), no
+   `unsafe`. The service never acquires it as a controlling terminal.
+2. `adapters::sandbox::terminal_spec`: `prlimit <worker limits> -- bwrap <the worker isolation> --
+   /usr/bin/setsid --ctty --wait /usr/bin/bash -i` (first of `/usr/bin/bash`, `/bin/bash`, `/usr/bin/sh`, `/bin/sh`;
+   without `setsid` the shell runs without a controlling terminal). The user side is the shell's stdin/stdout/stderr;
+   the service's copies are closed right after the spawn, nothing else is inherited. Inside, `setsid --ctty` makes
+   the PTY the shell's controlling terminal (job control, `^C` reaches the foreground job). The PTY is private to
+   this terminal, so `TIOCSTI` from inside can only inject into its own input; bwrap's `--new-session` still
+   separates the sandbox from any terminal of `laded`.
+3. Pidfile `$STATE/run/terminal-<objective>-<terminal>.pid` (outer bwrap, then the PID-namespace init), read by
+   the startup sweep exactly like worker pidfiles.
+
+| Path / property | Terminal |
+| --- | --- |
+| system dirs, `/etc` files, `/proc`, `/dev`, private `/tmp` | as for the worker |
+| repository Git common dir | read-only (no commits, no ref moves) |
+| Objective worktree | read-write while `defined`/`active`; **read-only** while a freeze runs and for `frozen`/`approved` candidates |
+| session dir, worker package, Node, gateway socket, credentials | **not bound / not set** |
+| network | none (`--unshare-net`, no gateway) |
+| environment | `HOME=/tmp`, `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `TERM=vt100`, `PS1`, `LADE_TERMINAL=read_write\|read_only` (+ `PWD` from bwrap) |
+| limits | `Limits::WORKER` through `prlimit`: 4 GiB address space, 512 processes, 1024 files, 512 MiB file size |
+
+Teardown: `Terminal::kill` (explicit close, freeze, lifecycle, lease loss, `service.stop`, shutdown, `Drop`) sends
+`SIGKILL` to the PID-namespace init — ending every process of the terminal, including `setsid`/double-forked
+daemons — and to bwrap, holding the `Child` so a reaped pid is never signalled, waits for the exit and removes the
+pidfile. A shell that exits ends `setsid --wait`, then the namespace init, which ends the namespace the same way.
+
+Bounds: input queue 256 frames / 256 KiB (`WouldBlock` beyond); output ring 1 MiB per terminal with up to 100 ms of
+backpressure before the oldest bytes are discarded and counted; no output is logged or stored.
+
+Tests: `tests/supervision_terminal.rs` — PTY and controlling terminal inside the sandbox, `ulimit -n/-u/-v` equal the
+worker limits, no credentials/network/host paths, job control, writes land in the worktree, a read-only terminal
+cannot change or create worktree files, `kill` ends a `setsid nohup` double-forked daemon and removes the pidfile,
+exit status, resize (`stty size`), and a `/dev/zero` flood that overflows the ring and is counted while `^C` still
+interrupts it.
+
 ## Not enforced (feeds limitations.md)
 
 - **Disk usage**: no quota on the worktree, session dir or `/tmp` tmpfs (tmpfs is memory-backed). The §7 2 GiB
@@ -187,3 +230,10 @@ all worker pidfiles and legacy `gw-*.sock` files. The report lists killed and sk
   bypass, a functional limitation).
 - **Worker output**: frames are schema-validated; content of valid frames (activity text) is untrusted and not
   otherwise filtered.
+- **Terminal quotas** are the worker's per-process `prlimit` values, not an aggregate per-Objective budget: a terminal
+  and the agent of the same Objective each get them, and `RLIMIT_NPROC` is still per real UID (root: not enforced).
+  No CPU limit, no disk quota (as for workers).
+- **Terminal and agent write concurrently** while the Objective is active: the terminal is a second writer of the
+  worktree until a freeze excludes both. Changes a terminal makes appear in the Change Set like the agent's.
+- **Terminal output** is untrusted bytes shown as text; escape sequences are interpreted by the client's minimal
+  VT parser only (no clipboard, title or hyperlink effects).

@@ -937,6 +937,81 @@
         "association_revision": {"$ref": "#/$defs/Counter"}
       }
     },
+    "TerminalMode": {"enum": ["read_write", "read_only"]},
+    "TerminalOpenCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "cols", "rows"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "cols": {"$ref": "#/$defs/Counter"},
+        "rows": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "TerminalInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_id", "objective_id", "mode", "cols", "rows"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/Id"},
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "mode": {"$ref": "#/$defs/TerminalMode"},
+        "cols": {"$ref": "#/$defs/Counter"},
+        "rows": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "TerminalInputCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_id", "data"],
+      "properties": {"terminal_id": {"$ref": "#/$defs/Id"}, "data": {"type": "string", "minLength": 1, "maxLength": 16384}}
+    },
+    "TerminalResizeCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_id", "cols", "rows"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/Id"},
+        "cols": {"$ref": "#/$defs/Counter"},
+        "rows": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "TerminalSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["terminal_id"],
+      "properties": {"terminal_id": {"$ref": "#/$defs/Id"}}
+    },
+    "TerminalOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "terminal_id", "seq", "data", "dropped_bytes"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "terminal_id": {"$ref": "#/$defs/Id"},
+        "seq": {"$ref": "#/$defs/Counter"},
+        "data": {"type": "string", "maxLength": 65536},
+        "dropped_bytes": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "TerminalClosed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "terminal_id", "reason"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "terminal_id": {"$ref": "#/$defs/Id"},
+        "reason": {"enum": ["exited", "closed", "review_freeze", "lifecycle", "failed"]},
+        "exit_code": {"$ref": "#/$defs/Counter"},
+        "signal": {"$ref": "#/$defs/Counter"}
+      }
+    },
+    "ServiceStopCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason"],
+      "properties": {"reason": {"enum": ["exit", "logout"]}}
+    },
     "ProviderAuth": {"enum": ["none", "api_key", "subscription_token", "oauth_login", "cloud_credentials", "custom"]},
     "ProviderStatus": {"enum": ["available", "missing_credentials", "restricted"]},
     "ProviderInfo": {
@@ -1486,6 +1561,62 @@
             "operation_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "settings.update"},
             "payload": {"$ref": "#/$defs/SettingsUpdateCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.open"},
+            "payload": {"$ref": "#/$defs/TerminalOpenCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.input"},
+            "payload": {"$ref": "#/$defs/TerminalInputCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.resize"},
+            "payload": {"$ref": "#/$defs/TerminalResizeCommand"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.close"},
+            "payload": {"$ref": "#/$defs/TerminalSelector"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "operation_id", "name", "payload"],
+          "properties": {
+            "kind": {"const": "request"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "operation_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "service.stop"},
+            "payload": {"$ref": "#/$defs/ServiceStopCommand"}
           }
         },
         {
@@ -2282,6 +2413,111 @@
           "properties": {
             "kind": {"const": "reply"},
             "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.open"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/TerminalInfo"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.input"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.resize"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "terminal.close"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
+            "name": {"const": "service.stop"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "request_id", "name", "result"],
+          "properties": {
+            "kind": {"const": "reply"},
+            "request_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "models.list"},
             "result": {
               "oneOf": [
@@ -2943,6 +3179,25 @@
           "additionalProperties": false,
           "required": ["name", "result"],
           "properties": {
+            "name": {"const": "service.stop"},
+            "result": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["status", "data"],
+                  "properties": {"status": {"const": "ok"}, "data": {"$ref": "#/$defs/Empty"}}
+                },
+                {"$ref": "#/$defs/Rejection"}
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "result"],
+          "properties": {
             "name": {"const": "session.navigate"},
             "result": {
               "oneOf": [
@@ -3238,6 +3493,30 @@
             "sequence": {"$ref": "#/$defs/Counter"},
             "name": {"const": "service.notice"},
             "payload": {"$ref": "#/$defs/ServiceNotice"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "terminal.output"},
+            "payload": {"$ref": "#/$defs/TerminalOutput"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "service_epoch", "sequence", "name", "payload"],
+          "properties": {
+            "kind": {"const": "event"},
+            "service_epoch": {"$ref": "#/$defs/Id"},
+            "sequence": {"$ref": "#/$defs/Counter"},
+            "name": {"const": "terminal.closed"},
+            "payload": {"$ref": "#/$defs/TerminalClosed"}
           }
         },
         {

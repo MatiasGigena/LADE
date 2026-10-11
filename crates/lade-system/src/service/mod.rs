@@ -17,6 +17,7 @@ mod project;
 mod recovery;
 mod review;
 mod state;
+mod terminal;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::{self, File, OpenOptions};
@@ -159,6 +160,7 @@ pub(crate) enum JobOutput {
     Catalog(Result<compat::CatalogData, String>),
     Profile(Result<crate::adapters::profile::ImportReport, String>),
     Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
+    Terminal(Result<crate::supervision::Terminal, Rejection>),
     Done,
 }
 
@@ -219,6 +221,11 @@ pub(crate) struct Service {
     ticks: u64,
     sandbox: OnceLock<Option<SandboxTools>>,
     compat: compat::CompatState,
+    /// Contained terminals of the controlling client, by terminal id (never durable).
+    terminals: BTreeMap<String, terminal::TermState>,
+    terminals_opening: usize,
+    /// `service.stop` was answered: leave the loop and shut down.
+    stopping: bool,
 }
 
 /// A running service instance (threads and admission material).
@@ -247,11 +254,27 @@ impl RunningService {
         self.epoch.as_str()
     }
 
-    /// Blocks until the service thread ends (it ends only through [`Self::shutdown`]).
+    /// Blocks until the service thread ends (through [`Self::shutdown`] or an explicit
+    /// `service.stop` from the controlling client), then releases admission like `shutdown`.
     pub fn wait(mut self) {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        self.release();
+    }
+
+    fn release(&mut self) {
+        if let Some(listener) = self.listener.take() {
+            listener.stop();
+        }
+        self.ticker_stop.store(true, Ordering::SeqCst);
+        if let Some(ticker) = self.ticker.take() {
+            let _ = ticker.join();
+        }
+        let _ = fs::remove_file(&self.socket);
+        let _ = fs::remove_file(&self.capability);
+        // The link writer flushes the final `service.stop` reply before the process exits.
+        thread::sleep(Duration::from_millis(200));
     }
 
     /// Stops accepting, terminates supervised workers, closes the store and removes the socket and
@@ -264,12 +287,7 @@ impl RunningService {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-        self.ticker_stop.store(true, Ordering::SeqCst);
-        if let Some(ticker) = self.ticker.take() {
-            let _ = ticker.join();
-        }
-        let _ = fs::remove_file(&self.socket);
-        let _ = fs::remove_file(&self.capability);
+        self.release();
     }
 }
 
@@ -388,6 +406,9 @@ pub fn start(
         ticks: 0,
         sandbox: OnceLock::new(),
         compat: compat::CompatState::default(),
+        terminals: BTreeMap::new(),
+        terminals_opening: 0,
+        stopping: false,
     };
     service.load().map_err(StartError::Recovery)?;
     service.load_compat().map_err(StartError::Recovery)?;
@@ -453,8 +474,14 @@ impl Service {
                 Msg::Tick => self.on_tick(),
                 Msg::Shutdown => break,
             }
+            if self.stopping {
+                eprintln!("laded: stopping on request of the controlling client");
+                break;
+            }
         }
         self.flush_activity();
+        // Terminals never outlive the service and are never resumed.
+        self.drop_terminals(None, true);
         for runtime in self.runtime.values_mut() {
             if let Some(mut control) = runtime.control.take() {
                 control.terminate();
@@ -510,6 +537,8 @@ impl Service {
             Inbound::Detach { conn } => {
                 if self.controller.as_ref().is_some_and(|c| c.conn == conn) {
                     self.controller = None;
+                    // Terminals belong to the lease: authority loss ends them.
+                    self.drop_terminals(Some(conn), false);
                 }
             }
             Inbound::Invalid { conn, request_id } => {
@@ -565,6 +594,7 @@ impl Service {
         let Some(controller) = self.controller.take() else {
             return;
         };
+        self.drop_terminals(Some(controller.conn), false);
         let notice = self.encode_event_frame(
             self.sequence,
             Event::ServiceNotice(ServiceNotice {
@@ -844,6 +874,7 @@ impl Service {
     fn on_tick(&mut self) {
         self.ticks += 1;
         self.flush_deltas();
+        self.pump_terminals();
         if self.ticks.is_multiple_of(10) {
             self.flush_activity();
         }

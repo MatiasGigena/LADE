@@ -14,8 +14,9 @@ laded serve [--state-dir DIR] [--runtime-dir DIR]
 Defaults: state `$XDG_STATE_HOME/lade` (`~/.local/state/lade`), runtime `$XDG_RUNTIME_DIR/lade` (fallback
 `$STATE/run`). Both must be absolute. Exit statuses: `0` version, `64` usage, `78` refused to start (unsafe directory,
 unopenable/corrupt/newer store, another instance holds the state directory), `70` internal. The process sets umask
-`077`. It runs until killed; `SIGTERM` is not trapped (no `unsafe` signal handlers) — workers die with their sandbox
-(`--die-with-parent`) and the next start recovers.
+`077`. It runs until the controlling client asks it to stop (`service.stop`, explicit Exit or logout: exit status
+`0`, see [Lifetime](#lifetime-close-exit-logout)) or until killed; `SIGTERM` is not trapped (no `unsafe` signal
+handlers) — workers and terminals die with their sandbox (`--die-with-parent`) and the next start recovers.
 
 ## State layout
 
@@ -27,7 +28,7 @@ unopenable/corrupt/newer store, another instance holds the state directory), `70
 | `$STATE/worktrees/<objective>/` | Objective worktrees (lazily provisioned on first execution) |
 | `$STATE/sessions/<objective>/` | pi agent dir and session files of the Objective |
 | `$STATE/verify/<verification>/` | disposable verification copies (removed after each run and swept on start) |
-| `$STATE/run/` | launcher pidfiles (swept on start) |
+| `$STATE/run/` | launcher and terminal pidfiles (`worker-*.pid`, `terminal-*.pid`; swept on start) |
 | `$STATE/tmp/` | temporary capture indexes and artifact staging (cleared on start) |
 | `$RUNTIME/control.cap`, `control.sock` | admission capability and control socket (0600, directory 0700) |
 | `$RUNTIME/g/<12 hex>-<gen>.sock` | per-launch gateway sockets (0600, directory 0700; swept on start) |
@@ -51,8 +52,8 @@ in `schema_migrations(version, applied_at)`, each applied in its own transaction
 
 **Dependency:** `rusqlite =0.40.2` with `bundled` (SQLite compiled in, so behaviour does not depend on the host
 library version). It is allowed for `lade-system` only; `scripts/check-architecture.py` still rejects any path from
-`lade-desktop` to SQLite. `rustix =1.1.4` (`net`, `process`, `fs`) provides `SO_PEERCRED`, `getuid`, `umask`, `flock`
-and `kill` without `unsafe`; `serde_json` (already reviewed for the protocol) encodes stored outcomes and references.
+`lade-desktop` to SQLite. `rustix =1.1.4` (`net`, `process`, `fs`, `pty`, `termios`) provides `SO_PEERCRED`, `getuid`, `umask`, `flock`,
+`kill` and the terminal PTY (`posix_openpt`, `TIOCGPTPEER`, window size) without `unsafe`; `serde_json` (already reviewed for the protocol) encodes stored outcomes and references.
 
 Schema v1 tables:
 
@@ -110,7 +111,7 @@ or `chunk.*` closes it. Each link has a reader thread and a writer thread fed by
 
 ```text
 accept thread ── per-link reader ─┐
-tick thread (100 ms) ─────────────┤
+tick thread (100 ms) ─────────────┤   (the tick also drains terminal output, see below)
 supervisor forwarder (launcher) ──┼─► service queue ─► service thread (state + store) ─► per-link writer
 pool (3 threads) job results ─────┘                         │
                                                             └─► pool: Git capture/diff/read/search, freeze,
@@ -189,6 +190,14 @@ a reused `request_id` with different content is `duplicate_conflict`):
 - `objective.cleanup`: core cleanup rules; removes the worktree (without confirmation only when its content equals
   the branch commit) and CAS-deletes the branch; records, retention refs, artifacts and session files stay.
 - `settings.update`: validated and persisted.
+- `service.stop {reason: exit|logout}`: journaled and answered, then the service thread leaves its loop: every
+  terminal is killed, every worker is terminated (sandbox killed), the store is closed, the socket and capability
+  are removed and `laded` exits `0`. Durable records stay as they are; the next start's recovery marks the live
+  executions `cancelled` + interrupted and nothing resumes.
+
+Terminal requests (`terminal.open/input/resize/close`, IMP-012) are interaction, not operations: they carry no
+`operation_id`, are never journaled or replayed, and create nothing durable. See
+[Contained terminals](#contained-terminals-imp-012).
 
 `available_actions` is computed for every `ActionName` from the same domain rules (lifecycle, execution state,
 current candidate, evidence, target movement, busy marker, latest capture, verification sandbox) with a reason when
@@ -219,6 +228,59 @@ Attention uses `lade_core::derive_attention` with facts the service tracks (unce
 failed checks, integration conflict, cached target movement, non-empty latest capture); wire badges add
 `verification_missing`, `unsent_drafts` and `fixture_model`.
 
+## Contained terminals (IMP-012)
+
+Source: `service/terminal.rs` (bookkeeping) over `supervision/terminal.rs` (PTY and sandbox; see
+[execution-safety.md](execution-safety.md#contained-terminal-imp-012)). The client cannot start a process: it can
+only ask the service, which allocates the PTY itself and starts the shell in the Objective's bubblewrap sandbox with
+the worker's `prlimit` quotas.
+
+- **Scope.** `terminal.open {objective_id, cols, rows}` (sizes 1..=500 × 1..=200) is accepted only for an Objective
+  whose worktree exists (`invalid_lifecycle` "start the agent once" otherwise, and after Cleanup) and whose lifecycle
+  is `defined`/`active` (read-write) or `frozen`/`approved` (**read-only**: the worktree is bound read-only). Any
+  other lifecycle is `invalid_lifecycle`. Without a working sandbox: `execution_unavailable` — there is no
+  unsandboxed terminal. At most 4 terminals per Objective and 16 in total (`limit_reached`). The sandbox starts on
+  the pool; on completion the service revalidates the lease, the lifecycle and writer exclusion and kills a terminal
+  whose scope changed meanwhile (`conflict`).
+- **Review writer exclusion.** `review.freeze` kills every writable terminal of the Objective — waiting for its
+  sandbox to end — before the execution is stopped and the worktree captured (`terminal.closed {reason:
+  review_freeze}`); while the freeze runs and while a candidate is frozen or approved only read-only terminals open.
+  After every Objective change the service closes terminals the Objective no longer admits (`reason: lifecycle`).
+- **Lease.** Terminals belong to the controlling lease that opened them. When that link closes (window closed,
+  client crashed, link overflow) every terminal of it is killed; a later client never sees them. `service.stop` and
+  service shutdown kill all of them. They are not stored and **never resumed**; the startup sweep kills any recorded
+  terminal sandbox that survived a crash (`terminal-*.pid`).
+- **I/O.** `terminal.input {terminal_id, data ≤ 16,384 code points}` queues bytes on a bounded per-terminal queue
+  (256 KiB; `limit_reached` when the shell is not reading); `terminal.resize` sets the PTY window size (the kernel
+  sends `SIGWINCH`); `terminal.close` kills the terminal (`terminal.closed {reason: closed}`).
+- **Output.** A reader thread copies PTY output into a 1 MiB ring per terminal. Every 100 ms tick the service sends
+  at most 2 × 32 KiB per terminal as `terminal.output {seq, data, dropped_bytes}`: `seq` increases by one per event,
+  `data` is UTF-8 (incomplete sequences carried to the next chunk, invalid bytes replaced, NUL dropped). When the ring
+  is full the reader waits up to 100 ms for the tick (backpressure: a flooding command is slowed to ≈ 640 KiB/s),
+  then discards the oldest bytes and reports their count in `dropped_bytes`. Output is never written anywhere else
+  (no diagnostic copy, nothing on disk).
+- **End.** When the shell (and with it the sandbox) ends, the remaining output is sent, then
+  `terminal.closed {reason: exited, exit_code | signal}`.
+
+Evidence: `tests/supervision_terminal.rs` (real PTY + sandbox: quotas, grants, job control, read-only bind,
+detached-descendant teardown, exit status, resize, flood ring), `tests/service_terminal.rs` (real service: scope,
+freeze exclusion, read-only review terminal, lease loss, bounded flood rate, `service.stop` and restart),
+`scripts/e2e-terminal` (native client under Xvfb).
+
+## Lifetime: close, Exit, logout
+
+| Event | Service | Agents (workers) | Terminals |
+| --- | --- | --- | --- |
+| Window closed / client ends | keeps running; the lease is freed | keep running (authorized background work) | killed with the lease |
+| Explicit Exit in the window (`service.stop {reason: exit}`) | answers, stops, exits `0` (`Restart=on-failure` does not restart it) | sandboxes killed; recorded as interrupted on the next start, never resumed | killed |
+| Session logout, client running (`query-end` → `service.stop {reason: logout}`) | as Exit | as Exit | as Exit |
+| Session logout, no client / under systemd | the user manager stops `lade.service` (`SIGTERM`, then `KillMode=control-group` ends every descendant) | killed with the control group; interrupted on the next start | killed |
+| `laded` started by hand (no systemd) and the session ends without a client | keeps running until killed (not trapped) | keep running | none (no lease) |
+
+A second client never gets authority: the window application is single-instance on the session bus (a second
+launch activates the existing window), and the service refuses any second link while the lease is held (one
+`service.notice {code: unauthorized}`, then the link closes).
+
 ## Restart recovery
 
 Before the socket exists: (1) operations left `pending` are recorded `uncertain` with an `interrupted` outcome
@@ -233,7 +295,7 @@ and `$STATE/tmp`.
 
 ## Tests
 
-`crates/lade-system/tests/service_{admission,operations,flow,actions}.rs` run the real socket, real SQLite and disposable Git
+`crates/lade-system/tests/service_{admission,operations,flow,actions,terminal}.rs` run the real socket, real SQLite and disposable Git
 repositories: handshake/file modes, wrong capability and pre-auth frames, second client refused and reconnect,
 invalid request keeps the link, admission rotates on restart; duplicate operations and `operation.get`; objective and
 journal survive restart; restart interrupts a live execution and makes unacknowledged dispatch uncertain; corrupt
@@ -248,6 +310,9 @@ and the real sandboxed launcher when bubblewrap works.
 - The working-basis Change Set compares against the current target commit; if the target moved after the start
   commit, target-side changes appear as reverted until a candidate is frozen (candidates merge onto the target).
 - The lease refusal is a `service.notice` event (the protocol has no request to reply to).
-- `SIGTERM` is not handled gracefully; recovery on the next start is the contract.
+- `SIGTERM` is not handled gracefully; recovery on the next start is the contract. Graceful stops go through
+  `service.stop` (Exit, logout with a running client).
+- A terminal needs an existing worktree: an Objective that never ran its agent has none (no provisioning from
+  `terminal.open`).
 - Search content results carry line numbers, not byte offsets.
 - Reading files larger than 64 MiB is refused (`unsupported_content`) rather than streamed.

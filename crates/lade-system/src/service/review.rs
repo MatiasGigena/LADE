@@ -74,6 +74,8 @@ impl Service {
             }
         };
         self.rt(oid).busy = Some("freeze");
+        // Review writer exclusion: no terminal may write the worktree from here on.
+        self.exclude_terminal_writers(oid);
         let live = self.objectives[&oid]
             .objective()
             .execution()

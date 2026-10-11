@@ -636,3 +636,17 @@ pub fn notice(n: &wire::ServiceNotice) -> view::ServiceNotice {
         message: n.message.clone(),
     }
 }
+
+pub fn terminal_end(c: &wire::TerminalClosed) -> crate::presentation::terminal::TerminalEnd {
+    use crate::presentation::terminal::TerminalEnd as E;
+    match c.reason {
+        wire::TerminalCloseReason::Exited => E::Exited {
+            code: c.exit_code.as_ref().map(Counter::value),
+            signal: c.signal.as_ref().map(Counter::value),
+        },
+        wire::TerminalCloseReason::Closed => E::Closed,
+        wire::TerminalCloseReason::ReviewFreeze => E::ReviewFreeze,
+        wire::TerminalCloseReason::Lifecycle => E::Lifecycle,
+        wire::TerminalCloseReason::Failed => E::Failed,
+    }
+}

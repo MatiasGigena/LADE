@@ -474,3 +474,15 @@ window.lade-dialog { background-color: @surface; border-radius: 8px; }
 .dialog-content { padding: 24px; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .limited-error > .error-box { margin-top: 6px; }
+
+/* Terminal (IMP-012): plain monospace text on the surface, existing tokens only ------------ */
+
+.terminal-pane { padding: 24px; }
+.compact .terminal-pane { padding: 16px; }
+.terminal-frame { border: 1px solid @border_separator; border-radius: 6px; }
+textview.terminal-view, textview.terminal-view > text {
+  background-color: @surface;
+  color: @ink_primary;
+  font-family: monospace;
+  font-size: 13px;
+}

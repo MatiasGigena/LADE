@@ -138,7 +138,7 @@ gateway allows only that provider's reviewed host.
 | Built-in tools `read`, `bash`, `edit`, `write` | Supported | pi's own tools, unmodified (IMP-008) |
 | Parallel tool execution | Supported (pi behaviour) | Unchanged pi agent loop; not separately exercised by an IMP-011 test |
 | Steering, follow-up, queue clear, abort | Supported | IMP-008 (`worker.test.ts`) |
-| Direct user shell (`!cmd`) | Restricted | No direct user shell; the contained terminal is IMP-012 |
+| Direct user shell (`!cmd`) | Restricted | pi's `!cmd` user shell is not routed: input starting with `!` goes to pi as ordinary text, never to a shell. The IMP-012 contained terminal exists (a separate PTY in the Objective sandbox, per Objective), but it is not wired to `!cmd` |
 | Image input | Unresolved | Not part of the input protocol; tool images appear as `[image]` |
 
 ## Protocol and generations

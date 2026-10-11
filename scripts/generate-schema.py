@@ -261,6 +261,25 @@ client.update({
     'ServiceNotice': obj({'level': enum('info', 'warning', 'error'), 'code': string(min_length=1, max_length=64),
                           'message': ref('ShortText')}),
     'Scope': obj({'workspace_id': ID, 'objective_id': ID, 'session_id': ID, 'association_revision': COUNTER}),
+    # Contained terminal (IMP-012). Terminal requests are ephemeral interaction with a service-owned PTY inside the
+    # Objective sandbox: they create no durable state, are never journaled or replayed, and so carry no
+    # operation_id. Sizes are decimal strings like every other counter; the service bounds them.
+    'TerminalMode': enum('read_write', 'read_only'),
+    'TerminalOpenCommand': obj({**O, 'cols': COUNTER, 'rows': COUNTER}),
+    'TerminalInfo': obj({'terminal_id': ID, **O, 'mode': ref('TerminalMode'), 'cols': COUNTER, 'rows': COUNTER}),
+    'TerminalInputCommand': obj({'terminal_id': ID, 'data': string(min_length=1, max_length=16384)}),
+    'TerminalResizeCommand': obj({'terminal_id': ID, 'cols': COUNTER, 'rows': COUNTER}),
+    'TerminalSelector': obj({'terminal_id': ID}),
+    # Output is UTF-8 text decoded by the service (invalid bytes replaced); dropped_bytes counts output discarded
+    # since the previous event because the bounded buffer overflowed (flood), so the client can mark the gap.
+    'TerminalOutput': obj({**O, 'terminal_id': ID, 'seq': COUNTER, 'data': string(max_length=65536),
+                           'dropped_bytes': COUNTER}),
+    'TerminalClosed': obj({**O, 'terminal_id': ID,
+                           'reason': enum('exited', 'closed', 'review_freeze', 'lifecycle', 'failed')},
+                          {'exit_code': COUNTER, 'signal': COUNTER}),
+    # Explicit Exit / session logout: the service stops its workers and terminals and exits. Nothing resumes on
+    # the next start (restart recovery marks interrupted work).
+    'ServiceStopCommand': obj({'reason': enum('exit', 'logout')}),
 })
 # IMP-011: model catalogue, session tree/fork/import/export, resources and semantic extension UI.
 PROVIDER_ID = string(min_length=1, max_length=128)
@@ -304,7 +323,8 @@ client.update({
     'UiRespondCommand': obj({**O, 'ui_id': ID, 'generation': COUNTER, 'answer': ref('UiAnswer')}),
 })
 
-# name, mutating, payload def, reply data def. Mutating names require operation_id; queries must omit it.
+# name, mutating, payload def, reply data def. Mutating names require operation_id; queries (and the ephemeral
+# terminal.* interaction) must omit it.
 REQUESTS = [
     ('snapshot', False, 'Empty', 'SnapshotData'),
     ('objective.get', False, 'ObjectiveSelector', 'ObjectiveDetail'),
@@ -336,6 +356,11 @@ REQUESTS = [
     ('objective.discard', True, 'ObjectiveSelector', 'ObjectiveDetail'),
     ('objective.cleanup', True, 'ObjectiveCleanupCommand', 'ObjectiveDetail'),
     ('settings.update', True, 'SettingsUpdateCommand', 'Settings'),
+    ('terminal.open', False, 'TerminalOpenCommand', 'TerminalInfo'),
+    ('terminal.input', False, 'TerminalInputCommand', 'Empty'),
+    ('terminal.resize', False, 'TerminalResizeCommand', 'Empty'),
+    ('terminal.close', False, 'TerminalSelector', 'Empty'),
+    ('service.stop', True, 'ServiceStopCommand', 'Empty'),
     # IMP-011.
     ('models.list', False, 'ModelsListQuery', 'ModelCatalog'),
     ('session.tree', False, 'ObjectiveSelector', 'SessionTree'),
@@ -361,6 +386,8 @@ EVENTS = [
     ('worktree.changed', 'WorktreeChanged'),
     ('verification.changed', 'VerificationSummary'),
     ('service.notice', 'ServiceNotice'),
+    ('terminal.output', 'TerminalOutput'),
+    ('terminal.closed', 'TerminalClosed'),
     # IMP-011.
     ('session.changed', 'SessionState'),
     ('ui.request', 'UiRequest'),
