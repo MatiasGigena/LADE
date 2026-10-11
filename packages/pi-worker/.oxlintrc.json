@@ -43,7 +43,7 @@
   },
   "overrides": [
     {
-      "files": ["src/protocol.ts", "src/worker/wire.ts"],
+      "files": ["src/protocol.ts", "src/schema.ts", "src/worker/wire.ts"],
       "rules": {
         "anti-slop/no-runtime-typeof": [
           "error",

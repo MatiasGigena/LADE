@@ -1,58 +1,37 @@
-// Hand-mirrored delivery-plan §4.2 worker wire shapes and a closed validator.
-// This is the single swap point for WP-A's generated worker DTOs/validators:
-// replace the types, parseInbound and encodeOutbound here and nothing else changes.
-import { boundedJson, MAX_FRAME, MAX_STRING, WireError } from "../json.ts";
-import type { JsonObject, JsonValue } from "../json.ts";
-import type { WorkerErrorCode } from "../dto.ts";
+// Worker wire shapes: the generated §4.2 DTOs (src/dto.ts, scripts/generate-dtos.py) validated
+// against the checked-in closed worker schema (contracts/v1/worker-schema.json) in both directions.
+import { boundedJson, MAX_FRAME, WireError } from "../json.ts";
+import type { ServiceToWorker, WorkerBody, WorkerToService } from "../dto.ts";
+import { BUNDLE, isServiceToWorker, isWorkerToService, VERSION } from "../schema.ts";
+import { validateWorker } from "./contract.ts";
 
-export const WORKER_PROTOCOL = 1;
+export type { ActivityRole, DeliveryMode, Model as ModelRef, SessionCommand, ThinkingLevel, TreeEntry, UiAnswer, UiPrompt, WorkerResources } from "../dto.ts";
 
-export const WORKER_BUNDLE = "0.2.0";
+export const WORKER_PROTOCOL = VERSION;
 
-export type DeliveryMode = "prompt" | "steer" | "follow_up";
+export const WORKER_BUNDLE = BUNDLE;
 
-export type ActivityRole = "user" | "assistant" | "thinking" | "tool" | "system";
+export type InboundBody = ServiceToWorker;
 
-export type TurnState = "running" | "idle";
+export type OutboundBody = WorkerToService;
 
-export interface ModelRef { provider: string; id: string }
+export type StartBody = Extract<InboundBody, { kind: "worker.start" }>;
 
-export interface StartBody {
-  kind: "worker.start";
-  objective_id: string;
-  session_dir: string;
-  cwd: string;
-  model: ModelRef;
-  resume: boolean;
-  system_note: string;
-}
+export type DeliverBody = Extract<InboundBody, { kind: "input.deliver" }>;
 
-export interface DeliverBody { kind: "input.deliver"; input_id: string; mode: DeliveryMode; text: string }
+export type CommandBody = Extract<InboundBody, { kind: "session.command" }>;
 
-export type InboundBody = StartBody | DeliverBody | { kind: "session.abort" } | { kind: "worker.shutdown" };
+export type RespondBody = Extract<InboundBody, { kind: "ui.respond" }>;
 
-export interface ActivityItemBody {
-  kind: "activity.item";
-  item_id: string;
-  role: ActivityRole;
-  title: string;
-  text: string;
-  tool_name?: string;
-  is_error: boolean;
-  truncated: boolean;
-}
+export type ActivityItemBody = Extract<OutboundBody, { kind: "activity.item" }>;
 
-export interface ActivityDeltaBody { kind: "activity.delta"; item_id: string; append_text: string }
+export type ResultBody = Extract<OutboundBody, { kind: "session.result" }>;
 
-export type OutboundBody =
-  | { kind: "worker.ready"; pi_session_id: string; session_file: string }
-  | { kind: "input.received"; input_id: string }
-  | ActivityItemBody
-  | ActivityDeltaBody
-  | { kind: "turn.state"; state: TurnState }
-  | { kind: "worker.error"; code: WorkerErrorCode; message: string };
+export type LoadedResource = Extract<OutboundBody, { kind: "resources.loaded" }>["resources"][number];
 
-/** Transport seam: swapping to WP-A's validators must not change worker logic. */
+export type TurnState = Extract<OutboundBody, { kind: "turn.state" }>["state"];
+
+/** Transport seam: worker logic never sees unvalidated frames. */
 export interface WorkerChannel {
   send(body: OutboundBody): Promise<void>;
   incoming(): AsyncIterable<InboundBody>;
@@ -60,129 +39,29 @@ export interface WorkerChannel {
 
 export const MAX_ERROR_MESSAGE = 512;
 
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-const ERROR_CODES: ReadonlySet<string> = new Set(["startup_failed", "session_failed", "provider_failed", "delivery_failed", "protocol_violation", "limit_reached", "internal"]);
-
-function isObject(value: JsonValue | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isText(value: JsonValue | undefined): value is string {
-  return typeof value === "string";
-}
-
-function isFlag(value: JsonValue | undefined): value is boolean {
-  return typeof value === "boolean";
-}
-
-function isUuid(value: JsonValue | undefined): value is string {
-  return isText(value) && UUID_V4.test(value);
-}
-
-function isMode(value: JsonValue | undefined): value is DeliveryMode {
-  return value === "prompt" || value === "steer" || value === "follow_up";
-}
-
-function hasKeys(value: JsonObject, keys: readonly string[]): boolean {
-  const own = Object.keys(value);
-
-  return own.length === keys.length && keys.every(key => Object.hasOwn(value, key));
-}
-
-function invalid(): WireError {
-  return new WireError("invalid_schema");
-}
-
-function parseBody(body: JsonObject): InboundBody {
-  switch (body.kind) {
-    case "worker.start": {
-      const model = body.model;
-
-      if (
-        !hasKeys(body, ["kind", "objective_id", "session_dir", "cwd", "model", "resume", "system_note"]) ||
-        !isUuid(body.objective_id) || !isText(body.session_dir) || !isText(body.cwd) ||
-        !isFlag(body.resume) || !isText(body.system_note) ||
-        !isObject(model) || !hasKeys(model, ["provider", "id"]) || !isText(model.provider) || !isText(model.id) ||
-        body.session_dir.length === 0 || body.cwd.length === 0 || model.provider.length === 0 || model.id.length === 0
-      ) throw invalid();
-
-      return {
-        kind: "worker.start",
-        objective_id: body.objective_id,
-        session_dir: body.session_dir,
-        cwd: body.cwd,
-        model: { provider: model.provider, id: model.id },
-        resume: body.resume,
-        system_note: body.system_note,
-      };
-    }
-
-    case "input.deliver":
-      if (!hasKeys(body, ["kind", "input_id", "mode", "text"]) || !isUuid(body.input_id) || !isMode(body.mode) || !isText(body.text)) throw invalid();
-
-      return { kind: "input.deliver", input_id: body.input_id, mode: body.mode, text: body.text };
-    case "session.abort":
-      if (!hasKeys(body, ["kind"])) throw invalid();
-
-      return { kind: "session.abort" };
-    case "worker.shutdown":
-      if (!hasKeys(body, ["kind"])) throw invalid();
-
-      return { kind: "worker.shutdown" };
-    default: throw invalid();
-  }
-}
-
-/** Bounded parse (IMP-001 JSON limits) followed by the closed §4.2 inbound schema. */
+/** Bounded parse (IMP-001 JSON limits), exact versions, the closed worker schema and the service direction. */
 export function parseInbound(bytes: Uint8Array): InboundBody {
   const value = boundedJson(bytes);
+  validateWorker(value);
+  const body: WorkerBody = value.body;
 
-  if (!isObject(value) || value.protocol !== WORKER_PROTOCOL || value.bundle !== WORKER_BUNDLE) throw new WireError("version_mismatch");
-  const body = value.body;
+  if (!isServiceToWorker(body)) throw new WireError("invalid_schema");
 
-  if (!hasKeys(value, ["protocol", "bundle", "body"]) || !isObject(body)) throw invalid();
-
-  return parseBody(body);
+  return body;
 }
 
-function checkText(value: string): void {
-  if (Buffer.byteLength(value) > MAX_STRING) throw new WireError("limit_reached");
-}
-
-function checkOutbound(body: OutboundBody): void {
-  switch (body.kind) {
-    case "worker.ready": checkText(body.pi_session_id); checkText(body.session_file);
-
-      return;
-    case "input.received":
-      if (!UUID_V4.test(body.input_id)) throw invalid();
-
-      return;
-    case "activity.item":
-      if (!UUID_V4.test(body.item_id)) throw invalid();
-      checkText(body.title); checkText(body.text);
-
-      if (body.tool_name !== undefined) checkText(body.tool_name);
-
-      return;
-    case "activity.delta":
-      if (!UUID_V4.test(body.item_id)) throw invalid();
-      checkText(body.append_text);
-
-      return;
-    case "turn.state": return;
-    case "worker.error":
-      if (!ERROR_CODES.has(body.code) || body.message.length > MAX_ERROR_MESSAGE) throw invalid();
-  }
-}
-
-/** One LF-terminated worker frame; rejects before writing anything over the frame limit. */
+/** One LF-terminated worker frame; schema-checked and bounded before anything is written. */
 export function encodeOutbound(body: OutboundBody): Buffer {
-  checkOutbound(body);
-  const bytes = Buffer.from(JSON.stringify({ protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body }));
+  const envelope = { protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body };
+  const text = JSON.stringify(envelope);
 
-  if (bytes.length > MAX_FRAME) throw new WireError("frame_size");
+  if (Buffer.byteLength(text) > MAX_FRAME) throw new WireError("frame_size");
+  const bytes = Buffer.from(text);
+  // Re-decode exactly what leaves: a sender never emits what the peer must reject.
+  const decoded = boundedJson(bytes);
+  validateWorker(decoded);
+
+  if (!isWorkerToService(decoded.body)) throw new WireError("invalid_schema");
 
   return Buffer.concat([bytes, Buffer.from("\n")]);
 }
@@ -190,8 +69,6 @@ export function encodeOutbound(body: OutboundBody): Buffer {
 /**
  * Worker LF framing with the IMP-001 semantics of `Decoder("worker")` in ../framing.ts: split only
  * on byte LF, bound the pending line before allocating, poison the decoder after the first error.
- * The shared Decoder validates against the IMP-001 client schema, so it cannot carry §4.2 bodies
- * until WP-A generalises it.
  */
 export class LineDecoder {
   private body = Buffer.alloc(0);

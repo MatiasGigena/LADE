@@ -51,11 +51,14 @@ export class StdioChannel implements WorkerChannel {
     return this.flush();
   }
 
-  /** Resolves once every frame queued so far has been handed to the pipe. */
+  /**
+   * Resolves once every frame queued so far has been handed to the pipe. A frame queued while a
+   * drain is finishing (after its last write, before it settles) starts the next drain.
+   */
   flush(): Promise<void> {
     this.flushing ??= this.drain().finally(() => { this.flushing = undefined; });
 
-    return this.flushing;
+    return this.flushing.then(() => this.queue.length > 0 ? this.flush() : undefined);
   }
 
   private async drain(): Promise<void> {

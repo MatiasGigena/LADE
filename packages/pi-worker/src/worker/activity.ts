@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { newId } from "../schema.ts";
 import type { AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { Id } from "../dto.ts";
 import type { ActivityItemBody, ActivityRole, OutboundBody, TurnState } from "./wire.ts";
 import { MAX_ERROR_MESSAGE } from "./wire.ts";
 
@@ -60,9 +61,9 @@ function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
 
-interface Block { itemId: string; role: ActivityRole; title: string; sent: number; carry: string; capped: boolean }
+interface Block { itemId: Id; role: ActivityRole; title: string; sent: number; carry: string; capped: boolean }
 
-interface Tool { itemId: string; name: string; title: string; args: string }
+interface Tool { itemId: Id; name: string; title: string; args: string }
 
 /**
  * Projects SDK session events onto §4.2 activity bodies. Streaming text/thinking is announced as an
@@ -103,7 +104,13 @@ export class ActivityMapper {
       case "compaction_start": this.system("Compacting context", `Context compaction started (${event.reason}).`, false);
 
         return;
-      case "auto_retry_start": this.system("Retrying model request", `Attempt ${event.attempt} of ${event.maxAttempts} after ${event.delayMs} ms.`, false);
+      case "compaction_end": this.compactionEnd(event.reason, event.aborted, event.willRetry, event.errorMessage, event.result?.tokensBefore);
+
+        return;
+      case "auto_retry_start": this.system("Retrying model request", `Attempt ${event.attempt} of ${event.maxAttempts} after ${event.delayMs} ms (${safeMessage(event.errorMessage)}).`, false);
+
+        return;
+      case "auto_retry_end": this.system(event.success ? "Retry succeeded" : "Retry gave up", event.success ? `The model request succeeded on attempt ${event.attempt}.` : `The model request failed after ${event.attempt} attempt(s): ${safeMessage(event.finalError ?? "unknown error")}.`, !event.success);
 
         return;
       default:
@@ -112,7 +119,13 @@ export class ActivityMapper {
 
   /** A worker-originated transcript note (never contains prompt or source text). */
   system(title: string, text: string, isError: boolean): void {
-    this.item(randomUUID(), "system", title, text, isError, undefined);
+    this.item(newId(), "system", title, text, isError, undefined);
+  }
+
+  private compactionEnd(reason: string, aborted: boolean, willRetry: boolean, error: string | undefined, tokensBefore: number | undefined): void {
+    if (aborted) this.system("Compaction aborted", `Context compaction (${reason}) was aborted.`, false);
+    else if (error !== undefined) this.system("Compaction failed", `Context compaction (${reason}) failed${willRetry ? " and will be retried" : ""}: ${safeMessage(error)}.`, true);
+    else this.system("Context compacted", `Context compaction (${reason}) finished${tokensBefore === undefined ? "" : ` (${tokensBefore} tokens before)`}.`, false);
   }
 
   private setTurn(state: TurnState): void {
@@ -121,7 +134,7 @@ export class ActivityMapper {
     this.send({ kind: "turn.state", state });
   }
 
-  private item(itemId: string, role: ActivityRole, title: string, text: string, isError: boolean, toolName: string | undefined): void {
+  private item(itemId: Id, role: ActivityRole, title: string, text: string, isError: boolean, toolName: string | undefined): void {
     const bounded = boundText(text);
     const label = bounded.truncated ? clip(`${title} (truncated; ${bounded.bytes} bytes)`, MAX_TITLE) : clip(title, MAX_TITLE);
     const body: ActivityItemBody = { kind: "activity.item", item_id: itemId, role, title: label, text: bounded.text, is_error: isError, truncated: bounded.truncated };
@@ -134,7 +147,7 @@ export class ActivityMapper {
     const existing = this.blocks.get(index);
 
     if (existing) return existing;
-    const created: Block = { itemId: randomUUID(), role, title: role === "thinking" ? "Thinking" : "Assistant", sent: 0, carry: "", capped: false };
+    const created: Block = { itemId: newId(), role, title: role === "thinking" ? "Thinking" : "Assistant", sent: 0, carry: "", capped: false };
     this.blocks.set(index, created);
     this.item(created.itemId, role, created.title, "", false, undefined);
 
@@ -180,7 +193,7 @@ export class ActivityMapper {
 
   private finish(message: SessionMessage): void {
     if (message.role === "user") {
-      this.item(randomUUID(), "user", "User", messageText(message), false, undefined);
+      this.item(newId(), "user", "User", messageText(message), false, undefined);
 
       return;
     }
@@ -188,8 +201,8 @@ export class ActivityMapper {
     if (message.role !== "assistant") return;
 
     for (const [index, part] of message.content.entries()) {
-      if (part.type === "text") this.item(this.blocks.get(index)?.itemId ?? randomUUID(), "assistant", "Assistant", part.text, false, undefined);
-      else if (part.type === "thinking") this.item(this.blocks.get(index)?.itemId ?? randomUUID(), "thinking", "Thinking", part.redacted ? "[redacted thinking]" : part.thinking, false, undefined);
+      if (part.type === "text") this.item(this.blocks.get(index)?.itemId ?? newId(), "assistant", "Assistant", part.text, false, undefined);
+      else if (part.type === "thinking") this.item(this.blocks.get(index)?.itemId ?? newId(), "thinking", "Thinking", part.redacted ? "[redacted thinking]" : part.thinking, false, undefined);
     }
 
     this.blocks.clear();
@@ -203,7 +216,7 @@ export class ActivityMapper {
 
   private toolStart(id: string, name: string, args: string, path: string | undefined, command: string | undefined): void {
     const target = path ?? command;
-    const tool: Tool = { itemId: randomUUID(), name, title: target === undefined ? name : `${name} ${clip(String(target), 120)}`, args };
+    const tool: Tool = { itemId: newId(), name, title: target === undefined ? name : `${name} ${clip(String(target), 120)}`, args };
     this.tools.set(id, tool);
     this.item(tool.itemId, "tool", tool.title, `arguments:\n${args}`, false, name);
   }
