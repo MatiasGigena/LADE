@@ -300,8 +300,11 @@ fn unreachable_destination_is_bad_gateway() {
 
 /// The worker side (`packages/pi-worker/src/worker/gateway.ts`): HTTPS servers with a
 /// test-generated certificate on two loopback ports, then — once the Rust side has started the
-/// gateway allowing only the first port — `fetch` (undici) and `node:https` through the gateway.
+/// gateway allowing only the first port — `fetch` (undici), `node:https` and a `wss://` WebSocket
+/// (undici's global `WebSocket`, the transport pi uses) through the gateway. Each origin also
+/// answers a WebSocket upgrade with a minimal echo (RFC 6455 handshake, one text frame).
 const TLS_CLIENT: &str = r#"
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import https from "node:https";
 import { createInterface } from "node:readline";
@@ -313,7 +316,23 @@ const listen = () => new Promise(resolve => {
   const server = https.createServer(options, (request, response) => {
     response.end(`tls origin saw ${request.url} over ${request.socket.getProtocol()}`);
   });
+  server.on("upgrade", (request, socket) => {
+    const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    socket.once("data", frame => {
+      const mask = frame.subarray(2, 6);
+      const payload = Buffer.from(frame.subarray(6, 6 + (frame[1] & 0x7f)).map((byte, i) => byte ^ mask[i % 4]));
+      const reply = Buffer.from(`${payload} over ${socket.getProtocol()}`);
+      socket.write(Buffer.concat([Buffer.from([0x81, reply.length]), reply]));
+    });
+  });
   server.listen(0, "127.0.0.1", () => resolve(server));
+});
+const echo = url => new Promise((resolve, reject) => {
+  const socket = new WebSocket(url);
+  socket.addEventListener("open", () => socket.send("ping"));
+  socket.addEventListener("message", event => { resolve(String(event.data)); socket.close(); });
+  socket.addEventListener("error", () => reject(Object.assign(new Error("websocket"), { code: "websocket_failed" })));
 });
 const allowed = await listen();
 const denied = await listen();
@@ -337,6 +356,8 @@ const report = {
   agent: await outcome(() => get(`${base(allowed.address().port)}/v1/agent`)),
   fetchDenied: await outcome(async () => (await fetch(`${base(denied.address().port)}/x`)).text()),
   agentDenied: await outcome(() => get(`${base(denied.address().port)}/x`)),
+  websocket: await outcome(() => echo(`wss://127.0.0.1:${allowed.address().port}/v1/responses`)),
+  websocketDenied: await outcome(() => echo(`wss://127.0.0.1:${denied.address().port}/x`)),
 };
 console.log(`REPORT ${JSON.stringify(report)}`);
 process.exit(0);
@@ -349,7 +370,7 @@ fn on_path(program: &str) -> Option<std::path::PathBuf> {
 }
 
 #[test]
-fn worker_https_reaches_a_local_tls_origin_through_the_gateway() {
+fn worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway() {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
@@ -444,4 +465,14 @@ fn worker_https_reaches_a_local_tls_origin_through_the_gateway() {
     for name in ["fetchDenied", "agentDenied"] {
         assert_eq!(value[name]["error"], "gateway_refused", "{report}");
     }
+    // A wss:// WebSocket is an ordinary CONNECT tunnel with TLS end to end: it reaches the
+    // allowed origin and is refused for the other port, exactly like fetch.
+    let echoed = value["websocket"]["ok"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{report}"));
+    assert!(echoed.starts_with("ping over TLSv1."), "{report}");
+    assert_eq!(
+        value["websocketDenied"]["error"], "websocket_failed",
+        "{report}"
+    );
 }

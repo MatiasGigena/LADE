@@ -146,10 +146,11 @@ class NoNetworkHttpsAgent extends https.Agent {
 }
 
 /**
- * Route every undici connection (and therefore global fetch) and the `node:http`/`node:https`
- * global agents through the LADE gateway. TLS is negotiated end-to-end with the origin over the
- * tunnel; the gateway only sees the authority. Clients that bring their own agent (or
- * `agent: false`) bypass the global agents and have no network at all.
+ * Route every undici connection (and therefore global fetch and the global `WebSocket`, whose
+ * `ws:`/`wss:` handshakes use the global dispatcher) and the `node:http`/`node:https` global agents
+ * through the LADE gateway. TLS is negotiated end-to-end with the origin over the tunnel; the
+ * gateway only sees the authority. Clients that bring their own agent (or `agent: false`) or their
+ * own sockets (the `ws` package) bypass the global agents and have no network at all.
  */
 export function installGateway(socketPath: string): void {
   const tls = buildConnector({ timeout: CONNECT_TIMEOUT_MS });
