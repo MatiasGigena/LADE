@@ -1,6 +1,6 @@
 #!/bin/sh
 # IMP-005 / IMP-010 failure paths in the real GTK client under Xvfb against a real `laded serve`
-# with the sandboxed `lade-fixture` model:
+# with the sandboxed `lade-fixture` model (test-only LADE_TEST_FIXTURE_PROVIDER=1 switch):
 #
 #   - draft save failure → visible failure → Retry → "Saving…" while the service holds the write →
 #     "Saved r1" only after the acknowledgement (checked against the service database);
@@ -143,7 +143,7 @@ no_drafts() { [ "$(sql "select count(*) from drafts where deleted = 0")" = 0 ]; 
 has_drafts() { ! no_drafts; }
 
 start_laded() {
-  LADE_TEST_FAULTS_DIR=$FAULTS "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
+  LADE_TEST_FAULTS_DIR=$FAULTS LADE_TEST_FIXTURE_PROVIDER=1 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
   LADED=$!
   pids="$pids $LADED"
   wait_for 10 "control socket" test -S "$RUN/control.sock"
@@ -183,6 +183,7 @@ pids="$pids $!"
 sleep 1
 start_laded
 grep -q "test fault injection enabled" "$T/laded.log" || fail "the service did not announce test fault injection"
+grep -q "offline test model lade-fixture enabled" "$T/laded.log" || fail "the service did not announce the test model"
 start_desktop --open "$REPO"
 wait_for 10 "connected" connected
 

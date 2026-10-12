@@ -1,6 +1,7 @@
 #!/bin/sh
 # One-worker reference trace of the collaboration loop (IMP-010): the real GTK client under Xvfb
-# against a real `laded serve` with one sandboxed `lade-fixture` worker, in a **release** build.
+# against a real `laded serve` with one sandboxed `lade-fixture` worker (test-only
+# LADE_TEST_FIXTURE_PROVIDER=1 switch), in a **release** build.
 # Measures, from the client's own timing trace (LADE_DESKTOP_TRACE): warm launch, input → first
 # agent activity, Full file and diff opens at the reference sizes of
 # docs/planning/performance-budgets.md (1,280,000-byte / 20,000-line file; 4,000-line /
@@ -137,7 +138,7 @@ git -C "$REPO" commit -q -m initial
 Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
 pids="$pids $!"
 sleep 1
-LADE_WORKER_DIR=$ROOT/packages/pi-worker "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
+LADE_WORKER_DIR=$ROOT/packages/pi-worker LADE_TEST_FIXTURE_PROVIDER=1 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
 LADED=$!
 echo "$LADED" >"$T/laded.pid"
 pids="$pids $LADED"
