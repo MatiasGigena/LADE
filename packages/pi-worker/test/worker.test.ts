@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_ITEM_BYTES } from "../src/worker/activity.ts";
+import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker } from "./worker-support.ts";
 import type { Sandbox } from "./worker-support.ts";
 
@@ -209,3 +210,21 @@ test("an unknown model fails worker.start with a coded error", () => withWorker(
   assert.equal(worker.kinds("worker.error")[0]?.code, "startup_failed");
   assert.equal(worker.kinds("worker.ready").length, 0);
 }));
+
+test("without the test switch the fixture provider is not registered and worker.start is refused", async () => {
+  const box = sandbox();
+  const worker = new Worker(box, { [FIXTURE_SWITCH]: "" });
+
+  try {
+    worker.send(startBody(box, false));
+    assert.equal(await worker.exited, 1);
+    const error = record(worker.kinds("worker.error")[0]);
+    assert.equal(error.code, "startup_failed");
+    assert.match(text(error.message), /not registered/);
+    assert.equal(worker.kinds("worker.ready").length, 0);
+  } finally {
+    worker.child.kill("SIGKILL");
+    await worker.exited;
+    cleanup(box);
+  }
+});

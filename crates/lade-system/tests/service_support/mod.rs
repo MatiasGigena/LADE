@@ -24,6 +24,7 @@ use lade_protocol::types::{Capability, Id};
 use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 use lade_system::service::{self, RunningService, ServiceConfig};
+use lade_system::supervision::credentials::FIXTURE_SWITCH;
 use lade_system::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,
 };
@@ -51,6 +52,7 @@ impl Env {
         Self { root, repo }
     }
 
+    /// The test service configuration; the offline fixture model is switched on.
     pub fn config(&self) -> ServiceConfig {
         ServiceConfig {
             state_dir: self.root.path().join("state"),
@@ -58,6 +60,7 @@ impl Env {
             limits: lade_system::service::ResourceLimits::default(),
             storage_limit_bytes: lade_system::adapters::sandbox::WRITABLE_STORAGE_BYTES,
             cgroups: None,
+            test_fixture_provider: true,
         }
     }
 
@@ -260,7 +263,8 @@ pub fn eventually<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Unsandboxed real worker (tests only, disposable directories, fixture model).
+// Unsandboxed real worker (tests only, disposable directories, fixture model). The fixture
+// provider's test switch is always on here; the service's own switch still gates it.
 
 pub struct NodeLauncher {
     pub entry: PathBuf,
@@ -333,6 +337,7 @@ impl WorkerLauncher for NodeLauncher {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", scratch)
             .env("PI_CODING_AGENT_DIR", scratch)
+            .env(FIXTURE_SWITCH, "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         if let Some(models) = models {
@@ -357,6 +362,7 @@ impl WorkerLauncher for NodeLauncher {
             .env("HOME", &request.session_dir)
             .env("LANG", "C.UTF-8")
             .env("TERM", "dumb")
+            .env(FIXTURE_SWITCH, "1")
             .current_dir(&request.worktree)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -421,15 +427,26 @@ pub fn sandbox_works() -> bool {
     SandboxTools::locate().is_ok_and(|tools| sandbox_available(&tools).is_ok())
 }
 
-/// The real sandboxed launcher when the host supports it, else the unsandboxed test launcher.
+/// The real sandboxed launcher when the host supports it, else the unsandboxed test launcher;
+/// the offline fixture model is switched on.
 pub fn best_launcher(env: &Env) -> (Arc<dyn WorkerLauncher>, bool) {
+    best_launcher_with(env, true)
+}
+
+/// [`best_launcher`] with the sandboxed launcher's fixture switch set to `fixture`.
+pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>, bool) {
     use lade_system::supervision::{LauncherConfig, default_launcher};
     if sandbox_works()
         && let Ok(launcher) = LauncherConfig::new(
             env.root.path().join("state/run"),
             env.root.path().join("run/g"),
         )
-        .and_then(default_launcher)
+        .and_then(|config| {
+            default_launcher(LauncherConfig {
+                test_fixture_provider: fixture,
+                ..config
+            })
+        })
     {
         return (Arc::from(launcher), true);
     }
@@ -668,6 +685,7 @@ impl Env {
             .arg("--runtime-dir")
             .arg(self.root.path().join("run"))
             .args(extra)
+            .env(FIXTURE_SWITCH, "1")
             .env_remove("LADE_FAULT_POINT")
             .stdin(Stdio::null())
             .stdout(Stdio::null())

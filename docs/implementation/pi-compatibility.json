@@ -421,15 +421,6 @@
       ],
       "status": "restricted",
       "reason": "no reviewed egress policy in this LADE build for https://open.bigmodel.cn/api/coding/paas/v4"
-    },
-    {
-      "id": "lade-fixture",
-      "name": "LADE fixture provider (offline, scripted; not a real model)",
-      "status": "supported",
-      "auth": [
-        "none"
-      ],
-      "note": "offline scripted fixture model, not a real model"
     }
   ],
   "custom_providers": {

@@ -68,6 +68,10 @@ const SYSTEM_FILES: &[&str] = &[
 ];
 const SANDBOX_PATH: &str = "/usr/bin:/bin";
 
+/// Test-only switch (`LADE_TEST_FIXTURE_PROVIDER=1`) that makes the worker and its model catalogue
+/// register the offline `lade-fixture` model; set in a sandbox only when the service runs with it.
+pub const FIXTURE_SWITCH: &str = "LADE_TEST_FIXTURE_PROVIDER";
+
 #[derive(Debug)]
 pub enum SandboxError {
     ToolMissing {
@@ -554,6 +558,8 @@ pub struct WorkerLaunch {
     /// Further read-only paths (for example vendored packages the worker resolves).
     pub extra_ro: Vec<PathBuf>,
     pub limits: Limits,
+    /// Test-only: export [`FIXTURE_SWITCH`] so the worker registers the offline fixture model.
+    pub test_fixture_provider: bool,
 }
 
 impl fmt::Debug for WorkerLaunch {
@@ -573,6 +579,7 @@ impl fmt::Debug for WorkerLaunch {
             .field("credentials", &credentials)
             .field("extra_ro", &self.extra_ro)
             .field("limits", &self.limits)
+            .field("test_fixture_provider", &self.test_fixture_provider)
             .finish()
     }
 }
@@ -614,6 +621,9 @@ pub fn worker_spec(launch: &WorkerLaunch) -> Result<SandboxSpec, SandboxError> {
             return Err(SandboxError::InvalidSpec { what: "pi env" });
         }
         spec.env(name, value)?;
+    }
+    if launch.test_fixture_provider {
+        spec.env(FIXTURE_SWITCH, "1")?;
     }
     for (name, value) in &launch.credentials {
         spec.secret_env(name, value)?;

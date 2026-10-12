@@ -1,11 +1,16 @@
 // Deterministic, credential-free, offline `lade-fixture` provider. It implements the SDK's custom
 // streaming API (`streamSimple`) and is registered on the ModelRuntime like an extension provider,
 // so its responses go through pi's real agent loop and its tool calls run pi's real tools.
+// Test-only: it is registered only when `LADE_TEST_FIXTURE_PROVIDER=1` is set (laded passes the
+// switch to the worker and the catalogue only when it was itself started with it).
 import { createAssistantMessageEventStream } from "./pi-ai.ts";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, TextContent, ToolCall } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const FIXTURE_PROVIDER = "lade-fixture";
+
+/** Test-only switch; without it the fixture provider does not exist. */
+export const FIXTURE_SWITCH = "LADE_TEST_FIXTURE_PROVIDER";
 
 export const FIXTURE_MODEL = "scripted";
 
@@ -232,4 +237,12 @@ export function fixtureProvider(): ProviderRegistration {
       maxTokens: 4_096,
     }],
   };
+}
+
+/** Registers the fixture provider on `runtime` only when the test switch is set; whether it did. */
+export function registerTestFixture(runtime: ModelRuntime): boolean {
+  if (process.env[FIXTURE_SWITCH] !== "1") return false;
+  runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
+
+  return true;
 }

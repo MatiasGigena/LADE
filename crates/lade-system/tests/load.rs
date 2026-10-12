@@ -35,6 +35,7 @@ use lade_protocol::client::{
     ServiceStopCommand, Side, StopReason,
 };
 use lade_protocol::types::{Counter, DeliveryMode, Id, ReadLimit, WirePath};
+use lade_system::supervision::credentials::FIXTURE_SWITCH;
 use service_support::*;
 
 // ---------------------------------------------------------------------------------------------
@@ -446,6 +447,7 @@ impl Laded {
             .arg(env.root.path().join("run"))
             .args(["--max-workers", "32"])
             .env("LADE_WORKER_DIR", worker_dir)
+            .env(FIXTURE_SWITCH, "1")
             .env_remove("LADE_FAULT_POINT")
             .stdin(Stdio::null())
             .stdout(Stdio::null())

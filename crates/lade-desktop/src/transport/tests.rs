@@ -417,6 +417,8 @@ fn real_service_workspace_objective_execution_and_change_set() {
             .arg(dir.0.join("state"))
             .arg("--runtime-dir")
             .arg(&runtime)
+            // The offline test model is a test-only provider.
+            .env("LADE_TEST_FIXTURE_PROVIDER", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .spawn()
