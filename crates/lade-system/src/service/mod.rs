@@ -70,6 +70,10 @@ pub struct ServiceConfig {
     /// Delegated cgroup subtree for terminals and verification runs (the launcher has its own
     /// handle); `None` without delegation.
     pub cgroups: Option<Arc<SandboxCgroups>>,
+    /// Test-only: offer and start the offline `lade-fixture` model (see
+    /// [`crate::supervision::credentials::FIXTURE_SWITCH`]). Off in a normal install: the provider is
+    /// then absent from the catalogue and refused at start.
+    pub test_fixture_provider: bool,
 }
 
 impl ServiceConfig {
@@ -95,6 +99,7 @@ impl ServiceConfig {
             limits: ResourceLimits::default(),
             storage_limit_bytes: WRITABLE_STORAGE_BYTES,
             cgroups: None,
+            test_fixture_provider: false,
         })
     }
 }
@@ -269,6 +274,8 @@ pub(crate) struct Service {
     /// A writable-storage measurement job is in flight.
     storage_check: bool,
     cgroups: Option<Arc<SandboxCgroups>>,
+    /// See [`ServiceConfig::test_fixture_provider`].
+    test_fixture_provider: bool,
 }
 
 /// A running service instance (threads and admission material).
@@ -463,6 +470,7 @@ pub fn start(
         storage_limit: config.storage_limit_bytes,
         storage_check: false,
         cgroups: config.cgroups.clone(),
+        test_fixture_provider: config.test_fixture_provider,
     };
     service.load().map_err(StartError::Recovery)?;
     service.load_compat().map_err(StartError::Recovery)?;

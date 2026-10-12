@@ -239,7 +239,7 @@ in `dist/providers/data/*.json`):
 
 | Provider | Host (443) | Credential variables (pi `env-api-keys.js`) |
 | --- | --- | --- |
-| `lade-fixture` | none (offline) | none |
+| `lade-fixture` (test-only, only with `LADE_TEST_FIXTURE_PROVIDER=1`) | none (offline) | none |
 | `anthropic` | `api.anthropic.com` | `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN` |
 | `openai` | `api.openai.com` | `OPENAI_API_KEY` |
 | `google` | `generativelanguage.googleapis.com` | `GEMINI_API_KEY` |

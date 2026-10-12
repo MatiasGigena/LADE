@@ -164,10 +164,9 @@ specific commit). The intent stays editable until approval. Nothing runs yet: th
 ## 5. Choose a model and provide credentials
 
 Pick a model when starting execution: in Activity, while *Start agent* is available, the state line names the
-model and thinking level it will use; change them under *Model, Agent Session and profile*. `lade-fixture / scripted` is an **offline test model** (always labelled as such): it
-writes files only when told `lade-fixture: write <path> <content>` and is useful for trying the workflow.
+model and thinking level it will use; change them under *Model, Agent Session and profile*.
 
-Real providers need an API key. The recommended place is your **keyring** (GNOME Keyring, through the Secret
+Most providers need an API key. The recommended place is your **keyring** (GNOME Keyring, through the Secret
 Service; needs `sudo apt install libsecret-tools`):
 
 ```sh

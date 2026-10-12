@@ -29,7 +29,6 @@ use super::state::{ObjState, WsState};
 
 const SUMMARY_OUTCOME_CHARS: usize = 512;
 const DETAIL_LIST_MAX: usize = 64;
-pub const FIXTURE_PROVIDER: &str = "lade-fixture";
 /// Shared by the `review.freeze` projection and its rejection.
 pub const NO_CHANGES_TO_FREEZE: &str = "No changes to freeze — complete without changes instead";
 /// Shared by the `review.verify` projection and its rejection.
@@ -268,13 +267,6 @@ impl Service {
         }
         if st.unsent_drafts() > 0 && !record.lifecycle.is_terminal() {
             badges.push(Badge::UnsentDrafts);
-        }
-        if record
-            .execution
-            .session()
-            .is_some_and(|s| s.model.provider() == FIXTURE_PROVIDER)
-        {
-            badges.push(Badge::FixtureModel);
         }
         badges.truncate(16);
         let (state, reason) = wire_execution_state(record.execution.state());

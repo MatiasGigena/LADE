@@ -65,7 +65,7 @@ export type Execution = { "state": ExecutionState; "generation": Counter; "reaso
 
 export type Attention = "needs_attention" | "ready_for_review" | "working" | "idle" | "archived";
 
-export type Badge = "interrupted" | "delivery_uncertain" | "stale_feedback" | "verification_failed" | "verification_missing" | "integration_conflict" | "stale_target" | "limit_reached" | "cleaned_up" | "fixture_model" | "unsent_drafts";
+export type Badge = "interrupted" | "delivery_uncertain" | "stale_feedback" | "verification_failed" | "verification_missing" | "integration_conflict" | "stale_target" | "limit_reached" | "cleaned_up" | "unsent_drafts";
 
 export type ErrorCode = "unauthorized" | "stale_service" | "stale_association" | "stale_execution" | "stale_reference" | "stale_candidate" | "stale_target" | "invalid_lifecycle" | "unsupported_content" | "version_mismatch" | "durability_failure" | "permission_denied" | "limit_reached" | "interrupted" | "unknown_operation" | "replay_expired" | "duplicate_conflict" | "not_found" | "invalid_request" | "conflict" | "execution_unavailable";
 

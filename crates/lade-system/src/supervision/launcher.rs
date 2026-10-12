@@ -23,7 +23,10 @@ use std::time::{Duration, Instant};
 use lade_protocol::worker::WorkerBody;
 use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode_worker, encode};
 
-use super::credentials::{CredentialError, CredentialSource, ReleasedCredentials};
+use super::credentials::{
+    CredentialError, CredentialSource, FIXTURE_PROVIDER, FIXTURE_REFUSED, FIXTURE_SWITCH,
+    ReleasedCredentials,
+};
 use super::gateway::{
     EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies, ensure_private_dir,
 };
@@ -112,6 +115,9 @@ pub struct LauncherConfig {
     /// Delegated cgroup subtree: each sandbox then runs in a leaf of its Objective's limited
     /// cgroup. `None` (no delegation): the `prlimit` limits only.
     pub cgroups: Option<Arc<SandboxCgroups>>,
+    /// Test-only: register and launch the offline `lade-fixture` model (`FIXTURE_SWITCH` is then
+    /// passed to the worker and the catalogue). Off by default; the provider is then refused.
+    pub test_fixture_provider: bool,
 }
 
 impl LauncherConfig {
@@ -134,6 +140,7 @@ impl LauncherConfig {
             upstream_proxy: UpstreamProxy::from_env(),
             extra_ro: Vec::new(),
             cgroups: None,
+            test_fixture_provider: false,
         })
     }
 }
@@ -284,6 +291,9 @@ impl SandboxLauncher {
         release: bool,
     ) -> Result<(EgressPolicy, ReleasedCredentials), LaunchError> {
         let unavailable = |e: CredentialError| LaunchError::ProviderUnavailable(e.to_string());
+        if provider == FIXTURE_PROVIDER && !self.config.test_fixture_provider {
+            return Err(LaunchError::ProviderUnavailable(FIXTURE_REFUSED.into()));
+        }
         let credentials = &self.config.credentials;
         if let Some(policy) = self.config.policies.get(provider) {
             let released = if release {
@@ -378,6 +388,9 @@ impl WorkerLauncher for SandboxLauncher {
         if let Some(models) = models {
             spec.ro_bind(models).map_err(sandbox)?;
         }
+        if config.test_fixture_provider {
+            spec.env(FIXTURE_SWITCH, "1").map_err(sandbox)?;
+        }
         spec.marker(&sandbox_marker(&config.run_dir))
             .map_err(sandbox)?;
         let command = spec.command(&self.tools).map_err(sandbox)?;
@@ -459,6 +472,7 @@ impl WorkerLauncher for SandboxLauncher {
                 .collect(),
             extra_ro: config.extra_ro.clone(),
             limits: config.limits,
+            test_fixture_provider: config.test_fixture_provider,
         };
         let spec_error = |e: SandboxError| {
             LaunchError::Io(io::Error::new(ErrorKind::InvalidInput, e.to_string()))

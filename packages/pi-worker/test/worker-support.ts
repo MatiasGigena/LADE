@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { boundedJson } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
+import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { WORKER_BUNDLE, WORKER_PROTOCOL } from "../src/worker/wire.ts";
 
 export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "worker.ts");
@@ -74,10 +75,11 @@ export class Worker {
   stderr = "";
   private pending = "";
   private wake: () => void = () => {};
+  /** The test-only fixture provider is switched on unless `env` overrides the switch. */
   constructor(box: Sandbox, env: Record<string, string> = {}) {
     this.child = spawn(process.execPath, [WORKER], {
       cwd: box.cwd,
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, LANG: "C.UTF-8", TERM: "dumb", ...env },
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, LANG: "C.UTF-8", TERM: "dumb", [FIXTURE_SWITCH]: "1", ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.setEncoding("utf8");

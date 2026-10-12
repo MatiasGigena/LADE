@@ -363,7 +363,7 @@ impl TerminalPane {
     fn render(&self) {
         let state = self.controller.store.state();
         let summary = state.selected_summary().cloned();
-        let connected = state.connection.is_connected() && !state.is_preview();
+        let connected = state.connection.is_connected();
         let session = summary
             .as_ref()
             .and_then(|s| state.terminal_for(&s.objective_id))

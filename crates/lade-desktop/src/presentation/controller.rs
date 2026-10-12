@@ -1278,7 +1278,7 @@ impl Controller {
     /// lease) the window cannot stop the service and only closes: returns `false`.
     pub fn exit(&self, reason: StopReason) -> bool {
         let connected = self.store.state().connection.is_connected();
-        if connected && !self.store.state().is_preview() {
+        if connected {
             self.emit(Intent::StopService { reason });
         }
         connected
@@ -1320,12 +1320,12 @@ impl Controller {
 mod tests {
     use super::*;
     use crate::presentation::intents::RecordingSink;
-    use crate::presentation::preview;
     use crate::presentation::store::PresentationState;
+    use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
         let mut state = PresentationState::new(super::super::model::ConnectionState::Connected);
-        for update in preview::fixture_updates() {
+        for update in test_fixture::fixture_updates() {
             state.apply(update);
         }
         state.connection = super::super::model::ConnectionState::Connected;
@@ -1351,7 +1351,7 @@ mod tests {
         controller.set_view(MainView::Activity);
         assert_eq!(controller.store.state().ui.compact_region, Region::Main);
         // Add feedback opens the feedback panel holding the new draft.
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         controller.set_view(MainView::Workbench);
         let reference = controller
             .store
@@ -1363,7 +1363,7 @@ mod tests {
             .map(|d| d.reference.clone())
             .expect("fixture draft");
         controller.store.update(|s| {
-            s.objective_ui_mut(&ObjectiveId::new(preview::MAIN_OBJECTIVE))
+            s.objective_ui_mut(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE))
                 .selection = Some(Ok(reference));
             ((), Vec::new())
         });
@@ -1383,7 +1383,7 @@ mod tests {
     #[test]
     fn content_search_results_become_the_viewer_selection_range() {
         let (controller, _) = setup();
-        let id = ObjectiveId::new(preview::MAIN_OBJECTIVE);
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
         controller.select_objective(&id);
         let path = RepoPath::utf8("src/network/retry.ts");
         controller.open_search_result(&SearchResult {
@@ -1426,11 +1426,11 @@ mod tests {
     #[test]
     fn notification_navigation_only_requests_projections() {
         let (controller, sink) = setup();
-        controller.navigate_to(&ObjectiveId::new(preview::SECOND_OBJECTIVE), true);
+        controller.navigate_to(&ObjectiveId::new(test_fixture::SECOND_OBJECTIVE), true);
         let state = controller.store.state();
         assert_eq!(
             state.ui.selected.as_ref().map(ObjectiveId::as_str),
-            Some(preview::SECOND_OBJECTIVE)
+            Some(test_fixture::SECOND_OBJECTIVE)
         );
         assert_eq!(state.ui.view, MainView::Workbench);
         assert_eq!(state.ui.inspector_tab, InspectorTab::Evidence);
@@ -1447,7 +1447,7 @@ mod tests {
         use crate::presentation::store::StoreUpdate;
         use crate::presentation::terminal::{TerminalEnd, TerminalMode};
         let (controller, sink) = setup();
-        let id = ObjectiveId::new(preview::MAIN_OBJECTIVE);
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
         controller.select_objective(&id);
         sink.intents.borrow_mut().clear();
         assert!(!controller.terminal_input("ls\r"), "no terminal yet");
@@ -1546,7 +1546,7 @@ mod tests {
     #[test]
     fn selecting_an_objective_requests_its_projections() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::SECOND_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::SECOND_OBJECTIVE));
         let intents = sink.intents.borrow();
         assert!(
             intents
@@ -1563,7 +1563,7 @@ mod tests {
     #[test]
     fn edit_intent_sends_the_edited_revision() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
         let (revision, mut intent, enabled) = {
             let state = controller.store.state();
@@ -1585,7 +1585,7 @@ mod tests {
             assert_eq!(
                 sink.intents.borrow().as_slice(),
                 [Intent::UpdateObjective {
-                    objective_id: ObjectiveId::new(preview::MAIN_OBJECTIVE),
+                    objective_id: ObjectiveId::new(test_fixture::MAIN_OBJECTIVE),
                     expected_intent_revision: revision,
                     intent,
                 }]
@@ -1599,7 +1599,7 @@ mod tests {
     #[test]
     fn disabled_actions_are_not_sent() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
         let err = controller.integrate().unwrap_err();
         assert!(!err.is_empty());
@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn stale_item_blocks_the_whole_batch() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
         let batch = controller.feedback_batch().unwrap();
         assert!(batch.items.iter().any(|i| i.stale));
@@ -1621,9 +1621,9 @@ mod tests {
     #[test]
     fn closing_flushes_drafts_and_lists_what_is_not_yet_saved() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
-        let draft = DraftId::new(preview::SAVED_DRAFT);
+        let draft = DraftId::new(test_fixture::SAVED_DRAFT);
         let before = controller.unsaved_drafts().len();
         controller.edit_draft(&draft, "Closing right after typing.", 1_000);
         let unsaved = controller.unsaved_drafts();
@@ -1653,9 +1653,9 @@ mod tests {
     #[test]
     fn typing_in_a_draft_schedules_a_save_intent() {
         let (controller, sink) = setup();
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
-        let draft = DraftId::new(preview::SAVED_DRAFT);
+        let draft = DraftId::new(test_fixture::SAVED_DRAFT);
         controller.edit_draft(&draft, "Use a typed TimeoutError here.", 1_000);
         assert_eq!(controller.poll_drafts(1_100), Some(1_300));
         assert!(sink.intents.borrow().is_empty());

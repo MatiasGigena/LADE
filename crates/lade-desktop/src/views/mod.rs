@@ -83,7 +83,7 @@ pub struct App {
     before_terminal: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     watcher: RefCell<AttentionWatcher>,
     delivery: RefCell<Delivery>,
-    /// Desktop notifications (live windows only; never for preview data).
+    /// Desktop notifications.
     notifier: RefCell<Option<Rc<dyn Notifier>>>,
     body: gtk::Stack,
     centre: gtk::Stack,
@@ -98,7 +98,6 @@ pub struct App {
     sizes: Cell<WideSizes>,
     empty: gtk::Box,
     notice: gtk::Box,
-    preview_band: gtk::Label,
     notices_seen: Cell<usize>,
     draft_timer: RefCell<Option<glib::SourceId>>,
     scheduling: Cell<bool>,
@@ -149,10 +148,6 @@ impl App {
         let root = widgets::vbox(0);
         root.add_css_class("lade-root");
         root.append(&header.viewport);
-        // Persistent statement in preview mode so fixture data is never mistaken for service state.
-        let preview_band = widgets::label("", &["preview-band"]);
-        preview_band.set_visible(false);
-        root.append(&preview_band);
         let notice = widgets::hbox(widgets::space::GROUP);
         notice.add_css_class("notice-bar");
         notice.set_visible(false);
@@ -258,7 +253,6 @@ impl App {
             sizes: Cell::new(layout::wide_sizes(1440)),
             empty,
             notice,
-            preview_band,
             notices_seen: Cell::new(0),
             draft_timer: RefCell::new(None),
             scheduling: Cell::new(false),
@@ -288,7 +282,7 @@ impl App {
         app
     }
 
-    /// Requests the viewer content for a restored selection (e.g. the preview fixture).
+    /// Requests the viewer content for a restored selection.
     pub fn load_initial(&self) {
         self.controller.reload_viewer();
     }
@@ -329,7 +323,7 @@ impl App {
         let weak = Rc::downgrade(self);
         self.window
             .connect_close_request(move |_| match weak.upgrade() {
-                Some(app) if !app.close_confirmed.get() && !app.store.state().is_preview() => {
+                Some(app) if !app.close_confirmed.get() => {
                     if app.guard_unsaved(CloseAfter::Window) {
                         glib::Propagation::Proceed
                     } else {
@@ -543,10 +537,7 @@ impl App {
     /// controls it; the window closes once the service confirms. Closing the window instead
     /// keeps authorized background work running.
     fn confirm_exit(self: &Rc<Self>) {
-        let controls = {
-            let state = self.store.state();
-            state.connection.is_connected() && !state.is_preview()
-        };
+        let controls = self.store.state().connection.is_connected();
         let body = if controls {
             "Exit stops the LADE service: running agents are stopped and recorded as interrupted, terminals end, and nothing resumes on its own when LADE starts again. To keep agents working in the background, close the window instead."
         } else {
@@ -796,13 +787,10 @@ impl App {
         let Some(notifier) = self.notifier.borrow().clone() else {
             return;
         };
-        let requests = {
-            let state = self.store.state();
-            if state.is_preview() {
-                return;
-            }
-            self.watcher.borrow_mut().observe(&state.objectives)
-        };
+        let requests = self
+            .watcher
+            .borrow_mut()
+            .observe(&self.store.state().objectives);
         if requests.is_empty() {
             return;
         }
@@ -954,17 +942,11 @@ impl App {
 
     fn render_body(self: &Rc<Self>) {
         let state = self.store.state();
-        let (_, full) = header::connection_text(&state.connection, state.is_preview());
-        self.preview_band.set_text(&format!(
-            "{full}. Every Objective, file, check and draft shown here is fixture data; actions are not sent anywhere."
-        ));
-        self.preview_band.set_visible(state.is_preview());
         let has_workspace = state.active_workspace().is_some();
         let connection = state.connection.clone();
-        let preview = state.is_preview();
         drop(state);
         widgets::clear(&self.empty);
-        if has_workspace || preview {
+        if has_workspace {
             self.body.set_visible_child_name("main");
             return;
         }

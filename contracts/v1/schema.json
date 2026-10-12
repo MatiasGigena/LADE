@@ -227,7 +227,6 @@
         "stale_target",
         "limit_reached",
         "cleaned_up",
-        "fixture_model",
         "unsent_drafts"
       ]
     },

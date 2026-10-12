@@ -11,16 +11,18 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use lade_protocol::client::{
-    ActivityPageQuery, ErrorCode, Event, ExecutionState, FeedbackSubmitCommand, Lifecycle,
-    MessageSendCommand, ModelsListQuery, ObjectiveSelector, ProfileImportCommand, ProviderAuth,
-    ProviderStatus, ReplyData, Request, ResourceDecideCommand, ResourceKind, ResourceState,
-    SessionCompactCommand, SessionConfigureCommand, SessionForkCommand, SessionImportCommand,
-    SessionNavigateCommand, UiRespondCommand,
+    ActivityPageQuery, ErrorCode, Event, ExecutionStartCommand, ExecutionState,
+    FeedbackSubmitCommand, Lifecycle, MessageSendCommand, ModelsListQuery, ObjectiveSelector,
+    ProfileImportCommand, ProviderAuth, ProviderStatus, ReplyData, Request, ResourceDecideCommand,
+    ResourceKind, ResourceState, SessionCompactCommand, SessionConfigureCommand,
+    SessionForkCommand, SessionImportCommand, SessionNavigateCommand, UiRespondCommand,
 };
 use lade_protocol::types::{
     Counter, DeliveryMode, Digest, ForkPosition, Id, Model, PageLimit, ThinkingLevel,
     TreeEntryKind, UiAnswer, UiCloseReason, UiPrompt, WirePath,
 };
+use lade_system::service::{self, ServiceConfig};
+use lade_system::supervision::credentials::FIXTURE_REFUSED;
 use service_support::*;
 
 const EXTENSION: &str = r#"export default function (pi) {
@@ -103,6 +105,74 @@ fn snapshot_tree(dir: &Path) -> BTreeMap<PathBuf, (Vec<u8>, SystemTime)> {
         }
     }
     out
+}
+
+fn provider_ids(client: &mut Client, provider: Option<&str>) -> (Vec<String>, usize) {
+    match client.call(Request::ModelsList(ModelsListQuery {
+        provider: provider.map(str::to_owned),
+    })) {
+        Ok(ReplyData::ModelsList(catalog)) => (
+            catalog.providers.into_iter().map(|p| p.provider).collect(),
+            catalog.models.len(),
+        ),
+        other => panic!("models.list: {other:?}"),
+    }
+}
+
+/// Without the service's test switch the offline fixture model is neither listed nor startable,
+/// whichever launcher (sandboxed with its own switch off, or the unsandboxed test launcher) runs.
+#[test]
+fn the_fixture_provider_is_absent_and_refused_without_the_test_switch() {
+    for (tag, launcher) in [
+        ("svc-nofixture", None),
+        ("svc-nofixture-fake", Some(FakeLauncher::shared())),
+    ] {
+        let env = Env::new(tag);
+        let launcher = launcher.unwrap_or_else(|| best_launcher_with(&env, false).0);
+        let config = ServiceConfig {
+            test_fixture_provider: false,
+            ..env.config()
+        };
+        let service = service::start(config, launcher).expect("service starts");
+        let mut client = env.connect();
+        let (providers, _) = provider_ids(&mut client, None);
+        assert!(!providers.iter().any(|p| p == "lade-fixture"), "{tag}");
+        assert_eq!(
+            provider_ids(&mut client, Some("lade-fixture")).1,
+            0,
+            "{tag}"
+        );
+        let ws = open_workspace(&mut client, &env.repo);
+        let objective = create_objective(&mut client, &ws.workspace_id, "No fixture").objective_id;
+        let refused = match client.call(Request::ExecutionStart(ExecutionStartCommand {
+            objective_id: objective,
+            model: Model {
+                provider: "lade-fixture".into(),
+                id: "scripted".into(),
+            },
+            thinking: None,
+        })) {
+            Err(rejection) => rejection,
+            other => panic!("fixture start was not refused: {other:?}"),
+        };
+        assert_eq!(refused.code, ErrorCode::ExecutionUnavailable, "{tag}");
+        assert_eq!(refused.detail, FIXTURE_REFUSED, "{tag}");
+        drop(client);
+        service.shutdown();
+    }
+}
+
+/// With the switch the fallback catalogue (no SDK catalogue) still offers the fixture model.
+#[test]
+fn the_fixture_provider_is_listed_with_the_test_switch() {
+    let env = Env::new("svc-fixture-fallback");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let (providers, _) = provider_ids(&mut client, None);
+    assert_eq!(providers, ["lade-fixture"]);
+    assert_eq!(provider_ids(&mut client, Some("lade-fixture")).1, 1);
+    drop(client);
+    service.shutdown();
 }
 
 #[test]
@@ -556,5 +626,17 @@ fn model_and_thinking_selection_is_persisted_per_objective() {
     assert_eq!(
         detail(&mut client, &objective).session.unwrap().thinking,
         Some(ThinkingLevel::Minimal)
+    );
+}
+
+/// `laded serve` started with the test switch says so in its log.
+#[test]
+fn laded_warns_when_the_test_fixture_provider_is_enabled() {
+    let env = Env::new("svc-fixture-warning");
+    let daemon = env.spawn_laded(None, &[]);
+    let log = daemon.log_text();
+    assert!(
+        log.contains("warning: offline test model lade-fixture enabled"),
+        "{log}"
     );
 }

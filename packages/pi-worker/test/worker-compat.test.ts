@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { FIXTURE_PROVIDER, FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { extensionHash } from "../src/worker/resources.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker, WORKER } from "./worker-support.ts";
@@ -336,13 +337,18 @@ test("a second command while one runs fails at once; a foreign profile path is r
   assert.equal(done.ok, true, text(done.message));
 }));
 
+function runCatalog(box: Sandbox, name: string, env: Record<string, string>): JsonObject {
+  const out = join(box.root, name);
+  execFileSync(process.execPath, [join(dirname(WORKER), "worker", "catalog.ts"), out], { stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, ...env } });
+
+  return record(JSON.parse(readFileSync(out, "utf8")));
+}
+
 test("the pinned compatibility manifest matches the SDK catalogue", () => {
   const box = sandbox();
 
   try {
-    const out = join(box.root, "catalog.json");
-    execFileSync(process.execPath, [join(dirname(WORKER), "worker", "catalog.ts"), out], { stdio: "ignore" });
-    const catalog = record(JSON.parse(readFileSync(out, "utf8")));
+    const catalog = runCatalog(box, "catalog.json", {});
     const manifest = record(JSON.parse(readFileSync(join(dirname(WORKER), "..", "..", "..", "docs", "implementation", "pi-compatibility.json"), "utf8")));
 
     const ids = (value: JsonValue | undefined): string[] => {
@@ -354,5 +360,21 @@ test("the pinned compatibility manifest matches the SDK catalogue", () => {
     assert.equal(record(manifest.sdk).version, catalog.sdk_version, "manifest is pinned to the installed SDK version");
     assert.deepEqual(ids(manifest.providers), ids(catalog.providers), "every catalogue provider is classified, none extra");
     assert.equal(catalog.error, null);
+  } finally { cleanup(box); }
+});
+
+test("the catalogue lists the fixture provider only with the test switch", () => {
+  const box = sandbox();
+
+  try {
+    const providers = (catalog: JsonObject): string[] => {
+      assert.ok(Array.isArray(catalog.providers));
+
+      return catalog.providers.map(entry => text(record(entry).id));
+    };
+
+    assert.ok(!providers(runCatalog(box, "off.json", {})).includes(FIXTURE_PROVIDER), "absent without the switch");
+    const on = runCatalog(box, "on.json", { [FIXTURE_SWITCH]: "1" });
+    assert.ok(providers(on).includes(FIXTURE_PROVIDER), "present with the switch");
   } finally { cleanup(box); }
 });

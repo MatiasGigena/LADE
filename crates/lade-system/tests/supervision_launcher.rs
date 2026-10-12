@@ -17,7 +17,7 @@ use adapters_support::{TempDir, git, init_repo};
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use lade_protocol::worker::{TurnState, WorkerBody};
 use lade_system::adapters::sandbox::SandboxTools;
-use lade_system::supervision::credentials::CredentialSource;
+use lade_system::supervision::credentials::{CredentialSource, FIXTURE_REFUSED};
 use lade_system::supervision::gateway::{EgressPolicy, EgressRule, default_policies};
 use lade_system::supervision::launcher::{
     NODE_ARGS, WORKER_LIMITS, default_worker_dir, resolve_node, worker_dir_from,
@@ -95,6 +95,7 @@ impl Fixture {
             upstream_proxy: None,
             extra_ro: Vec::new(),
             cgroups: None,
+            test_fixture_provider: true,
         }
     }
 
@@ -428,6 +429,8 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
         .replace("__OUTSIDE__", outside.to_str().unwrap())
         .replace("__ALLOWED__", &format!("127.0.0.1:{port}"));
     let mut config = fx.probe_config(node, &script);
+    // A normal install: the test-only fixture switch is off and never reaches the sandbox.
+    config.test_fixture_provider = false;
     config.policies.insert(
         "openai".into(),
         EgressPolicy::none().with_extra([EgressRule {
@@ -643,4 +646,27 @@ fn providers_without_credentials_or_policy_are_unavailable() {
         Err(LaunchError::Io(_))
     ));
     assert!(!Path::new(&fx.socket(5)).exists());
+}
+
+#[test]
+fn the_fixture_provider_is_refused_without_the_test_switch() {
+    let Some(node) = prerequisites() else { return };
+    let fx = Fixture::new("nofixture");
+    let config = LauncherConfig {
+        test_fixture_provider: false,
+        ..fx.config(node)
+    };
+    let launcher = default_launcher(config).unwrap();
+    let Err(LaunchError::ProviderUnavailable(refused)) = launcher.preflight("lade-fixture") else {
+        panic!("expected provider_unavailable at preflight");
+    };
+    assert_eq!(refused, FIXTURE_REFUSED);
+    let (tx, _rx) = sync_channel(4);
+    let Err(LaunchError::ProviderUnavailable(refused)) =
+        launcher.launch(fx.request("lade-fixture", "scripted", 6), tx)
+    else {
+        panic!("expected provider_unavailable at launch");
+    };
+    assert_eq!(refused, FIXTURE_REFUSED);
+    assert!(!Path::new(&fx.socket(6)).exists());
 }

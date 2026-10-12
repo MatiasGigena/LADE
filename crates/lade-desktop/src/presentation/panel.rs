@@ -361,13 +361,13 @@ pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> 
 mod tests {
     use super::*;
     use crate::presentation::model::{AvailableAction, Badge, ExecutionState};
-    use crate::presentation::preview;
     use crate::presentation::store::PresentationState;
+    use crate::presentation::test_fixture;
 
     fn details() -> Vec<ObjectiveDetail> {
         let mut state =
             PresentationState::new(crate::presentation::model::ConnectionState::Connected);
-        for update in preview::fixture_updates() {
+        for update in test_fixture::fixture_updates() {
             state.apply(update);
         }
         let details: Vec<ObjectiveDetail> = state
@@ -375,10 +375,7 @@ mod tests {
             .values()
             .filter_map(|d| d.loaded().cloned())
             .collect();
-        assert!(
-            details.len() > 1,
-            "the preview fixture has several Objectives"
-        );
+        assert!(details.len() > 1, "the test data has several Objectives");
         details
     }
 

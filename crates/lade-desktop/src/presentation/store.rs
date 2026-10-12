@@ -316,8 +316,6 @@ pub struct PresentationState {
     pub ui: UiState,
     /// IMP-011 projections and the model picker's choice.
     pub compat: CompatState,
-    /// Labelled development fixture (`--preview`); never service authority.
-    pub preview: bool,
     /// Contained terminals of this window, newest last.
     pub terminals: Vec<TerminalSession>,
     /// `service.stop` was accepted.
@@ -356,15 +354,10 @@ impl PresentationState {
             command_status: HashMap::new(),
             ui: UiState::default(),
             compat: CompatState::default(),
-            preview: false,
             terminals: Vec::new(),
             service_stopped: false,
             notifications_unavailable: None,
         }
-    }
-
-    pub fn is_preview(&self) -> bool {
-        self.preview
     }
 
     pub fn active_workspace(&self) -> Option<&Workspace> {

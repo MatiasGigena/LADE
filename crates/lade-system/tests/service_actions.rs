@@ -382,6 +382,7 @@ fn start_without_credentials_is_refused_synchronously_naming_the_variable() {
     )
     .unwrap();
     config.credentials = CredentialSource::empty();
+    config.test_fixture_provider = true;
     let launcher: Arc<dyn WorkerLauncher> = Arc::from(default_launcher(config).unwrap());
     let service = env.start(launcher);
     let mut client = env.connect();

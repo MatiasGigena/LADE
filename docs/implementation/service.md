@@ -322,7 +322,7 @@ input is never resent automatically.
 
 Attention uses `lade_core::derive_attention` with facts the service tracks (uncertain delivery, stale unsent drafts,
 failed checks, integration conflict, cached target movement, non-empty latest capture); wire badges add
-`verification_missing`, `unsent_drafts`, `fixture_model` and `limit_reached` (first, for an execution that failed
+`verification_missing`, `unsent_drafts` and `limit_reached` (first, for an execution that failed
 because an enforced limit was reached; its failure reason starts with `limit_reached:`).
 
 ## Resource limits (IMP-006)
@@ -515,6 +515,29 @@ directory at every `draft.save`: a file `draft.save` that is empty refuses the s
 anything is written; containing `delay <ms>` (≤ 10 s) it holds the save on the service thread and then saves
 normally. It exists so that `scripts/e2e-resilience` can show the client's save-failure, retry and "Saved only after
 the acknowledgement" behaviour against the real service; it is **not a product setting**.
+
+## Test-only fixture provider
+
+The offline scripted model `lade-fixture/scripted` (the worker's `src/worker/fixture.ts`, see
+[worker.md](worker.md#lade-fixture-provider-test-only)) exists only for test harnesses. It is enabled only when
+`laded serve` starts with **`LADE_TEST_FIXTURE_PROVIDER=1`** in its environment (read once at start, in debug and
+release builds; the systemd unit never sets it). `laded` then logs `warning: offline test model lade-fixture enabled
+(LADE_TEST_FIXTURE_PROVIDER=1); test harnesses only, not for real use`, sets `ServiceConfig::test_fixture_provider`
+and `LauncherConfig::test_fixture_provider`, and passes the switch into the sandbox of the model catalogue and of each
+worker launch, which register the provider only with it. Without the switch, at every layer:
+
+- the worker and the catalogue do not register the provider, and the service drops it from `models.list` (also the
+  fallback catalogue used when the SDK catalogue cannot run, which is then empty with its error);
+- `execution.start`, `execution.resume` and `session.configure` naming it — for example from a stale stored
+  default model or an Objective started by a test build — are refused with `execution_unavailable` and the detail
+  `lade-fixture is an offline test provider; it is available only when laded runs with
+  LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)`; a launch reaching the sandboxed launcher (restart recovery)
+  fails with the same reason.
+
+With the switch the provider is an ordinary catalogue entry (no special badge or label in the client). The Rust
+integration tests (`tests/service_support`), the worker tests, `tests/load.rs` and `scripts/e2e-gui`,
+`e2e-terminal`, `e2e-resilience` and `e2e-perf` turn it on; `tests/service_compat.rs` and
+`tests/supervision_launcher.rs` check that it is absent and refused without it.
 
 ## Tests
 

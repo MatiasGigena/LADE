@@ -294,14 +294,6 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 }
 .profile-name { font-weight: 500; }
 
-.preview-band {
-  padding: 6px 16px;
-  background-color: @fill_band;
-  border-bottom: 1px solid @border_separator;
-  font-size: 13px;
-  color: @ink_secondary;
-}
-
 .notice-bar {
   padding: 8px 16px;
   background-color: @fill_band;

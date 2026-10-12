@@ -1,6 +1,7 @@
 #!/bin/sh
 # Canonical IMP-013 load, latency and soak procedures (docs/planning/performance-budgets.md)
-# against the real release `laded`, real sandboxed workers and the offline `lade-fixture` model.
+# against the real release `laded`, real sandboxed workers and the offline `lade-fixture` model
+# (the test starts `laded` with the test-only LADE_TEST_FIXTURE_PROVIDER=1 switch).
 # Not part of scripts/verify: a full load run takes about an hour, the soak 35 minutes.
 #
 #   scripts/load [OUT_DIR]          nominal 1/4-worker runs, service launches, GTK client phases

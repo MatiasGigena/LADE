@@ -1,5 +1,8 @@
 //! `laded`: the authoritative LADE service.
 //!
+//! Test harnesses start `serve` with `LADE_TEST_FIXTURE_PROVIDER=1` to enable the offline
+//! `lade-fixture` model (a warning is logged); a normal install never offers it.
+//!
 //! ```text
 //! laded --version
 //! laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
@@ -32,7 +35,9 @@ use lade_system::adapters::sandbox::{OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cg
 use lade_system::diagnostics;
 use lade_system::service::{self, ResourceLimits, ServiceConfig, StartError};
 use lade_system::storage::{self, backup};
-use lade_system::supervision::credentials::{FIXTURE_PROVIDER, custom_var, provider_env_vars};
+use lade_system::supervision::credentials::{
+    FIXTURE_PROVIDER, FIXTURE_SWITCH, custom_var, fixture_switch_on, provider_env_vars,
+};
 use lade_system::supervision::secret_service::{
     MAX_SECRET_BYTES, SecretService, valid_provider_id,
 };
@@ -251,6 +256,7 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
         .and_then(|launcher| {
             default_launcher(LauncherConfig {
                 cgroups: config.cgroups.clone(),
+                test_fixture_provider: config.test_fixture_provider,
                 ..launcher
             })
         });
@@ -385,8 +391,15 @@ fn serve(parsed: &Args) -> ExitCode {
     };
     let config = ServiceConfig {
         cgroups: delegated_cgroups(),
+        test_fixture_provider: fixture_switch_on(),
         ..config
     };
+    if config.test_fixture_provider {
+        eprintln!(
+            "laded: warning: offline test model {FIXTURE_PROVIDER} enabled ({FIXTURE_SWITCH}=1); \
+             test harnesses only, not for real use"
+        );
+    }
     if let Some(dir) = lade_system::fault::directory() {
         eprintln!(
             "laded: warning: test fault injection enabled ({}={}); not for real use",

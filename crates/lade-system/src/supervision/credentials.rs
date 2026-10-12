@@ -34,8 +34,23 @@ use super::secret_service::{Lookup, SecretService};
 /// Largest accepted credentials file.
 const MAX_FILE_BYTES: u64 = 64 << 10;
 
-/// Providers that need no credentials (the offline fixture model).
+/// The offline scripted test model; it needs no credentials. Test-only: the service offers and
+/// starts it only when it runs with [`FIXTURE_SWITCH`].
 pub const FIXTURE_PROVIDER: &str = "lade-fixture";
+
+/// Environment switch (`LADE_TEST_FIXTURE_PROVIDER=1`) that enables [`FIXTURE_PROVIDER`] for test
+/// harnesses. `laded serve` reads it once at start and passes it on to the worker and the model
+/// catalogue; without it the provider is absent from the catalogue and refused at start.
+pub use crate::adapters::sandbox::FIXTURE_SWITCH;
+
+/// Why [`FIXTURE_PROVIDER`] is refused when the switch is off.
+pub const FIXTURE_REFUSED: &str = "lade-fixture is an offline test provider; it is available only \
+     when laded runs with LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)";
+
+/// Whether this process was started with [`FIXTURE_SWITCH`] set to `1`.
+pub fn fixture_switch_on() -> bool {
+    std::env::var_os(FIXTURE_SWITCH).is_some_and(|v| v == "1")
+}
 
 /// Credential variables per provider, mirroring pi-ai 0.85.1 `env-api-keys.js`
 /// (`getApiKeyEnvVars`). Any one present variable satisfies the provider; all present ones are

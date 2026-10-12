@@ -1,7 +1,7 @@
 #!/bin/sh
 # Drives the complete first-release loop in the real GTK client under Xvfb against a real
-# `laded serve`, with the offline `lade-fixture` model inside the real worker sandbox, and
-# captures one screenshot per major step.
+# `laded serve`, with the offline `lade-fixture` model inside the real worker sandbox (enabled by the
+# test-only LADE_TEST_FIXTURE_PROVIDER=1 switch), and captures one screenshot per major step.
 #
 #   scripts/e2e-gui [OUT_DIR]     (default: docs/implementation/evidence/first-release)
 #
@@ -22,6 +22,9 @@ DPY=:${E2E_DISPLAY:-77}
 BIN=$ROOT/target/debug
 W=1440
 H=900
+# The screen is larger than the window so the 200 % capture can hold 800x550 logical pixels; the
+# window sits at 0,0 and each capture is the window's 1440x900 region of the root window.
+SCREEN=1600x1100
 for tool in Xvfb xdotool import git bwrap; do
   command -v "$tool" >/dev/null || { echo "e2e-gui: $tool is required" >&2; exit 2; }
 done
@@ -51,7 +54,7 @@ click() { x mousemove "$1" "$2" click 1; sleep "${3:-1}"; }
 key() { x key "$@"; sleep 1; }
 typ() { x type --delay 8 "$1"; }
 park() { x mousemove 700 880; sleep 0.5; }
-shot() { park; import -window root "$OUT/e2e-$1.png"; step "screenshot e2e-$1.png"; }
+shot() { park; import -window root -crop "${W}x${H}+0+0" +repage "$OUT/e2e-$1.png"; step "screenshot e2e-$1.png"; }
 scroll_inspector() { x mousemove 1280 600; i=0; while [ $i -lt "${1:-12}" ]; do x click 5; i=$((i + 1)); done; sleep 1; }
 # Inspector buttons move with scrolling and wrapped reasons; find them by pixels
 # (scripts/e2e-find-button.py): `black` = filled primary button, else a label template in
@@ -103,14 +106,16 @@ git -C "$REPO" add README.md
 git -C "$REPO" commit -q -m initial
 BASE=$(git -C "$REPO" rev-parse main)
 
-Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
+Xvfb "$DPY" -screen 0 ${SCREEN}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
 pids="$pids $!"
 sleep 1
-"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
+LADE_TEST_FIXTURE_PROVIDER=1 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
 pids="$pids $!"
 wait_for 10 "control socket" test -S "$RUN/control.sock"
+grep -q "offline test model lade-fixture enabled" "$T/laded.log" || fail "the service did not announce the test model"
 XDG_CONFIG_HOME=$T/config GTK_A11Y=none "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" --open "$REPO" >"$T/desktop.log" 2>&1 &
-pids="$pids $!"
+DESKTOP=$!
+pids="$pids $DESKTOP"
 wait_for 20 "LADE window" xdotool search --onlyvisible --name LADE
 WID=$(xdotool search --onlyvisible --name LADE | head -1)
 x windowmove "$WID" 0 0 windowsize "$WID" $W $H
@@ -150,6 +155,11 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 [ ! -e "$REPO/hello.txt" ] || fail "the shared checkout was written"
 sleep 3
 shot 04-activity
+
+step "Activity: Model, Agent Session and profile (opened, then closed again)"
+click 380 180 2
+shot 04b-agent-tools
+click 380 180 1
 
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
@@ -282,4 +292,25 @@ click 1020 166 1   # open More actions (collapsed by default): every other actio
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"
+
+step "800x550 compact composition (window capture)"
+x windowsize "$WID" 800 550
+sleep 3
+park
+import -window "$WID" "$OUT/e2e-23-compact-800x550.png"
+step "screenshot e2e-23-compact-800x550.png"
+
+step "200 % scale: the client restarted with GDK_SCALE=2 (1600x1100 physical, 800x550 logical)"
+kill "$DESKTOP"
+wait "$DESKTOP" 2>/dev/null || true
+XDG_CONFIG_HOME=$T/config GTK_A11Y=none GDK_SCALE=2 GDK_DPI_SCALE=1 "$BIN/lade-desktop" --no-spawn --runtime-dir "$RUN" >>"$T/desktop.log" 2>&1 &
+DESKTOP=$!
+pids="$pids $DESKTOP"
+wait_for 20 "LADE window" xdotool search --onlyvisible --name LADE
+WID=$(xdotool search --onlyvisible --name LADE | head -1)
+x windowmove "$WID" 0 0 windowsize "$WID" 1600 1100
+sleep 4
+park
+import -window root -crop 1600x1100+0+0 +repage "$OUT/e2e-24-scale-200-800x550.png"
+step "screenshot e2e-24-scale-200-800x550.png"
 step "PASSED: squash commit $(git -C "$REPO" rev-parse --short main) on main contains hello.txt; screenshots in $OUT"

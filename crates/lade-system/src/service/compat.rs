@@ -38,6 +38,7 @@ use serde_json::Value;
 
 use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
+use crate::supervision::credentials::FIXTURE_PROVIDER;
 use crate::supervision::{AccessStatus, AuthKind, ProviderFacts};
 
 use super::convert::{
@@ -157,28 +158,34 @@ fn text(value: Option<&Value>, max: usize) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// The offline fixture provider, known without running the catalogue.
-fn fixture_catalog(error: Option<String>) -> CatalogData {
+/// The catalogue when the SDK catalogue cannot run: only the offline test provider when the
+/// service runs with the test switch, otherwise nothing.
+fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
+    let fixture = (
+        ProviderFacts {
+            id: FIXTURE_PROVIDER.into(),
+            name: "LADE fixture provider (offline, scripted; not a real model)".into(),
+            api_key: true,
+            oauth: None,
+            subscription: false,
+            base_url: None,
+        },
+        vec![ModelInfo {
+            provider: FIXTURE_PROVIDER.into(),
+            id: "scripted".into(),
+            name: "LADE fixture: scripted (offline test model)".into(),
+            reasoning: false,
+            thinking_levels: vec![ThinkingLevel::Off],
+        }],
+    );
     CatalogData {
         sdk_version: "0.85.1".into(),
-        providers: vec![(
-            ProviderFacts {
-                id: "lade-fixture".into(),
-                name: "LADE fixture provider (offline, scripted; not a real model)".into(),
-                api_key: true,
-                oauth: None,
-                subscription: false,
-                base_url: None,
-            },
-            vec![ModelInfo {
-                provider: "lade-fixture".into(),
-                id: "scripted".into(),
-                name: "LADE fixture: scripted (offline test model)".into(),
-                reasoning: false,
-                thinking_levels: vec![ThinkingLevel::Off],
-            }],
-        )],
-        error,
+        providers: if test_fixture_provider {
+            vec![fixture]
+        } else {
+            Vec::new()
+        },
+        error: Some(error),
     }
 }
 
@@ -357,12 +364,13 @@ impl Service {
             }
             Err(why) => {
                 eprintln!("laded: model catalogue unavailable");
-                Arc::new(fixture_catalog(Some(preview(
-                    &format!(
-                        "the SDK model catalogue is unavailable ({why}); only the offline fixture is listed"
+                Arc::new(fallback_catalog(
+                    self.test_fixture_provider,
+                    preview(
+                        &format!("the SDK model catalogue is unavailable ({why})"),
+                        512,
                     ),
-                    512,
-                ))))
+                ))
             }
         };
         for (ctx, query) in std::mem::take(&mut self.compat.catalog_waiting) {
@@ -372,9 +380,13 @@ impl Service {
     }
 
     fn catalog_reply(&self, data: &CatalogData, query: &ModelsListQuery) -> ReplyData {
+        // The test-only fixture provider is never offered without the service's test switch.
+        let offered =
+            |facts: &ProviderFacts| self.test_fixture_provider || facts.id != FIXTURE_PROVIDER;
         let mut providers: Vec<ProviderInfo> = data
             .providers
             .iter()
+            .filter(|(facts, _)| offered(facts))
             .map(|(facts, models)| {
                 let access = self.launcher.provider_access(facts);
                 ProviderInfo {
@@ -403,7 +415,9 @@ impl Service {
         let matching: Vec<&ModelInfo> = data
             .providers
             .iter()
-            .filter(|(facts, _)| query.provider.as_deref() == Some(facts.id.as_str()))
+            .filter(|(facts, _)| {
+                offered(facts) && query.provider.as_deref() == Some(facts.id.as_str())
+            })
             .flat_map(|(_, models)| models)
             .collect();
         ReplyData::ModelsList(ModelCatalog {
@@ -825,7 +839,7 @@ impl Service {
             };
             return self.send_command(ctx, oid, Op::Configure, command, None);
         }
-        if let Err(rejection) = self.preflight_provider(model.provider()) {
+        if let Err(rejection) = self.preflight(model.provider()) {
             self.finish(ctx, Err(rejection));
             return Flow::Done;
         }
@@ -834,16 +848,6 @@ impl Service {
         });
         self.finish(ctx, result);
         Flow::Done
-    }
-
-    fn preflight_provider(&self, provider: &str) -> Result<(), Rejection> {
-        self.launcher.preflight(provider).map_err(|e| {
-            rejection(
-                ErrorCode::ExecutionUnavailable,
-                SafeAction::None,
-                &e.detail(),
-            )
-        })
     }
 
     /// Records model (Objective row) and thinking (preference) in one transaction.
@@ -890,16 +894,18 @@ impl Service {
         let st = self.objectives.get(&oid);
         let session = st.and_then(|st| st.objective().execution().session().cloned());
         let pi = self.compat.live.get(&oid).and_then(|l| l.pi.clone());
-        let model = session.as_ref().map_or_else(
-            || Model {
-                provider: "lade-fixture".into(),
-                id: "scripted".into(),
-            },
-            |s| Model {
+        // Session commands need a bound session; without one the live worker's model (if any).
+        let model = session
+            .as_ref()
+            .map(|s| Model {
                 provider: preview(s.model.provider(), 128),
                 id: preview(s.model.id(), 256),
-            },
-        );
+            })
+            .or_else(|| pi.as_ref().map(|p| p.model.clone()))
+            .unwrap_or_else(|| Model {
+                provider: String::new(),
+                id: String::new(),
+            });
         SessionState {
             objective_id: wire_id(oid.uuid()),
             generation: counter(pi.as_ref().map_or(0, |p| p.generation)),

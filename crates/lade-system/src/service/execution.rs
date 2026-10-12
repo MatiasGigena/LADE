@@ -16,6 +16,7 @@ use lade_protocol::types::{ActivityRole, Id, Model, truncate_utf8};
 use lade_protocol::worker::{MAX_ITEM_TEXT_BYTES, TurnState, WorkerBody};
 
 use crate::storage::{self, ActivityRow};
+use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
 use crate::supervision::{LaunchBinding, LaunchRequest, SupervisorEvent, WorkerEvent};
 
 use super::convert::{
@@ -147,8 +148,16 @@ impl Service {
     }
 
     /// Refuses synchronously when the launcher can already tell a worker for `provider` could
-    /// not start (sandbox, egress policy, missing credentials — names only, never values).
-    fn preflight(&self, provider: &str) -> Result<(), Rejection> {
+    /// not start (sandbox, egress policy, missing credentials — names only, never values), and
+    /// refuses the test-only fixture provider unless the service was started with its switch.
+    pub(crate) fn preflight(&self, provider: &str) -> Result<(), Rejection> {
+        if provider == FIXTURE_PROVIDER && !self.test_fixture_provider {
+            return Err(rejection(
+                ErrorCode::ExecutionUnavailable,
+                SafeAction::None,
+                FIXTURE_REFUSED,
+            ));
+        }
         self.launcher.preflight(provider).map_err(|e| {
             rejection(
                 ErrorCode::ExecutionUnavailable,

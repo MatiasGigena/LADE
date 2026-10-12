@@ -164,7 +164,14 @@ automatically.
   `getSupportedThinkingLevels` and message/stream types.
 - From `undici@8.9.0`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
 
-## `lade-fixture` provider
+## `lade-fixture` provider (test-only)
+
+The offline fixture provider exists only for test harnesses. The worker (`src/worker/session.ts`) and the
+model catalogue (`src/worker/catalog.ts`) register it only when `LADE_TEST_FIXTURE_PROVIDER=1` is set in
+their environment; `laded` sets it in the sandbox only when it was itself started with that switch (see
+[service.md](service.md#test-only-fixture-provider)). Without it the provider is not in the catalogue and a
+`worker.start` naming it fails with `startup_failed` ("the requested model is not registered"). The worker
+tests (`test/worker-support.ts`) switch it on.
 
 `src/worker/fixture.ts` registers provider `lade-fixture` with model `scripted`
 (`lade-fixture/scripted`, display name "LADE fixture: scripted (offline test model)") through
@@ -201,7 +208,8 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   prompt while streaming → follow-up; abort clears the queue and keeps the worker usable; resume
   keeps `pi_session_id`/`session_file` and history; invalid frame → exit 2 without echo; frame
   before start → exit 2; fixture failure → `provider_failed` and recovery; > 192 KiB tool item
-  truncated; stdin EOF → exit 0; unknown model → exit 1.
+  truncated; stdin EOF → exit 0; unknown model → exit 1; without `LADE_TEST_FIXTURE_PROVIDER=1` the
+  fixture model is not registered and `worker.start` fails with `startup_failed`.
 - `test/worker-wire.test.ts` — closed inbound validation, LF fragmentation/poisoning, outbound
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled

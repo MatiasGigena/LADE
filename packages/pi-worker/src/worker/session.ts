@@ -5,7 +5,7 @@ import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAge
 import type { WorkerErrorCode } from "../dto.ts";
 import { counter } from "../schema.ts";
 import { safeMessage } from "./activity.ts";
-import { FIXTURE_PROVIDER, fixtureProvider } from "./fixture.ts";
+import { registerTestFixture } from "./fixture.ts";
 import { LadeResourceLoader } from "./resources.ts";
 import type { UiBridge } from "./ui.ts";
 import type { CommandBody, DeliverBody, ModelRef, OutboundBody, ResultBody, StartBody, ThinkingLevel, TreeEntry, WorkerResources } from "./wire.ts";
@@ -149,7 +149,7 @@ export class SessionHost {
       allowModelNetwork: false,
     });
 
-    modelRuntime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
+    registerTestFixture(modelRuntime);
 
     if (!modelRuntime.getModel(start.model.provider, start.model.id)) throw new StartError("startup_failed", "the requested model is not registered");
 

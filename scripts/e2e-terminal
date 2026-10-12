@@ -95,7 +95,7 @@ git -C "$REPO" commit -q -m initial
 Xvfb "$DPY" -screen 0 ${W}x${H}x24 -nolisten tcp >"$T/xvfb.log" 2>&1 &
 pids="$pids $!"
 sleep 1
-"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
+LADE_TEST_FIXTURE_PROVIDER=1 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >"$T/laded.log" 2>&1 &
 LADED=$!
 pids="$pids $LADED"
 wait_for 10 "control socket" test -S "$RUN/control.sock"
@@ -211,7 +211,7 @@ pgrep -f "$STATE" >/dev/null && fail "processes of this state directory linger a
 [ ! -e "$RUN/control.sock" ] || fail "control socket left behind"
 
 step "restart: the execution is interrupted, not resumed"
-"$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
+LADE_TEST_FIXTURE_PROVIDER=1 "$BIN/laded" serve --state-dir "$STATE" --runtime-dir "$RUN" >>"$T/laded.log" 2>&1 &
 LADED=$!
 pids="$pids $LADED"
 wait_for 10 "control socket" test -S "$RUN/control.sock"

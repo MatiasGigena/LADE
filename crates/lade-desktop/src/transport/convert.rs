@@ -178,7 +178,6 @@ fn badge(b: wire::Badge) -> view::Badge {
         wire::Badge::StaleTarget => view::Badge::StaleTarget,
         wire::Badge::LimitReached => view::Badge::LimitReached,
         wire::Badge::CleanedUp => view::Badge::CleanedUp,
-        wire::Badge::FixtureModel => view::Badge::FixtureModel,
         wire::Badge::UnsentDrafts => view::Badge::UnsentDrafts,
     }
 }

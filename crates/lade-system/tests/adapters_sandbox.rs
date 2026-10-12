@@ -585,6 +585,7 @@ sock.on('close', () => console.log(JSON.stringify(report)));
         credentials: vec![("FIXTURE_API_KEY".into(), "not-a-real-key".into())],
         extra_ro: Vec::new(),
         limits: Limits::WORKER,
+        test_fixture_provider: false,
     })
     .unwrap();
     assert!(
@@ -602,6 +603,7 @@ sock.on('close', () => console.log(JSON.stringify(report)));
             credentials: Vec::new(),
             extra_ro: Vec::new(),
             limits: Limits::WORKER,
+            test_fixture_provider: false,
         })
         .is_err()
     );
