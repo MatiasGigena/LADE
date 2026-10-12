@@ -112,12 +112,7 @@ fn full_loop_with_the_real_worker() {
     let ws = open_workspace(&mut client, &env.repo);
     assert_eq!(ws.default_branch.as_deref(), Some("main"));
     let objective = create_objective(&mut client, &ws.workspace_id, "Greeting").objective_id;
-    let started = start_execution(&mut client, &objective);
-    assert!(
-        started
-            .badges
-            .contains(&lade_protocol::client::Badge::FixtureModel)
-    );
+    start_execution(&mut client, &objective);
     wait_state(&mut client, &objective, ExecutionState::Idle);
 
     // Agent work in the isolated worktree.

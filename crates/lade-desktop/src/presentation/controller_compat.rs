@@ -265,18 +265,18 @@ mod tests {
     };
     use crate::presentation::intents::RecordingSink;
     use crate::presentation::model::ConnectionState;
-    use crate::presentation::preview;
     use crate::presentation::store::{PresentationState, Store};
+    use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
         let mut state = PresentationState::new(ConnectionState::Connected);
-        for update in preview::fixture_updates() {
+        for update in test_fixture::fixture_updates() {
             state.apply(update);
         }
         let store = Store::new(state);
         let sink = Rc::new(RecordingSink::default());
         let controller = Controller::new(store, sink.clone());
-        controller.select_objective(&ObjectiveId::new(preview::MAIN_OBJECTIVE));
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
         (controller, sink)
     }
@@ -336,7 +336,7 @@ mod tests {
             .store
             .apply_all(vec![StoreUpdate::Compat(CompatUpdate::DialogOpened(
                 UiDialog {
-                    objective_id: ObjectiveId::new(preview::MAIN_OBJECTIVE),
+                    objective_id: ObjectiveId::new(test_fixture::MAIN_OBJECTIVE),
                     ui_id: "00000000-0000-4000-8000-000000000042".into(),
                     generation: 3,
                     prompt: UiPromptView::Confirm {

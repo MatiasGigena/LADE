@@ -205,7 +205,6 @@ pub enum Badge {
     StaleTarget,
     LimitReached,
     CleanedUp,
-    FixtureModel,
     UnsentDrafts,
 }
 
@@ -221,7 +220,6 @@ impl Badge {
             Self::StaleTarget => "target moved",
             Self::LimitReached => "limit reached",
             Self::CleanedUp => "cleaned up",
-            Self::FixtureModel => "fixture model",
             Self::UnsentDrafts => "unsent drafts",
         }
     }

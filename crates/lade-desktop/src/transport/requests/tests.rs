@@ -584,7 +584,7 @@ pub(crate) fn wire_detail(objective_id: &str) -> wire::ObjectiveDetail {
             reason: None,
         },
         attention: wire::Attention::Working,
-        badges: vec![wire::Badge::FixtureModel],
+        badges: vec![wire::Badge::UnsentDrafts],
         updated_at: timestamp(),
         revision: Counter::new(4),
         intent: wire::Intent {
@@ -653,7 +653,7 @@ fn objective_detail_converts_field_by_field() {
         detail.summary.execution.state,
         view::ExecutionState::Running
     );
-    assert_eq!(detail.summary.badges, vec![view::Badge::FixtureModel]);
+    assert_eq!(detail.summary.badges, vec![view::Badge::UnsentDrafts]);
     assert_eq!(
         detail.summary.updated_at,
         view::Timestamp(timestamp().unix_ms())

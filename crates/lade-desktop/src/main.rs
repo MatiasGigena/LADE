@@ -1,6 +1,6 @@
 #[allow(
     dead_code,
-    reason = "presentation API surface shared by preview, tests and the live transport"
+    reason = "presentation API surface shared by tests and the live transport"
 )]
 mod presentation;
 mod transport;
@@ -16,14 +16,12 @@ use std::rc::Rc;
 
 use gtk4::{Application, gio, glib, prelude::*};
 
-use presentation::intents::IntentSink;
-use presentation::model::{ConnectionState, Timestamp};
-use presentation::preview::{PreviewResponder, PreviewVariant, preview_state};
+use presentation::model::ConnectionState;
 use presentation::store::{PresentationState, Store};
 use transport::Transport;
 use transport::connection::{self, Config, SpawnService};
 
-const USAGE: &str = "usage: lade-desktop [--runtime-dir DIR] [--state-dir DIR] [--no-spawn] [--open PATH]\n       lade-desktop --preview | --preview=disconnected\n       lade-desktop --version";
+const USAGE: &str = "usage: lade-desktop [--runtime-dir DIR] [--state-dir DIR] [--no-spawn] [--open PATH]\n       lade-desktop --version";
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Live {
@@ -31,12 +29,6 @@ struct Live {
     state_dir: Option<PathBuf>,
     no_spawn: bool,
     open: Option<PathBuf>,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum Mode {
-    Live(Live),
-    Preview(PreviewVariant),
 }
 
 fn absolute(path: OsString) -> PathBuf {
@@ -47,14 +39,7 @@ fn absolute(path: OsString) -> PathBuf {
     std::env::current_dir().map_or(path.clone(), |cwd| cwd.join(path))
 }
 
-fn parse_args(args: &[OsString]) -> Result<Mode, String> {
-    match args {
-        [flag] if flag == "--preview" => return Ok(Mode::Preview(PreviewVariant::Standard)),
-        [flag] if flag == "--preview=disconnected" => {
-            return Ok(Mode::Preview(PreviewVariant::Disconnected));
-        }
-        _ => {}
-    }
+fn parse_args(args: &[OsString]) -> Result<Live, String> {
     let mut live = Live::default();
     let mut args = args.iter().cloned();
     while let Some(flag) = args.next() {
@@ -71,7 +56,7 @@ fn parse_args(args: &[OsString]) -> Result<Mode, String> {
         let value = args.next().filter(|v| !v.is_empty()).ok_or(USAGE)?;
         *slot = Some(absolute(value));
     }
-    Ok(Mode::Live(live))
+    Ok(live)
 }
 
 fn live_config(live: &Live) -> Result<Config, String> {
@@ -105,99 +90,68 @@ fn main() -> glib::ExitCode {
         );
         return glib::ExitCode::SUCCESS;
     }
-    let mode = match parse_args(&args) {
-        Ok(mode) => mode,
-        Err(usage) => {
-            eprintln!("{usage}");
-            return glib::ExitCode::from(2);
-        }
-    };
-    let config = match &mode {
-        Mode::Live(live) => match live_config(live) {
-            Ok(config) => Some(config),
+    let config = match parse_args(&args) {
+        Ok(live) => match live_config(&live) {
+            Ok(config) => config,
             Err(message) => {
                 eprintln!("lade-desktop: {message}");
                 return glib::ExitCode::from(2);
             }
         },
-        Mode::Preview(_) => None,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return glib::ExitCode::from(2);
+        }
     };
-    // Live windows are single-instance: a second launch activates the running window (GApplication
+    // The window is single-instance: a second launch activates the running window (GApplication
     // on the session bus) instead of opening another approval authority; the service's single
     // controlling lease refuses any other client anyway. Without a session bus GApplication runs
-    // non-unique and the lease is the only guard. Preview windows are fixture data and may coexist.
-    let live = matches!(mode, Mode::Live(_));
+    // non-unique and the lease is the only guard.
     let app = Application::builder()
-        .application_id(if live {
-            "dev.lade.Desktop"
-        } else {
-            "dev.lade.Desktop.Preview"
-        })
-        .flags(if live {
-            gio::ApplicationFlags::FLAGS_NONE
-        } else {
-            gio::ApplicationFlags::NON_UNIQUE
-        })
+        .application_id("dev.lade.Desktop")
+        .flags(gio::ApplicationFlags::FLAGS_NONE)
         // Logout: the session manager asks before ending the session (`query-end`).
-        .register_session(live)
+        .register_session(true)
         .build();
     app.connect_startup(|_| views::load_css());
-    let mode = Rc::new(mode);
     // The views are owned here for the lifetime of the application.
     let windows: Rc<std::cell::RefCell<Vec<Rc<views::App>>>> = Rc::default();
-    if live {
-        // Notification clicks navigate in the existing window; they never approve or send.
-        let action = gio::SimpleAction::new(
-            views::notify::OPEN_OBJECTIVE_ACTION,
-            Some(glib::VariantTy::STRING),
-        );
-        let open = windows.clone();
-        action.connect_activate(move |_, target| {
-            let target = target.and_then(glib::Variant::str);
-            if let (Some(window), Some(target)) = (open.borrow().first(), target) {
-                window.open_from_notification(target);
-            }
-        });
-        app.add_action(&action);
-        // Logout stops the service according to policy: no lingering work, nothing resumes.
-        let ending = windows.clone();
-        app.connect_query_end(move |_| {
-            for window in ending.borrow().iter() {
-                window.logout();
-            }
-        });
-    }
+    // Notification clicks navigate in the existing window; they never approve or send.
+    let action = gio::SimpleAction::new(
+        views::notify::OPEN_OBJECTIVE_ACTION,
+        Some(glib::VariantTy::STRING),
+    );
+    let open = windows.clone();
+    action.connect_activate(move |_, target| {
+        let target = target.and_then(glib::Variant::str);
+        if let (Some(window), Some(target)) = (open.borrow().first(), target) {
+            window.open_from_notification(target);
+        }
+    });
+    app.add_action(&action);
+    // Logout stops the service according to policy: no lingering work, nothing resumes.
+    let ending = windows.clone();
+    app.connect_query_end(move |_| {
+        for window in ending.borrow().iter() {
+            window.logout();
+        }
+    });
     app.connect_activate(move |app| {
         // A second activation (another launch, or a notification) focuses the existing window.
         if let Some(existing) = windows.borrow().first() {
             existing.present();
             return;
         }
-        let window = match (&*mode, &config) {
-            (Mode::Preview(variant), _) => {
-                let now = Timestamp(glib::real_time() / 1000);
-                let monotonic = u64::try_from(glib::monotonic_time() / 1000).unwrap_or(0);
-                let store = Store::new(preview_state(now, monotonic, *variant));
-                let responder: Rc<dyn IntentSink> =
-                    Rc::new(PreviewResponder::new(Rc::downgrade(&store), now));
-                let sink = Rc::new(views::bridge::DeferredSink::new(responder));
-                views::App::new(app, store, sink)
-            }
-            (Mode::Live(_), Some(config)) => {
-                let store = Store::new(PresentationState::new(ConnectionState::Connecting));
-                let transport = Rc::new(Transport::new());
-                let window = views::App::new(app, store, transport.clone());
-                window.set_notifier(Rc::new(views::notify::DesktopNotifier::new(app)));
-                if transport
-                    .start(config.clone(), window.update_sender())
-                    .is_err()
-                {
-                    eprintln!("lade-desktop: could not start the transport thread");
-                }
-                window
-            }
-            (Mode::Live(_), None) => return,
-        };
+        let store = Store::new(PresentationState::new(ConnectionState::Connecting));
+        let transport = Rc::new(Transport::new());
+        let window = views::App::new(app, store, transport.clone());
+        window.set_notifier(Rc::new(views::notify::DesktopNotifier::new(app)));
+        if transport
+            .start(config.clone(), window.update_sender())
+            .is_err()
+        {
+            eprintln!("lade-desktop: could not start the transport thread");
+        }
         window.load_initial();
         window.present();
         windows.borrow_mut().push(window);
@@ -216,16 +170,13 @@ mod tests {
 
     #[test]
     fn default_launch_is_live() {
-        assert_eq!(parse_args(&[]), Ok(Mode::Live(Live::default())));
-        assert_eq!(
-            parse_args(&args(&["--preview"])),
-            Ok(Mode::Preview(PreviewVariant::Standard))
-        );
+        assert_eq!(parse_args(&[]), Ok(Live::default()));
+        assert!(parse_args(&args(&["--preview"])).is_err());
     }
 
     #[test]
     fn live_flags_parse_once_each() {
-        let Ok(Mode::Live(live)) = parse_args(&args(&[
+        let Ok(live) = parse_args(&args(&[
             "--runtime-dir",
             "/tmp/r",
             "--no-spawn",
@@ -234,7 +185,7 @@ mod tests {
             "--state-dir",
             "/tmp/s",
         ])) else {
-            panic!("live mode");
+            panic!("live flags");
         };
         assert_eq!(live.runtime_dir, Some(PathBuf::from("/tmp/r")));
         assert_eq!(live.state_dir, Some(PathBuf::from("/tmp/s")));
@@ -242,7 +193,6 @@ mod tests {
         assert!(live.no_spawn);
         assert!(parse_args(&args(&["--no-spawn", "--no-spawn"])).is_err());
         assert!(parse_args(&args(&["--runtime-dir"])).is_err());
-        assert!(parse_args(&args(&["--preview", "--no-spawn"])).is_err());
         assert!(parse_args(&args(&["--bogus"])).is_err());
     }
 }

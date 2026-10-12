@@ -12,12 +12,11 @@ use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::keys::{AppAction, Keymap};
 use crate::presentation::model::{ConnectionState, Load, SearchResult, SearchScope};
-use crate::presentation::preview::PREVIEW_LABEL;
 use crate::presentation::store::{Change, MainView};
 
-/// Short header text and the full statement (tooltip, accessible name and preview band).
-pub fn connection_text(connection: &ConnectionState, preview: bool) -> (String, String) {
-    let (short, full) = match connection {
+/// Short header text and the full statement (tooltip and accessible name).
+pub fn connection_text(connection: &ConnectionState) -> (String, String) {
+    match connection {
         ConnectionState::Connecting => (
             "… Connecting".to_owned(),
             "Connecting to the service".to_owned(),
@@ -41,16 +40,6 @@ pub fn connection_text(connection: &ConnectionState, preview: bool) -> (String, 
         ConnectionState::LeaseHeld => (
             "! Not controlling".to_owned(),
             "Another LADE window controls this service".to_owned(),
-        ),
-    };
-    if !preview {
-        return (short, full);
-    }
-    match connection {
-        ConnectionState::Connected => ("◇ Preview data".to_owned(), PREVIEW_LABEL.to_owned()),
-        _ => (
-            "◇ Preview data".to_owned(),
-            format!("Preview data — {}", full.to_lowercase()),
         ),
     }
 }
@@ -149,7 +138,7 @@ impl Header {
         let status = label("", &["connection", "meta"]);
         status.set_wrap(false);
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        // Keeps "Preview data" / "Disconnected" readable even when the header is tight.
+        // Keeps "Reconnecting" / "Disconnected" readable even when the header is tight.
         status.set_width_chars(14);
         status.set_valign(gtk::Align::Center);
         root.append(&status);
@@ -358,12 +347,10 @@ impl Header {
 
     fn refresh_connection(&self) {
         let state = self.controller.store.state();
-        let (short, full) = connection_text(&state.connection, state.is_preview());
+        let (short, full) = connection_text(&state.connection);
         self.status.set_text(&short);
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
-        // In preview the band below the header is the one statement of the data source.
-        self.status.set_visible(!state.is_preview());
     }
 
     fn refresh_search(&self) {

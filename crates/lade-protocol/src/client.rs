@@ -698,7 +698,6 @@ wire_enum!(Badge {
     StaleTarget,
     LimitReached,
     CleanedUp,
-    FixtureModel,
     UnsentDrafts,
 });
 wire_enum!(CandidateStatus {

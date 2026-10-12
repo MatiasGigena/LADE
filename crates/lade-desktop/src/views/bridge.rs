@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 
 use gtk4::glib;
 
-use crate::presentation::intents::{Intent, IntentSink};
 use crate::presentation::store::{Store, StoreUpdate};
 
 /// Maximum updates applied per main-loop iteration before yielding.
@@ -104,24 +103,5 @@ pub fn connect(store: &Rc<Store>, capacity: usize) -> UpdateSender {
             wake_pending: AtomicBool::new(false),
             key,
         }),
-    }
-}
-
-/// Defers intents to the next main-loop iteration so a sink that answers synchronously (the
-/// preview responder) never re-enters a GTK signal handler.
-pub struct DeferredSink {
-    inner: Rc<dyn IntentSink>,
-}
-
-impl DeferredSink {
-    pub fn new(inner: Rc<dyn IntentSink>) -> Self {
-        Self { inner }
-    }
-}
-
-impl IntentSink for DeferredSink {
-    fn submit(&self, intent: Intent) {
-        let inner = self.inner.clone();
-        glib::idle_add_local_once(move || inner.submit(intent));
     }
 }

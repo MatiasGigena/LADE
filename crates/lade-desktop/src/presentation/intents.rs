@@ -355,7 +355,7 @@ impl Intent {
     }
 }
 
-/// Receiver of user intents (WP-G: the transport; preview: the labelled fixture responder).
+/// Receiver of user intents (WP-G: the transport).
 ///
 /// Implementations must not block the GTK main context.
 pub trait IntentSink {
