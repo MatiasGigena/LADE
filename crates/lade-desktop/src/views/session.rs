@@ -28,9 +28,9 @@ fn section(title: &str) -> gtk::Box {
     section
 }
 
-/// Provider, model and thinking drop-downs bound to the controller's picker choice.
+/// Provider, model and thinking drop-downs bound to the controller's picker choice (which the
+/// controller keeps defaulted; this view only reads it).
 pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
-    controller.picker_defaults();
     let block = vbox(space::ITEM);
     let state = controller.store.state();
     let compat = &state.compat;

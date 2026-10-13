@@ -65,8 +65,17 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// The controller subscribes to the store first, so derived transient state (the model
+    /// picker's defaults) is settled before any view renders the same change.
     pub fn new(store: Rc<Store>, sink: Rc<dyn IntentSink>) -> Rc<Self> {
-        Rc::new(Self { store, sink })
+        let controller = Rc::new(Self { store, sink });
+        let weak = Rc::downgrade(&controller);
+        controller.store.subscribe(move |changes| {
+            if let Some(controller) = weak.upgrade() {
+                controller.follow_store(changes);
+            }
+        });
+        controller
     }
 
     fn emit(&self, intent: Intent) {

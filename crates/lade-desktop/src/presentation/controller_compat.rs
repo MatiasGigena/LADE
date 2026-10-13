@@ -38,18 +38,37 @@ impl Controller {
         }
     }
 
+    /// Keeps the picker's choice in step with the store: once the catalogue arrives or the
+    /// selection or its detail changes, an unset choice gets its defaults. Runs from the store
+    /// subscription, so views only read the choice and never write it while rendering.
+    pub(super) fn follow_store(&self, changes: &[Change]) {
+        let relevant = changes
+            .iter()
+            .any(|c| matches!(c, Change::Catalog | Change::Selection | Change::Detail(_)));
+        if relevant {
+            self.picker_defaults();
+        }
+    }
+
     /// Selects the provider/model the picker should show first: the persisted session model, the
-    /// default model, or the first available provider.
-    pub fn picker_defaults(&self) {
+    /// default model, the first available provider, or else the first listed provider (so the
+    /// picker's shown provider is always the chosen one, with its access reason beside it).
+    pub(super) fn picker_defaults(&self) {
         let (choice, missing) = {
             let state = self.store.state();
             let compat = &state.compat;
-            if compat.choice.provider.is_some() {
-                return;
-            }
             let Some(catalog) = &compat.catalog else {
                 return;
             };
+            // A chosen provider stays chosen while the catalogue still lists it.
+            if compat
+                .choice
+                .provider
+                .as_ref()
+                .is_some_and(|p| catalog.provider(p).is_some())
+            {
+                return;
+            }
             let session = state.selected_detail().and_then(|d| d.session.clone());
             let preferred = session
                 .as_ref()
@@ -64,8 +83,12 @@ impl Controller {
                         .providers
                         .iter()
                         .find(|p| p.status == super::compat::ProviderStatus::Available)
+                        .or_else(|| catalog.providers.first())
                         .map(|p| p.id.clone())
                 });
+            if provider.is_none() {
+                return;
+            }
             let choice = ModelChoice {
                 model: preferred
                     .filter(|m| Some(&m.provider) == provider.as_ref())
@@ -297,7 +320,7 @@ mod tests {
                 }],
                 error: None,
             }))]);
-        controller.picker_defaults();
+        // The controller chose the defaults when the catalogue arrived, not a view.
         assert_eq!(
             sink.intents.borrow().as_slice(),
             [Intent::LoadModels {
@@ -341,7 +364,7 @@ mod tests {
 
     #[test]
     fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
-        let (controller, _) = setup();
+        let (controller, sink) = setup();
         controller.store.update(|s| {
             s.compat = Default::default();
             ((), Vec::new())
@@ -361,6 +384,9 @@ mod tests {
             controller.chosen_model().unwrap_err(),
             "LADE can't load models right now."
         );
+        assert!(sink.intents.borrow().is_empty(), "nothing to load");
+        // Only providers that need credentials: the first one is chosen, so the picker shows
+        // the provider it acts on, with its access reason.
         controller.store.apply(catalog(
             vec![ProviderView {
                 id: "anthropic".into(),
@@ -373,12 +399,10 @@ mod tests {
             }],
             None,
         ));
-        assert_eq!(controller.readiness(), Readiness::NoProviderChosen);
-        controller.choose_model(ModelChoice {
-            provider: Some("anthropic".into()),
-            model: None,
-            thinking: ThinkingLevel::Off,
-        });
+        assert_eq!(
+            controller.store.state().compat.choice.provider.as_deref(),
+            Some("anthropic")
+        );
         controller
             .store
             .apply(StoreUpdate::Compat(CompatUpdate::Models {

@@ -475,7 +475,6 @@ impl Activity {
             .iter()
             .any(|p| p.action == ActionName::ExecutionStart && p.tone == Tone::Primary)
         {
-            self.controller.picker_defaults();
             line.push_str(&match self.controller.chosen_model() {
                 Ok((model, thinking)) => format!(
                     " · starts with {} · thinking {}",
