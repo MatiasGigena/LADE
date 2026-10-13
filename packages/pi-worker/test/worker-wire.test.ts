@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { test } from "node:test";
-import { boundText, MAX_ITEM_BYTES, safeMessage } from "../src/worker/activity.ts";
+import { ActivityMapper, boundText, MAX_ITEM_BYTES, safeMessage } from "../src/worker/activity.ts";
 import { StdioChannel } from "../src/worker/channel.ts";
+import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
+import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
-import type { InboundBody } from "../src/worker/wire.ts";
+import type { InboundBody, OutboundBody } from "../src/worker/wire.ts";
 import type { JsonObject } from "../src/json.ts";
 import { parseId } from "../src/protocol.ts";
 
@@ -95,4 +97,52 @@ test("frames queued while a drain settles are still written", async () => {
   void channel.send({ kind: "turn.state", state: "idle" });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(written.length, 2, "two synchronous sends are both written without a third");
+});
+
+test("character-bounded titles, labels and messages never end in half a surrogate pair", async () => {
+  const emoji = "\u{1F600}";
+  // Each cut lands between the two halves of a surrogate pair; the frame must still encode.
+  const sent: OutboundBody[] = [];
+  const mapper = new ActivityMapper(body => { sent.push(body); });
+  mapper.handle({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: emoji.repeat(100) } });
+  mapper.system(emoji.repeat(150), "text", false);
+  sent.push({ kind: "worker.error", code: "internal", message: safeMessage(emoji.repeat(300)) });
+  const entry = treeEntry({ type: "message", id: "e1", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: emoji.repeat(150), timestamp: 0 } }, emoji.repeat(150));
+  sent.push({ kind: "session.result", command_id: ID, ok: true, message: "", entries: [entry] });
+  const ui = new UiBridge(body => { sent.push(body); }, () => {});
+  const answer = ui.context().input(`i${emoji.repeat(300)}`, `p${emoji.repeat(300)}`);
+  const request = sent.at(-1);
+  assert.equal(request?.kind, "ui.request");
+  ui.advance();
+  assert.equal(await answer, undefined);
+  assert.ok(sent.length >= 5);
+
+  for (const body of sent) assert.doesNotThrow(() => encodeOutbound(body), `${body.kind} encodes`);
+});
+
+test("select answers map back to the full option and an empty choice is refused", async () => {
+  const sent: OutboundBody[] = [];
+  const ui = new UiBridge(body => { sent.push(body); }, () => {});
+  const long = `${"o".repeat(600)}`;
+  const chosen = ui.context().select("pick", ["short", long]);
+  const request = sent.at(-1);
+  assert.ok(request?.kind === "ui.request" && request.prompt.kind === "select");
+  const shown = request.prompt.options[1] ?? "";
+  assert.equal(ui.respond({ kind: "ui.respond", ui_id: request.ui_id, generation: request.generation, answer: { kind: "value", value: shown } }), undefined);
+  assert.equal(await chosen, long, "a clipped option still selects the option the extension offered");
+  await assert.rejects(ui.context().select("pick", []), /at least one option/);
+  assert.equal(sent.length, 1, "no unencodable dialog request is sent");
+});
+
+test("a tree page of long labelled entries still fits one session.result frame", () => {
+  const wide = "\u6f22".repeat(300);
+  const entries = Array.from({ length: MAX_TREE_ENTRIES }, (_, n) => ({ type: "message" as const, id: `e${n}`, parentId: n === 0 ? null : `e${n - 1}`, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user" as const, content: wide, timestamp: n } }));
+  const all = entries.map(entry => treeEntry(entry, wide));
+  assert.throws(() => encodeOutbound({ kind: "session.result", command_id: ID, ok: true, message: "", entries: all }), { code: "frame_size" }, "the unbounded page would not fit");
+  const page = treePage(entries, () => wide);
+  assert.equal(page.truncated, true);
+  assert.ok(page.entries.length > 0 && page.entries.length < entries.length);
+  assert.equal(page.entries.at(-1)?.entry_id, `e${MAX_TREE_ENTRIES - 1}`, "the newest entries are kept, oldest first");
+  assert.doesNotThrow(() => encodeOutbound({ kind: "session.result", command_id: ID, ok: true, message: "", entries: page.entries, truncated: true, leaf_id: "e1023" }));
+  assert.deepEqual(treePage(entries.slice(0, 3), () => undefined), { entries: entries.slice(0, 3).map(entry => treeEntry(entry, undefined)), truncated: false });
 });

@@ -1003,7 +1003,9 @@ impl App {
     fn render_notice(self: &Rc<Self>) {
         widgets::clear(&self.notice);
         let state = self.store.state();
-        let total = state.notices.len();
+        // Not `notices.len()`: that stops growing at the retained cap, which would hide every
+        // notice after one dismissed at the cap.
+        let total = state.notices_received;
         let latest = state.notices.last().cloned();
         drop(state);
         let Some(notice) = latest.filter(|_| total > self.notices_seen.get()) else {

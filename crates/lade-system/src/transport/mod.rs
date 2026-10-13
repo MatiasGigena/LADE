@@ -126,6 +126,17 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     Ok(capability)
 }
 
+/// Refuses when a service already answers on `dir/control.sock`. Called before anything in `dir`
+/// (capability, gateway sockets) is touched; [`bind_socket`] checks again.
+pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
+    let path = dir.join(SOCKET_NAME);
+    let socket = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket());
+    if socket && UnixStream::connect(&path).is_ok() {
+        return Err(TransportError::AlreadyRunning);
+    }
+    Ok(())
+}
+
 /// Binds `dir/control.sock` (0600). An existing socket is removed only when nothing answers it.
 pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     let path = dir.join(SOCKET_NAME);

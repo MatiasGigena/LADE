@@ -311,6 +311,9 @@ pub struct PresentationState {
     pub viewer: Viewer,
     pub search: Load<SearchResults>,
     pub notices: Vec<ServiceNotice>,
+    /// Notices ever received; keeps growing after `notices` is capped, so "new since dismissed"
+    /// stays decidable.
+    pub notices_received: usize,
     /// Latest command outcome per Objective (rejection, or "Checking outcome…").
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
     pub ui: UiState,
@@ -351,6 +354,7 @@ impl PresentationState {
             },
             search: Load::NotLoaded,
             notices: Vec::new(),
+            notices_received: 0,
             command_status: HashMap::new(),
             ui: UiState::default(),
             compat: CompatState::default(),
@@ -478,6 +482,7 @@ impl PresentationState {
     }
 
     fn push_notice(&mut self, notice: ServiceNotice) {
+        self.notices_received += 1;
         self.notices.push(notice);
         if self.notices.len() > MAX_NOTICES {
             self.notices.remove(0);
@@ -502,6 +507,12 @@ impl PresentationState {
                             session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
                             changes.push(Change::Terminal(session.objective_id.clone()));
                         }
+                    }
+                    // Dialogs closed while away would never be reported; the service re-announces
+                    // the ones still open to the next controlling client.
+                    if !self.compat.dialogs.is_empty() {
+                        self.compat.dialogs.clear();
+                        changes.push(Change::Dialogs);
                     }
                 }
                 changes
@@ -1352,6 +1363,20 @@ mod tests {
     }
 
     #[test]
+    fn notices_received_keeps_counting_past_the_retained_cap() {
+        let mut state = PresentationState::default();
+        for n in 0..MAX_NOTICES + 5 {
+            state.apply(StoreUpdate::Notice(ServiceNotice {
+                level: crate::presentation::model::NoticeLevel::Warning,
+                code: "c".into(),
+                message: format!("notice {n}"),
+            }));
+        }
+        assert_eq!(state.notices.len(), MAX_NOTICES);
+        assert_eq!(state.notices_received, MAX_NOTICES + 5);
+    }
+
+    #[test]
     fn worktree_change_flags_instead_of_replacing() {
         let mut state = PresentationState::default();
         let o = ObjectiveId::new("o");
@@ -1376,6 +1401,40 @@ mod tests {
             store.state().connection,
             ConnectionState::Reconnecting { attempt: 1 }
         );
+    }
+
+    #[test]
+    fn extension_dialogs_are_dropped_with_the_link_and_reannounced_after_it() {
+        use crate::presentation::compat::{UiDialog, UiPromptView};
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let dialog = |id: &str| {
+            StoreUpdate::Compat(CompatUpdate::DialogOpened(UiDialog {
+                objective_id: ObjectiveId::new("o"),
+                ui_id: id.to_owned(),
+                generation: 1,
+                prompt: UiPromptView::Confirm {
+                    title: "t".into(),
+                    message: "m".into(),
+                },
+            }))
+        };
+        state.apply(dialog("closed-while-away"));
+        state.apply(dialog("still-open"));
+        let changes = state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
+            attempt: 1,
+        }));
+        assert!(changes.contains(&Change::Dialogs));
+        assert!(state.compat.dialogs.is_empty());
+        state.apply(StoreUpdate::Connection(ConnectionState::Connected));
+        // The service re-announces only the dialogs that are still open.
+        assert_eq!(state.apply(dialog("still-open")), vec![Change::Dialogs]);
+        let open: Vec<&str> = state
+            .compat
+            .dialogs
+            .iter()
+            .map(|d| d.ui_id.as_str())
+            .collect();
+        assert_eq!(open, ["still-open"]);
     }
 
     #[test]

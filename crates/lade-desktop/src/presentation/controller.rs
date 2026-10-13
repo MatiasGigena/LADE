@@ -34,7 +34,10 @@ pub struct BatchItem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeedbackBatch {
+    /// At most [`MAX_FEEDBACK_BATCH`] drafts: one `feedback.submit` takes no more.
     pub items: Vec<BatchItem>,
+    /// Unsent drafts left for a later batch because the batch is full.
+    pub deferred: usize,
     pub destination: Option<SessionInfo>,
     pub mode: DeliveryMode,
     /// Reasons the batch cannot be submitted now; empty means the request may be sent.
@@ -52,6 +55,9 @@ pub struct UnsavedDraft {
     /// disconnected or conflicting drafts, which need the developer.
     pub pending: bool,
 }
+
+/// `feedback.submit` `drafts` `maxItems` (`contracts/v1/schema.json`; the core's batch bound).
+pub const MAX_FEEDBACK_BATCH: usize = 256;
 
 pub struct Controller {
     pub store: Rc<Store>,
@@ -660,7 +666,7 @@ impl Controller {
             .get(id)
             .map_or(DeliveryMode::Steer, |u| u.feedback_mode);
         let connected = state.connection.is_connected();
-        let items: Vec<BatchItem> = state
+        let mut items: Vec<BatchItem> = state
             .unsent_drafts(id)
             .filter(|d| d.durable_revision() > 0 || !d.body.is_empty())
             .map(|d| BatchItem {
@@ -671,6 +677,9 @@ impl Controller {
                 stale: d.stale,
             })
             .collect();
+        // A larger set is submitted in several batches; the rest stay unsent drafts.
+        let deferred = items.len().saturating_sub(MAX_FEEDBACK_BATCH);
+        items.truncate(MAX_FEEDBACK_BATCH);
         let mut blockers = Vec::new();
         match detail.map(|d| d.availability(ActionName::FeedbackSubmit)) {
             Some(ActionAvailability::Enabled) => {}
@@ -712,6 +721,7 @@ impl Controller {
         }
         Some(FeedbackBatch {
             items,
+            deferred,
             destination,
             mode,
             blockers,
@@ -1616,6 +1626,59 @@ mod tests {
         assert!(batch.blockers.iter().any(|b| b.contains("stale")));
         assert!(controller.submit_feedback(&batch).is_err());
         assert!(sink.intents.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_feedback_batch_takes_at_most_the_wire_bound_and_defers_the_rest() {
+        use crate::presentation::model::{Draft, DraftState, SessionId};
+        let (controller, sink) = setup();
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+        controller.select_objective(&id);
+        sink.intents.borrow_mut().clear();
+        controller.store.update(|s| {
+            let template = s.drafts[&id][0].reference.clone();
+            let session = s
+                .selected_detail()
+                .and_then(|d| d.session.clone())
+                .map_or_else(|| SessionId::new("s"), |d| d.session_id);
+            let editors = (0..MAX_FEEDBACK_BATCH + 44)
+                .map(|n| {
+                    DraftEditor::from_durable(&Draft {
+                        draft_id: DraftId::new(format!("draft-{n}")),
+                        objective_id: id.clone(),
+                        destination_session_id: session.clone(),
+                        reference: template.clone(),
+                        body: format!("note {n}"),
+                        revision: 1,
+                        state: DraftState::Unsent,
+                        stale: false,
+                        input_id: None,
+                    })
+                })
+                .collect();
+            s.drafts.insert(id.clone(), editors);
+            if let Some(Load::Loaded(detail)) = s.details.get_mut(&id) {
+                for available in &mut detail.available_actions {
+                    if available.action == ActionName::FeedbackSubmit {
+                        available.enabled = true;
+                        available.reason = None;
+                    }
+                }
+            }
+            ((), Vec::new())
+        });
+        let batch = controller.feedback_batch().unwrap();
+        assert_eq!(
+            (batch.items.len(), batch.deferred),
+            (MAX_FEEDBACK_BATCH, 44)
+        );
+        assert_eq!(batch.blockers, Vec::<String>::new());
+        controller.submit_feedback(&batch).unwrap();
+        let intents = sink.intents.borrow();
+        let Some(Intent::SubmitFeedback { drafts, .. }) = intents.last() else {
+            panic!("feedback submitted");
+        };
+        assert_eq!(drafts.len(), MAX_FEEDBACK_BATCH);
     }
 
     #[test]

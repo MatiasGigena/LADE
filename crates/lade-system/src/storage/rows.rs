@@ -3,7 +3,7 @@
 
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use lade_core::Revision;
 use lade_core::domain::execution::{
@@ -107,21 +107,33 @@ pub fn insert_workspace(conn: &Connection, row: &WorkspaceRow) -> Sql<()> {
     Ok(())
 }
 
+fn workspace_from_row(row: &Row<'_>) -> Sql<WorkspaceRow> {
+    let path: Vec<u8> = row.get(1)?;
+    Ok(WorkspaceRow {
+        id: WorkspaceId::new(uuid(&row.get::<_, String>(0)?)?),
+        path: PathBuf::from(OsString::from_vec(path)),
+        name: row.get(2)?,
+        default_branch: row.get(3)?,
+        opened_at: row.get(4)?,
+    })
+}
+
 pub fn load_workspaces(conn: &Connection) -> Sql<Vec<WorkspaceRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, path, name, default_branch, opened_at FROM workspaces ORDER BY opened_at, id",
     )?;
-    let rows = stmt.query_map([], |row| {
-        let path: Vec<u8> = row.get(1)?;
-        Ok(WorkspaceRow {
-            id: WorkspaceId::new(uuid(&row.get::<_, String>(0)?)?),
-            path: PathBuf::from(OsString::from_vec(path)),
-            name: row.get(2)?,
-            default_branch: row.get(3)?,
-            opened_at: row.get(4)?,
-        })
-    })?;
+    let rows = stmt.query_map([], workspace_from_row)?;
     rows.collect()
+}
+
+/// The recorded Workspace at `path` (paths are unique), if any.
+pub fn workspace_by_path(conn: &Connection, path: &Path) -> Sql<Option<WorkspaceRow>> {
+    conn.query_row(
+        "SELECT id, path, name, default_branch, opened_at FROM workspaces WHERE path = ?1",
+        params![path.as_os_str().as_bytes()],
+        workspace_from_row,
+    )
+    .optional()
 }
 
 // ---------------------------------------------------------------------------------------------

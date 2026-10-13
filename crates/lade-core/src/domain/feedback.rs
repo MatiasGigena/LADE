@@ -8,8 +8,9 @@ use crate::domain::inspection::{CurrentContent, MAX_TEXT_BYTES, Reference, Side}
 use crate::domain::objectives::{Lifecycle, Objective};
 use crate::error::DomainError;
 
-/// Maximum number of drafts in one submitted batch.
-pub const MAX_BATCH_ITEMS: usize = 64;
+/// Maximum number of drafts in one submitted batch; equals the wire bound of `feedback.submit`
+/// (`FeedbackSubmitCommand.drafts`, `maxItems` 256), so every batch the protocol admits is submittable.
+pub const MAX_BATCH_ITEMS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InputMode {
@@ -851,6 +852,40 @@ mod tests {
             accept_feedback(&objective, acceptance(&objective), &mut batch, None, ts(5)),
             Err(DomainError::NotFound("draft"))
         );
+    }
+
+    #[test]
+    fn batch_size_matches_the_wire_contract() {
+        // `FeedbackSubmitCommand.drafts` admits 1..=256 drafts; every one of them must be submittable.
+        fn entries<'a>(drafts: &'a mut [Draft], same: &'a ArtifactDigest) -> Vec<BatchEntry<'a>> {
+            drafts
+                .iter_mut()
+                .map(|draft| BatchEntry {
+                    draft,
+                    revision: Revision::INITIAL,
+                    current: present(same, b""),
+                })
+                .collect()
+        }
+        let (objective, _) = active_objective();
+        let same = digest(1);
+        let mut drafts: Vec<Draft> = (0..=256)
+            .map(|n| save_new(&objective, 1000 + n, "fn main()", "fix"))
+            .collect();
+        assert_eq!(
+            accept_feedback(
+                &objective,
+                acceptance(&objective),
+                &mut entries(&mut drafts, &same),
+                None,
+                ts(5)
+            ),
+            Err(DomainError::LimitReached("feedback batch too large"))
+        );
+        let mut full = entries(&mut drafts[..256], &same);
+        let input = accept_feedback(&objective, acceptance(&objective), &mut full, None, ts(5))
+            .expect("a full wire batch is accepted");
+        assert_eq!(input.items.len(), 256);
     }
 
     #[test]

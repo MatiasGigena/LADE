@@ -36,17 +36,27 @@ export function boundText(text: string): Bounded {
   }
 }
 
+/**
+ * At most `max` UTF-16 code units of `text`, never ending in the high half of a surrogate pair: a
+ * lone surrogate cannot be encoded on the wire, so the frame would be rejected.
+ */
+export function prefix(text: string, max: number): string {
+  if (text.length <= max) return text;
+
+  return text.slice(0, isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max);
+}
+
 /** Diagnostic text for worker.error: one line, likely credentials masked, never longer than the wire cap. */
 export function safeMessage(text: string): string {
   const line = text.replace(/\p{Cc}+/gu, " ").replace(/[A-Za-z0-9_\-+/=.]{32,}/g, "[redacted]").trim();
 
-  return line.length > MAX_ERROR_MESSAGE ? `${line.slice(0, MAX_ERROR_MESSAGE - 1)}…` : line;
+  return line.length > MAX_ERROR_MESSAGE ? `${prefix(line, MAX_ERROR_MESSAGE - 1)}…` : line;
 }
 
 function clip(text: string, max: number): string {
   const line = text.replace(/\s+/g, " ").trim();
 
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return line.length > max ? `${prefix(line, max - 1)}…` : line;
 }
 
 function messageText(message: SessionMessage): string {

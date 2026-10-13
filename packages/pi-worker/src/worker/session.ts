@@ -4,7 +4,7 @@ import { createAgentSessionFromServices, createAgentSessionRuntime, ModelRuntime
 import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WorkerErrorCode } from "../dto.ts";
 import { counter } from "../schema.ts";
-import { safeMessage } from "./activity.ts";
+import { prefix, safeMessage } from "./activity.ts";
 import { registerTestFixture } from "./fixture.ts";
 import { LadeResourceLoader } from "./resources.ts";
 import type { UiBridge } from "./ui.ts";
@@ -14,6 +14,9 @@ import type { CommandBody, DeliverBody, ModelRef, OutboundBody, ResultBody, Star
 export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 
 export const MAX_TREE_ENTRIES = 1024;
+
+/** Encoded size of the listed entries; with the rest of `session.result` it stays below the 1 MiB frame. */
+const MAX_TREE_BYTES = 900 * 1024;
 
 const MAX_LABEL = 200;
 
@@ -44,7 +47,7 @@ function inside(parent: string, path: string): boolean {
 function clip(text: string): string {
   const line = text.replace(/\s+/g, " ").trim();
 
-  return line.length > MAX_LABEL ? `${line.slice(0, MAX_LABEL - 1)}…` : line;
+  return line.length > MAX_LABEL ? `${prefix(line, MAX_LABEL - 1)}…` : line;
 }
 
 function contentText(content: string | ReadonlyArray<{ type: string; text?: string }>): string {
@@ -88,6 +91,30 @@ export function treeEntry(entry: SessionEntry, bookmark: string | undefined): Tr
     case "custom": return base("custom", entry.customType);
     default: return base("other", "entry");
   }
+}
+
+export interface TreePage { entries: TreeEntry[]; truncated: boolean }
+
+/**
+ * The newest session entries (oldest first) that fit one `session.result` frame: at most
+ * MAX_TREE_ENTRIES and MAX_TREE_BYTES of encoded entries. `truncated` when older entries were left out.
+ */
+export function treePage(entries: readonly SessionEntry[], label: (id: string) => string | undefined): TreePage {
+  const page: TreeEntry[] = [];
+  let bytes = 0;
+
+  for (let i = entries.length - 1; i >= 0 && page.length < MAX_TREE_ENTRIES; i--) {
+    const entry = entries[i];
+
+    if (entry === undefined) break;
+    const node = treeEntry(entry, label(entry.id));
+    bytes += Buffer.byteLength(JSON.stringify(node)) + 1;
+
+    if (bytes > MAX_TREE_BYTES) break;
+    page.push(node);
+  }
+
+  return { entries: page.reverse(), truncated: page.length < entries.length };
 }
 
 function isThinking(level: string): level is ThinkingLevel {
@@ -313,10 +340,9 @@ export class SessionHost {
     switch (command.op) {
       case "tree": {
         const manager = session.sessionManager;
-        const entries = manager.getEntries();
-        const start = Math.max(0, entries.length - MAX_TREE_ENTRIES);
-        result.entries = entries.slice(start).map(entry => treeEntry(entry, manager.getLabel(entry.id)));
-        result.truncated = start > 0;
+        const page = treePage(manager.getEntries(), id => manager.getLabel(id));
+        result.entries = page.entries;
+        result.truncated = page.truncated;
         const leaf = manager.getLeafId();
 
         if (leaf !== null) result.leaf_id = leaf;

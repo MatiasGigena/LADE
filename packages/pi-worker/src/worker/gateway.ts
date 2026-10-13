@@ -28,8 +28,19 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
     let head = Buffer.alloc(0);
 
     function fail(error: Error): void {
-      socket.removeListener("data", onData); socket.destroy();
+      detach(); socket.destroy();
       reject(error);
+    }
+
+    function onTimeout(): void { fail(new GatewayError("gateway_timeout", "gateway CONNECT timed out")); }
+
+    // The gateway closed the connection before a complete CONNECT reply.
+    function onEnd(): void { fail(new GatewayError("gateway_protocol", "gateway closed the connection before replying")); }
+
+    /** The handshake's listeners and timer; the established tunnel belongs to its user. */
+    function detach(): void {
+      socket.removeListener("data", onData); socket.removeListener("error", fail); socket.removeListener("end", onEnd);
+      socket.removeListener("timeout", onTimeout); socket.setTimeout(0);
     }
 
     function onData(chunk: Buffer): void {
@@ -42,7 +53,7 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
         return;
       }
 
-      socket.removeListener("data", onData); socket.removeListener("error", fail); socket.setTimeout(0);
+      detach();
       const status = /^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString("latin1"))?.[1];
 
       if (status === undefined || !status.startsWith("2")) {
@@ -58,8 +69,10 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
       resolve(socket);
     }
 
-    socket.setTimeout(CONNECT_TIMEOUT_MS, () => fail(new GatewayError("gateway_timeout", "gateway CONNECT timed out")));
+    socket.setTimeout(CONNECT_TIMEOUT_MS);
+    socket.once("timeout", onTimeout);
     socket.once("error", fail);
+    socket.once("end", onEnd);
     socket.on("data", onData);
     socket.once("connect", () => {
       socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
