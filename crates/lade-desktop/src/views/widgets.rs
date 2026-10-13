@@ -273,8 +273,9 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
 }
 
 /// A multi-line field with a visible placeholder: [`bounded_text`] with a dim hint laid over its
-/// first line (`GtkTextView` has no placeholder of its own). The hint shows only while the buffer
-/// is empty and the field is unfocused; it is also the view's accessible description.
+/// first line (`GtkTextView` has no placeholder of its own). Like a `GtkEntry` placeholder, the hint
+/// shows while the buffer is empty, focused or not (a field focused for you, such as the composer
+/// after Start agent, still says what it is for); it is also the view's accessible description.
 pub fn placeholder_text(
     view: &gtk::TextView,
     placeholder: &str,
@@ -291,19 +292,10 @@ pub fn placeholder_text(
     set_accessible_description(view, placeholder);
     let update = {
         let hint = hint.clone();
-        move |view: &gtk::TextView| {
-            hint.set_visible(view.buffer().char_count() == 0 && !view.has_focus());
-        }
+        move |buffer: &gtk::TextBuffer| hint.set_visible(buffer.char_count() == 0)
     };
-    update(view);
-    let weak = view.downgrade();
-    let on_change = update.clone();
-    view.buffer().connect_changed(move |_| {
-        if let Some(view) = weak.upgrade() {
-            on_change(&view);
-        }
-    });
-    view.connect_has_focus_notify(update);
+    update(&view.buffer());
+    view.buffer().connect_changed(update);
     overlay
 }
 

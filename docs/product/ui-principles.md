@@ -125,7 +125,7 @@ Shared components (`crates/lade-desktop/src/views/widgets.rs`), used instead of 
 | --- | --- | --- |
 | `empty_state` | Centred heading, an optional one-paragraph explanation, the one relevant action and an optional metadata note after it; no illustration | First Objective (work area, Activity, Terminal), no selection, no changes, no file, no terminal |
 | `inline_message` | Sign and plain sentence on the kind's semantic fill (info, warning, error); technical detail (error code, raw service text) in a collapsed *Details* and the accessible description | Refusals beside the control that issued the command, load failures, the catalogue warning |
-| `text_field` / `placeholder_text` | Metadata label above a bounded multi-line field with a visible placeholder (shown while empty and unfocused) | Intent fields, the composer, override reasons |
+| `text_field` / `placeholder_text` | Metadata label above a bounded multi-line field with a visible placeholder (shown while empty, as an entry's) | Intent fields, the composer, override reasons |
 | `dropdown_or` | Drop-down that ellipsizes a long choice (full text in tooltip and list) and, with no choices, is insensitive and says what is missing | Provider, model, thinking, delivery mode, integration target |
 | `disclosure` | Quiet full-width toggle (▸/▾) showing or hiding its content | More actions, Details, Agent settings, Accepted inputs, profile resources |
 | `action_row`, `list_action_row`, `compact_action` | An action whose availability is the service's projection: a disabled one keeps its place with its reason (visible, tooltip, accessible description); a not-offered one is hidden; black only when cleanly available | Overview next action, More actions, Activity's agent action and Send |
