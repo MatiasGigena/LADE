@@ -223,7 +223,7 @@ pub fn notice_level(l: wire::NoticeLevel) -> view::NoticeLevel {
     }
 }
 
-/// Stable wire spelling of an error code (shown to the developer with the rejection).
+/// Stable wire spelling of an error code (technical details only, never the plain message).
 pub fn error_code(code: wire::ErrorCode) -> &'static str {
     use wire::ErrorCode as E;
     match code {
@@ -251,15 +251,55 @@ pub fn error_code(code: wire::ErrorCode) -> &'static str {
     }
 }
 
-/// What the developer can safely do next, in words.
-pub fn safe_action(action: wire::SafeAction) -> Option<&'static str> {
+/// What the developer can do next, in words — only when it can help. "Refresh" is offered only
+/// for stale state (a precondition or lifecycle refusal stays refused after a refresh; the
+/// service's own detail names the step that helps). Recovering an outcome is the transport's
+/// job, and "continue explicitly" names no control, so neither is advised.
+pub fn advice(code: wire::ErrorCode, action: wire::SafeAction) -> Option<&'static str> {
+    use wire::ErrorCode as E;
+    let stale = matches!(
+        code,
+        E::StaleService
+            | E::StaleAssociation
+            | E::StaleExecution
+            | E::StaleReference
+            | E::StaleCandidate
+            | E::StaleTarget
+    );
     match action {
-        wire::SafeAction::Refresh => Some("Refresh and try again."),
+        wire::SafeAction::Refresh if stale => Some("Refresh and try again."),
         wire::SafeAction::InspectPrevious => Some("Inspect the previous version."),
-        wire::SafeAction::QueryOperation => Some("Checking the recorded outcome."),
-        wire::SafeAction::RetryRead => Some("Retry."),
-        wire::SafeAction::ExplicitContinue => Some("Continue explicitly if intended."),
-        wire::SafeAction::None => None,
+        wire::SafeAction::RetryRead => Some("Try again."),
+        _ => None,
+    }
+}
+
+/// A plain reason for a rejection whose detail is missing or not meant for people (a bare code
+/// or identifier list).
+pub fn fallback_reason(code: wire::ErrorCode) -> &'static str {
+    use wire::ErrorCode as E;
+    match code {
+        E::Unauthorized => "This window is not allowed to do that.",
+        E::StaleService => "The service restarted.",
+        E::StaleAssociation => "The Agent Session changed.",
+        E::StaleExecution => "The agent was restarted.",
+        E::StaleReference => "Some feedback no longer matches the current code.",
+        E::StaleCandidate => "A newer candidate exists.",
+        E::StaleTarget => "The Integration Target moved.",
+        E::InvalidLifecycle => "That isn't possible in the Objective's current state.",
+        E::UnsupportedContent => "This content isn't supported.",
+        E::VersionMismatch => "This window and the service are different versions.",
+        E::DurabilityFailure => "LADE couldn't record it, so nothing was changed.",
+        E::PermissionDenied => "Permission was denied.",
+        E::LimitReached => "A limit was reached.",
+        E::Interrupted => "It was interrupted.",
+        E::UnknownOperation => "The service has no record of it.",
+        E::ReplayExpired => "Its outcome can no longer be checked.",
+        E::DuplicateConflict => "It conflicts with an earlier request.",
+        E::NotFound => "It no longer exists.",
+        E::InvalidRequest => "The request was not valid.",
+        E::Conflict => "Something changed in the meantime.",
+        E::ExecutionUnavailable => "The agent isn't running.",
     }
 }
 

@@ -785,7 +785,7 @@ fn command_success_clears_and_rejection_sets_the_status_beside_actions() {
     assert_eq!(status.code, "invalid_lifecycle");
     assert_eq!(
         status.message,
-        "Freeze for review was refused (invalid_lifecycle) — the agent is still running. Refresh and try again."
+        "Couldn't freeze for review. The agent is still running."
     );
     assert!(effects.follow_ups.contains(&Intent::LoadObjective {
         objective_id: oid()
@@ -798,6 +798,121 @@ fn command_success_clears_and_rejection_sets_the_status_beside_actions() {
         objective_id: oid(),
         status: None
     }));
+}
+
+/// The context `request` builds for `intent`.
+fn context_of(intent: &Intent) -> Context {
+    request(intent).unwrap().unwrap().1
+}
+
+#[test]
+fn refusals_are_plain_sentences_with_the_code_kept_apart() {
+    // A precondition: no code, no "Refresh" advice (refreshing would not help).
+    let terminal = refusal(
+        "Open terminal",
+        &Rejection::new(
+            ErrorCode::InvalidLifecycle,
+            SafeAction::Refresh,
+            "Start the agent once to create this Objective's worktree.",
+        ),
+    );
+    assert_eq!(
+        terminal.message,
+        "Couldn't open terminal. Start the agent once to create this Objective's worktree."
+    );
+    assert_eq!(
+        terminal.details,
+        "invalid_lifecycle: Start the agent once to create this Objective's worktree."
+    );
+    // Stale state: refreshing helps, and says so once.
+    let stale = refusal(
+        "Approve",
+        &Rejection::new(ErrorCode::StaleTarget, SafeAction::Refresh, ""),
+    );
+    assert_eq!(
+        stale.message,
+        "Couldn't approve. The Integration Target moved. Refresh and try again."
+    );
+    assert_eq!(stale.details, "stale_target");
+    let worded = refusal(
+        "Edit intent",
+        &Rejection::new(
+            ErrorCode::StaleAssociation,
+            SafeAction::Refresh,
+            "The Agent Session changed. Refresh and try again.",
+        ),
+    );
+    assert_eq!(
+        worded.message,
+        "Couldn't edit intent. The Agent Session changed. Refresh and try again."
+    );
+    // Bare codes and identifiers are never shown; a lowercase service detail becomes a sentence.
+    let bare = refusal(
+        "Start agent",
+        &Rejection::new(
+            ErrorCode::ExecutionUnavailable,
+            SafeAction::ExplicitContinue,
+            "execution_unavailable",
+        ),
+    );
+    assert_eq!(
+        bare.message,
+        "Couldn't start agent. The agent isn't running."
+    );
+    let gone = refusal(
+        "Delete draft",
+        &Rejection::new(ErrorCode::NotFound, SafeAction::Refresh, "draft"),
+    );
+    assert_eq!(
+        gone.message,
+        "Couldn't delete draft. The draft no longer exists."
+    );
+    let lower = refusal(
+        "Terminal input",
+        &Rejection::new(
+            ErrorCode::NotFound,
+            SafeAction::Refresh,
+            "terminal not found",
+        ),
+    );
+    assert_eq!(
+        lower.message,
+        "Couldn't send terminal input. Terminal not found."
+    );
+    assert_eq!(
+        rejection_message("Checking the outcome of “Approve”", &stale_rejection()),
+        "Couldn't check the outcome of “Approve”. The Integration Target moved. Refresh and try again."
+    );
+    // Every code reads without its spelling.
+    for code in [
+        ErrorCode::Unauthorized,
+        ErrorCode::DurabilityFailure,
+        ErrorCode::LimitReached,
+        ErrorCode::Conflict,
+        ErrorCode::VersionMismatch,
+    ] {
+        let message = rejection_message("Approve", &Rejection::new(code, SafeAction::None, ""));
+        assert!(!message.contains(convert::error_code(code)), "{message}");
+        assert!(!message.contains('_'), "{message}");
+    }
+}
+
+fn stale_rejection() -> Rejection {
+    Rejection::new(ErrorCode::StaleTarget, SafeAction::Refresh, "")
+}
+
+#[test]
+fn commands_without_an_objective_still_use_the_notice() {
+    let effects = rejection_effects(
+        &context_of(&Intent::UpdateSettings {
+            default_model: ModelRef::new("lade-fixture", "scripted"),
+        }),
+        &Rejection::new(ErrorCode::InvalidRequest, SafeAction::None, "unknown model"),
+    );
+    assert!(matches!(
+        effects.updates.as_slice(),
+        [StoreUpdate::Notice(n)] if n.message == "Couldn't save default model. Unknown model."
+    ));
 }
 
 #[test]
@@ -842,7 +957,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
     );
     assert!(effects.updates.contains(&StoreUpdate::DraftSaveFailed {
         draft_id: DraftId::new(D),
-        message: "conflict: revision moved".into()
+        message: "Revision moved.".into()
     }));
 }
 

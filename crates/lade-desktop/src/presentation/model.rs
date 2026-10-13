@@ -386,6 +386,17 @@ pub enum ActionAvailability {
     NotOffered,
 }
 
+/// A refused request as the developer sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    /// Plain sentences: what could not be done, why, and a next step only when one helps. Never
+    /// carries an error code.
+    pub message: String,
+    /// Technical details for a tooltip or diagnostics: the error code and the service's raw
+    /// detail, for example `invalid_lifecycle: Start the agent once to create …`.
+    pub details: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectiveDetail {
     pub summary: ObjectiveSummary,

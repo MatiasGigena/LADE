@@ -9,10 +9,11 @@ use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 use super::compat as compat_wire;
 use super::convert::{self, Invalid, id, to_basis, to_path};
 use crate::presentation::compat::CompatUpdate;
+use crate::presentation::format::sentence;
 use crate::presentation::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::model::{
-    self as view, Basis, DraftId, NoticeLevel, ObjectiveId, RepoPath, SearchScope, ServiceNotice,
-    Side,
+    self as view, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath, SearchScope,
+    ServiceNotice, Side,
 };
 use crate::presentation::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
@@ -942,22 +943,76 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     effects
 }
 
-/// The developer-facing sentence for a rejection: label, code, service detail and safe action.
-pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
+/// "Couldn't open terminal." for the label "Open terminal".
+fn could_not(label: &str) -> String {
+    let action = match label {
+        "Terminal input" => "send terminal input".to_owned(),
+        _ => match label.strip_prefix("Checking ") {
+            Some(rest) => format!("check {rest}"),
+            None => {
+                let mut chars = label.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_lowercase().chain(chars).collect()
+                })
+            }
+        },
+    };
+    format!("Couldn't {action}.")
+}
+
+/// The service's detail as a sentence, or a plain fallback when the detail is not meant for
+/// people (empty, a bare code or identifier, a list of draft ids).
+fn plain_reason(rejection: &Rejection) -> String {
+    let detail = rejection.detail.trim();
+    let machine = !detail.contains(' ')
+        || rejection.code == wire::ErrorCode::StaleReference
+        || detail.starts_with("stale drafts:");
+    if !machine {
+        return sentence(detail);
+    }
+    if rejection.code == wire::ErrorCode::NotFound
+        && !detail.is_empty()
+        && detail.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+    {
+        return format!("The {} no longer exists.", detail.replace('_', " "));
+    }
+    convert::fallback_reason(rejection.code).to_owned()
+}
+
+/// A rejection's plain reason plus advice (when it can help), without the action label.
+fn reason_and_advice(rejection: &Rejection) -> String {
+    let mut text = plain_reason(rejection);
+    if let Some(advice) = convert::advice(rejection.code, rejection.action)
+        && !text.contains(advice)
+    {
+        text.push(' ');
+        text.push_str(advice);
+    }
+    text
+}
+
+/// The code and raw service detail, for a tooltip or diagnostics.
+fn technical_details(rejection: &Rejection) -> String {
     let code = convert::error_code(rejection.code);
-    let mut message = format!("{label} was refused ({code})");
-    if !rejection.detail.is_empty() {
-        message.push_str(" — ");
-        message.push_str(&rejection.detail);
+    if rejection.detail.is_empty() {
+        code.to_owned()
+    } else {
+        format!("{code}: {}", rejection.detail)
     }
-    if !message.ends_with('.') {
-        message.push('.');
+}
+
+/// A rejection as the developer sees it: "Couldn't <label>." plus the service's reason in plain
+/// words and, only when it helps, what to do next; the code and raw detail are kept apart.
+pub fn refusal(label: &str, rejection: &Rejection) -> Refusal {
+    Refusal {
+        message: format!("{} {}", could_not(label), reason_and_advice(rejection)),
+        details: technical_details(rejection),
     }
-    if let Some(action) = convert::safe_action(rejection.action) {
-        message.push(' ');
-        message.push_str(action);
-    }
-    message
+}
+
+/// The plain sentence of [`refusal`] (no error code).
+pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
+    refusal(label, rejection).message
 }
 
 /// Maps a rejection for `context` onto the surface that asked.
@@ -1033,7 +1088,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                 // A refused save keeps the text locally and offers Retry beside the draft.
                 updates.push(StoreUpdate::DraftSaveFailed {
                     draft_id: draft_id.clone(),
-                    message: format!("{code}: {}", rejection.detail),
+                    message: reason_and_advice(rejection),
                 });
             }
             let notice = ServiceNotice {
