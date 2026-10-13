@@ -63,7 +63,9 @@ pub struct Activity {
     agent_area: gtk::Box,
     /// "Set up the agent", in the transcript's place while there is no Agent Session.
     setup: gtk::Box,
-    setup_body: gtk::Box,
+    /// The card's content above the resources, replaced by a new box on every render (see
+    /// `render_setup`).
+    setup_body: RefCell<gtk::Box>,
     setup_resources: gtk::Box,
     /// "Agent settings" (collapsed) once there is an Agent Session, and its content.
     settings: gtk::Box,
@@ -217,7 +219,7 @@ impl Activity {
             control_refusal,
             agent_area,
             setup,
-            setup_body,
+            setup_body: RefCell::new(setup_body),
             setup_resources,
             settings,
             agent_panel,
@@ -433,8 +435,13 @@ impl Activity {
     }
 
     /// The setup card's content: what the agent needs before it can start, and Start agent.
+    ///
+    /// The content goes into a new box that replaces the previous one. Refilling the same box
+    /// lets GTK (4.14) keep the constant-size request mode it cached while the box was empty, so
+    /// the card was measured without height-for-width: a wrapped provider warning then took more
+    /// height than the card reserved and Start agent overlapped the resources below.
     fn render_setup(self: &Rc<Self>, detail: &ObjectiveDetail) {
-        let body = &self.setup_body;
+        let body = &vbox(space::GROUP);
         let heading = widgets::section_title(SETUP_TITLE);
         body.append(&heading);
         body.append(&label(
@@ -471,6 +478,9 @@ impl Activity {
                 &["meta"],
             )),
         }
+        let old = self.setup_body.replace(body.clone());
+        self.setup.insert_child_after(body, Some(&old));
+        self.setup.remove(&old);
         self.setup_resources
             .append(&session::resources_section(&self.controller));
     }
@@ -520,7 +530,7 @@ impl Activity {
 
     /// The setup card (no Agent Session yet) or the settings (with one).
     fn render_agent(self: &Rc<Self>) {
-        widgets::clear(&self.setup_body);
+        widgets::clear(&self.setup_body.borrow());
         widgets::clear(&self.setup_resources);
         widgets::clear(&self.agent_panel);
         let detail = self.controller.store.state().selected_detail().cloned();
