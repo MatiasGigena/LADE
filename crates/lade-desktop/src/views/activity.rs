@@ -1,10 +1,10 @@
 //! Activity: the one home of Agent Session control — the agent's state in one sentence (session
-//! identity in its tooltip), Start / Cancel / Resume, the accepted inputs with their delivery
-//! state, the transcript with incremental appends and in-place delta updates, and the composer
-//! (Prompt / Steer / Follow-up). New items never take focus.
+//! identity in its tooltip), the one agent action that applies now (Start / Cancel / Resume), the
+//! accepted inputs with their delivery state, the transcript with incremental appends and in-place
+//! delta updates, and the composer (Prompt / Steer / Follow-up). New items never take focus.
 //!
 //! Before the Objective has an Agent Session the transcript's place holds "Set up the agent":
-//! provider, model and thinking (and the LADE profile resources, collapsed). With a
+//! provider, model, thinking and Start agent (and the LADE profile resources, collapsed). With a
 //! session, the model picker, the Agent Session tools and the profile
 //! resources are under one collapsed "Agent settings" disclosure. Nothing here scrolls inside
 //! the page: the work area itself scrolls.
@@ -22,10 +22,10 @@ use super::widgets::{
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
-    ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState, ExecutionState,
-    ObjectiveDetail, ObjectiveId, Timestamp,
+    ActionAvailability, ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState,
+    ExecutionState, ObjectiveDetail, ObjectiveId, Timestamp,
 };
-use crate::presentation::panel::{self, Tone};
+use crate::presentation::panel::{self, PanelAction, Tone};
 use crate::presentation::store::{ActivityChange, Change};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -45,8 +45,10 @@ pub struct Activity {
     controller: Rc<Controller>,
     title: gtk::Label,
     status: gtk::Label,
-    /// Start agent, Cancel agent and Resume agent, as the service offers them.
+    /// The one agent action that applies now (with an Agent Session; Start is in the setup card).
     controls: gtk::Box,
+    /// Why a stopped agent stopped (the service's reason).
+    state_message: gtk::Box,
     /// The latest local error of Start / Cancel / Resume, below the state line.
     control_error: gtk::Box,
     /// The setup card and the settings disclosure: rebuilt together, focus kept by key.
@@ -108,6 +110,8 @@ impl Activity {
         controls.set_valign(gtk::Align::Start);
         head.append(&controls);
         root.append(&head);
+        let state_message = vbox(0);
+        root.append(&state_message);
         let control_error = vbox(0);
         root.append(&control_error);
 
@@ -186,6 +190,7 @@ impl Activity {
             title,
             status,
             controls,
+            state_message,
             control_error,
             agent_area,
             setup,
@@ -341,13 +346,57 @@ impl Activity {
     fn show_control_result(&self, result: Result<(), String>) {
         widgets::clear(&self.control_error);
         if let Err(message) = result {
-            self.control_error.append(&widgets::error_line(&message));
+            self.control_error
+                .append(&widgets::inline_message(MessageKind::Error, &message, None));
         }
         fit(&self.control_error);
     }
 
-    /// The setup card's content: what the agent needs before it can start.
-    fn render_setup(self: &Rc<Self>) {
+    /// Clears the local errors of earlier attempts: the catalogue or the Objective changed, so
+    /// they no longer describe the current state.
+    fn clear_errors(&self) {
+        widgets::clear(&self.control_error);
+        fit(&self.control_error);
+        self.agent_error.replace(None);
+    }
+
+    /// Start agent, Cancel agent or Resume agent. Start also needs a chosen model: without one it
+    /// is disabled (the picker says what is missing; the reason is the tooltip) and never black.
+    fn agent_button(self: &Rc<Self>, control: &PanelAction) -> gtk::Button {
+        let availability = match (control.action, &control.availability) {
+            (ActionName::ExecutionStart, ActionAvailability::Enabled) => {
+                match self.controller.chosen_model() {
+                    Ok(_) => ActionAvailability::Enabled,
+                    Err(reason) => ActionAvailability::Disabled { reason },
+                }
+            }
+            (_, availability) => availability.clone(),
+        };
+        let this = Rc::downgrade(self);
+        let action = control.action;
+        let button = widgets::compact_action(&control.label, &availability, move |_| {
+            if let Some(this) = this.upgrade() {
+                let controller = &this.controller;
+                let result = match action {
+                    ActionName::ExecutionStart => {
+                        controller.chosen_model().and_then(|(model, thinking)| {
+                            controller.start_execution(model, Some(thinking))
+                        })
+                    }
+                    ActionName::ExecutionCancel => controller.cancel(),
+                    _ => controller.resume(),
+                };
+                this.show_control_result(result);
+            }
+        });
+        if control.tone == Tone::Primary && availability == ActionAvailability::Enabled {
+            button.add_css_class("primary");
+        }
+        button
+    }
+
+    /// The setup card's content: what the agent needs before it can start, and Start agent.
+    fn render_setup(self: &Rc<Self>, detail: &ObjectiveDetail) {
         let body = &self.setup_body;
         let heading = widgets::section_title(SETUP_TITLE);
         body.append(&heading);
@@ -360,6 +409,27 @@ impl Activity {
             body.append(&widgets::inline_message(MessageKind::Error, error, None));
         }
         body.append(&session::model_picker(&self.controller));
+        let start = panel::activity_controls(detail)
+            .into_iter()
+            .find(|c| c.action == ActionName::ExecutionStart);
+        match start {
+            Some(start) => {
+                let row = vbox(space::TIGHT);
+                let button = self.agent_button(&start);
+                button.set_halign(gtk::Align::Start);
+                row.append(&button);
+                // The service's own refusal is stated here, the card being the empty state; a
+                // missing model is already stated by the picker above.
+                if let ActionAvailability::Disabled { reason } = &start.availability {
+                    row.append(&label(reason, &["meta"]));
+                }
+                body.append(&row);
+            }
+            None => body.append(&label(
+                "Starting the agent is not offered for this Objective.",
+                &["meta"],
+            )),
+        }
         self.setup_resources
             .append(&session::resources_section(&self.controller));
     }
@@ -413,7 +483,7 @@ impl Activity {
         self.settings.set_visible(session);
         match detail {
             Some(detail) if session => self.render_settings(&detail),
-            Some(_) => self.render_setup(),
+            Some(detail) => self.render_setup(&detail),
             None => {}
         }
     }
@@ -473,9 +543,7 @@ impl Activity {
         for change in changes {
             match change {
                 Change::Selection => {
-                    self.agent_error.replace(None);
-                    widgets::clear(&self.control_error);
-                    fit(&self.control_error);
+                    self.clear_errors();
                     self.restore_composer();
                     self.render_items();
                     self.render_inputs();
@@ -483,11 +551,14 @@ impl Activity {
                     agent = true;
                 }
                 Change::Inputs(id) if Some(id) == selected.as_ref() => self.render_inputs(),
+                // A new catalogue or Objective state supersedes an earlier local error.
                 Change::Catalog => {
+                    self.clear_errors();
                     state = true;
                     agent = true;
                 }
                 Change::Detail(id) if Some(id) == selected.as_ref() => {
+                    self.clear_errors();
                     state = true;
                     agent = true;
                 }
@@ -531,7 +602,33 @@ impl Activity {
         self.updating.set(false);
     }
 
-    /// Title, the state sentence, the header actions, Send, and which body shows.
+    /// The header's one agent action for the current state: Cancel while the agent runs, Resume
+    /// (or Start again) once it stopped. Without an Agent Session, Start is the setup card's.
+    /// An enabled candidate is preferred; otherwise the offered one shows disabled, its reason in
+    /// the tooltip.
+    fn relevant_control(detail: &ObjectiveDetail) -> Option<PanelAction> {
+        let wanted: &[ActionName] = match detail.summary.execution.state {
+            ExecutionState::Starting
+            | ExecutionState::Running
+            | ExecutionState::Idle
+            | ExecutionState::Stopping => &[ActionName::ExecutionCancel],
+            _ if detail.session.is_none() => &[],
+            _ => &[ActionName::ExecutionResume, ActionName::ExecutionStart],
+        };
+        let offered: Vec<PanelAction> = panel::activity_controls(detail)
+            .into_iter()
+            .filter(|c| wanted.contains(&c.action))
+            .collect();
+        let rank = |c: &PanelAction| wanted.iter().position(|w| *w == c.action);
+        offered
+            .iter()
+            .filter(|c| c.availability == ActionAvailability::Enabled)
+            .min_by_key(|c| rank(c))
+            .or_else(|| offered.iter().min_by_key(|c| rank(c)))
+            .cloned()
+    }
+
+    /// Title, the state sentence, the header action, Send, and which body shows.
     fn render_state(self: &Rc<Self>) {
         let state = self.controller.store.state();
         let title = state.selected_summary().map_or_else(
@@ -542,6 +639,8 @@ impl Activity {
         drop(state);
         self.title.set_text(&title);
         widgets::clear(&self.controls);
+        widgets::clear(&self.state_message);
+        fit(&self.state_message);
         widgets::clear(&self.send_area);
         let line = self.controller.agent_line();
         let (sentence, details) = match (&detail, line) {
@@ -553,30 +652,19 @@ impl Activity {
         self.status.set_tooltip_text(details.as_deref());
         widgets::set_accessible_description(&self.status, details.as_deref().unwrap_or(""));
         if let Some(detail) = &detail {
-            // A disabled control's reason is its tooltip and accessible description.
-            for control in panel::activity_controls(detail) {
-                let this = Rc::downgrade(self);
-                let action = control.action;
-                let button =
-                    widgets::compact_action(&control.label, &control.availability, move |_| {
-                        if let Some(this) = this.upgrade() {
-                            let controller = &this.controller;
-                            let result = match action {
-                                ActionName::ExecutionStart => {
-                                    controller.chosen_model().and_then(|(model, thinking)| {
-                                        controller.start_execution(model, Some(thinking))
-                                    })
-                                }
-                                ActionName::ExecutionCancel => controller.cancel(),
-                                _ => controller.resume(),
-                            };
-                            this.show_control_result(result);
-                        }
-                    });
-                if control.tone == Tone::Primary {
-                    button.add_css_class("primary");
-                }
-                self.controls.append(&button);
+            let execution = &detail.summary.execution;
+            if execution.state == ExecutionState::Failed
+                && let Some(reason) = &execution.reason
+            {
+                self.state_message.append(&widgets::inline_message(
+                    MessageKind::Error,
+                    reason,
+                    None,
+                ));
+            }
+            fit(&self.state_message);
+            if let Some(control) = Self::relevant_control(detail) {
+                self.controls.append(&self.agent_button(&control));
             }
             let this = Rc::downgrade(self);
             self.send_area.append(&widgets::action_row(
