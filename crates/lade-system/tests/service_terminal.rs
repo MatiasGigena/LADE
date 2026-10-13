@@ -10,9 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::client::{
-    Basis, ErrorCode, Event, ExecutionState, ObjectiveSelector, ReplyData, Request,
-    ServiceStopCommand, StopReason, TerminalCloseReason, TerminalInfo, TerminalInputCommand,
-    TerminalMode, TerminalOpenCommand, TerminalResizeCommand, TerminalSelector,
+    ActionName, Basis, ErrorCode, Event, ExecutionState, ObjectiveSelector, ReplyData, Request,
+    SafeAction, ServiceStopCommand, StopReason, TerminalCloseReason, TerminalInfo,
+    TerminalInputCommand, TerminalMode, TerminalOpenCommand, TerminalResizeCommand,
+    TerminalSelector,
 };
 use lade_protocol::types::{Counter, Id};
 use service_support::*;
@@ -101,9 +102,25 @@ fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
 fn started_objective(env: &Env, client: &mut Client, title: &str) -> Id {
     let ws = open_workspace(client, &env.repo);
     let objective = create_objective(client, &ws.workspace_id, title).objective_id;
-    // No worktree yet: nothing to open a terminal in.
+    // No worktree yet: nothing to open a terminal in. The projection says so before the request.
+    let projected = detail(client, &objective)
+        .available_actions
+        .into_iter()
+        .find(|a| a.action == ActionName::TerminalOpen)
+        .expect("terminal.open is projected");
+    assert!(!projected.enabled);
     let refused = client.call(open_command(&objective)).unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidLifecycle, "{refused:?}");
+    assert_eq!(
+        refused.action,
+        SafeAction::None,
+        "a precondition, not stale state"
+    );
+    assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
+    assert_eq!(
+        refused.detail,
+        "Start the agent once to create this Objective's worktree."
+    );
     start_execution(client, &objective);
     wait_state(client, &objective, ExecutionState::Idle);
     assert!(worktree(env, &objective).is_dir());
@@ -119,6 +136,13 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     if !sandbox_works() {
         let refused = client.call(open_command(&objective)).unwrap_err();
         assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
+        let projected = detail(&mut client, &objective)
+            .available_actions
+            .into_iter()
+            .find(|a| a.action == ActionName::TerminalOpen)
+            .unwrap();
+        assert!(!projected.enabled);
+        assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
         eprintln!("note: sandbox unavailable; terminal refused as expected");
         return;
     }

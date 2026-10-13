@@ -3,9 +3,10 @@
 //! Objective in that state: an enabled action's request must be accepted and a disabled action's
 //! request must be rejected.
 //!
-//! `feedback.submit` is excluded here (it needs inspected drafts; the flow tests cover it), and an
-//! enabled `review.approve` is sent with an override reason, which the projection announces as
-//! required when evidence is missing.
+//! `feedback.submit` is excluded here (it needs inspected drafts; the flow tests cover it), as is
+//! `terminal.open` (a real sandboxed shell; `service_terminal.rs` checks its projection against
+//! the refusal), and an enabled `review.approve` is sent with an override reason, which the
+//! projection announces as required when evidence is missing.
 
 mod service_support;
 
@@ -210,7 +211,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
             text: "hello".into(),
             mode: DeliveryMode::Prompt,
         }),
-        ActionName::FeedbackSubmit => return None,
+        ActionName::FeedbackSubmit | ActionName::TerminalOpen => return None,
         ActionName::ReviewFreeze => Request::ReviewFreeze(selector(&objective)),
         ActionName::ReviewReturn => Request::ReviewReturn(CandidateCommand {
             objective_id: objective,
@@ -271,7 +272,7 @@ fn every_projected_action_agrees_with_its_request() {
     for state in STATES {
         let probe = build(&env, &mut client, &ws.workspace_id, state);
         let actions = detail(&mut client, &probe).available_actions;
-        assert_eq!(actions.len(), 16, "one entry per action");
+        assert_eq!(actions.len(), 17, "one entry per action");
         for available in actions {
             // A fresh Objective per action: requests mutate state.
             let objective = build(&env, &mut client, &ws.workspace_id, state);
@@ -335,7 +336,7 @@ fn empty_change_set_disables_freeze_with_the_same_reason_as_the_rejection() {
     let reason = freeze.reason.clone().unwrap();
     assert_eq!(
         reason,
-        "No changes to freeze — complete without changes instead"
+        "There are no changes to freeze. Complete without changes instead."
     );
     // The request agrees, without stopping the live execution first.
     let rejected = client
@@ -438,7 +439,7 @@ fn start_without_a_sandbox_is_refused_synchronously() {
     assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
     assert_eq!(
         refused.detail,
-        "worker sandbox unavailable: bwrap not found"
+        "LADE can't run agents on this computer because the sandbox check failed."
     );
     assert_eq!(
         detail(&mut client, &objective).execution.state,

@@ -231,7 +231,9 @@ a reused `request_id` with different content is `duplicate_conflict`):
 - `objective.update_intent`: core CAS on `intent_revision`.
 - `execution.start` / `execution.resume`: after the core transition is checked, the launcher's `preflight(provider)`
   (sandbox probe, egress policy, credentials) runs; a failure rejects synchronously with `execution_unavailable`
-  (detail names missing credential variables, never values) and nothing is recorded. Otherwise the core transition
+  (detail names missing credential variables, never values; a failed sandbox probe reads "LADE can't run agents on
+  this computer because the sandbox check failed." and its technical detail goes to the service diagnostics) and
+  nothing is recorded. Otherwise the core transition
   (new session / new generation) is committed first; then the
   pool provisions the worktree (`worktree_add` of the Objective branch at the start commit under
   `$STATE/worktrees/<id>`; never the shared checkout) and calls the launcher with `worker.start`. Launch failure →
@@ -298,9 +300,11 @@ Terminal requests (`terminal.open/input/resize/close`, IMP-012) are interaction,
 current candidate, evidence, target movement, busy marker, latest capture, verification sandbox) with a reason when
 disabled; approval with missing or failed evidence is enabled with a reason stating that an override reason is
 required, and input (`message.send`, `feedback.submit`) to a stopped execution is enabled with a reason saying it waits
-for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for
-eleven Objective states, that every enabled action's request is accepted and every disabled action's request is
-rejected.
+for Resume (it is accepted with delivery `blocked`, and `blocked_reason` says to resume). `tests/service_actions.rs`
+checks, for eleven Objective states, that every enabled action's request is accepted and every disabled action's
+request is rejected. `terminal.open` is projected from the same scope check its request uses
+(`service_terminal.rs` checks that the reason equals the refusal). Reasons and refusal details are short
+developer-facing sentences that name the next step (sentence case, ending with a period, no internal codes).
 
 Events carry a monotonically increasing `sequence` per service epoch: `objective.changed` + `objective.detail` after
 every Objective change, `activity.appended` per item, `activity.delta` coalesced per 100 ms tick, `draft.changed`,
@@ -342,15 +346,18 @@ changing them is Matias's decision). Enforcement per sandbox is described in
   check. This is a **monitor, not a quota**: writes between two checks succeed, and the disk itself is not reserved.
 - **cgroup v2 placement.** At start `laded` (the binary, not `service::start`) calls
   `adapters::sandbox::cgroup::detect`. When the unit's cgroup is delegated (`Delegate=memory pids cpu` in
-  `packaging/systemd/lade.service`: systemd marks it with the `user.delegate`/`trusted.delegate` extended attribute,
-  owned by the service user, with the three controllers available), `laded` moves itself into `<unit
-  cgroup>/service`, enables the controllers, removes sandbox cgroups a previous instance left, and passes the subtree
+  `packaging/systemd/lade.service`; delegation is stated either by a `trusted.delegate`/`user.delegate` extended
+  attribute, which only the system manager sets, or by the systemd user manager reporting `Delegate=yes` for the unit
+  whose `ControlGroup=` is this cgroup; the cgroup is owned by the service user, its interface files writable, the
+  three controllers available; see [execution safety](execution-safety.md#cgroup-v2-placement)), `laded` moves
+  itself (and anything else in the cgroup) into `<unit cgroup>/service`, enables the controllers, proves with a probe
+  cgroup that `pids.max` refuses a fork, removes sandbox cgroups a previous instance left, and passes the subtree
   to the launcher, the terminals and verification runs: each Objective gets `<unit cgroup>/sandboxes/<objective>`
   with `OBJECTIVE_CGROUP_LIMITS` (`memory.max` 4 GiB, `pids.max` 512, `cpu.max` unlimited), shared by its worker,
   terminals and verification runs in one leaf each (`worker-<generation>`, `terminal-<id>`, `verify-<id>`). A
   sandbox is moved into its leaf while its launch gate is still closed; when it ends the leaf is killed
   (`cgroup.kill`) and removed. Without delegation (cgroup v1/hybrid, not started by the unit, a non-delegated cgroup,
-  missing controllers, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
+  missing controllers, a failed probe, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
   prlimit limits only` and continues; it never writes into a cgroup it was not delegated. A memory OOM kill inside a
   sandbox is logged (`sandbox memory limit reached`) and surfaces as the worker's unexpected exit.
 
@@ -362,7 +369,7 @@ only ask the service, which allocates the PTY itself and starts the shell in the
 the worker's `prlimit` quotas.
 
 - **Scope.** `terminal.open {objective_id, cols, rows}` (sizes 1..=500 × 1..=200) is accepted only for an Objective
-  whose worktree exists (`invalid_lifecycle` "start the agent once" otherwise, and after Cleanup) and whose lifecycle
+  whose worktree exists (`invalid_lifecycle` with action `none`, "Start the agent once to create this Objective's worktree." otherwise; after Cleanup it says so) and whose lifecycle
   is `defined`/`active` (read-write) or `frozen`/`approved` (**read-only**: the worktree is bound read-only). Any
   other lifecycle is `invalid_lifecycle`. Without a working sandbox: `execution_unavailable` — there is no
   unsandboxed terminal. At most 4 terminals per Objective and `--max-terminals` (default 16) across all Objectives (`limit_reached`, naming both counts; before IMP-013 the total was wrongly counted per Objective). The sandbox starts on
@@ -484,15 +491,16 @@ none resumed.
 ## Aggregate limits and storage pressure (IMP-013)
 
 Source: `service/limits.rs`. Accounting across Objectives lives in the service only (sandbox limits —
-`prlimit`, cgroups — are the launcher's). Every limit is configurable, printed at startup and named in the
-refusal and in `available_actions`; the defaults are **proposals awaiting approval** (#14 policy):
+`prlimit`, cgroups — are the launcher's). Every limit is configurable and printed at startup with its option; the
+refusal and `available_actions` state it in plain words (without the option); the defaults are **proposals
+awaiting approval** (#14 policy):
 
 | Limit | Flag | Default | At the limit |
 | --- | --- | --- | --- |
-| live agent executions (one sandboxed worker each) | `--max-workers` | 16 | `execution.start`/`resume` → `limit_reached` "N of N agents are running (laded --max-workers N); stop one or raise the limit"; nothing is recorded; the action shows the same reason |
+| live agent executions (one sandboxed worker each) | `--max-workers` | 16 | `execution.start`/`resume` → `limit_reached` "N of N agents are already running, the most LADE runs at once. Stop one to start another."; nothing is recorded; the action shows the same reason |
 | contained terminals in total | `--max-terminals` | 16 (4 per Objective, fixed) | `terminal.open` → `limit_reached` naming both counts |
 | free space on the state filesystem: warning | `--storage-warn-mib` | 2048 | `service.notice {level: warning, code: storage_low}` (on the transition and to every newly attached client) |
-| free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "storage pressure: … free, below the … reserve" — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
+| free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "The disk that holds LADE's data has … MiB free, below the … MiB LADE keeps in reserve. Free some space and try again." — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
 
 The free-space reserve complements, and does not replace, the per-execution writable-storage monitor (IMP-006:
 worktree + session directory against `WRITABLE_STORAGE_BYTES`, the agent stopped with `limit_reached`): that one

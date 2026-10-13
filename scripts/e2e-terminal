@@ -51,8 +51,9 @@ key() { x key "$@"; sleep 1; }
 typ() { x type --delay 12 "$1"; }
 park() { x mousemove 700 880; sleep 0.5; }
 shot() { park; import -window root "$OUT/t-$1.png"; step "screenshot t-$1.png"; }
+# Start agent: the filled black button of Activity's "Set up the agent" card ("X Y").
 start_button() {
-  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 270 1100 150 750
 }
 wait_for() {
   limit=$1; what=$2; shift 2
@@ -113,12 +114,16 @@ wait "$SECOND" || fail "second launch failed"
 grep -q "refused second client" "$T/laded.log" && fail "the second launch reached the service"
 
 step "Objective with a worktree (the fixture agent starts once)"
-key ctrl+n
-click 280 106 0.3; typ "Terminal check"
-click 280 195 0.3; typ "the terminal stays in scope"
-click 469 625 2
-# Start agent is Activity's (Agent Session control): its filled black button in the Activity
-# header, found by pixels (scripts/e2e-find-button.py box) rather than by a fixed position.
+key ctrl+n         # the Title field has focus
+typ "Terminal check"
+key Tab            # Expected outcome
+typ "the terminal stays in scope"
+# Constraints, Acceptance criteria, Integration target, Start point, Cancel, Create Objective.
+key Tab Tab Tab Tab Tab Tab
+key Return
+sleep 1
+# Start agent is Activity's (Agent Session control): its filled black button in the "Set up the
+# agent" card, found by pixels (scripts/e2e-find-button.py box) rather than by a fixed position.
 key ctrl+2
 wait_for 20 "Start agent" start_button
 XY=$(start_button)

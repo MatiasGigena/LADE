@@ -17,7 +17,7 @@ use lade_protocol::worker::{MAX_ITEM_TEXT_BYTES, TurnState, WorkerBody};
 
 use crate::storage::{self, ActivityRow};
 use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
-use crate::supervision::{LaunchBinding, LaunchRequest, SupervisorEvent, WorkerEvent};
+use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerEvent};
 
 use super::convert::{
     counter, domain_rejection, new_uuid, now_ms, parse_uuid, preview, rejection, wire_id, wire_ts,
@@ -28,6 +28,10 @@ use super::project::wire_input;
 use super::{JobOutput, ReqCtx, Service};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+/// Why Start agent / Resume agent are refused when the worker sandbox probe failed (the probe's
+/// own output goes to the service diagnostics only).
+pub const AGENT_SANDBOX_UNAVAILABLE: &str =
+    "LADE can't run agents on this computer because the sandbox check failed.";
 const LIVE_ITEM_RETENTION: Duration = Duration::from_secs(60);
 /// Prefix of a failure reason caused by an enforced limit; the summary shows `limit_reached`.
 pub(crate) const LIMIT_REACHED: &str = "limit_reached";
@@ -152,6 +156,8 @@ impl Service {
     /// Refuses synchronously when the launcher can already tell a worker for `provider` could
     /// not start (sandbox, egress policy, missing credentials — names only, never values), and
     /// refuses the test-only fixture provider unless the service was started with its switch.
+    /// A failed sandbox check is refused in one sentence; its technical detail (the failing step
+    /// and its output) is written to the service diagnostics.
     pub(crate) fn preflight(&self, provider: &str) -> Result<(), Rejection> {
         if provider == FIXTURE_PROVIDER && !self.test_fixture_provider {
             return Err(rejection(
@@ -161,11 +167,14 @@ impl Service {
             ));
         }
         self.launcher.preflight(provider).map_err(|e| {
-            rejection(
-                ErrorCode::ExecutionUnavailable,
-                SafeAction::None,
-                &e.detail(),
-            )
+            let detail = match &e {
+                LaunchError::SandboxUnavailable(_) => {
+                    eprintln!("laded: agent start refused: {}", e.detail());
+                    AGENT_SANDBOX_UNAVAILABLE.to_owned()
+                }
+                LaunchError::ProviderUnavailable(_) | LaunchError::Io(_) => e.detail(),
+            };
+            rejection(ErrorCode::ExecutionUnavailable, SafeAction::None, &detail)
         })
     }
 

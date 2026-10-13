@@ -332,7 +332,8 @@ fn rejected_query_reaches_its_surface() {
     let step = core.on_reply(reply);
     assert!(matches!(
         step.updates.as_slice(),
-        [StoreUpdate::ChangesFailed { message, .. }] if message.contains("not_found")
+        [StoreUpdate::ChangesFailed { message, .. }]
+            if message == "Couldn't load Change Set. No worktree yet."
     ));
     assert_eq!(core.pending_count(), 1, "only the welcome snapshot remains");
 }

@@ -23,6 +23,7 @@ use lade_protocol::types::{
 };
 use lade_system::service::{self, ServiceConfig};
 use lade_system::supervision::credentials::FIXTURE_REFUSED;
+use lade_system::supervision::secret_service::SecretService;
 use service_support::*;
 
 const EXTENSION: &str = r#"export default function (pi) {
@@ -178,7 +179,11 @@ fn the_fixture_provider_is_listed_with_the_test_switch() {
 #[test]
 fn models_come_from_the_sdk_catalogue_with_explicit_provider_access() {
     let env = Env::new("svc-models");
-    let (launcher, _) = best_launcher(&env);
+    let (launcher, sandboxed) = best_launcher(&env);
+    // The sandboxed launcher uses this host's keyring: a usable one may hold the key, which only
+    // execution start reads, so the provider is then not reported missing.
+    let keyring = SecretService::from_env();
+    let keyring = sandboxed && keyring.is_enabled() && keyring.unavailable_reason().is_none();
     let _service = env.start(launcher);
     let mut client = env.connect();
     let catalog = match client.call(Request::ModelsList(ModelsListQuery { provider: None })) {
@@ -196,7 +201,16 @@ fn models_come_from_the_sdk_catalogue_with_explicit_provider_access() {
     assert!(by_id.len() > 30, "the SDK registry, not a static table");
     assert_eq!(by_id["lade-fixture"].status, ProviderStatus::Available);
     let anthropic = by_id["anthropic"];
-    assert_eq!(anthropic.status, ProviderStatus::MissingCredentials);
+    if keyring {
+        assert_eq!(anthropic.status, ProviderStatus::Available);
+    } else {
+        assert_eq!(anthropic.status, ProviderStatus::MissingCredentials);
+        // One short sentence; where the key goes is the client's collapsed Details.
+        assert_eq!(
+            anthropic.reason.as_deref(),
+            Some("Add an API key or subscription token for Anthropic to use it.")
+        );
+    }
     for auth in [
         ProviderAuth::ApiKey,
         ProviderAuth::SubscriptionToken,

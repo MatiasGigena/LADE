@@ -9,10 +9,11 @@ use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 use super::compat as compat_wire;
 use super::convert::{self, Invalid, id, to_basis, to_path};
 use crate::presentation::compat::CompatUpdate;
+use crate::presentation::format::sentence;
 use crate::presentation::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::model::{
-    self as view, Basis, DraftId, NoticeLevel, ObjectiveId, RepoPath, SearchScope, ServiceNotice,
-    Side,
+    self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath,
+    SearchScope, ServiceNotice, Side,
 };
 use crate::presentation::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
@@ -49,13 +50,15 @@ pub enum Context {
     Terminal(ObjectiveId, &'static str),
     /// `service.stop` (Exit / logout).
     Stop,
-    /// A mutating request. `objective_id` scopes where its outcome is shown.
+    /// A mutating request. `objective_id` scopes where its outcome is shown; `surface` is where
+    /// it was issued (set for every Objective-scoped command, see [`surface`]).
     Command {
         label: &'static str,
         objective_id: Option<ObjectiveId>,
         draft_id: Option<DraftId>,
         /// Draft ids of a feedback batch, to name stale items in a `stale_reference` rejection.
         batch: Vec<DraftId>,
+        surface: Option<ActionSurface>,
     },
 }
 
@@ -66,6 +69,7 @@ impl Context {
             objective_id: objective_id.cloned(),
             draft_id: None,
             batch: Vec::new(),
+            surface: None,
         }
     }
 
@@ -149,8 +153,57 @@ pub fn start_point(start: &StartPoint) -> Result<wire::Start, Invalid> {
     }
 }
 
+/// The surface an Objective-scoped command is issued from (`None` for commands without an
+/// Objective and for queries).
+pub fn surface(intent: &Intent) -> Option<ActionSurface> {
+    use Intent as I;
+    Some(match intent {
+        I::UpdateObjective { .. } => ActionSurface::Intent,
+        I::StartExecution { .. } | I::Cancel { .. } | I::Resume { .. } => ActionSurface::Agent,
+        I::NavigateSession { .. }
+        | I::ForkSession { .. }
+        | I::ImportSession { .. }
+        | I::ExportSession { .. }
+        | I::CompactSession { .. }
+        | I::ReloadSession { .. }
+        | I::ConfigureSession { .. } => ActionSurface::Session,
+        I::SendMessage { .. } => ActionSurface::Send,
+        I::SaveDraft { .. } | I::DeleteDraft { .. } => ActionSurface::Drafts,
+        I::SubmitFeedback { .. } => ActionSurface::Feedback,
+        I::Freeze { .. }
+        | I::ReturnForRevision { .. }
+        | I::Approve { .. }
+        | I::Refresh { .. }
+        | I::Integrate { .. } => ActionSurface::Review,
+        I::Verify { .. } => ActionSurface::Checks,
+        I::Complete { .. } | I::Discard { .. } | I::Cleanup { .. } | I::DeleteHistory { .. } => {
+            ActionSurface::Closing
+        }
+        I::OpenTerminal { .. }
+        | I::TerminalInput { .. }
+        | I::ResizeTerminal { .. }
+        | I::CloseTerminal { .. } => ActionSurface::Terminal,
+        I::RespondDialog { .. } => ActionSurface::Dialog,
+        _ => return None,
+    })
+}
+
 /// Maps one intent to its request. `Ok(None)` for intents handled by the connection itself.
 pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
+    let Some((request, mut context)) = request_for(intent)? else {
+        return Ok(None);
+    };
+    if let Context::Command {
+        surface: issued_from,
+        ..
+    } = &mut context
+    {
+        *issued_from = surface(intent);
+    }
+    Ok(Some((request, context)))
+}
+
+fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
     use Intent as I;
     let mapped = match intent {
         I::RetryConnection => return Ok(None),
@@ -336,6 +389,7 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
                 objective_id: Some(objective_id.clone()),
                 draft_id: Some(draft_id.clone()),
                 batch: Vec::new(),
+                surface: None,
             },
         ),
         I::DeleteDraft {
@@ -351,6 +405,7 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
                 objective_id: None,
                 draft_id: Some(draft_id.clone()),
                 batch: Vec::new(),
+                surface: None,
             },
         ),
         I::SubmitFeedback {
@@ -382,6 +437,7 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
                 objective_id: Some(objective_id.clone()),
                 draft_id: None,
                 batch: drafts.iter().map(|d| d.draft_id.clone()).collect(),
+                surface: None,
             },
         ),
         I::Freeze { objective_id } => (
@@ -750,6 +806,7 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     let updates = &mut effects.updates;
     if let Context::Command {
         objective_id: Some(objective_id),
+        surface,
         ..
     } = context
     {
@@ -757,6 +814,12 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             objective_id: objective_id.clone(),
             status: None,
         });
+        if let Some(surface) = surface {
+            updates.push(StoreUpdate::RefusalCleared {
+                objective_id: objective_id.clone(),
+                surface: *surface,
+            });
+        }
     }
     if compat_effects(context, &data, &mut effects) {
         return effects;
@@ -942,74 +1005,130 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     effects
 }
 
-/// The developer-facing sentence for a rejection: label, code, service detail and safe action.
-pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
-    let code = convert::error_code(rejection.code);
-    let mut message = format!("{label} was refused ({code})");
-    if !rejection.detail.is_empty() {
-        message.push_str(" — ");
-        message.push_str(&rejection.detail);
-    }
-    if !message.ends_with('.') {
-        message.push('.');
-    }
-    if let Some(action) = convert::safe_action(rejection.action) {
-        message.push(' ');
-        message.push_str(action);
-    }
-    message
+/// "Couldn't open terminal." for the label "Open terminal".
+fn could_not(label: &str) -> String {
+    let action = match label {
+        "Terminal input" => "send terminal input".to_owned(),
+        _ => match label.strip_prefix("Checking ") {
+            Some(rest) => format!("check {rest}"),
+            None => {
+                let mut chars = label.chars();
+                chars.next().map_or_else(String::new, |first| {
+                    first.to_lowercase().chain(chars).collect()
+                })
+            }
+        },
+    };
+    format!("Couldn't {action}.")
 }
 
-/// Maps a rejection for `context` onto the surface that asked.
+/// The service's detail as a sentence, or a plain fallback when the detail is not meant for
+/// people (empty, a bare code or identifier, a list of draft ids).
+fn plain_reason(rejection: &Rejection) -> String {
+    let detail = rejection.detail.trim();
+    let machine = !detail.contains(' ')
+        || rejection.code == wire::ErrorCode::StaleReference
+        || detail.starts_with("stale drafts:");
+    if !machine {
+        return sentence(detail);
+    }
+    if rejection.code == wire::ErrorCode::NotFound
+        && !detail.is_empty()
+        && detail.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+    {
+        return format!("The {} no longer exists.", detail.replace('_', " "));
+    }
+    convert::fallback_reason(rejection.code).to_owned()
+}
+
+/// A rejection's plain reason plus advice (when it can help), without the action label.
+fn reason_and_advice(rejection: &Rejection) -> String {
+    let mut text = plain_reason(rejection);
+    if let Some(advice) = convert::advice(rejection.code, rejection.action)
+        && !text.contains(advice)
+    {
+        text.push(' ');
+        text.push_str(advice);
+    }
+    text
+}
+
+/// The code and raw service detail, for a tooltip or diagnostics.
+fn technical_details(rejection: &Rejection) -> String {
+    let code = convert::error_code(rejection.code);
+    if rejection.detail.is_empty() {
+        code.to_owned()
+    } else {
+        format!("{code}: {}", rejection.detail)
+    }
+}
+
+/// A rejection as the developer sees it: "Couldn't <label>." plus the service's reason in plain
+/// words and, only when it helps, what to do next; the code and raw detail are kept apart.
+pub fn refusal(label: &str, rejection: &Rejection) -> Refusal {
+    Refusal {
+        message: format!("{} {}", could_not(label), reason_and_advice(rejection)),
+        details: technical_details(rejection),
+    }
+}
+
+/// The plain sentence of [`refusal`] (no error code).
+pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
+    refusal(label, rejection).message
+}
+
+/// Maps a rejection for `context` onto the surface that asked. Objective-scoped command
+/// refusals go to the store only, per Objective and surface; the global notice is for refusals
+/// no Objective surface can show.
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
     let code = convert::error_code(rejection.code).to_owned();
-    let mut message = rejection_message(context.label(), rejection);
+    let mut refused = refusal(context.label(), rejection);
     let updates = &mut effects.updates;
+    let notice = |refused: Refusal| {
+        StoreUpdate::Notice(ServiceNotice {
+            level: NoticeLevel::Warning,
+            code: code.clone(),
+            message: refused.message,
+        })
+    };
     match context {
         Context::Objective(o) => updates.push(StoreUpdate::ObjectiveLoadFailed {
             objective_id: o.clone(),
-            message,
+            message: refused.message,
         }),
         Context::Changes(o, basis) => updates.push(StoreUpdate::ChangesFailed {
             objective_id: o.clone(),
             basis: basis.clone(),
-            message,
+            message: refused.message,
         }),
         Context::Diff(o, _, path) | Context::File(o, _, path, _) => {
             updates.push(StoreUpdate::ViewerFailed {
                 objective_id: o.clone(),
                 path: path.clone(),
-                message,
+                message: refused.message,
             });
         }
-        Context::Search { .. } => updates.push(StoreUpdate::SearchFailed { message }),
-        Context::Terminal(o, _) => updates.push(StoreUpdate::TerminalProblem {
-            objective_id: o.clone(),
-            message,
+        Context::Search { .. } => updates.push(StoreUpdate::SearchFailed {
+            message: refused.message,
         }),
-        Context::Stop => updates.push(StoreUpdate::Notice(ServiceNotice {
-            level: NoticeLevel::Warning,
-            code,
-            message,
-        })),
-        Context::Snapshot
+        Context::Terminal(o, _) => updates.push(StoreUpdate::TerminalRefused {
+            objective_id: o.clone(),
+            refusal: refused,
+        }),
+        Context::Stop
+        | Context::Snapshot
         | Context::Activity(_)
         | Context::Drafts(_)
         | Context::Inputs(_)
         | Context::Models(_)
         | Context::Tree(_)
-        | Context::Resources => {
-            updates.push(StoreUpdate::Notice(ServiceNotice {
-                level: NoticeLevel::Warning,
-                code,
-                message,
-            }));
-        }
+        | Context::Resources => updates.push(notice(refused)),
         Context::Command {
             objective_id,
             draft_id,
             batch,
+            surface,
             ..
         } => {
             if rejection.code == wire::ErrorCode::StaleReference && !batch.is_empty() {
@@ -1019,7 +1138,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                     .map(DraftId::short)
                     .collect();
                 if !stale.is_empty() {
-                    message.push_str(&format!(
+                    refused.message.push_str(&format!(
                         " Stale draft{}: {}. Re-anchor or remove {} and submit again.",
                         if stale.len() == 1 { "" } else { "s" },
                         stale.join(", "),
@@ -1027,25 +1146,35 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                     ));
                 }
             }
-            if let Some(draft_id) = draft_id
-                && objective_id.is_some()
-            {
-                // A refused save keeps the text locally and offers Retry beside the draft.
-                updates.push(StoreUpdate::DraftSaveFailed {
+            match (objective_id, draft_id) {
+                // A refused save keeps the text locally and offers Retry beside the draft; the
+                // draft row is the only place it shows.
+                (Some(_), Some(draft_id)) => updates.push(StoreUpdate::DraftSaveRefused {
                     draft_id: draft_id.clone(),
-                    message: format!("{code}: {}", rejection.detail),
-                });
+                    refusal: Refusal {
+                        message: reason_and_advice(rejection),
+                        details: refused.details,
+                    },
+                }),
+                (None, Some(draft_id)) => updates.push(StoreUpdate::DraftDeleteRefused {
+                    draft_id: draft_id.clone(),
+                    refusal: refused,
+                }),
+                (Some(o), None) => {
+                    // The outcome is known: an earlier "Checking outcome…" note no longer applies.
+                    updates.push(StoreUpdate::CommandStatus {
+                        objective_id: o.clone(),
+                        status: None,
+                    });
+                    updates.push(StoreUpdate::Refused {
+                        objective_id: o.clone(),
+                        surface: surface.unwrap_or(ActionSurface::Review),
+                        refusal: refused,
+                    });
+                }
+                (None, None) => updates.push(notice(refused)),
             }
-            let notice = ServiceNotice {
-                level: NoticeLevel::Warning,
-                code,
-                message,
-            };
             if let Some(o) = objective_id {
-                updates.push(StoreUpdate::CommandStatus {
-                    objective_id: o.clone(),
-                    status: Some(notice.clone()),
-                });
                 // Re-read the authority projection so actions show their current reasons.
                 effects.follow_ups.push(refresh_objective(o));
                 if !batch.is_empty() || draft_id.is_some() {
@@ -1054,7 +1183,6 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                     });
                 }
             }
-            updates.push(StoreUpdate::Notice(notice));
         }
     }
     effects

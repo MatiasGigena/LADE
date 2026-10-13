@@ -156,10 +156,24 @@ pub fn delivery_label(delivery: DeliveryState, blocked_reason: Option<&str>) -> 
         DeliveryState::Received => "Accepted · received by agent".to_owned(),
         DeliveryState::Uncertain => "Accepted · delivery uncertain — not resent".to_owned(),
         DeliveryState::Blocked => match blocked_reason {
-            Some(reason) => format!("Accepted · blocked — {reason}"),
+            Some(reason) => format!("Accepted · blocked. {}", sentence(reason)),
             None => "Accepted · blocked".to_owned(),
         },
     }
+}
+
+/// `text` as a sentence: trimmed, first letter capitalized, ending with `.`, `!` or `?`.
+pub fn sentence(text: &str) -> String {
+    let text = text.trim();
+    let mut chars = text.chars();
+    let mut out: String = match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => return String::new(),
+    };
+    if !out.ends_with(['.', '!', '?']) {
+        out.push('.');
+    }
+    out
 }
 
 pub fn mode_label(mode: DeliveryMode) -> &'static str {
@@ -533,6 +547,18 @@ mod tests {
             assert!(full.contains("Candidate 2 — frozen"));
             assert!(full.contains(candidate_status(status)));
         }
+    }
+
+    #[test]
+    fn sentences_are_capitalized_and_terminated() {
+        assert_eq!(sentence(" not connected "), "Not connected.");
+        assert_eq!(sentence("Done."), "Done.");
+        assert_eq!(sentence("why?"), "Why?");
+        assert_eq!(sentence(""), "");
+        assert_eq!(
+            delivery_label(DeliveryState::Blocked, Some("the agent isn't running")),
+            "Accepted · blocked. The agent isn't running."
+        );
     }
 
     #[test]

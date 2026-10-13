@@ -131,6 +131,12 @@ All optional fields, so older peers' frames stay valid and an older client simpl
   `artifact_digest` still names the whole file; encoding is decided by a NUL in the first 8,000 bytes; a text chunk
   is cut back to a character boundary, an offset inside a character is `invalid_request`, and a chunk that is not
   UTF-8 is `unsupported_content` (no gaps in the text).
+- The `ActionName` `terminal.open`: the only interaction in `available_actions`, so the client enables "Open
+  terminal" from the service's scope (worktree exists, lifecycle admits a terminal, sandbox works) instead of
+  guessing; an enabled entry may carry a note (read-only while frozen). Its reason equals the `terminal.open`
+  refusal detail.
+- `available_actions` reasons, `InputSummary.blocked_reason` and rejection `detail`s are short developer-facing
+  sentences ending with a period; the client shows them as they are and keeps `code` for technical details only.
 - `ObjectiveDetail.history_deleted` (`true` only) and the `ActionName` `objective.delete_history`: the deliberate
   deletion of a cleaned-up Objective's retention refs and branch. `confirm_history_loss` must be `true` (otherwise
   `invalid_request`); it is never sent by the service or client on its own.

@@ -159,9 +159,18 @@ impl LimitedInput {
     }
 
     /// The field and its local error area as one unit (no extra spacing while there is no error).
-    pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
+    pub fn field(&self, field: &impl IsA<gtk::Widget>) -> gtk::Box {
         let unit = vbox(0);
-        unit.append(scroll);
+        unit.append(field);
+        self.error.add_css_class("limited-error");
+        unit.append(&self.error);
+        unit
+    }
+
+    /// This input as a [`text_field`] (label, field with a visible placeholder) followed by its
+    /// local error area.
+    pub fn labelled(&self, label: &str, placeholder: &str, min: i32, max: i32) -> gtk::Box {
+        let unit = text_field(label, placeholder, &self.view, min, max);
         self.error.add_css_class("limited-error");
         unit.append(&self.error);
         unit
@@ -240,7 +249,8 @@ fn text_of(buffer: &gtk::TextBuffer) -> String {
 }
 
 /// Multi-line input with a real boundary whose height stays between `min` and `max` px (the text
-/// scrolls beyond that), independent of earlier layout passes.
+/// scrolls beyond that), independent of earlier layout passes. The field clips its content to its
+/// rounded border and its scrollbar overlays the text, so no column is reserved at the right edge.
 pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWindow {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     // Tab moves focus to the next control instead of inserting a tab character.
@@ -254,21 +264,168 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .min_content_height(min)
         .max_content_height(max)
         .propagate_natural_height(true)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(view)
         .build();
+    scroll.set_overflow(gtk::Overflow::Hidden);
     scroll.add_css_class("text-input");
     scroll
 }
 
+/// A multi-line field with a visible placeholder: [`bounded_text`] with a dim hint laid over its
+/// first line (`GtkTextView` has no placeholder of its own). Like a `GtkEntry` placeholder, the hint
+/// shows while the buffer is empty, focused or not (a field focused for you, such as the composer
+/// after Start agent, still says what it is for); it is also the view's accessible description.
+pub fn placeholder_text(
+    view: &gtk::TextView,
+    placeholder: &str,
+    min: i32,
+    max: i32,
+) -> gtk::Overlay {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&bounded_text(view, min, max)));
+    let hint = label(placeholder, &["text-placeholder"]);
+    hint.set_can_target(false);
+    hint.set_valign(gtk::Align::Start);
+    overlay.add_overlay(&hint);
+    overlay.set_clip_overlay(&hint, true);
+    set_accessible_description(view, placeholder);
+    let update = {
+        let hint = hint.clone();
+        move |buffer: &gtk::TextBuffer| hint.set_visible(buffer.char_count() == 0)
+    };
+    update(&view.buffer());
+    view.buffer().connect_changed(update);
+    overlay
+}
+
+/// A labelled multi-line input: a metadata label above a [`placeholder_text`] field, grouped
+/// tightly. The label is also the view's accessible name.
+pub fn text_field(
+    label_text: &str,
+    placeholder: &str,
+    view: &gtk::TextView,
+    min: i32,
+    max: i32,
+) -> gtk::Box {
+    let unit = vbox(space::TIGHT);
+    unit.add_css_class("text-field");
+    unit.append(&label(label_text, &["meta"]));
+    set_accessible_label(view, label_text);
+    unit.append(&placeholder_text(view, placeholder, min, max));
+    unit
+}
+
+/// The kind of an [`inline_message`]: its sign, fill and accessible prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Info,
+    Warning,
+    Error,
+}
+
+impl MessageKind {
+    fn sign(self) -> &'static str {
+        match self {
+            Self::Info => "i",
+            Self::Warning => "⚠",
+            Self::Error => "✕",
+        }
+    }
+
+    fn class(self) -> &'static str {
+        match self {
+            Self::Info => "message-info",
+            Self::Warning => "message-warning",
+            Self::Error => "message-error",
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Info => "Note",
+            Self::Warning => "Warning",
+            Self::Error => "Error",
+        }
+    }
+}
+
+/// A local message banner near the control or content it concerns: a sign and a plain sentence on
+/// the kind's semantic fill. Technical details (service codes, raw errors) stay out of the sentence
+/// in a collapsed "Details" disclosure and are the banner's accessible description; its accessible
+/// name is "<Kind>: <text>".
+pub fn inline_message(kind: MessageKind, text: &str, details: Option<&str>) -> gtk::Box {
+    let root = vbox(space::TIGHT);
+    root.add_css_class("inline-message");
+    root.add_css_class(kind.class());
+    let row = hbox(space::ITEM);
+    let sign = gtk::Label::new(Some(kind.sign()));
+    sign.add_css_class("message-sign");
+    sign.set_valign(gtk::Align::Start);
+    row.append(&sign);
+    let message = label(text, &[]);
+    message.set_hexpand(true);
+    row.append(&message);
+    root.append(&row);
+    set_accessible_label(&root, &format!("{}: {text}", kind.prefix()));
+    if let Some(details) = details.filter(|d| !d.is_empty()) {
+        let code = label(details, &["mono", "message-details"]);
+        code.set_selectable(true);
+        root.append(&disclosure("Details", false, &code, |_| {}));
+        set_accessible_description(&root, details);
+    }
+    root
+}
+
+/// A centred, calm empty state: a heading, an optional one-paragraph explanation (omitted when
+/// empty), the relevant action, if any, and an optional metadata `note` after it (for example the
+/// scope of what the action opens). No illustration or motivational copy (design.md §5).
+pub fn empty_state(
+    title: &str,
+    body: &str,
+    action: Option<&gtk::Button>,
+    note: Option<&str>,
+) -> gtk::Widget {
+    let block = vbox(space::GROUP);
+    block.add_css_class("empty-block");
+    block.set_halign(gtk::Align::Center);
+    block.set_valign(gtk::Align::Center);
+    block.set_hexpand(true);
+    block.set_vexpand(true);
+    let centred = |text: &gtk::Label| {
+        text.set_xalign(0.5);
+        text.set_justify(gtk::Justification::Center);
+        text.set_max_width_chars(56);
+    };
+    let heading = heading(title, "empty-heading");
+    centred(&heading);
+    block.append(&heading);
+    if !body.is_empty() {
+        let text = label(body, &["secondary"]);
+        centred(&text);
+        block.append(&text);
+    }
+    if let Some(action) = action {
+        action.set_halign(gtk::Align::Center);
+        block.append(action);
+    }
+    if let Some(note) = note.filter(|n| !n.is_empty()) {
+        let line = label(note, &["meta"]);
+        centred(&line);
+        block.append(&line);
+    }
+    block.upcast()
+}
+
 /// A region viewport: vertical scrolling when the content is taller than the window, never a
-/// horizontal scrollbar, and non-overlay scrollbars (GTK's transient overlay sliders produced
-/// unallocated-snapshot warnings in the IMP-002 checkpoint and can hide content under them).
+/// horizontal scrollbar. The scrollbar overlays the content (shown while scrolling or hovered)
+/// instead of reserving a column, so a region that barely fits keeps its full width; regions keep
+/// a right padding of their own so the slider does not cover text at rest.
 pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(child)
         .build()
 }
@@ -302,13 +459,30 @@ fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
     factory
 }
 
-/// A drop-down whose closed button ellipsizes a long choice (full text as tooltip and in the
-/// open list), so it never widens a narrow column.
+/// [`dropdown_or`] with a generic "None available" for an empty list of choices.
 pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
-    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(choices)), None::<gtk::Expression>);
+    dropdown_or(choices, "None available")
+}
+
+/// A drop-down whose closed button ellipsizes a long choice (full text as tooltip and in the
+/// open list), so it never widens a narrow column. It never shows GTK's "(None)" placeholder:
+/// with no choices it is insensitive and shows `empty` (say what is missing, e.g. "No branches
+/// found"). `selected()` indexes `choices`, so callers read it with `choices.get(..)`, which is
+/// `None` for the empty case.
+pub fn dropdown_or(choices: &[&str], empty: &str) -> gtk::DropDown {
+    let shown: &[&str] = if choices.is_empty() {
+        &[empty]
+    } else {
+        choices
+    };
+    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(shown)), None::<gtk::Expression>);
     dropdown.set_factory(Some(&string_factory(true)));
     dropdown.set_list_factory(Some(&string_factory(false)));
     dropdown.set_hexpand(true);
+    if choices.is_empty() {
+        dropdown.set_sensitive(false);
+        set_accessible_description(&dropdown, empty);
+    }
     let update = |d: &gtk::DropDown| {
         let text = d
             .selected_item()
@@ -591,9 +765,10 @@ pub fn warning_line(text: &str) -> gtk::Box {
 /// Key/value row for the inspector.
 pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(space::GROUP);
+    // The key column's width is the stylesheet's `.field-key` minimum; this only caps how wide a
+    // long key grows before it wraps.
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
-    key_label.set_width_chars(10);
     key_label.set_max_width_chars(10);
     row.append(&key_label);
     value.set_hexpand(true);
@@ -602,22 +777,34 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
 }
 
 /// Restores focus to the same keyed widget after `rebuild` replaced the container's children, or to
-/// the container's first focusable child; never moves focus that was elsewhere.
+/// the container's first focusable child; never moves focus that was elsewhere. The key is the
+/// focused widget's own or its nearest keyed ancestor's inside the container, so focus in a keyed
+/// drop-down's inner button or open popover (a child of the drop-down) returns to that drop-down.
 pub fn rebuild_preserving_focus(container: &impl IsA<gtk::Widget>, rebuild: impl FnOnce()) {
     let container = container.as_ref();
     let focused = container.root().and_then(|r| r.focus());
     let inside = focused
         .as_ref()
         .is_some_and(|f| f.is_ancestor(container) || f == container);
-    let key = focused
-        .filter(|_| inside)
-        .map(|f| f.widget_name().to_string());
+    let key = focused.filter(|_| inside).and_then(|focused| {
+        let mut widget = Some(focused);
+        while let Some(w) = widget {
+            let name = w.widget_name();
+            if name.starts_with(FOCUS_KEY_PREFIX) {
+                return Some(name.to_string());
+            }
+            if &w == container {
+                return None;
+            }
+            widget = w.parent();
+        }
+        None
+    });
     rebuild();
     if !inside {
         return;
     }
     let restored = key
-        .filter(|k| k.starts_with(FOCUS_KEY_PREFIX))
         .and_then(|k| find_named(container, &k))
         .is_some_and(|w| w.grab_focus());
     if !restored {
@@ -656,7 +843,8 @@ fn install_close_shortcut(window: &gtk::Window) {
     window.add_controller(controller);
 }
 
-/// A modal dialog whose closing returns focus to `opener`.
+/// A modal dialog whose closing returns focus to `opener`. `title` is the window title (and so
+/// its accessible name) only; the body does not repeat it as a heading.
 pub struct Dialog {
     pub window: gtk::Window,
     pub body: gtk::Box,
@@ -678,7 +866,6 @@ impl Dialog {
         window.add_css_class("lade-dialog");
         let outer = vbox(space::SECTION);
         outer.add_css_class("dialog-content");
-        outer.append(&section_title(title));
         let body = vbox(space::GROUP);
         outer.append(&body);
         let error = vbox(0);

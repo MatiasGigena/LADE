@@ -386,6 +386,56 @@ pub enum ActionAvailability {
     NotOffered,
 }
 
+/// The service's projection for opening a contained terminal (`terminal.open` in the wire's
+/// `available_actions`). Kept apart from [`ActionName`]: it is an interaction, not an Objective
+/// operation, and no Overview surface draws it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalOpenAction {
+    pub enabled: bool,
+    /// Why it is disabled, or a note on an enabled terminal (for example that it opens read-only).
+    pub reason: Option<String>,
+}
+
+/// Where a command was issued. Objective-scoped refusals are kept per Objective and surface, so
+/// each surface shows only its own (see `PresentationState::last_refusal`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ActionSurface {
+    /// Edit intent.
+    Intent,
+    /// Activity's Agent Session controls: Start, Cancel, Resume.
+    Agent,
+    /// Session operations: model and thinking, tree navigation, fork, import, export, compact,
+    /// reload.
+    Session,
+    /// Activity's composer: Send.
+    Send,
+    /// Feedback drafts: delete (a refused save is shown on the draft itself).
+    Drafts,
+    /// Feedback: Submit feedback.
+    Feedback,
+    /// Overview review actions: freeze, return, approve, refresh, integrate.
+    Review,
+    /// Evidence: Run check.
+    Checks,
+    /// Overview closing actions: complete, discard, clean up, delete history.
+    Closing,
+    /// Terminal: open, input, resize, close.
+    Terminal,
+    /// Extension dialogs.
+    Dialog,
+}
+
+/// A refused request as the developer sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    /// Plain sentences: what could not be done, why, and a next step only when one helps. Never
+    /// carries an error code.
+    pub message: String,
+    /// Technical details for a tooltip or diagnostics: the error code and the service's raw
+    /// detail, for example `invalid_lifecycle: Start the agent once to create …`.
+    pub details: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectiveDetail {
     pub summary: ObjectiveSummary,
@@ -401,6 +451,8 @@ pub struct ObjectiveDetail {
     pub change_counts: ChangeCounts,
     pub unsent_drafts: u64,
     pub available_actions: Vec<AvailableAction>,
+    /// The service's projection for opening a terminal; `None` when it did not project one.
+    pub terminal_open: Option<TerminalOpenAction>,
     /// The Objective's Git history (retention refs, branch) was deleted on explicit request.
     pub history_deleted: bool,
 }
@@ -418,6 +470,28 @@ impl ObjectiveDetail {
                     .unwrap_or_else(|| "Unavailable — the service gave no reason".to_owned()),
             },
         }
+    }
+
+    /// Whether "Open terminal" is available, exactly as the service projected it.
+    pub fn terminal_availability(&self) -> ActionAvailability {
+        match &self.terminal_open {
+            None => ActionAvailability::NotOffered,
+            Some(a) if a.enabled => ActionAvailability::Enabled,
+            Some(a) => ActionAvailability::Disabled {
+                reason: a
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "Unavailable — the service gave no reason".to_owned()),
+            },
+        }
+    }
+
+    /// The service's note on an enabled terminal (for example that it opens read-only).
+    pub fn terminal_note(&self) -> Option<&str> {
+        self.terminal_open
+            .as_ref()
+            .filter(|a| a.enabled)
+            .and_then(|a| a.reason.as_deref())
     }
 
     pub fn current_candidate(&self) -> Option<&CandidateSummary> {

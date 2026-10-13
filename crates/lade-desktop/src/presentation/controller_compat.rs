@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use super::compat::{ForkPosition, ModelChoice, ThinkingLevel, UiAnswerView};
+use super::compat::{ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView};
 use super::controller::Controller;
 use super::intents::Intent;
 use super::model::{ExecutionState, ModelRef, ObjectiveId};
@@ -38,18 +38,37 @@ impl Controller {
         }
     }
 
+    /// Keeps the picker's choice in step with the store: once the catalogue arrives or the
+    /// selection or its detail changes, an unset choice gets its defaults. Runs from the store
+    /// subscription, so views only read the choice and never write it while rendering.
+    pub(super) fn follow_store(&self, changes: &[Change]) {
+        let relevant = changes
+            .iter()
+            .any(|c| matches!(c, Change::Catalog | Change::Selection | Change::Detail(_)));
+        if relevant {
+            self.picker_defaults();
+        }
+    }
+
     /// Selects the provider/model the picker should show first: the persisted session model, the
-    /// default model, or the first available provider.
-    pub fn picker_defaults(&self) {
+    /// default model, the first available provider, or else the first listed provider (so the
+    /// picker's shown provider is always the chosen one, with its access reason beside it).
+    pub(super) fn picker_defaults(&self) {
         let (choice, missing) = {
             let state = self.store.state();
             let compat = &state.compat;
-            if compat.choice.provider.is_some() {
-                return;
-            }
             let Some(catalog) = &compat.catalog else {
                 return;
             };
+            // A chosen provider stays chosen while the catalogue still lists it.
+            if compat
+                .choice
+                .provider
+                .as_ref()
+                .is_some_and(|p| catalog.provider(p).is_some())
+            {
+                return;
+            }
             let session = state.selected_detail().and_then(|d| d.session.clone());
             let preferred = session
                 .as_ref()
@@ -64,8 +83,12 @@ impl Controller {
                         .providers
                         .iter()
                         .find(|p| p.status == super::compat::ProviderStatus::Available)
+                        .or_else(|| catalog.providers.first())
                         .map(|p| p.id.clone())
                 });
+            if provider.is_none() {
+                return;
+            }
             let choice = ModelChoice {
                 model: preferred
                     .filter(|m| Some(&m.provider) == provider.as_ref())
@@ -88,19 +111,17 @@ impl Controller {
         }
     }
 
-    /// The picker's resolved model, or why there is none yet.
+    /// How far the picker is from a usable model.
+    pub fn readiness(&self) -> Readiness {
+        self.store.state().compat.readiness()
+    }
+
+    /// The picker's resolved model, or why there is none yet (one short sentence).
     pub fn chosen_model(&self) -> Result<(ModelRef, ThinkingLevel), String> {
-        let state = self.store.state();
-        let compat = &state.compat;
-        let provider = compat
-            .choice
-            .provider
-            .as_ref()
-            .ok_or("Choose a provider first")?;
-        let model = compat
-            .chosen_model()
-            .ok_or_else(|| format!("The models of {provider} are still loading"))?;
-        Ok((model.model_ref(), compat.choice.thinking))
+        match self.readiness() {
+            Readiness::Ready { model, thinking } => Ok((model.model_ref(), thinking)),
+            other => Err(other.problem().unwrap_or_default()),
+        }
     }
 
     /// The selected Objective with a live worker that can take a session operation now.
@@ -299,14 +320,23 @@ mod tests {
                 }],
                 error: None,
             }))]);
-        controller.picker_defaults();
+        // The controller chose the defaults when the catalogue arrived, not a view.
         assert_eq!(
             sink.intents.borrow().as_slice(),
             [Intent::LoadModels {
                 provider: Some("local-llm".into())
             }]
         );
-        assert!(controller.chosen_model().unwrap_err().contains("loading"));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::ModelsLoading {
+                provider: "Fixture".into()
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "Loading Fixture's models…"
+        );
         controller
             .store
             .apply_all(vec![StoreUpdate::Compat(CompatUpdate::Models {
@@ -322,6 +352,101 @@ mod tests {
         let (model, thinking) = controller.chosen_model().unwrap();
         assert_eq!(model, ModelRef::new("local-llm", "scripted"));
         assert_eq!(thinking, ThinkingLevel::Off);
+    }
+
+    fn catalog(providers: Vec<ProviderView>, error: Option<&str>) -> StoreUpdate {
+        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+            sdk_version: "0.85.1".into(),
+            providers,
+            error: error.map(str::to_owned),
+        }))
+    }
+
+    #[test]
+    fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
+        let (controller, sink) = setup();
+        controller.store.update(|s| {
+            s.compat = Default::default();
+            ((), Vec::new())
+        });
+        assert_eq!(controller.readiness(), Readiness::CatalogLoading);
+        controller.store.apply(catalog(
+            Vec::new(),
+            Some("worker sandbox unavailable: sandbox_unavailable"),
+        ));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NoProviders {
+                error: Some("worker sandbox unavailable: sandbox_unavailable".into())
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "LADE can't load models right now."
+        );
+        assert!(sink.intents.borrow().is_empty(), "nothing to load");
+        // Only providers that need credentials: the first one is chosen, so the picker shows
+        // the provider it acts on, with its access reason.
+        controller.store.apply(catalog(
+            vec![ProviderView {
+                id: "anthropic".into(),
+                name: "Anthropic".into(),
+                auth: vec!["API key".into()],
+                status: ProviderStatus::MissingCredentials,
+                reason: Some("Set ANTHROPIC_API_KEY".into()),
+                variables: vec!["ANTHROPIC_API_KEY".into()],
+                models: 0,
+            }],
+            None,
+        ));
+        assert_eq!(
+            controller.store.state().compat.choice.provider.as_deref(),
+            Some("anthropic")
+        );
+        controller
+            .store
+            .apply(StoreUpdate::Compat(CompatUpdate::Models {
+                provider: "anthropic".into(),
+                models: Vec::new(),
+            }));
+        // The service says it needs credentials: not ready, whatever models it lists.
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NeedsCredentials {
+                provider: "Anthropic".into()
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "Add credentials for Anthropic to start the agent."
+        );
+        let anthropic = |status| ProviderView {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            auth: vec!["API key".into()],
+            status,
+            reason: None,
+            variables: vec!["ANTHROPIC_API_KEY".into()],
+            models: 0,
+        };
+        controller
+            .store
+            .apply(catalog(vec![anthropic(ProviderStatus::Restricted)], None));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::Restricted {
+                provider: "Anthropic".into()
+            }
+        );
+        controller
+            .store
+            .apply(catalog(vec![anthropic(ProviderStatus::Available)], None));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NoModels {
+                provider: "Anthropic".into()
+            }
+        );
     }
 
     #[test]

@@ -366,7 +366,7 @@ fn aggregate_worker_quota_is_configurable_visible_and_four_is_not_a_cap() {
     assert!(!gate.enabled);
     let reason = gate.reason.clone().unwrap();
     assert!(
-        reason.contains("5 of 5 agents") && reason.contains("--max-workers"),
+        reason.contains("5 of 5 agents") && !reason.contains("--max-workers"),
         "{reason}"
     );
     let refused = client
@@ -503,7 +503,7 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
         .find(|a| a.action == ActionName::ExecutionStart)
         .unwrap();
     assert!(!gate.enabled);
-    assert!(gate.reason.as_deref().unwrap().contains("storage pressure"));
+    assert!(gate.reason.as_deref().unwrap().contains("in reserve"));
     let refused = client
         .call(Request::ExecutionStart(
             lade_protocol::client::ExecutionStartCommand {
@@ -517,11 +517,7 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
         ))
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::LimitReached);
-    assert!(
-        refused.detail.contains("storage pressure"),
-        "{}",
-        refused.detail
-    );
+    assert!(refused.detail.contains("in reserve"), "{}", refused.detail);
     let resume = client
         .call(Request::ExecutionResume(ObjectiveSelector {
             objective_id: running.clone(),

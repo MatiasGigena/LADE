@@ -74,17 +74,21 @@ def solid(*layers):
     return color
 
 
-# The viewer's diff colours are set from Rust (GtkTextTag / gutter markup); they must be tokens.
-viewer = viewer_path.read_text()
+# The viewer's diff colours are set from Rust (GtkTextTag / gutter markup): it reads them from
+# style.css by name (`token("…")`), so every colour name it uses must be a token and any literal a
+# token value. Its tests (which also probe a missing name) are not scanned.
+viewer = viewer_path.read_text().split('#[cfg(test)]')[0]
 token_hex = {('#%02X%02X%02X' % tuple(rgb(v))): k for k, v in tokens.items() if v[3] == 1.0}
 viewer_colours = {}
 for literal in sorted(set(re.findall(r'#[0-9A-Fa-f]{6}', viewer))):
     name = token_hex.get(literal.upper())
     viewer_colours[literal] = name
-    # The separator line foreground is the one deliberate viewer-only ink; checked below.
-    if name is None and literal.upper() != '#5C5C5C':
+    if name is None:
         errors.append(f'viewer.rs: {literal} is not a style.css token')
-tokens['viewer_separator_ink'] = parse('#5C5C5C')
+for name in sorted(set(re.findall(r'"((?:add|del|warn|ink|fill)_\w+)"', viewer))):
+    viewer_colours[name] = name if name in tokens else None
+    if name not in tokens:
+        errors.append(f'viewer.rs: colour "{name}" is not a style.css token')
 
 # The syntax scheme names its colours; each must be the style.css token of that name and value,
 # and every style may use only those named colours (no literal foreground/background).
@@ -125,8 +129,10 @@ pairs += [
     ('surface', ['primary_pressed'], TEXT, 'text'),
     # Destructive buttons: label on hover fill.
     ('del_ink', ['del_fill'], TEXT, 'text'),
-    # Diff separator lines in the viewer.
-    ('viewer_separator_ink', ['fill_band'], TEXT, 'text'),
+    # Inline messages (views::widgets::inline_message): text and its Details toggle on hover.
+    ('ink_primary', ['fill_band', 'fill_hover'], TEXT, 'text'),
+    ('warn_ink', ['warn_fill', 'fill_hover'], TEXT, 'text'),
+    ('del_ink', ['del_fill', 'fill_hover'], TEXT, 'text'),
     # Syntax inks (code-scheme.xml) on the code surface, the diff line fills and the selection.
     *[(ink, fills, TEXT, 'syntax text') for ink in syntax_inks
       for fills in (['surface'], ['add_fill'], ['del_fill'], ['text_selection'],

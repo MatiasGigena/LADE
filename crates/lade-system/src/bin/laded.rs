@@ -276,7 +276,8 @@ fn delegated_cgroups() -> Option<Arc<SandboxCgroups>> {
         Ok(cgroups) => {
             let swept = cgroups.sweep();
             eprintln!(
-                "laded: cgroup v2 delegated; sandboxes run in {} with per-Objective limits{}",
+                "laded: cgroup v2 delegated ({}); sandboxes run in {} with per-Objective limits{}",
+                cgroups.delegation(),
                 cgroups.root().display(),
                 if swept > 0 {
                     format!(" ({swept} stale sandbox cgroup(s) removed)")

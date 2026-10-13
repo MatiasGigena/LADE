@@ -31,7 +31,7 @@ use crate::storage::{self, CaptureRow, ObjectiveRow, WorkspaceRow};
 
 use super::convert::{
     conflict, core_reference, counter, domain_rejection, durability, from_wire_git, git_rejection,
-    invalid, new_uuid, not_found, now_ms, parse_uuid, wire_id,
+    invalid, new_uuid, not_found, now_ms, parse_uuid, rejection, wire_id,
 };
 use super::jobs::{self, CaptureInput, CaptureOut};
 use super::project::{core_mode, wire_draft, wire_input};
@@ -124,7 +124,7 @@ const SNAPSHOT_BRANCHES: usize = 64;
 const REPLY_BRANCHES: usize = 256;
 
 pub(crate) fn sql<T>(result: rusqlite::Result<T>) -> Result<T, Rejection> {
-    result.map_err(|_| durability("state could not be recorded"))
+    result.map_err(|_| durability("LADE couldn't record this, so nothing was changed. Try again."))
 }
 
 impl Service {
@@ -155,9 +155,7 @@ impl Service {
 
     pub(crate) fn check_idle(&self, oid: ObjectiveId) -> Result<(), Rejection> {
         match self.runtime.get(&oid).and_then(|r| r.busy) {
-            Some(what) => Err(conflict(&format!(
-                "another operation is in progress: {what}"
-            ))),
+            Some(_) => Err(conflict(super::project::BUSY)),
             None => Ok(()),
         }
     }
@@ -634,7 +632,11 @@ impl Service {
         let digest = ArtifactDigest::parse(reference.artifact_digest().hex())
             .map_err(|_| invalid("invalid artifact digest"))?;
         if !self.artifacts.contains(&digest) {
-            return Err(not_found("referenced artifact (read the file first)"));
+            return Err(rejection(
+                ErrorCode::NotFound,
+                SafeAction::None,
+                "The commented file version is no longer available. Open the file again.",
+            ));
         }
         let range = reference.byte_range();
         let page = self
@@ -644,9 +646,13 @@ impl Service {
                 range.start(),
                 usize::try_from(range.byte_len()).unwrap_or(usize::MAX),
             )
-            .map_err(|_| durability("referenced artifact unreadable"))?;
+            .map_err(|_| {
+                durability("The commented file version couldn't be read. Open the file again.")
+            })?;
         if page.offset != range.start() || page.data != reference.selected_text().as_bytes() {
-            return Err(invalid("selected text does not match the referenced bytes"));
+            return Err(invalid(
+                "The selected text no longer matches the file. Select it again.",
+            ));
         }
         let existing = st.draft(draft_id).cloned();
         if existing.is_none()
@@ -682,7 +688,9 @@ impl Service {
         // Test-only (scripts/e2e-resilience): inert unless LADE_TEST_FAULTS_DIR is set.
         match fault::operation("draft.save") {
             Some(Fault::Refuse) => {
-                return Err(durability("injected test fault: the draft was not written"));
+                return Err(durability(
+                    "The draft was not written (injected test fault).",
+                ));
             }
             Some(Fault::Delay(delay)) => std::thread::sleep(delay),
             None => {}
@@ -832,7 +840,7 @@ impl Service {
                 .map_err(|e| domain_rejection(&e))?;
             if st.objective().lifecycle() != lade_core::domain::objectives::Lifecycle::Active {
                 return Err(domain_rejection(&lade_core::DomainError::InvalidLifecycle(
-                    "input requires an active objective; return a frozen candidate for revision first",
+                    lade_core::domain::feedback::input_refusal(st.objective().lifecycle()),
                 )));
             }
             let mut drafts = Vec::new();
@@ -840,10 +848,12 @@ impl Service {
                 let id = DraftId::new(parse_uuid(&entry.draft_id)?);
                 let draft = st.draft(id).ok_or_else(|| not_found("draft"))?;
                 if draft.revision().value() != entry.revision.value() {
-                    return Err(conflict("draft revision mismatch"));
+                    return Err(conflict(
+                        "A draft changed after you reviewed it. Refresh and try again.",
+                    ));
                 }
                 if !draft.is_unsent() {
-                    return Err(conflict("draft already submitted"));
+                    return Err(conflict("A draft was already submitted."));
                 }
                 drafts.push((id, draft.record().reference.clone()));
             }

@@ -797,6 +797,9 @@ pub enum ActionName {
     ObjectiveCleanup,
     #[serde(rename = "objective.delete_history")]
     ObjectiveDeleteHistory,
+    /// Opening a contained terminal: the reason says why not (no worktree yet, closed, no sandbox).
+    #[serde(rename = "terminal.open")]
+    TerminalOpen,
 }
 impl From<ActionName> for RequestName {
     fn from(action: ActionName) -> Self {
@@ -817,6 +820,7 @@ impl From<ActionName> for RequestName {
             ActionName::ObjectiveDiscard => Self::ObjectiveDiscard,
             ActionName::ObjectiveCleanup => Self::ObjectiveCleanup,
             ActionName::ObjectiveDeleteHistory => Self::ObjectiveDeleteHistory,
+            ActionName::TerminalOpen => Self::TerminalOpen,
         }
     }
 }

@@ -9,6 +9,7 @@
 //! is drawn and which offered action to emphasise; it never enables, hides a disabled reason, or
 //! invents an action.
 
+use super::compat::{Catalog, ProviderStatus};
 use super::format;
 use super::model::{
     ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
@@ -275,11 +276,19 @@ pub fn activity_controls(detail: &ObjectiveDetail) -> Vec<PanelAction> {
 }
 
 /// When an agent control (Start, Resume) is what the Objective waits for, the Overview names it
-/// in one line and points to Activity instead of drawing a second control.
-pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
+/// in one line and points to Activity instead of drawing a second control. `start_blocker` is
+/// why the agent cannot start even though the service offers Start (for example no model
+/// provider has credentials): the line then says so instead of suggesting a start.
+pub fn agent_pointer(detail: &ObjectiveDetail, start_blocker: Option<&str>) -> Option<String> {
     let enabled = |a| detail.availability(a) == ActionAvailability::Enabled;
     if enabled(ActionName::ExecutionStart) {
-        Some("The agent has not started yet — start it in Activity.".to_owned())
+        Some(match start_blocker {
+            Some(blocker) => format!(
+                "The agent has not started — it cannot start yet: {}. Details are in Activity.",
+                blocker.trim_end_matches('.')
+            ),
+            None => "The agent has not started yet — start it in Activity.".to_owned(),
+        })
     } else if enabled(ActionName::ExecutionResume) {
         Some(format!(
             "The agent is stopped ({}) — resume it in Activity.",
@@ -288,6 +297,27 @@ pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
     } else {
         None
     }
+}
+
+/// Why the agent cannot start whatever the service offers, from the model catalogue: no provider
+/// has credentials (the catalogue's own error, such as an unavailable sandbox, when it gives
+/// one). `None` while the catalogue is not loaded or when a provider can be used.
+pub fn start_blocker(catalog: Option<&Catalog>) -> Option<String> {
+    let catalog = catalog?;
+    if catalog
+        .providers
+        .iter()
+        .any(|p| p.status != ProviderStatus::MissingCredentials)
+    {
+        return None;
+    }
+    Some(
+        catalog
+            .error
+            .clone()
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or_else(|| "no model provider has credentials".to_owned()),
+    )
 }
 
 /// Status, sign and the attention reasons ("! Needs attention · check failed · unsent drafts").
@@ -545,7 +575,15 @@ mod tests {
         let mut d = with(&base, &all(&[ActionName::ExecutionStart]));
         d.summary.lifecycle = Lifecycle::Defined;
         assert!(next_action(&d).is_none());
-        assert!(agent_pointer(&d).unwrap().contains("Activity"));
+        assert!(
+            agent_pointer(&d, None)
+                .unwrap()
+                .contains("start it in Activity")
+        );
+        // Offered, but it cannot start (no provider): the line does not suggest starting.
+        let blocked = agent_pointer(&d, Some("no model provider has credentials")).unwrap();
+        assert!(blocked.contains("cannot start yet: no model provider has credentials."));
+        assert!(!blocked.contains("start it in"));
         assert!(!overview_actions(&d).contains(&ActionName::ExecutionStart));
         let controls = activity_controls(&d);
         let start = controls
@@ -562,9 +600,13 @@ mod tests {
         let mut d = with(&base, &all(&[ActionName::ExecutionResume]));
         d.summary.lifecycle = Lifecycle::Active;
         d.summary.execution.state = ExecutionState::Cancelled;
-        assert!(agent_pointer(&d).unwrap().contains("resume it in Activity"));
+        assert!(
+            agent_pointer(&d, None)
+                .unwrap()
+                .contains("resume it in Activity")
+        );
         let d = with(&base, &all(&[]));
-        assert!(agent_pointer(&d).is_none());
+        assert!(agent_pointer(&d, None).is_none());
     }
 
     #[test]

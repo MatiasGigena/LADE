@@ -14,7 +14,8 @@ use gtk4 as gtk;
 use sourceview5::prelude::*;
 
 use super::widgets::{
-    self, hbox, label, set_accessible_description, set_accessible_label, space, vbox,
+    self, MessageKind, hbox, inline_message, label, set_accessible_description,
+    set_accessible_label, space, vbox,
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
@@ -57,6 +58,8 @@ pub struct Viewer {
     file_toggle: gtk::ToggleButton,
     pub add_feedback: gtk::Button,
     selection_label: gtk::Label,
+    /// Path, counts, mode and Add feedback: shown only while a file is open.
+    toolbar: gtk::Box,
     stack: gtk::Stack,
     pub view: sourceview5::View,
     buffer: sourceview5::Buffer,
@@ -95,16 +98,41 @@ fn number_renderer(
     renderer
 }
 
+/// The stylesheet, read for the colour tokens the viewer sets from Rust.
+const STYLE: &str = include_str!("../assets/style.css");
+
+/// A colour token of the stylesheet (`@define-color <name> <value>;`). Text tags and gutter
+/// markup cannot use CSS, so the diff fills, signs and separator ink are read from the same
+/// tokens instead of repeating their values here.
+fn token(name: &str) -> &'static str {
+    STYLE
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("@define-color ")?
+                .strip_prefix(name)?
+                .strip_prefix(' ')?
+                .strip_suffix(';')
+        })
+        .unwrap_or("black")
+}
+
 fn sign_renderer(lines: &Rc<RefCell<Vec<ViewLine>>>) -> sourceview5::GutterRendererText {
     let renderer = sourceview5::GutterRendererText::new();
     renderer.add_css_class("gutter-sign");
     renderer.set_xalign(0.5);
     renderer.set_xpad(4);
     let lines = lines.clone();
+    let sign = |ink: &str, sign: &str| {
+        format!(
+            "<span foreground=\"{}\" weight=\"bold\">{sign}</span>",
+            token(ink)
+        )
+    };
+    let (add, del) = (sign("add_ink", "+"), sign("del_ink", "−"));
     renderer.connect_query_data(move |r, _, line| {
         let markup = match lines.borrow().get(line as usize).map(|l| l.kind) {
-            Some(ViewLineKind::Add) => "<span foreground=\"#146C43\" weight=\"bold\">+</span>",
-            Some(ViewLineKind::Del) => "<span foreground=\"#B42318\" weight=\"bold\">−</span>",
+            Some(ViewLineKind::Add) => add.as_str(),
+            Some(ViewLineKind::Del) => del.as_str(),
             _ => " ",
         };
         r.set_markup(markup);
@@ -143,23 +171,22 @@ impl Viewer {
         toolbar.append(&add_feedback);
         root.append(&toolbar);
 
-        let selection_label = label("", &["meta", "selection-line"]);
-        selection_label.set_wrap(false);
-        selection_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        root.append(&selection_label);
-
         let buffer = sourceview5::Buffer::new(None);
         buffer.set_highlight_syntax(false);
         buffer.set_highlight_matching_brackets(false);
         buffer.set_style_scheme(code_scheme().as_ref());
         let table = buffer.tag_table();
-        for (name, background) in [("add", "#EEF8F1"), ("del", "#FFF0EF"), ("sep", "#F5F5F5")] {
+        for (name, fill) in [
+            ("add", "add_fill"),
+            ("del", "del_fill"),
+            ("sep", "fill_band"),
+        ] {
             let tag = gtk::TextTag::builder()
                 .name(name)
-                .paragraph_background(background)
+                .paragraph_background(token(fill))
                 .build();
             if name == "sep" {
-                tag.set_foreground(Some("#5C5C5C"));
+                tag.set_foreground(Some(token("ink_metadata")));
             }
             table.add(&tag);
         }
@@ -216,6 +243,14 @@ impl Viewer {
         stack.add_named(&message, Some("message"));
         stack.set_vexpand(true);
         root.append(&stack);
+        // Below the code, and only while it has something to say: appearing there it takes
+        // height from the bottom of the code area, so the code never moves under the pointer
+        // while a selection is being made, and no empty band sits above the code.
+        let selection_label = label("", &["meta", "selection-line"]);
+        selection_label.set_wrap(false);
+        selection_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        selection_label.set_visible(false);
+        root.append(&selection_label);
         let footer = hbox(space::GROUP);
         footer.add_css_class("viewer-footer");
         root.append(&footer);
@@ -229,6 +264,7 @@ impl Viewer {
             file_toggle,
             add_feedback,
             selection_label,
+            toolbar,
             stack,
             view,
             buffer,
@@ -320,14 +356,11 @@ impl Viewer {
         }
     }
 
-    fn show_message(&self, title: &str, body: &str, warning: bool) {
+    fn show_message(&self, title: &str, body: &str) {
         widgets::clear(&self.message);
-        if warning {
-            self.message.append(&widgets::warning_line(title));
-        } else {
-            self.message
-                .append(&widgets::heading(title, "empty-heading"));
-        }
+        self.message.set_valign(gtk::Align::Start);
+        self.message
+            .append(&widgets::heading(title, "empty-heading"));
         if !body.is_empty() {
             self.message.append(&label(body, &["secondary"]));
         }
@@ -398,13 +431,21 @@ impl Viewer {
             widgets::clear(&self.counts);
             self.root.set_sensitive(true);
             drop(state);
-            self.show_message(
+            // No file: one empty state, without a mode toggle or Add feedback to act on.
+            self.toolbar.set_visible(false);
+            self.selection_label.set_visible(false);
+            widgets::clear(&self.message);
+            self.message.set_valign(gtk::Align::Fill);
+            self.message.append(&widgets::empty_state(
                 "Select a file to inspect",
                 "Choose a file from the Change Set to see its diff or full content.",
-                false,
-            );
+                None,
+                None,
+            ));
+            self.stack.set_visible_child_name("message");
             return;
         };
+        self.toolbar.set_visible(true);
         self.path_label.set_text(&key.path.display);
         self.path_label.set_tooltip_text(Some(&key.path.display));
         let basis = format::basis_label(&key.basis, detail.as_ref());
@@ -425,18 +466,15 @@ impl Viewer {
         set_accessible_label(&self.view, &a11y);
         match content {
             ViewerContent::Empty | ViewerContent::Loading => {
-                self.show_message(
-                    "Loading…",
-                    &format!("{} · {basis}", key.path.display),
-                    false,
-                );
+                self.show_message("Loading…", &format!("{} · {basis}", key.path.display));
             }
             ViewerContent::Failed(message) => {
-                self.show_message(
-                    &format!("Could not load {}: {message}", key.path.display),
-                    "",
-                    true,
-                );
+                widgets::clear(&self.message);
+                self.message.set_valign(gtk::Align::Start);
+                // A plain sentence ("Couldn't load diff. …"); the path is the toolbar's.
+                self.message
+                    .append(&inline_message(MessageKind::Error, &message, None));
+                self.stack.set_visible_child_name("message");
                 let retry = widgets::button("Retry", &[]);
                 let controller = self.controller.clone();
                 retry.connect_clicked(move |_| controller.refresh_changes());
@@ -447,13 +485,11 @@ impl Viewer {
                     self.show_message(
                         "Binary file — not shown as text",
                         "LADE does not render binary content. Its retained identity is listed in Evidence; open it outside LADE if you need to inspect it.",
-                        false,
                     );
                 } else if diff.hunks.is_empty() {
                     self.show_message(
                         "No textual changes",
                         "Only the mode, type or name changed. Switch to Full file to read the content.",
-                        false,
                     );
                 } else {
                     self.set_lines(
@@ -464,9 +500,13 @@ impl Viewer {
                     );
                     self.show_highlight_note();
                     if diff.truncated {
-                        self.footer.append(&widgets::warning_line(
+                        let note = inline_message(
+                            MessageKind::Warning,
                             "The service truncated this diff. Open Full file to page through every byte.",
-                        ));
+                            None,
+                        );
+                        note.set_hexpand(true);
+                        self.footer.append(&note);
                         self.footer.set_visible(true);
                     }
                 }
@@ -479,7 +519,6 @@ impl Viewer {
                             content.total_bytes
                         ),
                         &content.version_label,
-                        false,
                     );
                 } else {
                     let value = self
@@ -591,6 +630,11 @@ impl Viewer {
         let detail = state.selected_detail();
         let has_session = detail.is_some_and(|d| d.session.is_some());
         let selection = state.selected_ui().and_then(|u| u.selection.clone());
+        let file_open = state
+            .viewer
+            .key
+            .as_ref()
+            .is_some_and(|k| Some(&k.objective_id) == state.ui.selected.as_ref());
         // The how-to hint shows until the first selection in this window; afterwards the line
         // appears only for a selection or a reason it cannot be used. Add feedback always keeps
         // the hint as its tooltip and accessible description.
@@ -605,13 +649,14 @@ impl Viewer {
                 has_session,
             ),
         };
-        // The line keeps its height (style.css) so the code never moves under the pointer.
         let shown = if text == SELECTION_HINT && self.hint_seen.get() {
             ""
         } else {
             text.as_str()
         };
         self.selection_label.set_text(shown);
+        self.selection_label
+            .set_visible(file_open && !shown.is_empty());
         self.selection_label
             .set_tooltip_text((!shown.is_empty()).then_some(shown));
         self.add_feedback.set_sensitive(enabled);
@@ -624,5 +669,31 @@ impl Viewer {
         };
         self.add_feedback.set_tooltip_text(Some(&reason));
         set_accessible_description(&self.add_feedback, &reason);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token;
+
+    #[test]
+    fn diff_colours_are_the_stylesheet_tokens() {
+        for name in [
+            "add_ink",
+            "del_ink",
+            "add_fill",
+            "del_fill",
+            "fill_band",
+            "ink_metadata",
+        ] {
+            let value = token(name);
+            assert_ne!(value, "black", "{name} is a style.css token");
+            assert!(
+                gtk4::gdk::RGBA::parse(value).is_ok(),
+                "{name} = {value} parses as a colour"
+            );
+        }
+        assert_eq!(token("add_ink"), "#146C43");
+        assert_eq!(token("missing_token"), "black");
     }
 }

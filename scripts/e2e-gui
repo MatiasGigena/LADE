@@ -10,7 +10,9 @@
 # E2E_KEEP=1 keeps the temporary directory.
 #
 # Fragile by nature: there is no window manager, so dialogs open at the top-left corner, and
-# controls are clicked by their position in the 1440x900 layout. Keyboard shortcuts are the
+# controls are clicked by their position in the 1440x900 layout (measured on the calm-UI layout:
+# Change Set rows below the Change Set heading and the inspected-version line). Dialogs are
+# answered with the keyboard (their first field or Cancel has focus). Keyboard shortcuts are the
 # defaults of DEFAULT_APP_KEYBINDINGS (Ctrl+N new Objective, Ctrl+1 Workbench, Ctrl+2 Activity,
 # Ctrl+Shift+M add feedback, Ctrl+Return send); XDG_CONFIG_HOME points into the temporary
 # directory so a user's keybindings.json cannot change them. Every step that changes state is confirmed
@@ -57,18 +59,21 @@ park() { x mousemove 700 880; sleep 0.5; }
 shot() { park; import -window root -crop "${W}x${H}+0+0" +repage "$OUT/e2e-$1.png"; step "screenshot e2e-$1.png"; }
 scroll_inspector() { x mousemove 1280 600; i=0; while [ $i -lt "${1:-12}" ]; do x click 5; i=$((i + 1)); done; sleep 1; }
 # Inspector buttons move with scrolling and wrapped reasons; find them by pixels
-# (scripts/e2e-find-button.py): `black` = filled primary button, else a label template in
-# scripts/e2e-templates/. reveal KIND scrolls from the top until it shows and sets BUTTON_Y.
+# (scripts/e2e-find-button.py): `black` = filled primary button, `red` = the outlined destructive
+# next action (Clean up), `outline` = an outlined neutral next action. reveal KIND scrolls from
+# the top until it shows and sets BUTTON_Y.
 find_button() {
   case $1 in
     black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
   esac
 }
-# Activity's Start agent: the filled black button in the Activity header ("X Y").
+# Activity's Start agent: the filled black button of the "Set up the agent" card, shown in the
+# transcript's place until the Objective has an Agent Session ("X Y"; the composer's Send, below
+# y = 750, appears only with a session).
 start_button() {
-  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 270 1100 150 750
 }
 reveal() {
   x mousemove 1280 600; i=0; while [ $i -lt 20 ]; do x click 4; i=$((i + 1)); done; sleep 1
@@ -123,15 +128,20 @@ sleep 2
 shot 01-workspace-open
 
 step "create an Objective"
-key ctrl+n
-click 280 106 0.3; typ "Greeting file"
-click 280 195 0.3; typ "hello.txt says hi"
+key ctrl+n         # the Title field has focus
+typ "Greeting file"
+key Tab            # Expected outcome
+typ "hello.txt says hi"
 shot 02-new-objective
-click 469 625 2
+# Constraints, Acceptance criteria, Integration target, Start point, Cancel, Create Objective.
+key Tab Tab Tab Tab Tab Tab
+key Return
+sleep 1
 
 step "start the agent with the fixture model (sandboxed worker)"
-# Start agent is Activity's (Agent Session control): its black button in the Activity header,
-# found by pixels; retried on a loaded host.
+# Start agent is Activity's (Agent Session control): its black button in the "Set up the agent"
+# card (provider, model and thinking chosen by default), found by pixels; retried on a loaded
+# host.
 key ctrl+2
 tries=0
 until session_ready; do
@@ -156,20 +166,20 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 sleep 3
 shot 04-activity
 
-step "Activity: Model, Agent Session and profile (opened, then closed again)"
-click 380 180 2
+step "Activity: Agent settings (opened, then closed again)"
+click 380 171 2    # the collapsed "Agent settings" disclosure below the state line
 shot 04b-agent-tools
-click 380 180 1
+click 380 171 1
 
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
 sleep 1
-click 1057 249 2   # Refresh the inspected capture (explicit, never silent)
-click 330 262 2    # hello.txt
+click 1057 265 2   # Refresh the inspected capture (explicit, never silent)
+click 330 277 2    # hello.txt
 shot 05-change-set
 
 step "select text, add feedback, wait until Saved"
-x mousemove 622 342 click --repeat 2 --delay 80 1
+x mousemove 622 358 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Please greet more warmly."
@@ -184,18 +194,20 @@ key ctrl+Return
 wait_for 60 "hello.txt rewritten" wt_file_is hello
 sleep 3
 key ctrl+1
-click 1343 78 2    # Feedback tab
+click 1323 80 2    # Feedback tab
 shot 07-stale-batch-blocked
 
 step "remove the stale draft (explicit confirmation)"
-click 1201 516 1
+click 1196 519 1   # Remove draft… (below the stale warning, the field and its save state)
 shot 08-remove-draft-confirm
-click 359 160 2
+key Tab            # Cancel has focus; Tab reaches Remove draft
+key Return
+sleep 1
 
 step "new draft on the current bytes, submitted as steer"
-click 1057 249 2   # Refresh
-click 330 262 2    # hello.txt
-x mousemove 625 342 click --repeat 2 --delay 80 1
+click 1057 265 2   # Refresh
+click 330 277 2    # hello.txt
+x mousemove 625 358 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Greet warmly."
@@ -205,7 +217,8 @@ sleep 3
 reveal black       # Review and submit (the Feedback tab's black button)
 click 1280 "$BUTTON_Y" 1
 shot 09-submit-dialog
-click 479 300 1    # Submit 1 item
+key Tab            # Cancel has focus; Tab reaches Submit 1 item
+key Return
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
 sleep 3
 shot 10-feedback-received
@@ -215,14 +228,16 @@ shot 11-agent-revision
 key ctrl+1
 
 step "edit the intent"
-click 1175 78 1    # Overview tab
-click 1200 458 1   # Edit intent (quiet action below the intent)
-key Tab
+click 1170 80 1    # Overview tab
+click 1168 494 1   # Edit intent (quiet action below the intent; Freeze for review is the next action)
+key Tab            # from Expected outcome to Constraints
 typ "Only touch hello.txt"
 key Tab
 typ "test -f hello.txt passes"
 shot 12-edit-intent
-click 487 440 2
+key Tab Tab        # Cancel, Save intent
+key Return
+sleep 1
 
 step "freeze for review"
 reveal black       # Freeze for review (the next action)
@@ -231,22 +246,20 @@ wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
 sleep 3
 d=$(wt)
 [ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
-click 972 176 1    # inspected version: open the list ...
-key Down           # ... Candidate 1 (current)
-key Return
-sleep 2
-click 330 262 2    # hello.txt in the frozen candidate
+click 972 191 1    # inspected version: open the list ...
+click 963 303 2    # ... Candidate 1 (current), below Working inspection
+click 330 277 2    # hello.txt in the frozen candidate
 shot 13-frozen
 
 step "Evidence: service-observed check"
-click 1258 78 1    # Evidence tab
-click 1280 442 0.3
+click 1246 80 1    # Evidence tab
+click 1280 380 0.3 # the check command (below Candidates and "No checks recorded.")
 typ 'sh -c "test -f hello.txt"'
-click 1280 490 8   # Run check
+click 1280 428 8   # Run check
 shot 14-check-passed
 
 step "approve the candidate"
-click 1175 78 1    # Overview tab
+click 1170 80 1    # Overview tab
 reveal black       # Approve Candidate 1 (checks passed: no override needed)
 shot 15-approve-ready
 click 1280 "$BUTTON_Y" 3
@@ -260,7 +273,7 @@ key Tab            # Cancel has focus; Tab reaches the confirm button
 key Return
 wait_for 60 "squash commit on main" main_integrated
 sleep 3
-reveal clean-up
+reveal red         # Clean up branch and worktree: the destructive next action
 shot 18-integrated
 
 step "verify the integration with Git"
@@ -277,7 +290,7 @@ key Tab            # Cancel has focus; Tab reaches Clean up
 key Return
 wait_for 60 "branch and worktree removed" cleaned_up
 sleep 2
-x mousemove 120 139 click 1   # expand the archive
+x mousemove 110 140 click 1   # expand the archive ("Completed and discarded (1)")
 sleep 1
 shot 20-cleaned-up
 git -C "$REPO" for-each-ref --format='%(refname)' refs/lade/retain/ | grep -q candidate- ||
@@ -288,7 +301,7 @@ x windowsize "$WID" 1280 800
 sleep 2
 park
 import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
-click 1020 166 1   # open More actions (collapsed by default): every other action with its reason
+click 1020 175 1   # open More actions (collapsed by default): every other action with its reason
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"

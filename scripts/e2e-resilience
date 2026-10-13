@@ -24,8 +24,9 @@
 # (ctypes + libX11 for scripts/x11-close-window.py; sqlite3 to read the service database
 # read-only). Environment: E2E_DISPLAY (default 79), E2E_KEEP=1 keeps the temporary directory.
 #
-# Fragile by nature (as scripts/e2e-gui): no window manager, dialogs open at the top-left corner,
-# controls are clicked by position in the 1440x900 layout. Every state change is asserted from the
+# Fragile by nature (as scripts/e2e-gui): no window manager, dialogs open at the top-left corner
+# and are answered with the keyboard, other controls are clicked by position in the 1440x900
+# layout or found by pixels. Every state change is asserted from the
 # database, Git, the filesystem or processes, not from pixels.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -81,13 +82,16 @@ scroll_inspector() { # scroll_inspector CLICKS (down; negative = up)
 }
 inspector_top() { scroll_inspector -20; }
 # Inspector buttons move with scrolling and wrapped reasons, so they are found by pixels
-# (scripts/e2e-find-button.py): `black` is a filled primary button, `label T` an enabled button
-# whose label band matches the template scripts/e2e-templates/T.png.
+# (scripts/e2e-find-button.py): `black` is a filled primary button, `outline` an enabled outlined
+# neutral next action (Approve with an override), `red` the outlined destructive next action
+# (Clean up), `history` the red quiet "Delete Git history" row of More actions.
 find_button() {
   case $1 in
     black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
+    history) import -window root -depth 8 ppm:- |
+      python3 -I "$ROOT/scripts/e2e-find-button.py" text red 1136 1423 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
   esac
 }
 # click_inspector WHAT KIND: from the top of the inspector, scroll down until the button shows.
@@ -102,11 +106,12 @@ click_inspector() {
   click 1280 "$y" 1
 }
 click_primary() { click_inspector "$1" black; }
-# Activity's Start agent (Agent Session control): its filled black button in the Activity header.
+# Activity's Start agent (Agent Session control): the filled black button of its "Set up the
+# agent" card.
 click_start() {
   key ctrl+2
   tries=0
-  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260); do
+  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 270 1100 150 750); do
     tries=$((tries + 1)); [ $tries -le 40 ] || fail "no Start agent button"; sleep 0.5
   done
   click ${XY% *} ${XY#* } 1
@@ -165,7 +170,7 @@ start_desktop() {
 }
 desktop_gone() { ! kill -0 "$DESKTOP" 2>/dev/null; }
 close_window() { python3 -I "$ROOT/scripts/x11-close-window.py" "$WID"; }
-draft_text() { click 1278 350 0.3; x key ctrl+End; typ "$1"; }
+draft_text() { click 1278 350 0.3; x key ctrl+End; typ "$1"; }   # the draft's text field
 
 step "development host, Xvfb ${W}x${H}, debug build; not the supported Mint/Cinnamon/X11 host"
 step "repository with main checked out and clean; service with the test-only fault directory"
@@ -194,11 +199,15 @@ shot "$OUT10" d-01-open-repository
 click 771 303 2    # Cancel (the file chooser has no Escape binding without a portal)
 
 step "dialog: new Objective (Ctrl+N), then create it"
-key ctrl+n
-click 280 106 0.3; typ "Greeting file"
-click 280 195 0.3; typ "hello.txt says hi"
+key ctrl+n         # the Title field has focus
+typ "Greeting file"
+key Tab            # Expected outcome
+typ "hello.txt says hi"
 shot "$OUT10" d-02-new-objective
-click 469 625 2
+# Constraints, Acceptance criteria, Integration target, Start point, Cancel, Create Objective.
+key Tab Tab Tab Tab Tab Tab
+key Return
+sleep 1
 
 step "start the agent (sandboxed worker, fixture model) and let it write hello.txt"
 sleep 2
@@ -213,9 +222,9 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 
 step "IMP-005: a draft save the service refuses stays visibly unsaved with Retry"
 key ctrl+1
-click 1057 249 2   # Refresh the inspected capture
-click 330 262 2    # hello.txt
-x mousemove 622 342 click --repeat 2 --delay 80 1
+click 1057 265 2   # Refresh the inspected capture
+click 330 277 2    # hello.txt
+x mousemove 622 358 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"            # refuse every draft.save
 key ctrl+shift+m
@@ -227,7 +236,8 @@ shot "$OUT5" r-01-save-failed
 
 step "Retry while the service holds the write: Saving…, not Saved, until the acknowledgement"
 echo "delay 4000" >"$FAULTS/draft.save"
-click 1169 500 1   # Retry (beside the failed draft)
+key Tab            # from the draft's field to Retry, beside its failed save state
+key Return
 sleep 1
 no_drafts || fail "the held save was written early"
 grep "draft " "$T/trace.log" | tail -1 | grep -q "Saving…" || fail "the draft is not shown as saving"
@@ -239,7 +249,6 @@ draft_is "$DRAFT" 1 "Please greet more warmly." || fail "revision 1 is not the t
 rm "$FAULTS/draft.save"
 sleep 1
 shot "$OUT5" r-03-saved-after-ack
-click 1382 82 1    # Dismiss the refusal notice (restores the layout)
 
 step "safe close: typing then closing at once flushes the draft before the window goes"
 draft_text " Thanks"
@@ -248,8 +257,8 @@ wait_for 10 "the window closed" desktop_gone
 draft_is "$DRAFT" 2 "Please greet more warmly. Thanks" || fail "the close did not flush: $(draft_rows)"
 grep "draft " "$T/trace.log" | tail -1 | grep -q "Saved r2" || fail "closed before the acknowledgement"
 start_desktop
-click 120 167 2    # the Objective
-click 1330 78 1    # Feedback tab
+click 120 163 2    # the Objective
+click 1323 80 1    # Feedback tab
 shot "$OUT5" r-04-reopened-saved
 
 step "service gone: typing is visibly not saved and closing asks keep-open or discard"
@@ -284,14 +293,14 @@ key Return
 wait_for 10 "the window closed after the discard" desktop_gone
 start_laded
 start_desktop
-click 120 167 2
-click 1330 78 1
+click 120 163 2
+click 1323 80 1
 draft_is "$DRAFT" 3 "Please greet more warmly. Thanks Bye" || fail "discarded text reached the service"
 shot "$OUT5" r-07-after-discard
 
 step "IMP-010: the service is killed in the middle of an agent run"
 key ctrl+2
-click 1050 98 3     # Resume agent (the run was interrupted by the kills above)
+click 1050 98 3     # Resume agent: the Activity header's one agent action (interrupted run)
 wait_for 60 "worker resumed" worker_alive
 click 680 790 0.3
 typ "lade-fixture: delay 2000"
@@ -327,13 +336,15 @@ sleep 3
 shot "$OUT10" e-04-continued
 
 step "a draft save fails during the loop; Retry; submit"
-click 1201 516 1   # Remove draft… (the stale draft would block the whole batch)
-click 359 160 2    # Remove draft (confirmation)
-wait_for 10 "the stale draft removed" no_drafts
 key ctrl+1
-click 1057 249 2   # Refresh (the worktree changed after the inspected capture)
-click 330 262 2    # hello.txt
-x mousemove 625 342 click --repeat 2 --delay 80 1
+click 1323 80 1    # Feedback tab
+click 1196 519 1   # Remove draft… (the stale draft would block the whole batch)
+key Tab            # Cancel has focus; Tab reaches Remove draft
+key Return
+wait_for 10 "the stale draft removed" no_drafts
+click 1057 265 2   # Refresh (the worktree changed after the inspected capture)
+click 330 277 2    # hello.txt
+x mousemove 625 358 click --repeat 2 --delay 80 1
 sleep 1
 : >"$FAULTS/draft.save"
 mark=$(wc -l <"$T/trace.log")
@@ -346,34 +357,38 @@ sleep 1
 no_drafts || fail "a refused save was written"
 shot "$OUT10" e-05-loop-save-failed
 rm "$FAULTS/draft.save"
-click 1169 500 1   # Retry
+key Tab            # from the draft's field to Retry
+key Return
 wait_for 15 "the retried save" has_drafts
 DRAFT=$(latest_draft)
 wait_for 10 "Saved r1" draft_is "$DRAFT" 1 "Greet warmly.
 lade-fixture: write hello.txt hello there"
-click 1382 82 1    # Dismiss the refusal notice
 step "dialog: submit feedback"
 click_primary "Review and submit"
 shot "$OUT10" d-03-submit-feedback
-click 479 300 1    # Submit 1 item
+key Tab            # Cancel has focus; Tab reaches Submit 1 item
+key Return
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
 sleep 3
 
 step "freeze, then approve with an override reason (no check was run)"
-click 1175 78 1    # Overview tab
+click 1170 80 1    # Overview tab
 click_primary "Freeze for review"   # the next action
 wait_for 60 "candidate commit on the Objective branch" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3
-click_inspector "Approve Candidate 1" approve-candidate-1   # neutral: an override reason is required
+click_inspector "Approve Candidate 1" outline   # neutral: an override reason is required
 typ "Reviewed the one-line change by hand; no check configured."
 shot "$OUT10" d-04-approve-override
-click 382 299 3    # Approve candidate
+key Tab Tab        # from the reason to Cancel, Approve candidate
+key Return
+sleep 2
 sql "select count(*) from approvals" | grep -q '^1$' || fail "approval not recorded"
 
 step "dialog: protected integration"
 click_primary "Integrate into main"
 shot "$OUT10" d-05-integrate-confirm
-click 374 160 1    # Integrate
+key Tab            # Cancel has focus; Tab reaches Integrate
+key Return
 wait_for 60 "squash commit on main" sh -c "git -C '$REPO' log -1 --format=%s main | grep -q 'Greeting file'"
 [ "$(git -C "$REPO" rev-parse main^)" = "$BASE" ] || fail "main is not one squash commit ahead"
 [ "$(cat "$REPO/hello.txt")" = "hello there" ] || fail "main worktree file missing or wrong"
@@ -381,25 +396,32 @@ wait_for 60 "squash commit on main" sh -c "git -C '$REPO' log -1 --format=%s mai
 sleep 2
 
 step "dialog: cleanup"
-click_inspector "Clean up branch and worktree" clean-up
+click_inspector "Clean up branch and worktree" red
 shot "$OUT10" d-06-cleanup
-click 524 181 1    # Clean up
+key Tab            # Cancel has focus; Tab reaches Clean up
+key Return
 wait_for 60 "branch and worktree removed" sh -c "! ls -d '$STATE'/worktrees/*/ >/dev/null 2>&1 && [ -z \"\$(git -C '$REPO' branch --list 'lade/*')\" ]"
 sleep 2
 
 step "dialog: delete Git history (explicit acknowledgement)"
 git -C "$REPO" for-each-ref refs/lade/retain/ | grep -q . || fail "retention refs missing before deletion"
-click_inspector "More actions" more-actions   # collapsed by default; Delete Git history is there
-click_inspector "Delete Git history" delete-git-history
-click 37 204 0.5   # I understand this history cannot be restored by LADE
+inspector_top
+click 1190 175 1   # More actions (collapsed by default), below "Approval consumed by integration"
+# Delete Git history: the last destructive row of More actions, its quiet label in red.
+click_inspector "Delete Git history" history
+key shift+Tab      # from Cancel back to "I understand this history cannot be restored by LADE"
+key space
 shot "$OUT10" d-07-delete-history
-click 418 266 3    # Delete history
+key Tab Tab        # Cancel, Delete history (enabled by the acknowledgement)
+key Return
+sleep 2
 [ -z "$(git -C "$REPO" for-each-ref refs/lade/)" ] || fail "retention refs remain"
 
 step "dialog: Exit (Ctrl+Q) stops the service"
 key ctrl+q
 shot "$OUT10" d-08-exit
-click 391 177 1    # Exit
+key Tab            # Cancel has focus; Tab reaches Exit
+key Return
 n=0
 while kill -0 "$LADED" 2>/dev/null; do
   n=$((n + 1)); [ $n -le 80 ] || fail "laded kept running after Exit"; sleep 0.25

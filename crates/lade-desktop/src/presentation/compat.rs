@@ -72,9 +72,60 @@ pub struct ProviderView {
 }
 
 impl ProviderView {
-    /// Picker entry: name, id and status.
+    /// Picker entry: the provider's name only (the id when it has none). Its id, access status
+    /// and authentication are the [`ProviderView::subtitle`].
     pub fn picker_label(&self) -> String {
-        format!("{} ({}) — {}", self.name, self.id, self.status.label())
+        if self.name.trim().is_empty() {
+            self.id.clone()
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// The secondary line under the chosen provider: id, access status, authentication and how
+    /// many models it lists.
+    pub fn subtitle(&self) -> String {
+        let auth = if self.auth.is_empty() {
+            "no authentication".to_owned()
+        } else {
+            self.auth.join(", ")
+        };
+        format!(
+            "{} · {} · {auth} · {} model{}",
+            self.id,
+            self.status.label(),
+            self.models,
+            if self.models == 1 { "" } else { "s" }
+        )
+    }
+
+    /// For a provider that needs credentials: where its key can go, for a collapsed *Details*
+    /// under the service's one-sentence reason. Built only from what the service published (the
+    /// provider id and its credential variable names) and the credential sources of the user
+    /// guide (§5); `None` for any other status or without variable names.
+    pub fn credential_help(&self) -> Option<String> {
+        if self.status != ProviderStatus::MissingCredentials || self.variables.is_empty() {
+            return None;
+        }
+        let id = &self.id;
+        // A custom provider needs every one of its variables, each stored by name.
+        let (variables, keyring) = if self.auth.iter().any(|a| a == "custom provider") {
+            (
+                self.variables.join(" and "),
+                format!("laded credentials set {id} --variable NAME"),
+            )
+        } else {
+            (
+                self.variables.join(" or "),
+                format!("laded credentials set {id}"),
+            )
+        };
+        Some(format!(
+            "Needs {variables}.\n\
+             Keyring: {keyring}\n\
+             File: ~/.config/lade/credentials.env (mode 0600), one NAME=value per line\n\
+             laded's environment works too. Keys are read when the agent starts."
+        ))
     }
 }
 
@@ -290,6 +341,55 @@ pub enum UiAnswerView {
     Cancel,
 }
 
+/// How far the model picker is from a model that Start agent (or Apply model and thinking) can
+/// use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    /// The service has not reported its catalogue yet.
+    CatalogLoading,
+    /// The catalogue lists no provider; `error` is the service's reason, when it gave one.
+    NoProviders { error: Option<String> },
+    /// Providers are listed but none is chosen.
+    NoProviderChosen,
+    /// The chosen provider's models (named by the provider's name) are being loaded.
+    ModelsLoading { provider: String },
+    /// The chosen provider lists no models.
+    NoModels { provider: String },
+    /// The service reports that the chosen provider needs credentials: the start preflight would
+    /// refuse it, so no model of it is offered for Start agent.
+    NeedsCredentials { provider: String },
+    /// The service restricts the chosen provider: none of its models can run in LADE.
+    Restricted { provider: String },
+    /// A model is chosen.
+    Ready {
+        model: ModelView,
+        thinking: ThinkingLevel,
+    },
+}
+
+impl Readiness {
+    /// Why there is no usable model yet, as one short sentence; `None` when ready.
+    pub fn problem(&self) -> Option<String> {
+        Some(match self {
+            Self::CatalogLoading => "Loading the available models…".to_owned(),
+            Self::NoProviders { error: Some(_) } => "LADE can't load models right now.".to_owned(),
+            Self::NoProviders { error: None } => "No model providers are available.".to_owned(),
+            Self::NoProviderChosen => "Choose a model provider.".to_owned(),
+            Self::ModelsLoading { provider } => format!("Loading {provider}'s models…"),
+            Self::NoModels { provider } => {
+                format!("{provider} has no models available. Choose another provider.")
+            }
+            Self::NeedsCredentials { provider } => {
+                format!("Add credentials for {provider} to start the agent.")
+            }
+            Self::Restricted { provider } => {
+                format!("{provider} can't be used in LADE. Choose another provider.")
+            }
+            Self::Ready { .. } => return None,
+        })
+    }
+}
+
 /// IMP-011 service projections and transient choices held by the presentation store.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CompatState {
@@ -415,6 +515,39 @@ impl CompatState {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// How far the picker is from a usable model.
+    pub fn readiness(&self) -> Readiness {
+        let Some(catalog) = &self.catalog else {
+            return Readiness::CatalogLoading;
+        };
+        if catalog.providers.is_empty() {
+            return Readiness::NoProviders {
+                error: catalog.error.clone(),
+            };
+        }
+        let Some(id) = &self.choice.provider else {
+            return Readiness::NoProviderChosen;
+        };
+        let view = catalog.provider(id);
+        let provider = view.map_or_else(|| id.clone(), ProviderView::picker_label);
+        // Availability is the service's: its status, never a guess from the models it lists.
+        match view.map(|v| v.status) {
+            Some(ProviderStatus::MissingCredentials) => {
+                return Readiness::NeedsCredentials { provider };
+            }
+            Some(ProviderStatus::Restricted) => return Readiness::Restricted { provider },
+            Some(ProviderStatus::Available) | None => {}
+        }
+        match (self.models.get(id), self.chosen_model()) {
+            (None, _) => Readiness::ModelsLoading { provider },
+            (Some(_), None) => Readiness::NoModels { provider },
+            (Some(_), Some(model)) => Readiness::Ready {
+                model: model.clone(),
+                thinking: self.choice.thinking,
+            },
+        }
+    }
+
     /// The model the picker resolves to, if the provider's models are loaded: the chosen id, or
     /// the provider's first model when none (or one the catalogue no longer lists) was chosen.
     pub fn chosen_model(&self) -> Option<&ModelView> {
@@ -522,10 +655,39 @@ mod tests {
             variables: Vec::new(),
             models: 8,
         };
+        assert_eq!(provider.picker_label(), "OpenAI Codex");
         assert_eq!(
-            provider.picker_label(),
-            "OpenAI Codex (openai-codex) — restricted"
+            provider.subtitle(),
+            "openai-codex · restricted · OAuth login · 8 models"
         );
         assert_eq!(ThinkingLevel::default(), ThinkingLevel::Off);
+        assert_eq!(
+            provider.credential_help(),
+            None,
+            "only for missing credentials"
+        );
+    }
+
+    #[test]
+    fn credential_help_names_only_the_published_variables() {
+        let mut provider = ProviderView {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            auth: vec!["API key".into(), "subscription token".into()],
+            status: ProviderStatus::MissingCredentials,
+            reason: Some("Add an API key or subscription token for Anthropic to use it.".into()),
+            variables: vec!["ANTHROPIC_API_KEY".into(), "ANTHROPIC_OAUTH_TOKEN".into()],
+            models: 23,
+        };
+        let help = provider.credential_help().unwrap();
+        assert!(help.starts_with("Needs ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN."));
+        assert!(help.contains("laded credentials set anthropic\n"));
+        provider.auth = vec!["custom provider".into()];
+        provider.variables = vec!["LADE_PROVIDER_A".into(), "LADE_PROVIDER_B".into()];
+        let help = provider.credential_help().unwrap();
+        assert!(help.starts_with("Needs LADE_PROVIDER_A and LADE_PROVIDER_B."));
+        assert!(help.contains("--variable NAME"));
+        provider.variables.clear();
+        assert_eq!(provider.credential_help(), None);
     }
 }
