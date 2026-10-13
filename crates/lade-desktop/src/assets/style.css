@@ -313,8 +313,9 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 .nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
 /* Connection status: small text with a sign, no box (the sign alone in compact). */
 .connection { font-size: 13px; }
-/* Search: the entry and its scope drop-down are one linked control — one boundary, one height,
- * a quiet divider between the parts and one focus ring around the whole group. */
+/* Search: the entry and its scope drop-down are one seamless control — one boundary, one height,
+ * no divider or fill of their own (theme gradients and shadows reset), and one focus ring around
+ * the whole group. */
 .search {
   border: 1px solid @border_control;
   border-radius: 6px;
@@ -328,13 +329,14 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   background-color: transparent;
   box-shadow: none;
 }
+.search entry, .search dropdown > button { background-image: none; outline: none; }
 .search dropdown > button {
   min-height: 34px;
   padding: 0 8px;
   border: none;
-  border-left: 1px solid @border_separator;
   border-radius: 0 6px 6px 0;
   background-color: transparent;
+  box-shadow: none;
 }
 .search dropdown > button:hover { background-color: @fill_hover; }
 .search dropdown > button:focus:focus-visible { outline: none; background-color: @fill_selected; }
