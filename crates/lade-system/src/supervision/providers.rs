@@ -102,6 +102,24 @@ fn missing_key(facts: &ProviderFacts, auth: &[AuthKind]) -> String {
     format!("Add {key} for {name} to use it.")
 }
 
+/// The reason of a provider whose key may be in the keyring, which only execution start reads.
+const KEYRING_AT_START: &str = "LADE looks for its key in your keyring when the agent starts.";
+
+/// Access of a provider whose key is in neither `laded`'s environment nor `credentials.env`.
+/// With a usable keyring the key may be there, but it is read only when execution starts
+/// (describing every provider must not read keys): the provider stays startable and says so, and
+/// a missing key is the start preflight's refusal. Without a usable keyring the key is missing
+/// for certain, so the provider needs credentials (`missing` says what to add) and the client
+/// does not offer Start agent with it.
+fn without_plain_key(credentials: &CredentialSource, missing: String) -> (AccessStatus, String) {
+    let keyring = credentials.secret_service();
+    if keyring.is_enabled() && keyring.unavailable_reason().is_none() {
+        (AccessStatus::Available, KEYRING_AT_START.to_owned())
+    } else {
+        (AccessStatus::MissingCredentials, missing)
+    }
+}
+
 /// Classifies one provider against the reviewed egress policies, the credential source and the
 /// LADE profile's custom providers.
 pub fn classify(
@@ -126,21 +144,21 @@ pub fn classify(
             provider.port,
             if provider.local { " (local)" } else { "" }
         );
-        return ProviderAccess {
-            auth: vec![AuthKind::Custom],
-            status: if available {
-                AccessStatus::Available
-            } else {
-                AccessStatus::MissingCredentials
-            },
-            reason: Some(if available {
-                endpoint
-            } else {
+        let (status, reason) = if available {
+            (AccessStatus::Available, endpoint)
+        } else {
+            without_plain_key(
+                credentials,
                 format!(
                     "Add the key for the custom provider {} to use it.",
                     provider.id
-                )
-            }),
+                ),
+            )
+        };
+        return ProviderAccess {
+            auth: vec![AuthKind::Custom],
+            status,
+            reason: Some(reason),
             variables: provider.vars.clone(),
         };
     }
@@ -186,17 +204,15 @@ pub fn classify(
             },
         );
     };
-    // The Secret Service is not asked here (that would read every provider's key): a key kept
-    // only there shows as missing until execution starts and looks it up.
-    let available = credentials.is_available(&facts.id);
-    let reason = (!available).then(|| missing_key(facts, &auth));
+    let (status, reason) = if credentials.is_available(&facts.id) {
+        (AccessStatus::Available, None)
+    } else {
+        let (status, reason) = without_plain_key(credentials, missing_key(facts, &auth));
+        (status, Some(reason))
+    };
     ProviderAccess {
         auth,
-        status: if available {
-            AccessStatus::Available
-        } else {
-            AccessStatus::MissingCredentials
-        },
+        status,
         reason,
         variables: vars.iter().map(|v| (*v).to_string()).collect(),
     }
@@ -303,6 +319,43 @@ mod tests {
         let local = classify(&facts("local", true, None), &policies, &empty, &[custom]);
         assert_eq!(local.status, AccessStatus::Available);
         assert_eq!(local.auth, [AuthKind::Custom]);
+    }
+
+    /// A key only the keyring may hold is not reported missing (execution start reads it), but
+    /// without a usable keyring the provider needs credentials and the client keeps Start off.
+    #[test]
+    fn a_usable_keyring_keeps_a_keyless_provider_startable() {
+        use crate::supervision::secret_service::SecretService;
+        let policies = default_policies();
+        let groq = facts("groq", true, None);
+        let unusable =
+            CredentialSource::empty().with_secret_service(SecretService::detect(None, |_| None));
+        let access = classify(&groq, &policies, &unusable, &[]);
+        assert_eq!(access.status, AccessStatus::MissingCredentials);
+        assert_eq!(
+            access.reason.as_deref(),
+            Some("Add an API key for groq to use it.")
+        );
+        let keyring = CredentialSource::empty().with_secret_service(SecretService::new(
+            "/usr/bin/secret-tool".into(),
+            Vec::new(),
+        ));
+        let access = classify(&groq, &policies, &keyring, &[]);
+        assert_eq!(access.status, AccessStatus::Available);
+        assert_eq!(access.reason.as_deref(), Some(KEYRING_AT_START));
+        assert_eq!(access.variables, ["GROQ_API_KEY"]);
+        let custom = CustomProvider {
+            id: "remote".into(),
+            host: "llm.example".into(),
+            port: 443,
+            local: false,
+            vars: vec!["LADE_PROVIDER_REMOTE".into()],
+        };
+        let remote = facts("remote", true, None);
+        let access = classify(&remote, &policies, &unusable, std::slice::from_ref(&custom));
+        assert_eq!(access.status, AccessStatus::MissingCredentials);
+        let access = classify(&remote, &policies, &keyring, &[custom]);
+        assert_eq!(access.status, AccessStatus::Available);
     }
 
     /// The pinned compatibility manifest states exactly what this build's tables decide.

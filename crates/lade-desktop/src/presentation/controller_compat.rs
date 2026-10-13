@@ -409,6 +409,38 @@ mod tests {
                 provider: "anthropic".into(),
                 models: Vec::new(),
             }));
+        // The service says it needs credentials: not ready, whatever models it lists.
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NeedsCredentials {
+                provider: "Anthropic".into()
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "Add credentials for Anthropic to start the agent."
+        );
+        let anthropic = |status| ProviderView {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            auth: vec!["API key".into()],
+            status,
+            reason: None,
+            variables: vec!["ANTHROPIC_API_KEY".into()],
+            models: 0,
+        };
+        controller
+            .store
+            .apply(catalog(vec![anthropic(ProviderStatus::Restricted)], None));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::Restricted {
+                provider: "Anthropic".into()
+            }
+        );
+        controller
+            .store
+            .apply(catalog(vec![anthropic(ProviderStatus::Available)], None));
         assert_eq!(
             controller.readiness(),
             Readiness::NoModels {

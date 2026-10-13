@@ -194,8 +194,11 @@ comments, optional `export `.
 
 For each variable LADE uses the first of: `laded`'s environment, the keyring, `credentials.env`. They are read at
 each start of execution, and only the selected provider's variables reach the sandbox. The keyring is read only
-when execution starts, so the model picker shows a provider whose key is only in the keyring as *needs
-credentials*; starting works. LADE never copies a key from the keyring into a file.
+when execution starts: with a usable keyring the model picker shows a provider whose key is in neither of the other
+places as available, noting that LADE looks for its key in your keyring when the agent starts (a missing key is
+then the start's refusal). Without a usable keyring such a provider *needs credentials*: the picker says what to
+add (where it can go is under *Details*), *Start agent* stays disabled until you add it and press *Check again*,
+and you can choose another provider meanwhile. LADE never copies a key from the keyring into a file.
 
 | Provider | Variables |
 | --- | --- |
@@ -234,7 +237,8 @@ processes; started by hand, LADE logs `cgroup limits unavailable (…)` and uses
   before it is delivered; its state (queued, dispatched, received, uncertain, blocked) is listed under **Accepted
   inputs and delivery**, and an uncertain or blocked one is stated above that list. An *uncertain* message is never
   resent automatically.
-- **Start agent** is in the *Set up the agent* card until the first start. Afterwards the top of Activity shows only
+- **Start agent** is in the *Set up the agent* card until the first start; it is disabled, with the reason in its
+  tooltip and the state line, while the chosen provider needs credentials or is restricted. Afterwards the top of Activity shows only
   the agent action that applies: **Cancel agent** (stops the agent and keeps its work and session) while it runs,
   **Resume agent** (continues the same session) once it stopped. An unavailable one names its reason in its
   tooltip, and the state line next to it says why.

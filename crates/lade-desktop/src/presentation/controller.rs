@@ -1366,6 +1366,12 @@ fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLine {
                     Readiness::NoModels { provider } => {
                         format!("{provider} has no models; choose another provider below.")
                     }
+                    Readiness::NeedsCredentials { provider } => format!(
+                        "Add credentials for {provider} to start it, or choose another provider \
+                         below."
+                    ),
+                    Readiness::Restricted { provider } =>
+                        format!("{provider} can't be used in LADE; choose another provider below."),
                 }
             ),
         },
@@ -1742,6 +1748,13 @@ mod tests {
                     provider: "Fixture".into(),
                 },
                 "The agent hasn't started. Loading Fixture's models…",
+            ),
+            (
+                Readiness::NeedsCredentials {
+                    provider: "Anthropic".into(),
+                },
+                "The agent hasn't started. Add credentials for Anthropic to start it, or choose \
+                 another provider below.",
             ),
         ] {
             let line = agent_line(&fresh, &readiness);

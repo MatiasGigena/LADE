@@ -138,6 +138,16 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
                 .upcast(),
             });
         }
+        // After adding a key, the service classifies the provider again on the next request.
+        if provider.status == ProviderStatus::MissingCredentials {
+            let check = widgets::button("Check again", &[]);
+            check.set_halign(gtk::Align::Start);
+            check.set_tooltip_text(Some("Ask LADE again whether this provider has a key"));
+            set_focus_key(&check, "agent:check-credentials");
+            let (c, id) = (controller.clone(), provider.id.clone());
+            check.connect_clicked(move |_| c.load_models(Some(id.clone())));
+            provider_field.append(&check);
+        }
     }
     block.append(&provider_field);
     let catalog_for_providers = catalog.clone();
@@ -179,8 +189,14 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
         Readiness::Ready { model, .. } => Some(model.clone()),
         _ => None,
     };
+    // A provider that needs credentials or is restricted is stated under the provider already.
+    let provider_problem = matches!(
+        readiness,
+        Readiness::NeedsCredentials { .. } | Readiness::Restricted { .. }
+    );
     match (&ready_model, readiness.problem()) {
         (Some(_), _) => block.append(&picker_field("Model", &model_choice)),
+        (None, Some(_)) if provider_problem => {}
         (None, Some(problem)) => {
             block.append(&picker_field("Model", &label(&problem, &["secondary"])));
         }

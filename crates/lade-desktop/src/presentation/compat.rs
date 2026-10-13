@@ -355,6 +355,11 @@ pub enum Readiness {
     ModelsLoading { provider: String },
     /// The chosen provider lists no models.
     NoModels { provider: String },
+    /// The service reports that the chosen provider needs credentials: the start preflight would
+    /// refuse it, so no model of it is offered for Start agent.
+    NeedsCredentials { provider: String },
+    /// The service restricts the chosen provider: none of its models can run in LADE.
+    Restricted { provider: String },
     /// A model is chosen.
     Ready {
         model: ModelView,
@@ -373,6 +378,12 @@ impl Readiness {
             Self::ModelsLoading { provider } => format!("Loading {provider}'s models…"),
             Self::NoModels { provider } => {
                 format!("{provider} has no models available. Choose another provider.")
+            }
+            Self::NeedsCredentials { provider } => {
+                format!("Add credentials for {provider} to start the agent.")
+            }
+            Self::Restricted { provider } => {
+                format!("{provider} can't be used in LADE. Choose another provider.")
             }
             Self::Ready { .. } => return None,
         })
@@ -517,9 +528,16 @@ impl CompatState {
         let Some(id) = &self.choice.provider else {
             return Readiness::NoProviderChosen;
         };
-        let provider = catalog
-            .provider(id)
-            .map_or_else(|| id.clone(), ProviderView::picker_label);
+        let view = catalog.provider(id);
+        let provider = view.map_or_else(|| id.clone(), ProviderView::picker_label);
+        // Availability is the service's: its status, never a guess from the models it lists.
+        match view.map(|v| v.status) {
+            Some(ProviderStatus::MissingCredentials) => {
+                return Readiness::NeedsCredentials { provider };
+            }
+            Some(ProviderStatus::Restricted) => return Readiness::Restricted { provider },
+            Some(ProviderStatus::Available) | None => {}
+        }
         match (self.models.get(id), self.chosen_model()) {
             (None, _) => Readiness::ModelsLoading { provider },
             (Some(_), None) => Readiness::NoModels { provider },
