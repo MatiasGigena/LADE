@@ -249,7 +249,8 @@ fn text_of(buffer: &gtk::TextBuffer) -> String {
 }
 
 /// Multi-line input with a real boundary whose height stays between `min` and `max` px (the text
-/// scrolls beyond that), independent of earlier layout passes.
+/// scrolls beyond that), independent of earlier layout passes. The field clips its content to its
+/// rounded border and its scrollbar overlays the text, so no column is reserved at the right edge.
 pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWindow {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
     // Tab moves focus to the next control instead of inserting a tab character.
@@ -263,9 +264,10 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .min_content_height(min)
         .max_content_height(max)
         .propagate_natural_height(true)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(view)
         .build();
+    scroll.set_overflow(gtk::Overflow::Hidden);
     scroll.add_css_class("text-input");
     scroll
 }
@@ -413,13 +415,14 @@ pub fn empty_state(title: &str, body: &str, action: Option<&gtk::Button>) -> gtk
 }
 
 /// A region viewport: vertical scrolling when the content is taller than the window, never a
-/// horizontal scrollbar, and non-overlay scrollbars (GTK's transient overlay sliders produced
-/// unallocated-snapshot warnings in the IMP-002 checkpoint and can hide content under them).
+/// horizontal scrollbar. The scrollbar overlays the content (shown while scrolling or hovered)
+/// instead of reserving a column, so a region that barely fits keeps its full width; regions keep
+/// a right padding of their own so the slider does not cover text at rest.
 pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(child)
         .build()
 }
@@ -453,13 +456,30 @@ fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
     factory
 }
 
-/// A drop-down whose closed button ellipsizes a long choice (full text as tooltip and in the
-/// open list), so it never widens a narrow column.
+/// [`dropdown_or`] with a generic "None available" for an empty list of choices.
 pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
-    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(choices)), None::<gtk::Expression>);
+    dropdown_or(choices, "None available")
+}
+
+/// A drop-down whose closed button ellipsizes a long choice (full text as tooltip and in the
+/// open list), so it never widens a narrow column. It never shows GTK's "(None)" placeholder:
+/// with no choices it is insensitive and shows `empty` (say what is missing, e.g. "No branches
+/// found"). `selected()` indexes `choices`, so callers read it with `choices.get(..)`, which is
+/// `None` for the empty case.
+pub fn dropdown_or(choices: &[&str], empty: &str) -> gtk::DropDown {
+    let shown: &[&str] = if choices.is_empty() {
+        &[empty]
+    } else {
+        choices
+    };
+    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(shown)), None::<gtk::Expression>);
     dropdown.set_factory(Some(&string_factory(true)));
     dropdown.set_list_factory(Some(&string_factory(false)));
     dropdown.set_hexpand(true);
+    if choices.is_empty() {
+        dropdown.set_sensitive(false);
+        set_accessible_description(&dropdown, empty);
+    }
     let update = |d: &gtk::DropDown| {
         let text = d
             .selected_item()
@@ -742,9 +762,10 @@ pub fn warning_line(text: &str) -> gtk::Box {
 /// Key/value row for the inspector.
 pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(space::GROUP);
+    // The key column's width is the stylesheet's `.field-key` minimum; this only caps how wide a
+    // long key grows before it wraps.
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
-    key_label.set_width_chars(10);
     key_label.set_max_width_chars(10);
     row.append(&key_label);
     value.set_hexpand(true);
@@ -807,7 +828,8 @@ fn install_close_shortcut(window: &gtk::Window) {
     window.add_controller(controller);
 }
 
-/// A modal dialog whose closing returns focus to `opener`.
+/// A modal dialog whose closing returns focus to `opener`. `title` is the window title (and so
+/// its accessible name) only; the body does not repeat it as a heading.
 pub struct Dialog {
     pub window: gtk::Window,
     pub body: gtk::Box,
@@ -829,7 +851,6 @@ impl Dialog {
         window.add_css_class("lade-dialog");
         let outer = vbox(space::SECTION);
         outer.add_css_class("dialog-content");
-        outer.append(&section_title(title));
         let body = vbox(space::GROUP);
         outer.append(&body);
         let error = vbox(0);

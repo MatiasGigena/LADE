@@ -17,6 +17,14 @@ use crate::presentation::keys::{self, AppAction, Keymap};
 use crate::presentation::model::Intent as ObjectiveIntent;
 use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
 
+/// A metadata label above its control, grouped tightly (the label names the control).
+fn labelled(name: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let unit = vbox(space::TIGHT);
+    unit.append(&label(name, &["meta"]));
+    unit.append(control);
+    unit
+}
+
 /// Generic confirmation; `destructive` uses the destructive treatment for the confirm button.
 pub fn confirm(
     opener: &impl IsA<gtk::Widget>,
@@ -117,15 +125,14 @@ pub fn approve_with_override(opener: &impl IsA<gtk::Widget>, controller: &Rc<Con
         &["secondary"],
     ));
     let reason = gtk::TextView::new();
-    set_accessible_label(&reason, "Override reason");
-    dialog.body.append(&label(
-        "Override reason (recorded with the approval)",
-        &["meta"],
-    ));
     let reason_input = LimitedInput::new(&reason, OVERRIDE_REASON_LIMIT, "the override reason");
-    dialog
-        .body
-        .append(&reason_input.field(&widgets::bounded_text(&reason, 96, 200)));
+    dialog.body.append(&reason_input.labelled(
+        "Override reason (recorded with the approval)",
+        "Why approve without passing checks?",
+        96,
+        200,
+    ));
+    set_accessible_label(&reason, "Override reason");
     dialog.add_cancel();
     let ok = dialog.add_button("Approve candidate", &["primary"]);
     let window = dialog.window.clone();
@@ -307,35 +314,35 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     let entry = |name: &str, placeholder: &str| {
         let e = gtk::Entry::builder().placeholder_text(placeholder).build();
         set_accessible_label(&e, name);
-        dialog.body.append(&label(name, &["meta"]));
-        dialog.body.append(&e);
+        dialog.body.append(&labelled(name, &e));
         e
     };
-    let title = entry("Title", "What should be true when this is done?");
-    let area = |name: &str| {
+    let title = entry("Title", "A short name, e.g. Retry failed uploads");
+    let area = |name: &str, placeholder: &str| {
         let view = gtk::TextView::new();
-        set_accessible_label(&view, name);
-        dialog.body.append(&label(name, &["meta"]));
         let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
         dialog
             .body
-            .append(&input.field(&widgets::bounded_text(&view, 56, 140)));
+            .append(&input.labelled(name, placeholder, 56, 140));
         input
     };
-    let outcome = area("Expected outcome");
-    let constraints = area("Constraints");
-    let acceptance = area("Acceptance criteria");
+    let outcome = area("Expected outcome", "What should be true when this is done?");
+    let constraints = area("Constraints", "Limits the agent must respect (optional)");
+    let acceptance = area(
+        "Acceptance criteria",
+        "How the result will be checked (optional)",
+    );
     let refs: Vec<&str> = branches.iter().map(String::as_str).collect();
-    let target = gtk::DropDown::from_strings(&refs);
+    let target = widgets::dropdown_or(&refs, "No branches found in this repository");
+    target.set_hexpand(false);
     if let Some(index) = branches.iter().position(|b| b == &default_branch) {
         target.set_selected(index as u32);
     }
     set_accessible_label(&target, "Integration target branch");
-    dialog.body.append(&label(
+    dialog.body.append(&labelled(
         "Integration target (receives the accepted Change Set)",
-        &["meta"],
+        &target,
     ));
-    dialog.body.append(&target);
     let start = entry(
         "Start point",
         "Leave empty to start from the target's current commit, or enter a commit",
@@ -391,20 +398,30 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
         ),
         &["secondary"],
     ));
-    let area = |name: &str, text: &str| {
+    let area = |name: &str, placeholder: &str, text: &str| {
         let view = gtk::TextView::new();
-        set_accessible_label(&view, name);
-        dialog.body.append(&label(name, &["meta"]));
         let input = LimitedInput::new(&view, TEXT_LIMIT, &name.to_lowercase());
-        input.set_text(text);
         dialog
             .body
-            .append(&input.field(&widgets::bounded_text(&view, 56, 160)));
+            .append(&input.labelled(name, placeholder, 56, 160));
+        input.set_text(text);
         input
     };
-    let outcome = area("Expected outcome", &current.outcome);
-    let constraints = area("Constraints", &current.constraints);
-    let acceptance = area("Acceptance criteria", &current.acceptance);
+    let outcome = area(
+        "Expected outcome",
+        "What should be true when this is done?",
+        &current.outcome,
+    );
+    let constraints = area(
+        "Constraints",
+        "Limits the agent must respect (optional)",
+        &current.constraints,
+    );
+    let acceptance = area(
+        "Acceptance criteria",
+        "How the result will be checked (optional)",
+        &current.acceptance,
+    );
     dialog.add_cancel();
     let ok = dialog.add_button("Save intent", &["primary"]);
     let window = dialog.window.clone();
