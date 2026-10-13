@@ -723,7 +723,21 @@ pub struct TerminalLaunch {
 
 /// Build a terminal sandbox: `HOME=/tmp` (private tmpfs), `TERM=vt100`, worker limits, no
 /// network, no credentials, the worktree read-write or read-only.
+///
+/// The prompt (`[lade] \W\$ `, or `[lade read-only] \W\$ `) is set by `env PS1=…` right before
+/// the shell: the launch gate is a non-interactive bash, which unsets an inherited `PS1`, so a
+/// `PS1` passed with the rest of the environment never reaches the shell.
 pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxError> {
+    let (mode, prompt) = if launch.writable {
+        ("read_write", "[lade] \\W\\$ ")
+    } else {
+        ("read_only", "[lade read-only] \\W\\$ ")
+    };
+    let env_program = ENV_PROGRAMS
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .ok_or(SandboxError::ToolMissing { tool: "env" })?;
     let mut argv = Vec::new();
     if let Some(setsid) = &launch.setsid {
         argv.extend([
@@ -732,7 +746,12 @@ pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxErro
             "--wait".into(),
         ]);
     }
-    argv.extend([launch.shell.clone().into_os_string(), "-i".into()]);
+    argv.extend([
+        env_program.into_os_string(),
+        format!("PS1={prompt}").into(),
+        launch.shell.clone().into_os_string(),
+        "-i".into(),
+    ]);
     let mut spec = SandboxSpec::new(argv, &launch.worktree, launch.limits)?;
     spec.ro_bind(&launch.repo_common_dir)?;
     if launch.writable {
@@ -740,16 +759,10 @@ pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxErro
     } else {
         spec.ro_bind(&launch.worktree)?;
     }
-    let (mode, prompt) = if launch.writable {
-        ("read_write", "[lade] \\W\\$ ")
-    } else {
-        ("read_only", "[lade read-only] \\W\\$ ")
-    };
     spec.env("HOME", "/tmp")?
         .env("PATH", SANDBOX_PATH)?
         .env("LANG", "C.UTF-8")?
         .env("TERM", "vt100")?
-        .env("PS1", prompt)?
         .env("LADE_TERMINAL", mode)?;
     Ok(spec)
 }
