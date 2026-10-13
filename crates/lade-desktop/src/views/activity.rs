@@ -83,6 +83,8 @@ pub struct Activity {
     empty: gtk::Box,
     text_labels: RefCell<Vec<gtk::Label>>,
     shown_for: RefCell<Option<ObjectiveId>>,
+    /// The Objective whose setup card is shown (no Agent Session yet), to notice it starting.
+    setup_for: RefCell<Option<ObjectiveId>>,
     composer_box: gtk::Box,
     pub composer: gtk::TextView,
     composer_input: Rc<widgets::LimitedInput>,
@@ -241,6 +243,7 @@ impl Activity {
             empty,
             text_labels: RefCell::new(Vec::new()),
             shown_for: RefCell::new(None),
+            setup_for: RefCell::new(None),
             composer_box,
             composer,
             composer_input,
@@ -540,8 +543,9 @@ impl Activity {
         panel.append(&resources);
     }
 
-    /// The setup card (no Agent Session yet) or the settings (with one).
-    fn render_agent(self: &Rc<Self>) {
+    /// The setup card (no Agent Session yet) or the settings (with one). Returns `true` when the
+    /// Objective whose setup card was shown has just got its Agent Session (it started).
+    fn render_agent(self: &Rc<Self>) -> bool {
         widgets::clear(&self.setup_body.borrow());
         widgets::clear(&self.setup_resources);
         widgets::clear(&self.agent_panel);
@@ -549,17 +553,48 @@ impl Activity {
         let session = detail.as_ref().is_some_and(|d| d.session.is_some());
         self.setup.set_visible(detail.is_some() && !session);
         self.settings.set_visible(session);
+        let id = detail.as_ref().map(|d| d.summary.objective_id.clone());
+        let previous = self.setup_for.replace(id.clone().filter(|_| !session));
         match detail {
             Some(detail) if session => self.render_settings(&detail),
             Some(detail) => self.render_setup(&detail),
             None => {}
         }
+        session && previous.is_some() && previous == id
     }
 
     /// Rebuilds the agent area keeping focus where it was (by focus key, also inside a keyed
     /// drop-down: see `widgets::rebuild_preserving_focus`).
+    ///
+    /// When the agent has just started, the setup card is gone: if focus was in it (the developer
+    /// pressed Start agent), it moves on to the composer, the next task, rather than to whatever
+    /// follows in the agent area. Either way the new state is announced politely, saying where
+    /// focus went.
     fn rebuild_agent(self: &Rc<Self>) {
-        widgets::rebuild_preserving_focus(&self.agent_area, || self.render_agent());
+        let in_setup = self
+            .root
+            .root()
+            .and_then(|r| r.focus())
+            .is_some_and(|f| f.is_ancestor(&self.setup));
+        let mut started = false;
+        widgets::rebuild_preserving_focus(&self.agent_area, || started = self.render_agent());
+        if !started {
+            return;
+        }
+        let sentence = self
+            .controller
+            .agent_line()
+            .map_or_else(|| "The agent started.".to_owned(), |l| l.sentence);
+        let message = if in_setup && self.composer_box.is_visible() && self.composer.grab_focus() {
+            format!("{sentence} Focus is on the message to the agent.")
+        } else {
+            sentence
+        };
+        widgets::announce(
+            &self.root,
+            &message,
+            gtk::AccessibleAnnouncementPriority::Medium,
+        );
     }
 
     fn composer_text(&self) -> String {
