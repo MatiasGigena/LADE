@@ -216,6 +216,37 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     );
 }
 
+/// The per-Objective bound holds for opens sent together, before any terminal has started.
+#[test]
+fn concurrent_opens_respect_the_per_objective_bound() {
+    let env = Env::new("svc-term-bound");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let objective = started_objective(&env, &mut client, "Terminal bound");
+    if !sandbox_works() {
+        return;
+    }
+    let mutating = open_command(&objective).name().is_mutating();
+    let sent: Vec<Id> = (0..5)
+        .map(|_| client.send(open_command(&objective), mutating))
+        .collect();
+    let mut opened = 0;
+    let mut refused = 0;
+    for request_id in &sent {
+        match result(client.wait_reply(request_id)) {
+            Ok(ReplyData::TerminalOpen(_)) => opened += 1,
+            Err(rejection) => {
+                assert_eq!(rejection.code, ErrorCode::LimitReached, "{rejection:?}");
+                refused += 1;
+            }
+            Ok(other) => panic!("terminal.open: {other:?}"),
+        }
+    }
+    assert_eq!((opened, refused), (4, 1));
+    drop(client);
+    service.shutdown();
+}
+
 #[test]
 fn lease_loss_kills_terminals_and_a_second_client_gets_none() {
     let env = Env::new("svc-term-lease");

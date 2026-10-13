@@ -436,26 +436,32 @@ impl Service {
                 self.wire_workspace(existing, REPLY_BRANCHES),
             ));
         }
-        let default_branch = repo.head_branch().ok().flatten();
-        let name = top.file_name().map_or_else(
-            || "workspace".to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let row = WorkspaceRow {
-            id: WorkspaceId::new(new_uuid()),
-            path: top.clone(),
-            name: name.clone(),
-            default_branch: default_branch.clone(),
-            opened_at: now_ms(),
+        // A recorded Workspace whose repository was unavailable at start is reattached (with its
+        // Objectives) rather than recorded a second time.
+        let row = match sql(storage::workspace_by_path(self.store.conn(), &top))? {
+            Some(row) => row,
+            None => {
+                let row = WorkspaceRow {
+                    id: WorkspaceId::new(new_uuid()),
+                    path: top.clone(),
+                    name: top.file_name().map_or_else(
+                        || "workspace".to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    ),
+                    default_branch: repo.head_branch().ok().flatten(),
+                    opened_at: now_ms(),
+                };
+                // Recorded with the generic outcome journal in `finish`.
+                sql(storage::insert_workspace(self.store.conn(), &row))?;
+                row
+            }
         };
-        // Recorded with the generic outcome journal in `finish`.
-        sql(storage::insert_workspace(self.store.conn(), &row))?;
         let ws = WsState {
             id: row.id,
             repo,
             path: top,
-            name,
-            default_branch,
+            name: row.name,
+            default_branch: row.default_branch,
         };
         let reply = self.wire_workspace(&ws, REPLY_BRANCHES);
         self.workspaces.insert(ws.id, ws);

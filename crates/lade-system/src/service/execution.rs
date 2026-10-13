@@ -119,6 +119,8 @@ impl Service {
         let model =
             ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(|e| domain_rejection(&e))?;
         let mut st = self.obj(oid)?.clone();
+        // No worker can launch without the repository (a Workspace unavailable at start).
+        self.ws_of(&st)?;
         let session = SessionId::new(new_uuid());
         let generation = st
             .objective_mut()
@@ -192,6 +194,7 @@ impl Service {
         let oid = self.objective_id(id)?;
         self.check_idle(oid)?;
         let mut st = self.obj(oid)?.clone();
+        self.ws_of(&st)?;
         let generation = st
             .objective_mut()
             .resume_execution(ts_now())

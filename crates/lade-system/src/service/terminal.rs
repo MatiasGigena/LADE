@@ -129,7 +129,13 @@ impl Service {
             let cols = size(&cmd.cols, MAX_COLS, "columns")?;
             let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
             let writable = self.terminal_scope(oid)?;
-            let open = self.terminals.values().filter(|t| t.oid == oid).count();
+            // Terminals still starting count too, so concurrent opens cannot exceed the bound.
+            let starting = self
+                .pending
+                .values()
+                .filter(|p| matches!(p, Pending::TerminalOpen { oid: o, .. } if *o == oid))
+                .count();
+            let open = self.terminals.values().filter(|t| t.oid == oid).count() + starting;
             let total = self.terminals.len() + self.terminals_opening;
             let max = self.limits.max_terminals;
             if total >= max || open >= MAX_PER_OBJECTIVE {

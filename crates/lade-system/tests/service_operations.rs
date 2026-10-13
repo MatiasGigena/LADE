@@ -139,6 +139,70 @@ fn objectives_and_journal_survive_restart() {
     service.shutdown();
 }
 
+/// A Workspace whose repository was unavailable at start (moved, unmounted) is not loaded; opening
+/// it again once it is back reattaches the recorded Workspace and its Objectives instead of
+/// failing on the stored path.
+#[test]
+fn reopening_a_workspace_unavailable_at_start_reattaches_it() {
+    let env = Env::new("svc-reattach");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    let created = create_objective(&mut client, &ws.workspace_id, "Survives a move");
+    drop(client);
+    service.shutdown();
+
+    let moved = env.root.path().join("repo-moved");
+    fs::rename(&env.repo, &moved).unwrap();
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    match client.call(Request::Snapshot(Empty {})) {
+        Ok(ReplyData::Snapshot(s)) => assert!(s.workspaces.is_empty()),
+        other => panic!("{other:?}"),
+    }
+    // Without its repository the Objective's execution cannot start: refused, not left
+    // `starting` with no worker ever launched.
+    let start = client
+        .call(Request::ExecutionStart(
+            lade_protocol::client::ExecutionStartCommand {
+                objective_id: created.objective_id.clone(),
+                model: lade_protocol::types::Model {
+                    provider: "lade-fixture".into(),
+                    id: "scripted".into(),
+                },
+                thinking: None,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(start.code, ErrorCode::NotFound, "{start:?}");
+    assert_eq!(
+        detail(&mut client, &created.objective_id).execution.state,
+        ExecutionState::None
+    );
+    fs::rename(&moved, &env.repo).unwrap();
+    let reopened = open_workspace(&mut client, &env.repo);
+    assert_eq!(reopened.workspace_id, ws.workspace_id);
+    let after = detail(&mut client, &created.objective_id);
+    assert_eq!(after.workspace_id, ws.workspace_id);
+    assert!(action_enabled(&after, ActionName::ExecutionStart));
+    let list = changes(&mut client, &created.objective_id, Basis::Working);
+    assert!(list.files.is_empty());
+    start_execution(&mut client, &created.objective_id);
+    wait_state(&mut client, &created.objective_id, ExecutionState::Idle);
+    drop(client);
+    service.shutdown();
+
+    // The reattached Workspace is the recorded one: nothing was duplicated.
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    match client.call(Request::Snapshot(Empty {})) {
+        Ok(ReplyData::Snapshot(s)) => assert_eq!(s.workspaces.len(), 1),
+        other => panic!("{other:?}"),
+    }
+    drop(client);
+    service.shutdown();
+}
+
 #[test]
 fn restart_marks_live_execution_interrupted() {
     let env = Env::new("svc-interrupt");

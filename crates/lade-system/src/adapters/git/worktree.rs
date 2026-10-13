@@ -115,18 +115,41 @@ impl Repository {
                 what: "main worktree",
             });
         }
+        // A forced removal deletes the directory directly instead of through `git worktree remove`:
+        // that command runs `status` inside any nested repository the directory holds, and a
+        // sandboxed worker can plant one whose configuration names a filter/hook program, which
+        // Git would then execute on the host (the per-repository hardening does not reach a nested
+        // repository's own config). The administrative entry is then pruned.
+        if force {
+            match fs::remove_dir_all(worktree.path()) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(GitError::Io {
+                        op: "worktree-remove",
+                        kind: e.kind(),
+                    });
+                }
+            }
+            self.git("worktree-prune")
+                .args(["worktree", "prune"])
+                .run()?;
+            return Ok(());
+        }
         if !worktree.path().exists() {
             self.git("worktree-prune")
                 .args(["worktree", "prune"])
                 .run()?;
             return Ok(());
         }
+        // The non-force path keeps Git's own dirty detection (callers that want it accept that it
+        // inspects worktree content; production removals are forced and never reach here).
         restore_gitfile(worktree)?;
-        let mut cmd = self.git("worktree-remove").args(["worktree", "remove"]);
-        if force {
-            cmd = cmd.arg("--force");
-        }
-        let out = cmd.arg(worktree.path()).output()?;
+        let out = self
+            .git("worktree-remove")
+            .args(["worktree", "remove"])
+            .arg(worktree.path())
+            .output()?;
         if out.status.success() {
             Ok(())
         } else if out.stderr.contains("modified or untracked files") {

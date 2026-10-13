@@ -423,6 +423,9 @@ pub fn start(
         private_dir(dir)?;
     }
     let lock = lock_state(&paths.state)?;
+    // A service of another state directory may share the runtime directory: refuse before
+    // recovery sweeps its gateway sockets or a new capability replaces its own.
+    transport::ensure_not_running(&config.runtime_dir).map_err(StartError::Transport)?;
     let store = Store::open(&paths.state.join("lade.db")).map_err(StartError::Store)?;
     let artifacts = ArtifactStore::open(&paths.state.join("artifacts"), &paths.tmp)
         .map_err(|e| StartError::StateDir(format!("artifacts: {}", e.code())))?;

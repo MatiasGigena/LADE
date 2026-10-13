@@ -187,6 +187,46 @@ fn invalid_request_keeps_the_link_and_restart_rotates_admission() {
     service.shutdown();
 }
 
+/// A second service sharing the runtime directory (another state directory) is refused without
+/// replacing the running service's capability: its clients keep being admitted.
+#[test]
+fn second_service_on_the_same_runtime_dir_leaves_admission_intact() {
+    let env = Env::new("svc-second");
+    let service = env.start(FakeLauncher::shared());
+    let capability = env.capability();
+    // A live worker's gateway socket of the running service.
+    let gateways = env.root.path().join("run/g");
+    fs::create_dir_all(&gateways).unwrap();
+    fs::set_permissions(&gateways, fs::Permissions::from_mode(0o700)).unwrap();
+    let gateway = gateways.join("0123456789ab-1.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&gateway).unwrap();
+    let config = lade_system::service::ServiceConfig {
+        state_dir: env.root.path().join("other-state"),
+        ..env.config()
+    };
+    let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
+        panic!("a second service started on the same runtime directory");
+    };
+    assert!(
+        matches!(
+            error,
+            lade_system::service::StartError::Transport(
+                lade_system::transport::TransportError::AlreadyRunning
+            )
+        ),
+        "{error:?}"
+    );
+    assert_eq!(env.capability(), capability, "the capability was replaced");
+    assert!(
+        gateway.exists(),
+        "a running worker's gateway socket was swept"
+    );
+    let mut client = env.connect();
+    assert!(client.call(Request::Snapshot(Empty {})).is_ok());
+    drop(client);
+    service.shutdown();
+}
+
 fn serde_json_frame(request_id: &lade_protocol::types::Id) -> Vec<u8> {
     let body = format!(
         r#"{{"protocol":1,"bundle":"{}","body":{{"kind":"request","request_id":"{}","operation_id":"{}","name":"snapshot","payload":{{}}}}}}"#,
