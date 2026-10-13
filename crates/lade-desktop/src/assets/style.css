@@ -246,6 +246,24 @@ paned.horizontal > separator {
 }
 separator.region-divider { background-color: @border_separator; min-width: 1px; }
 
+/* Shared components (views::widgets) ------------------------------------------------------- */
+
+/* Empty state: a calm centred block — heading, one explanation, the relevant action. */
+.empty-block { padding: 32px; }
+
+/* Inline message: a sign and a plain sentence on a semantic fill; codes stay in its Details. */
+.inline-message { border-radius: 6px; padding: 8px 12px; }
+.inline-message.message-info { background-color: @fill_band; color: @ink_primary; }
+.inline-message.message-warning { background-color: @warn_fill; color: @warn_ink; }
+.inline-message.message-error { background-color: @del_fill; color: @del_ink; }
+.inline-message .message-sign { font-weight: 700; }
+.inline-message button.disclosure-toggle label, .inline-message .message-details { color: inherit; }
+.inline-message button.disclosure-toggle:hover,
+.inline-message button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
+
+/* Multi-line field placeholder: inset like the text (1 px border + the view's 8 px margin). */
+label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
+
 /* Header ----------------------------------------------------------------------------------- */
 
 .lade-header {

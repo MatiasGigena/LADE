@@ -159,9 +159,18 @@ impl LimitedInput {
     }
 
     /// The field and its local error area as one unit (no extra spacing while there is no error).
-    pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
+    pub fn field(&self, field: &impl IsA<gtk::Widget>) -> gtk::Box {
         let unit = vbox(0);
-        unit.append(scroll);
+        unit.append(field);
+        self.error.add_css_class("limited-error");
+        unit.append(&self.error);
+        unit
+    }
+
+    /// This input as a [`text_field`] (label, field with a visible placeholder) followed by its
+    /// local error area.
+    pub fn labelled(&self, label: &str, placeholder: &str, min: i32, max: i32) -> gtk::Box {
+        let unit = text_field(label, placeholder, &self.view, min, max);
         self.error.add_css_class("limited-error");
         unit.append(&self.error);
         unit
@@ -259,6 +268,148 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .build();
     scroll.add_css_class("text-input");
     scroll
+}
+
+/// A multi-line field with a visible placeholder: [`bounded_text`] with a dim hint laid over its
+/// first line (`GtkTextView` has no placeholder of its own). The hint shows only while the buffer
+/// is empty and the field is unfocused; it is also the view's accessible description.
+pub fn placeholder_text(
+    view: &gtk::TextView,
+    placeholder: &str,
+    min: i32,
+    max: i32,
+) -> gtk::Overlay {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&bounded_text(view, min, max)));
+    let hint = label(placeholder, &["text-placeholder"]);
+    hint.set_can_target(false);
+    hint.set_valign(gtk::Align::Start);
+    overlay.add_overlay(&hint);
+    overlay.set_clip_overlay(&hint, true);
+    set_accessible_description(view, placeholder);
+    let update = {
+        let hint = hint.clone();
+        move |view: &gtk::TextView| {
+            hint.set_visible(view.buffer().char_count() == 0 && !view.has_focus());
+        }
+    };
+    update(view);
+    let weak = view.downgrade();
+    let on_change = update.clone();
+    view.buffer().connect_changed(move |_| {
+        if let Some(view) = weak.upgrade() {
+            on_change(&view);
+        }
+    });
+    view.connect_has_focus_notify(update);
+    overlay
+}
+
+/// A labelled multi-line input: a metadata label above a [`placeholder_text`] field, grouped
+/// tightly. The label is also the view's accessible name.
+pub fn text_field(
+    label_text: &str,
+    placeholder: &str,
+    view: &gtk::TextView,
+    min: i32,
+    max: i32,
+) -> gtk::Box {
+    let unit = vbox(space::TIGHT);
+    unit.add_css_class("text-field");
+    unit.append(&label(label_text, &["meta"]));
+    set_accessible_label(view, label_text);
+    unit.append(&placeholder_text(view, placeholder, min, max));
+    unit
+}
+
+/// The kind of an [`inline_message`]: its sign, fill and accessible prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Info,
+    Warning,
+    Error,
+}
+
+impl MessageKind {
+    fn sign(self) -> &'static str {
+        match self {
+            Self::Info => "i",
+            Self::Warning => "⚠",
+            Self::Error => "✕",
+        }
+    }
+
+    fn class(self) -> &'static str {
+        match self {
+            Self::Info => "message-info",
+            Self::Warning => "message-warning",
+            Self::Error => "message-error",
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Info => "Note",
+            Self::Warning => "Warning",
+            Self::Error => "Error",
+        }
+    }
+}
+
+/// A local message banner near the control or content it concerns: a sign and a plain sentence on
+/// the kind's semantic fill. Technical details (service codes, raw errors) stay out of the sentence
+/// in a collapsed "Details" disclosure and are the banner's accessible description; its accessible
+/// name is "<Kind>: <text>".
+pub fn inline_message(kind: MessageKind, text: &str, details: Option<&str>) -> gtk::Box {
+    let root = vbox(space::TIGHT);
+    root.add_css_class("inline-message");
+    root.add_css_class(kind.class());
+    let row = hbox(space::ITEM);
+    let sign = gtk::Label::new(Some(kind.sign()));
+    sign.add_css_class("message-sign");
+    sign.set_valign(gtk::Align::Start);
+    row.append(&sign);
+    let message = label(text, &[]);
+    message.set_hexpand(true);
+    row.append(&message);
+    root.append(&row);
+    set_accessible_label(&root, &format!("{}: {text}", kind.prefix()));
+    if let Some(details) = details.filter(|d| !d.is_empty()) {
+        let code = label(details, &["mono", "message-details"]);
+        code.set_selectable(true);
+        root.append(&disclosure("Details", false, &code, |_| {}));
+        set_accessible_description(&root, details);
+    }
+    root
+}
+
+/// A centred, calm empty state: a heading, an optional one-paragraph explanation (omitted when
+/// empty) and the relevant action, if any. No illustration or motivational copy (design.md §5).
+pub fn empty_state(title: &str, body: &str, action: Option<&gtk::Button>) -> gtk::Widget {
+    let block = vbox(space::GROUP);
+    block.add_css_class("empty-block");
+    block.set_halign(gtk::Align::Center);
+    block.set_valign(gtk::Align::Center);
+    block.set_hexpand(true);
+    block.set_vexpand(true);
+    let centred = |text: &gtk::Label| {
+        text.set_xalign(0.5);
+        text.set_justify(gtk::Justification::Center);
+        text.set_max_width_chars(56);
+    };
+    let heading = heading(title, "empty-heading");
+    centred(&heading);
+    block.append(&heading);
+    if !body.is_empty() {
+        let text = label(body, &["secondary"]);
+        centred(&text);
+        block.append(&text);
+    }
+    if let Some(action) = action {
+        action.set_halign(gtk::Align::Center);
+        block.append(action);
+    }
+    block.upcast()
 }
 
 /// A region viewport: vertical scrolling when the content is taller than the window, never a

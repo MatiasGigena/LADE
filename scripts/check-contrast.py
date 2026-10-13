@@ -125,6 +125,10 @@ pairs += [
     ('surface', ['primary_pressed'], TEXT, 'text'),
     # Destructive buttons: label on hover fill.
     ('del_ink', ['del_fill'], TEXT, 'text'),
+    # Inline messages (views::widgets::inline_message): text and its Details toggle on hover.
+    ('ink_primary', ['fill_band', 'fill_hover'], TEXT, 'text'),
+    ('warn_ink', ['warn_fill', 'fill_hover'], TEXT, 'text'),
+    ('del_ink', ['del_fill', 'fill_hover'], TEXT, 'text'),
     # Diff separator lines in the viewer.
     ('viewer_separator_ink', ['fill_band'], TEXT, 'text'),
     # Syntax inks (code-scheme.xml) on the code surface, the diff line fills and the selection.
