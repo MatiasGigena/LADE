@@ -161,21 +161,9 @@ impl Rail {
             .set_sensitive(state.connection.is_connected());
         let board = state.board();
         if board.groups.is_empty() && board.archive.is_empty() {
-            self.content
-                .append(&widgets::heading("No Objectives yet", "empty-heading"));
-            self.content.append(&label(
-                "Define an outcome for the agent to pursue in an isolated worktree.",
-                &["secondary"],
-            ));
-            let create = widgets::button("New Objective", &["primary"]);
-            create.set_halign(gtk::Align::Start);
-            let this_new = self.on_new.borrow().clone();
-            create.connect_clicked(move |b| {
-                if let Some(handler) = &this_new {
-                    handler(b);
-                }
-            });
-            self.content.append(&create);
+            // One quiet line: the work area's "Create your first Objective" explains and offers
+            // the action, and New Objective stays the + beside the heading.
+            self.content.append(&label("No Objectives yet.", &["meta"]));
             return;
         }
         let mut lists = Vec::new();

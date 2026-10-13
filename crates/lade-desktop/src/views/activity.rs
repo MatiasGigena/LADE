@@ -23,6 +23,7 @@ use super::session;
 use super::widgets::{
     self, MessageKind, hbox, label, set_accessible_label, set_focus_key, space, vbox,
 };
+use super::workbench;
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
@@ -598,7 +599,8 @@ impl Activity {
                 }
                 Change::Session(id) if Some(id) == selected.as_ref() => agent = true,
                 Change::Resources => agent = true,
-                Change::Connection => state = true,
+                // The board's first Objective replaces the first-Objective state.
+                Change::Connection | Change::Objectives => state = true,
                 Change::Activity(id, kind) if Some(id) == selected.as_ref() => {
                     match kind {
                         ActivityChange::Reset => self.render_items(),
@@ -670,6 +672,7 @@ impl Activity {
             |s| format!("Activity — {}", s.title),
         );
         let detail = state.selected_detail().cloned();
+        let selected = state.ui.selected.is_some();
         drop(state);
         self.title.set_text(&title);
         widgets::clear(&self.controls);
@@ -682,8 +685,11 @@ impl Activity {
         let (sentence, details) = match (&detail, line) {
             (Some(_), Some(line)) => (line.sentence, line.details),
             (Some(_), None) => ("Loading the agent's state…".to_owned(), None),
-            (None, _) => ("Select an Objective to see its agent.".to_owned(), None),
+            (None, _) if selected => ("Loading the agent's state…".to_owned(), None),
+            // Nothing selected: the empty state below says what to do.
+            (None, _) => (String::new(), None),
         };
+        self.status.set_visible(!sentence.is_empty());
         self.status.set_text(&sentence);
         self.status.set_tooltip_text(details.as_deref());
         widgets::set_accessible_description(&self.status, details.as_deref().unwrap_or(""));
@@ -749,6 +755,8 @@ impl Activity {
                 (log.loaded, !log.items.is_empty(), log.has_more)
             });
         let has_detail = detail.is_some();
+        let selected = state.ui.selected.is_some();
+        let board_empty = workbench::board_is_empty(&state);
         drop(state);
         // The transcript shows while it loads (its "Loading…" row) and once it has items.
         let transcript = has_detail && (items || (session && !loaded));
@@ -756,11 +764,24 @@ impl Activity {
         self.earlier.set_visible(transcript && more);
         self.composer_box.set_visible(session);
         widgets::clear(&self.empty);
+        if !selected {
+            // The same first-Objective state as the rest of the work area.
+            self.empty.append(&if board_empty {
+                workbench::first_objective_state(&self.controller)
+            } else {
+                widgets::empty_state(
+                    "No Objective selected",
+                    "Select an Objective to see its agent.",
+                    None,
+                    None,
+                )
+            });
+            self.empty.set_visible(true);
+            return;
+        }
         let empty = match execution {
-            None => Some((
-                "No Objective selected",
-                "Select an Objective to see its agent.",
-            )),
+            // Still loading: the state line says so.
+            None => None,
             Some(_) if transcript || !session => None,
             Some(ExecutionState::Idle) => {
                 Some(("No messages yet", "Send a prompt to start a turn."))
