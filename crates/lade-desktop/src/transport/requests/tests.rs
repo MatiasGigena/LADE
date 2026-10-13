@@ -628,6 +628,11 @@ pub(crate) fn wire_detail(objective_id: &str) -> wire::ObjectiveDetail {
                 enabled: false,
                 reason: Some("no valid approval".into()),
             },
+            wire::AvailableAction {
+                action: wire::ActionName::TerminalOpen,
+                enabled: false,
+                reason: Some("Start the agent once to create this Objective's worktree.".into()),
+            },
         ],
         session: Some(wire::SessionInfo {
             session_id: Id::parse(S).unwrap(),
@@ -664,6 +669,14 @@ fn objective_detail_converts_field_by_field() {
         detail.availability(view::ActionName::ReviewIntegrate),
         view::ActionAvailability::Disabled {
             reason: "no valid approval".into()
+        }
+    );
+    // `terminal.open` is kept apart from the Objective actions.
+    assert_eq!(detail.available_actions.len(), 2);
+    assert_eq!(
+        detail.terminal_availability(),
+        view::ActionAvailability::Disabled {
+            reason: "Start the agent once to create this Objective's worktree.".into()
         }
     );
     assert_eq!(
@@ -763,29 +776,45 @@ fn objective_create_selects_and_loads_the_new_objective() {
     }));
 }
 
+/// The context `request` builds for `intent`.
+fn context_of(intent: &Intent) -> Context {
+    request(intent).unwrap().unwrap().1
+}
+
 #[test]
-fn command_success_clears_and_rejection_sets_the_status_beside_actions() {
-    let context = Context::command("Freeze for review", Some(&oid()));
+fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface() {
+    let context = context_of(&Intent::Freeze {
+        objective_id: oid(),
+    });
     let rejection = Rejection::new(
         ErrorCode::InvalidLifecycle,
         SafeAction::Refresh,
-        "the agent is still running",
+        "Wait until the agent has stopped.",
     );
     let effects = rejection_effects(&context, &rejection);
-    let status = effects
-        .updates
-        .iter()
-        .find_map(|u| match u {
-            StoreUpdate::CommandStatus {
-                status: Some(s), ..
-            } => Some(s.clone()),
-            _ => None,
-        })
-        .unwrap();
-    assert_eq!(status.code, "invalid_lifecycle");
-    assert_eq!(
-        status.message,
-        "Couldn't freeze for review. The agent is still running."
+    let message = "Couldn't freeze for review. Wait until the agent has stopped.";
+    assert!(effects.updates.contains(&StoreUpdate::Refused {
+        objective_id: oid(),
+        surface: ActionSurface::Review,
+        refusal: Refusal {
+            message: message.into(),
+            details: "invalid_lifecycle: Wait until the agent has stopped.".into(),
+        },
+    }));
+    // Mirrored in the Objective status; never a second time as a global notice.
+    assert!(effects.updates.contains(&StoreUpdate::CommandStatus {
+        objective_id: oid(),
+        status: Some(ServiceNotice {
+            level: NoticeLevel::Warning,
+            code: REFUSAL_NOTICE_CODE.into(),
+            message: message.into(),
+        }),
+    }));
+    assert!(
+        !effects
+            .updates
+            .iter()
+            .any(|u| matches!(u, StoreUpdate::Notice(_)))
     );
     assert!(effects.follow_ups.contains(&Intent::LoadObjective {
         objective_id: oid()
@@ -798,11 +827,10 @@ fn command_success_clears_and_rejection_sets_the_status_beside_actions() {
         objective_id: oid(),
         status: None
     }));
-}
-
-/// The context `request` builds for `intent`.
-fn context_of(intent: &Intent) -> Context {
-    request(intent).unwrap().unwrap().1
+    assert!(ok.updates.contains(&StoreUpdate::RefusalCleared {
+        objective_id: oid(),
+        surface: ActionSurface::Review,
+    }));
 }
 
 #[test]
@@ -922,6 +950,7 @@ fn stale_reference_names_the_stale_drafts() {
         objective_id: Some(oid()),
         draft_id: None,
         batch: vec![DraftId::new(D), DraftId::new(C)],
+        surface: Some(ActionSurface::Feedback),
     };
     let rejection = Rejection::new(
         ErrorCode::StaleReference,
@@ -929,15 +958,23 @@ fn stale_reference_names_the_stale_drafts() {
         &format!("stale drafts: {D}"),
     );
     let effects = rejection_effects(&context, &rejection);
-    let notice = effects
+    let message = effects
         .updates
         .iter()
         .find_map(|u| match u {
-            StoreUpdate::Notice(n) => Some(n.message.clone()),
+            StoreUpdate::Refused {
+                surface: ActionSurface::Feedback,
+                refusal,
+                ..
+            } => Some(refusal.message.clone()),
             _ => None,
         })
         .unwrap();
-    assert!(notice.contains("Stale draft: 3b1c2d3e."), "{notice}");
+    assert!(message.contains("Stale draft: 3b1c2d3e."), "{message}");
+    assert!(
+        !message.contains(D),
+        "draft ids stay in the details: {message}"
+    );
     assert!(effects.follow_ups.contains(&Intent::LoadDrafts {
         objective_id: oid()
     }));
@@ -950,15 +987,51 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
         objective_id: Some(oid()),
         draft_id: Some(DraftId::new(D)),
         batch: Vec::new(),
+        surface: Some(ActionSurface::Drafts),
     };
     let effects = rejection_effects(
         &context,
-        &Rejection::new(ErrorCode::Conflict, SafeAction::Refresh, "revision moved"),
+        &Rejection::new(
+            ErrorCode::DurabilityFailure,
+            SafeAction::QueryOperation,
+            "The draft was not written (injected test fault).",
+        ),
     );
-    assert!(effects.updates.contains(&StoreUpdate::DraftSaveFailed {
-        draft_id: DraftId::new(D),
-        message: "Revision moved.".into()
-    }));
+    // Shown once, beside the draft: no Objective status, no notice.
+    assert_eq!(
+        effects.updates,
+        vec![StoreUpdate::DraftSaveRefused {
+            draft_id: DraftId::new(D),
+            refusal: Refusal {
+                message: "The draft was not written (injected test fault).".into(),
+                details: "durability_failure: The draft was not written (injected test fault)."
+                    .into(),
+            },
+        }]
+    );
+    let deleted = rejection_effects(
+        &context_of(&Intent::DeleteDraft {
+            draft_id: DraftId::new(D),
+            expected_revision: 2,
+        }),
+        &Rejection::new(
+            ErrorCode::Conflict,
+            SafeAction::Refresh,
+            "The draft was changed elsewhere. Refresh and try again.",
+        ),
+    );
+    assert_eq!(
+        deleted.updates,
+        vec![StoreUpdate::DraftDeleteRefused {
+            draft_id: DraftId::new(D),
+            refusal: Refusal {
+                message:
+                    "Couldn't delete draft. The draft was changed elsewhere. Refresh and try again."
+                        .into(),
+                details: "conflict: The draft was changed elsewhere. Refresh and try again.".into(),
+            },
+        }]
+    );
 }
 
 #[test]
@@ -1107,14 +1180,20 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
         &context,
         &wire::Rejection::new(
             wire::ErrorCode::InvalidLifecycle,
-            wire::SafeAction::Refresh,
-            "the Objective has no worktree yet",
+            wire::SafeAction::None,
+            "Start the agent once to create this Objective's worktree.",
         ),
     );
-    assert!(matches!(
-        &refused.updates[..],
-        [StoreUpdate::TerminalProblem { message, .. }] if message.contains("no worktree")
-    ));
+    assert_eq!(
+        refused.updates,
+        vec![StoreUpdate::TerminalRefused {
+            objective_id: oid(),
+            refusal: Refusal {
+                message: "Couldn't open terminal. Start the agent once to create this Objective's worktree.".into(),
+                details: "invalid_lifecycle: Start the agent once to create this Objective's worktree.".into(),
+            },
+        }]
+    );
     let stopped = reply_effects(&Context::Stop, ReplyData::ServiceStop(wire::Empty {}));
     assert_eq!(stopped.updates, vec![StoreUpdate::ServiceStopped]);
     let closed =

@@ -272,6 +272,10 @@ fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetai
             removed,
         },
         unsent_drafts: 5,
+        terminal_open: Some(super::model::TerminalOpenAction {
+            enabled: true,
+            reason: None,
+        }),
         history_deleted: false,
         available_actions: vec![
             action(ActionName::ReviewFreeze, Some("Already frozen as Candidate 2")),
@@ -382,6 +386,12 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
         },
         unsent_drafts: 0,
         available_actions: actions,
+        terminal_open: Some(super::model::TerminalOpenAction {
+            enabled: !summary.lifecycle.is_archived(),
+            reason: summary.lifecycle.is_archived().then(|| {
+                "Terminals open only while the Objective is in progress or under review.".to_owned()
+            }),
+        }),
         history_deleted: false,
     }
 }

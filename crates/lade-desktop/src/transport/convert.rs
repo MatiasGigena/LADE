@@ -182,7 +182,7 @@ fn badge(b: wire::Badge) -> view::Badge {
     }
 }
 
-/// `None` for `terminal.open`, which is not an Objective operation of the view.
+/// `None` for `terminal.open`, which the view keeps apart (`ObjectiveDetail::terminal_open`).
 fn action_name(a: wire::ActionName) -> Option<view::ActionName> {
     Some(match a {
         wire::ActionName::ObjectiveUpdateIntent => view::ActionName::ObjectiveUpdateIntent,
@@ -440,6 +440,14 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
                 })
             })
             .collect(),
+        terminal_open: d
+            .available_actions
+            .iter()
+            .find(|a| a.action == wire::ActionName::TerminalOpen)
+            .map(|a| view::TerminalOpenAction {
+                enabled: a.enabled,
+                reason: a.reason.clone(),
+            }),
         history_deleted: d.history_deleted == Some(true),
     }
 }
