@@ -132,24 +132,54 @@ hard are 32, forks stop with `EAGAIN` below 32, raising it fails).
 
 ### cgroup v2 placement
 
-`adapters::sandbox::cgroup`. When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), its cgroup is
-delegated: systemd sets the `user.delegate` (or `trusted.delegate`) extended attribute and chowns it to the service
-user. `detect` checks, in order: a cgroup v2 membership line (`0::<path>` in `/proc/self/cgroup`), cgroup2 mounted at
-`/sys/fs/cgroup`, the delegation attribute, ownership by the service's uid, and the `memory pids cpu` controllers.
-Then it moves `laded` into `<unit>/service` (cgroup v2 forbids processes in inner nodes), enables the controllers on
-`<unit>` and `<unit>/sandboxes`, and each Objective gets `<unit>/sandboxes/<objective>` with the limits above and one
-leaf per sandbox. The launcher, terminals and verification move the outer bwrap and the PID-namespace init into the
-leaf while the gate is closed (nothing else exists yet), verify membership through `/proc/<pid>/cgroup`, then open
-the gate, so every descendant is accounted. The leaf is killed (`cgroup.kill`) and removed after the sandbox ends;
-leftovers are removed at the next start. Any failed check gives the explicit diagnostic `cgroup limits unavailable
-(<reason>); sandboxes use the prlimit limits only` and the prlimit-only behaviour; LADE never writes into a cgroup it
-was not delegated and never refuses to start for lack of delegation.
+`adapters::sandbox::cgroup`. When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), the systemd user
+manager delegates the unit's cgroup to it. `detect` checks, in order, before writing anything:
 
-Evidence: `tests/adapters_cgroup.rs` — the fallback reasons (v1/hybrid, not mounted, not delegated: nothing
-written), the exact files written into a delegated subtree (on a directory standing in for cgroupfs), missing
-controllers. `delegated_cgroup_contains_and_limits_a_sandbox` exercises real placement and `pids.max` only with
-`LADE_TEST_DELEGATED_CGROUP=1` inside a delegated scope (`systemd-run --user --scope -p Delegate=yes …`); it has
-**not been executed** (neither CI nor the development host has a delegated cgroup v2; the host is cgroup v1/hybrid).
+1. a cgroup v2 membership line (`0::<path>` in `/proc/self/cgroup`) and cgroup2 mounted at `/sys/fs/cgroup`;
+2. the cgroup is owned by the service's uid;
+3. the cgroup's manager states the delegation: either the `trusted.delegate` or `user.delegate` extended attribute is
+   `1` (set by the **system** manager, for example on `user@<uid>.service`), or the cgroup is a `.service` or
+   `.scope` below `user@<euid>.service` and the user manager itself reports that unit with exactly this
+   `ControlGroup=` and `Delegate=yes` (`/usr/bin/systemctl --user show`, empty environment but `XDG_RUNTIME_DIR`,
+   5 s bound). The user manager of systemd 255 sets **no** delegation attribute on the units it delegates (checked on
+   the development host: neither a `Delegate=yes` scope nor a `Delegate=memory pids cpu` service gets one), so with
+   the attribute check alone every user unit, the shipped one included, fell back;
+4. `cgroup.procs`, `cgroup.threads` and `cgroup.subtree_control` are writable, and `cgroup.controllers` offers
+   `memory pids cpu`.
+
+Ownership and writability alone are not evidence: below `user@<uid>.service` every cgroup belongs to the user,
+including a terminal's app scope and any service without `Delegate=`. Writing there would move another
+application's processes, or leave the limits to a manager that considers the cgroup's `cgroup.subtree_control` its
+own and may rewrite it, silently dropping the `pids`/`memory` controllers and every sandbox limit with them. A
+`user.delegate` attribute can be set by the user on their own cgroups; it is accepted because it is systemd's
+documented signal and setting it is the same principal opting in, not an escalation.
+
+Then it moves `laded`, and any other process of the delegated cgroup, into `<unit>/service` (cgroup v2 forbids
+processes in inner nodes), enables the controllers on `<unit>` and `<unit>/sandboxes`, and proves enforcement before
+relying on it: a probe cgroup `<unit>/sandboxes/delegation-probe` must be on cgroupfs v2, offer the three controllers
+and take `pids.max` = 1, and a shell moved into it must be refused its next fork (`pids.events` `max` ≥ 1); the probe
+is removed. Each Objective gets `<unit>/sandboxes/<objective>` with the limits above and one leaf per sandbox. The
+launcher, terminals and verification move the outer bwrap and the PID-namespace init into the leaf while the gate is
+closed (nothing else exists yet), verify membership through `/proc/<pid>/cgroup`, then open the gate, so every
+descendant is accounted. The leaf is killed (`cgroup.kill`) and removed after the sandbox ends; leftovers are removed
+at the next start. On success the journal says how delegation was established (`cgroup v2 delegated (systemd user
+manager: lade.service has Delegate=yes)`). Any failed check gives the explicit diagnostic `cgroup limits unavailable
+(<reason>); sandboxes use the prlimit limits only` and the prlimit-only behaviour; LADE never writes into a cgroup it
+was not delegated and never refuses to start for lack of delegation. A failure after the move (controllers refused,
+the probe) leaves `laded` in `<unit>/service`, inside its own delegated cgroup.
+
+Evidence: `tests/adapters_cgroup.rs` — the fallback reasons (v1/hybrid, not mounted, not a user-manager unit, the
+manager reporting `Delegate=no`, another `ControlGroup=`, no answer: nothing written), a delegate attribute accepted
+without asking the manager, non-writable interface files, the exact files written into a delegated subtree (on a
+directory standing in for cgroupfs), missing controllers, a cgroup that cannot be emptied (no controllers enabled).
+`delegated_cgroup_contains_and_limits_a_sandbox` exercises real detection, the enforcement probe, placement and
+`pids.max` with `LADE_TEST_DELEGATED_CGROUP=1` inside a delegated cgroup:
+`LADE_TEST_DELEGATED_CGROUP=1 systemd-run --user --scope -p Delegate=yes ./scripts/cargo test -p lade-system --locked
+--test adapters_cgroup`. It passes on the development host (cgroup v2, systemd 255, kernel 7.0) in a transient
+`Delegate=yes` scope and in a transient service with `Delegate=memory pids cpu`; in a scope without `Delegate=` and
+in the desktop's app scope it falls back with `the systemd user manager reports Delegate=no` and writes nothing.
+`laded serve` in a transient service with the shipped unit's `Delegate=` and hardening options logs the delegated
+subtree. Not executed: the installed `lade.service` itself, and `memory.max` enforcement (no OOM test).
 
 ### Seccomp filter
 
@@ -429,8 +459,9 @@ interrupts it.
   an Objective with a worker, terminals and checks can hold several times 512) and not for root; the per-Objective
   `pids.max` applies only with delegation.
 - **CPU**: no CPU ceiling for workers or terminals (§7 proposes none; `cpu.max` is configurable).
-- **Delegated cgroup path unexecuted**: the real placement test needs a delegated cgroup v2, which neither CI nor the
-  development host provides.
+- **Delegated cgroup path partly executed**: the real placement and `pids.max` test passes on the development host
+  in transient delegated units (`systemd-run --user`); CI has no delegated cgroup v2, the installed unit has not been
+  run, and `memory.max` enforcement is untested.
 - **Supervisor-loss window**: a sandbox whose supervisor died after opening the gate but before bwrap armed its
   parent-death signals keeps running until the next `laded` start (startup sweep by marker) or until the unit stops.
 - **Seccomp scope**: a denylist; `ptrace` and `io_uring` are not filtered; the remaining kernel attack surface is that

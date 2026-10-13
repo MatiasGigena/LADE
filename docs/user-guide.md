@@ -329,8 +329,10 @@ other project data; its history is kept until you delete it. Retention refs in y
   supported mechanism; LADE does not change host security settings. Inspection and review keep working without the
   sandbox, but agents and checks do not run.
 - **"cgroup limits unavailable (…)" in the journal.** The per-Objective memory/process limits need the systemd unit
-  (`Delegate=memory pids cpu`) on a cgroup v2 system; the reason names what is missing. LADE keeps working with
-  per-process limits; `LADE_CGROUPS=off` disables the cgroup limits explicitly.
+  (`Delegate=memory pids cpu`) on a cgroup v2 system; LADE asks the systemd user manager whether its unit is
+  delegated (`systemctl --user show -p Delegate lade.service` must say `yes`) and checks that the limits take
+  effect. The reason names what is missing. LADE keeps working with per-process limits; `LADE_CGROUPS=off` disables
+  the cgroup limits explicitly.
 - **"Worker package not found" / "node runtime not found" in the journal.** The unit sets `LADE_WORKER_DIR` and a
   `PATH` containing the Node 22 recorded at install time. If you moved or upgraded Node, re-run the installer
   (optionally with `--node /path/to/node`). The launchers `~/.local/bin/laded` and `~/.local/bin/lade-desktop`

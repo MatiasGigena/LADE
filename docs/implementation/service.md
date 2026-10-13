@@ -346,15 +346,18 @@ changing them is Matias's decision). Enforcement per sandbox is described in
   check. This is a **monitor, not a quota**: writes between two checks succeed, and the disk itself is not reserved.
 - **cgroup v2 placement.** At start `laded` (the binary, not `service::start`) calls
   `adapters::sandbox::cgroup::detect`. When the unit's cgroup is delegated (`Delegate=memory pids cpu` in
-  `packaging/systemd/lade.service`: systemd marks it with the `user.delegate`/`trusted.delegate` extended attribute,
-  owned by the service user, with the three controllers available), `laded` moves itself into `<unit
-  cgroup>/service`, enables the controllers, removes sandbox cgroups a previous instance left, and passes the subtree
+  `packaging/systemd/lade.service`; delegation is stated either by a `trusted.delegate`/`user.delegate` extended
+  attribute, which only the system manager sets, or by the systemd user manager reporting `Delegate=yes` for the unit
+  whose `ControlGroup=` is this cgroup; the cgroup is owned by the service user, its interface files writable, the
+  three controllers available; see [execution safety](execution-safety.md#cgroup-v2-placement)), `laded` moves
+  itself (and anything else in the cgroup) into `<unit cgroup>/service`, enables the controllers, proves with a probe
+  cgroup that `pids.max` refuses a fork, removes sandbox cgroups a previous instance left, and passes the subtree
   to the launcher, the terminals and verification runs: each Objective gets `<unit cgroup>/sandboxes/<objective>`
   with `OBJECTIVE_CGROUP_LIMITS` (`memory.max` 4 GiB, `pids.max` 512, `cpu.max` unlimited), shared by its worker,
   terminals and verification runs in one leaf each (`worker-<generation>`, `terminal-<id>`, `verify-<id>`). A
   sandbox is moved into its leaf while its launch gate is still closed; when it ends the leaf is killed
   (`cgroup.kill`) and removed. Without delegation (cgroup v1/hybrid, not started by the unit, a non-delegated cgroup,
-  missing controllers, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
+  missing controllers, a failed probe, `LADE_CGROUPS=off`) `laded` logs `cgroup limits unavailable (<reason>); sandboxes use the
   prlimit limits only` and continues; it never writes into a cgroup it was not delegated. A memory OOM kill inside a
   sandbox is logged (`sandbox memory limit reached`) and surfaces as the worker's unexpected exit.
 
