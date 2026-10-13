@@ -27,8 +27,11 @@ Environment=PATH=@NODE_DIR@:/usr/local/bin:/usr/bin:/bin
 KillMode=control-group
 # laded manages its own cgroup subtree: it moves itself into <unit>/service and runs each
 # Objective's sandboxes in <unit>/sandboxes/<objective>/<leaf> with memory.max/pids.max/cpu.max
-# (crates/lade-system/src/adapters/sandbox/limits.rs). Without these controllers it logs why and
-# falls back to the prlimit limits. Systemd still kills the whole subtree on stop.
+# (crates/lade-system/src/adapters/sandbox/limits.rs). The user manager marks no delegate xattr on
+# its units, so laded confirms the delegation with `systemctl --user show` (Delegate=yes for the unit
+# whose ControlGroup= is its own cgroup), so laded must start in the unit's own cgroup (no
+# DelegateSubgroup=). Without delegation or these controllers it logs why and falls back to the
+# prlimit limits. Systemd still kills the whole subtree on stop.
 Delegate=memory pids cpu
 KillSignal=SIGTERM
 TimeoutStopSec=15
