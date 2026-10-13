@@ -461,12 +461,9 @@ impl Workbench {
                 return;
             }
             Load::Failed(message) => {
-                let (text, details) = panel::refusal_parts(message);
-                self.files_status.append(&inline_message(
-                    MessageKind::Error,
-                    &format!("The Change Set could not be loaded: {text}"),
-                    details.as_deref(),
-                ));
+                // A plain sentence ("Couldn't load Change Set. …"), never an error code.
+                self.files_status
+                    .append(&inline_message(MessageKind::Error, message, None));
                 let retry = widgets::button("Retry", &[]);
                 let controller = self.controller.clone();
                 retry.connect_clicked(move |_| controller.refresh_changes());

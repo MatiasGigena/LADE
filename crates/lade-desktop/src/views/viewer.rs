@@ -20,7 +20,6 @@ use super::widgets::{
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{FileEncoding, Load, Side};
-use crate::presentation::panel;
 use crate::presentation::store::{Change, ViewerContent, ViewerMode};
 use crate::presentation::syntax::{self, Highlight};
 use crate::presentation::text_map::{self, TextPos, ViewLine, ViewLineKind};
@@ -470,12 +469,9 @@ impl Viewer {
             ViewerContent::Failed(message) => {
                 widgets::clear(&self.message);
                 self.message.set_valign(gtk::Align::Start);
-                let (text, details) = panel::refusal_parts(&message);
-                self.message.append(&inline_message(
-                    MessageKind::Error,
-                    &format!("{} could not be loaded: {text}", key.path.display),
-                    details.as_deref(),
-                ));
+                // A plain sentence ("Couldn't load diff. …"); the path is the toolbar's.
+                self.message
+                    .append(&inline_message(MessageKind::Error, &message, None));
                 self.stack.set_visible_child_name("message");
                 let retry = widgets::button("Retry", &[]);
                 let controller = self.controller.clone();

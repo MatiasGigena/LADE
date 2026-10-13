@@ -26,10 +26,10 @@ use crate::presentation::controller::Controller;
 use crate::presentation::drafts::SaveStatus;
 use crate::presentation::format;
 use crate::presentation::model::{
-    ActionAvailability, ActionName, CandidateStatus, DeliveryMode, DraftId, NoticeLevel,
-    ObjectiveDetail, ObjectiveId, Timestamp, VerificationState,
+    ActionAvailability, ActionName, ActionSurface, CandidateStatus, DeliveryMode, DraftId,
+    NoticeLevel, ObjectiveDetail, ObjectiveId, Timestamp, VerificationState,
 };
-use crate::presentation::panel::{self, PanelAction, Surface, Tone};
+use crate::presentation::panel::{self, PanelAction, Tone};
 use crate::presentation::store::{Change, InspectorTab, MainView};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -53,6 +53,8 @@ pub struct Inspector {
     evidence: gtk::Box,
     drafts_box: gtk::Box,
     drafts_heading: gtk::Box,
+    /// The latest refused draft deletion, below the Drafts heading.
+    drafts_refusal: gtk::Box,
     submit_box: gtk::Box,
     drafts: RefCell<HashMap<DraftId, DraftWidgets>>,
     /// The latest local error of an Overview action, shown beside the Overview's actions.
@@ -108,6 +110,8 @@ impl Inspector {
 
         let drafts_heading = vbox(space::TIGHT);
         feedback.append(&drafts_heading);
+        let drafts_refusal = vbox(0);
+        feedback.append(&drafts_refusal);
         let drafts_box = vbox(space::SECTION);
         feedback.append(&drafts_box);
         let submit_box = vbox(space::GROUP);
@@ -127,6 +131,7 @@ impl Inspector {
             evidence,
             drafts_box,
             drafts_heading,
+            drafts_refusal,
             submit_box,
             drafts: RefCell::new(HashMap::new()),
             last_error: RefCell::new(None),
@@ -153,6 +158,7 @@ impl Inspector {
         inspector.render_overview();
         inspector.render_evidence();
         inspector.reconcile_drafts();
+        inspector.render_drafts_refusal();
         inspector.render_submit();
         inspector.sync_tab();
         inspector
@@ -180,6 +186,7 @@ impl Inspector {
                 }
                 Change::Detail(id) if mine(id) => {
                     (overview, evidence, submit) = (true, true, true);
+                    self.render_drafts_refusal();
                 }
                 Change::Drafts(id) if mine(id) => {
                     drafts = true;
@@ -202,6 +209,7 @@ impl Inspector {
         }
         if drafts {
             self.reconcile_drafts();
+            self.render_drafts_refusal();
         }
         if submit {
             widgets::rebuild_preserving_focus(&self.submit_box.clone(), || self.render_submit());
@@ -244,27 +252,37 @@ impl Inspector {
         }
     }
 
-    /// The selected Objective's latest command status when its action lives on `surface`: a
-    /// refusal as an inline message (service code in Details), progress as a quiet line.
-    fn command_status(&self, objective: &ObjectiveId, surface: Surface) -> Option<gtk::Widget> {
-        let status = self
-            .controller
-            .store
-            .state()
-            .command_status
-            .get(objective)
-            .cloned()
-            .filter(|s| panel::command_surface(&s.message) == Some(surface))?;
-        let (text, details) = panel::refusal_parts(&status.message);
-        Some(match status.level {
-            NoticeLevel::Info => label(&text, &["meta"]).upcast(),
-            NoticeLevel::Warning => {
-                inline_message(MessageKind::Warning, &text, details.as_deref()).upcast()
-            }
-            NoticeLevel::Error => {
-                inline_message(MessageKind::Error, &text, details.as_deref()).upcast()
-            }
-        })
+    /// The latest refusal of a command issued from `surface` for `objective`, as an inline
+    /// message beside that surface's controls (the error code and raw detail in Details).
+    fn refusal(&self, objective: &ObjectiveId, surface: ActionSurface) -> Option<gtk::Box> {
+        let state = self.controller.store.state();
+        let refusal = state.last_refusal(objective, surface)?;
+        Some(inline_message(
+            MessageKind::Warning,
+            &refusal.message,
+            Some(&refusal.details),
+        ))
+    }
+
+    /// The transport's progress note on the Objective's latest command ("Checking outcome…",
+    /// recovered after a dropped connection), as a quiet line. Warnings are the global notice's.
+    fn command_note(&self, objective: &ObjectiveId) -> Option<gtk::Label> {
+        let state = self.controller.store.state();
+        let note = state
+            .command_note(objective)
+            .filter(|n| n.level == NoticeLevel::Info)?;
+        Some(label(&note.message, &["meta"]))
+    }
+
+    /// The latest refused draft deletion of the selected Objective, below the Drafts heading.
+    fn render_drafts_refusal(&self) {
+        widgets::clear(&self.drafts_refusal);
+        let selected = self.controller.store.state().ui.selected.clone();
+        if let Some(message) = selected.and_then(|o| self.refusal(&o, ActionSurface::Drafts)) {
+            self.drafts_refusal.append(&message);
+        }
+        self.drafts_refusal
+            .set_visible(self.drafts_refusal.first_child().is_some());
     }
 
     fn detail(&self) -> Option<ObjectiveDetail> {
@@ -320,8 +338,13 @@ impl Inspector {
         if let Some(error) = self.last_error.borrow().as_ref() {
             next_area.append(&inline_message(MessageKind::Error, error, None));
         }
-        if let Some(status) = self.command_status(&summary.objective_id, Surface::Overview) {
-            next_area.append(&status);
+        for surface in [ActionSurface::Review, ActionSurface::Closing] {
+            if let Some(refusal) = self.refusal(&summary.objective_id, surface) {
+                next_area.append(&refusal);
+            }
+        }
+        if let Some(note) = self.command_note(&summary.objective_id) {
+            next_area.append(&note);
         }
         if next_area.first_child().is_some() {
             self.overview.append(&next_area);
@@ -388,6 +411,9 @@ impl Inspector {
                 }
             },
         ));
+        if let Some(refusal) = self.refusal(&summary.objective_id, ActionSurface::Intent) {
+            intent.append(&refusal);
+        }
         self.overview.append(&intent);
 
         // Details: identities and metadata, collapsed.
@@ -779,8 +805,8 @@ impl Inspector {
         if let Some(error) = self.check_error.borrow().as_ref() {
             run.append(&inline_message(MessageKind::Error, error, None));
         }
-        if let Some(status) = self.command_status(&detail.summary.objective_id, Surface::Evidence) {
-            run.append(&status);
+        if let Some(refusal) = self.refusal(&detail.summary.objective_id, ActionSurface::Checks) {
+            run.append(&refusal);
         }
         run.append(&label(
             "Runs in an isolated verification copy of the current candidate; it cannot change the candidate.",
@@ -947,6 +973,13 @@ impl Inspector {
             }
         }
         w.status.set_text(&status.label());
+        // A refused save keeps the error code and raw detail out of the sentence, in its tooltip.
+        let details = match &status {
+            SaveStatus::Failed { details, .. } if !details.is_empty() => Some(details.as_str()),
+            _ => None,
+        };
+        w.status.set_tooltip_text(details);
+        set_accessible_description(&w.status, details.unwrap_or(""));
         for class in ["save-failed", "save-warning", "save-ok"] {
             w.status.remove_css_class(class);
         }
@@ -1026,12 +1059,25 @@ impl Inspector {
 
     fn render_submit(self: &Rc<Self>) {
         widgets::clear(&self.submit_box);
+        // A refused submission keeps its drafts, so the section below is there to show it;
+        // otherwise it stays here alone.
+        let refusal = self
+            .controller
+            .store
+            .state()
+            .ui
+            .selected
+            .clone()
+            .and_then(|o| self.refusal(&o, ActionSurface::Feedback));
         // Nothing to submit: the Drafts heading already says how to start one.
         let Some(batch) = self
             .controller
             .feedback_batch()
             .filter(|b| !b.items.is_empty())
         else {
+            if let Some(refusal) = refusal {
+                self.submit_box.append(&refusal);
+            }
             return;
         };
         let s = section("Submit feedback");
@@ -1092,6 +1138,9 @@ impl Inspector {
                 }
             },
         ));
+        if let Some(refusal) = refusal {
+            s.append(&refusal);
+        }
         self.submit_box.append(&s);
     }
 

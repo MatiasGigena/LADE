@@ -15,9 +15,8 @@ use super::layout::{LayoutClass, Region};
 use super::model::{
     ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
     DeliveryMode, Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, NoticeLevel,
-    ObjectiveDetail, ObjectiveId, ObjectiveSummary, REFUSAL_NOTICE_CODE, Reference, Refusal,
-    RepoPath, SearchResults, ServiceNotice, Settings, Side, VerificationSummary, Workspace,
-    WorkspaceId,
+    ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath, SearchResults,
+    ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
 };
 use super::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
@@ -351,9 +350,9 @@ pub struct PresentationState {
     /// Notices ever received; keeps growing after `notices` is capped, so "new since dismissed"
     /// stays decidable.
     pub notices_received: usize,
-    /// Latest command outcome per Objective (a refusal mirror, coded
-    /// [`REFUSAL_NOTICE_CODE`], or "Checking outcome…" from the transport). Prefer
-    /// [`Self::last_refusal`] per surface and [`Self::command_note`] for the rest.
+    /// The transport's note on each Objective's latest command whose reply was lost ("Checking
+    /// outcome…", recovered, uncertain); read through [`Self::command_note`]. Refusals are kept
+    /// per surface instead ([`Self::last_refusal`]).
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
     /// Latest refusal per Objective and surface; cleared when that surface's command succeeds
     /// or the Objective changes (a new revision).
@@ -373,6 +372,19 @@ impl Default for PresentationState {
     fn default() -> Self {
         Self::new(ConnectionState::Connecting)
     }
+}
+
+/// The views to refresh when the refusal kept for `objective_id` and `surface` changes.
+fn refusal_changes(objective_id: ObjectiveId, surface: ActionSurface) -> Vec<Change> {
+    let mut changes = vec![Change::Detail(objective_id.clone())];
+    match surface {
+        ActionSurface::Terminal => changes.push(Change::Terminal(objective_id)),
+        ActionSurface::Drafts | ActionSurface::Feedback => {
+            changes.push(Change::Drafts(objective_id));
+        }
+        _ => {}
+    }
+    changes
 }
 
 impl PresentationState {
@@ -536,12 +548,10 @@ impl PresentationState {
             .map(|kept| &kept.refusal)
     }
 
-    /// `command_status` without refusal mirrors: the transport's outcome notes ("Checking
-    /// outcome…", an uncertain outcome) for surfaces that show refusals via [`Self::last_refusal`].
+    /// The transport's outcome note on the Objective's latest command ("Checking outcome…",
+    /// an uncertain or recovered outcome), cleared when a command of it succeeds.
     pub fn command_note(&self, objective_id: &ObjectiveId) -> Option<&ServiceNotice> {
-        self.command_status
-            .get(objective_id)
-            .filter(|n| n.code != REFUSAL_NOTICE_CODE)
+        self.command_status.get(objective_id)
     }
 
     /// Keeps `refusal` for `objective_id` and `surface`; the Change list for views to refresh.
@@ -556,15 +566,7 @@ impl PresentationState {
             (objective_id.clone(), surface),
             KeptRefusal { refusal, revision },
         );
-        let mut changes = vec![Change::Detail(objective_id.clone())];
-        match surface {
-            ActionSurface::Terminal => changes.push(Change::Terminal(objective_id)),
-            ActionSurface::Drafts | ActionSurface::Feedback => {
-                changes.push(Change::Drafts(objective_id));
-            }
-            _ => {}
-        }
-        changes
+        refusal_changes(objective_id, surface)
     }
 
     /// The Objective is now at `revision`: refusals made against another revision are dropped.
@@ -581,18 +583,6 @@ impl PresentationState {
                 }
             }
         });
-    }
-
-    /// The legacy Objective status line for a refusal (Overview), until surfaces show their own.
-    fn mirror_refusal(&mut self, objective_id: &ObjectiveId, refusal: &Refusal) {
-        self.command_status.insert(
-            objective_id.clone(),
-            ServiceNotice {
-                level: NoticeLevel::Warning,
-                code: REFUSAL_NOTICE_CODE.to_owned(),
-                message: refusal.message.clone(),
-            },
-        );
     }
 
     /// A terminal request failed. A terminal that never opened leaves no session behind (the
@@ -935,14 +925,14 @@ impl PresentationState {
             StoreUpdate::DraftDeleteRefused { draft_id, refusal } => {
                 match self.draft_mut(&draft_id).map(|d| d.objective_id.clone()) {
                     Some(objective_id) => {
-                        self.mirror_refusal(&objective_id, &refusal);
                         self.keep_refusal(objective_id, ActionSurface::Drafts, refusal)
                     }
                     // A draft this window no longer lists: nothing else can show it.
                     None => {
+                        let code = refusal.details.split(':').next().unwrap_or_default();
                         self.push_notice(ServiceNotice {
                             level: NoticeLevel::Warning,
-                            code: REFUSAL_NOTICE_CODE.to_owned(),
+                            code: code.to_owned(),
                             message: refusal.message,
                         });
                         vec![Change::Notices]
@@ -1047,13 +1037,7 @@ impl PresentationState {
                 objective_id,
                 surface,
             } => match self.refusals.remove(&(objective_id.clone(), surface)) {
-                Some(_) => {
-                    let mut changes = vec![Change::Detail(objective_id.clone())];
-                    if surface == ActionSurface::Terminal {
-                        changes.push(Change::Terminal(objective_id));
-                    }
-                    changes
-                }
+                Some(_) => refusal_changes(objective_id, surface),
                 None => Vec::new(),
             },
             StoreUpdate::Compat(update) => self
@@ -1659,28 +1643,46 @@ mod tests {
     }
 
     #[test]
-    fn command_note_skips_refusal_mirrors() {
+    fn command_notes_are_kept_apart_from_refusals() {
         let mut state = PresentationState::default();
         let o = ObjectiveId::new("o");
-        let note = |code: &str| ServiceNotice {
-            level: crate::presentation::model::NoticeLevel::Warning,
-            code: code.into(),
-            message: "m".into(),
+        let note = ServiceNotice {
+            level: crate::presentation::model::NoticeLevel::Info,
+            code: "query_operation".into(),
+            message: "Checking outcome of “Integrate”…".into(),
         };
         state.apply(StoreUpdate::CommandStatus {
             objective_id: o.clone(),
-            status: Some(note(REFUSAL_NOTICE_CODE)),
+            status: Some(note.clone()),
         });
-        assert!(
-            state.command_status.contains_key(&o),
-            "the Overview keeps working"
+        let changes = state.apply(StoreUpdate::Refused {
+            objective_id: o.clone(),
+            surface: ActionSurface::Review,
+            refusal: refusal("Couldn't integrate. The target moved."),
+        });
+        assert_eq!(changes, [Change::Detail(o.clone())]);
+        assert_eq!(
+            state.command_note(&o),
+            Some(&note),
+            "a refusal is not a note"
         );
-        assert_eq!(state.command_note(&o), None);
         state.apply(StoreUpdate::CommandStatus {
             objective_id: o.clone(),
-            status: Some(note("query_operation")),
+            status: None,
         });
-        assert_eq!(state.command_note(&o), Some(&note("query_operation")));
+        assert_eq!(state.command_note(&o), None);
+        assert!(state.last_refusal(&o, ActionSurface::Review).is_some());
+        // Clearing a feedback refusal refreshes the drafts' surface too.
+        state.apply(StoreUpdate::Refused {
+            objective_id: o.clone(),
+            surface: ActionSurface::Drafts,
+            refusal: refusal("Couldn't delete draft."),
+        });
+        let changes = state.apply(StoreUpdate::RefusalCleared {
+            objective_id: o.clone(),
+            surface: ActionSurface::Drafts,
+        });
+        assert!(changes.contains(&Change::Drafts(o)));
     }
 
     #[test]

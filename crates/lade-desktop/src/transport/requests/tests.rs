@@ -801,14 +801,10 @@ fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface()
             details: "invalid_lifecycle: Wait until the agent has stopped.".into(),
         },
     }));
-    // Mirrored in the Objective status; never a second time as a global notice.
+    // Shown on its surface only: no copy in the Objective's command note, no global notice.
     assert!(effects.updates.contains(&StoreUpdate::CommandStatus {
         objective_id: oid(),
-        status: Some(ServiceNotice {
-            level: NoticeLevel::Warning,
-            code: REFUSAL_NOTICE_CODE.into(),
-            message: message.into(),
-        }),
+        status: None,
     }));
     assert!(
         !effects

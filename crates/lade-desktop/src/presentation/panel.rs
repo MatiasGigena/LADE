@@ -320,67 +320,6 @@ pub fn start_blocker(catalog: Option<&Catalog>) -> Option<String> {
     )
 }
 
-/// Command labels (`Intent::label`) and the surface whose control sends them, the more specific
-/// label first ("Approve extension" before "Approve").
-const COMMAND_SURFACES: [(&str, Surface); 18] = [
-    ("Approve extension", Surface::Activity),
-    ("Reject extension", Surface::Activity),
-    ("Start agent", Surface::Activity),
-    ("Send message", Surface::Activity),
-    ("Resume", Surface::Activity),
-    ("Cancel", Surface::Activity),
-    ("Run check", Surface::Evidence),
-    ("Submit feedback", Surface::Feedback),
-    ("Freeze for review", Surface::Overview),
-    ("Return for revision", Surface::Overview),
-    ("Refresh against target", Surface::Overview),
-    ("Approve", Surface::Overview),
-    ("Integrate", Surface::Overview),
-    ("Complete without changes", Surface::Overview),
-    ("Discard", Surface::Overview),
-    ("Clean up", Surface::Overview),
-    ("Delete Git history", Surface::Overview),
-    ("Edit intent", Surface::Overview),
-];
-
-/// The surface whose action an Objective's latest command status (`command_status`) is about,
-/// read from the label the transport writes at the start of the sentence or in quotes. `None`
-/// for commands without an action surface (draft saves, for example).
-///
-/// Interim: the status carries no action name yet, so its label is matched; a per-surface
-/// refusal from the transport replaces this.
-pub fn command_surface(message: &str) -> Option<Surface> {
-    COMMAND_SURFACES.iter().find_map(|(label, surface)| {
-        let at_start = message
-            .strip_prefix(label)
-            .is_some_and(|rest| rest.starts_with(' '));
-        (at_start || message.contains(&format!("“{label}”"))).then_some(*surface)
-    })
-}
-
-/// A service refusal sentence ("<Action> was refused (<code>) — <detail>. <safe action>") split
-/// into a calm sentence for the developer and the technical part (action and service code) for a
-/// collapsed Details. Any other message is returned whole, with no details.
-pub fn refusal_parts(message: &str) -> (String, Option<String>) {
-    let Some((label, rest)) = message.split_once(" was refused (") else {
-        return (message.to_owned(), None);
-    };
-    let Some((code, after)) = rest.split_once(')') else {
-        return (message.to_owned(), None);
-    };
-    let details = Some(format!("{label} was refused · service code: {code}"));
-    let detail = after.strip_prefix(" — ").unwrap_or("").trim();
-    if detail.is_empty() {
-        return (format!("{label} was not accepted by the service."), details);
-    }
-    let mut chars = detail.chars();
-    let sentence = chars
-        .next()
-        .map(|c| c.to_uppercase().chain(chars).collect())
-        .unwrap_or_default();
-    (sentence, details)
-}
-
 /// Status, sign and the attention reasons ("! Needs attention · check failed · unsent drafts").
 /// Its home is the Objectives list; the compact work area repeats it only because the list is
 /// then another region.
@@ -668,59 +607,6 @@ mod tests {
         );
         let d = with(&base, &all(&[]));
         assert!(agent_pointer(&d, None).is_none());
-    }
-
-    #[test]
-    fn command_statuses_belong_to_the_surface_that_sent_them() {
-        let cases = [
-            (
-                "Freeze for review was refused (invalid_lifecycle).",
-                Some(Surface::Overview),
-            ),
-            (
-                "Checking outcome of “Integrate”… the service is still working on it.",
-                Some(Surface::Overview),
-            ),
-            (
-                "Approve extension was refused (denied).",
-                Some(Surface::Activity),
-            ),
-            (
-                "Approve was refused (stale_candidate) — x.",
-                Some(Surface::Overview),
-            ),
-            (
-                "Start agent was refused (sandbox_unavailable) — no sandbox.",
-                Some(Surface::Activity),
-            ),
-            (
-                "Run check was refused (invalid_request).",
-                Some(Surface::Evidence),
-            ),
-            ("Save draft was refused (conflict).", None),
-            ("Cancelled", None),
-        ];
-        for (message, surface) in cases {
-            assert_eq!(command_surface(message), surface, "{message}");
-        }
-    }
-
-    #[test]
-    fn refusals_read_as_a_sentence_with_the_code_in_details() {
-        let (text, details) = refusal_parts(
-            "Open terminal was refused (invalid_lifecycle) — the Objective has no worktree yet; \
-             start the agent once to create it. Refresh and try again.",
-        );
-        assert!(text.starts_with("The Objective has no worktree yet"));
-        assert!(!text.contains("invalid_lifecycle"));
-        assert!(details.unwrap().contains("invalid_lifecycle"));
-        let (text, details) = refusal_parts("Approve was refused (stale_candidate).");
-        assert_eq!(text, "Approve was not accepted by the service.");
-        assert!(details.unwrap().contains("stale_candidate"));
-        assert_eq!(
-            refusal_parts("The window is not connected."),
-            ("The window is not connected.".to_owned(), None)
-        );
     }
 
     #[test]

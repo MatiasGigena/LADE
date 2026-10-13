@@ -436,10 +436,6 @@ pub struct Refusal {
     pub details: String,
 }
 
-/// `ServiceNotice::code` of a `command_status` entry that mirrors a [`Refusal`] (kept so the
-/// Overview's Objective status still shows refusals until each surface shows its own).
-pub const REFUSAL_NOTICE_CODE: &str = "refused";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectiveDetail {
     pub summary: ObjectiveSummary,

@@ -12,8 +12,8 @@ use crate::presentation::compat::CompatUpdate;
 use crate::presentation::format::sentence;
 use crate::presentation::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::model::{
-    self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, REFUSAL_NOTICE_CODE,
-    Refusal, RepoPath, SearchScope, ServiceNotice, Side,
+    self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath,
+    SearchScope, ServiceNotice, Side,
 };
 use crate::presentation::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
@@ -1078,8 +1078,8 @@ pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
 }
 
 /// Maps a rejection for `context` onto the surface that asked. Objective-scoped command
-/// refusals go to the store only (per Objective and surface, mirrored in the Objective status);
-/// the global notice is for refusals no Objective surface can show.
+/// refusals go to the store only, per Objective and surface; the global notice is for refusals
+/// no Objective surface can show.
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
     let code = convert::error_code(rejection.code).to_owned();
@@ -1161,14 +1161,10 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                     refusal: refused,
                 }),
                 (Some(o), None) => {
-                    // Mirrored in the Objective status until each surface shows its own.
+                    // The outcome is known: an earlier "Checking outcome…" note no longer applies.
                     updates.push(StoreUpdate::CommandStatus {
                         objective_id: o.clone(),
-                        status: Some(ServiceNotice {
-                            level: NoticeLevel::Warning,
-                            code: REFUSAL_NOTICE_CODE.to_owned(),
-                            message: refused.message.clone(),
-                        }),
+                        status: None,
                     });
                     updates.push(StoreUpdate::Refused {
                         objective_id: o.clone(),
