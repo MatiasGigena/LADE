@@ -72,9 +72,31 @@ pub struct ProviderView {
 }
 
 impl ProviderView {
-    /// Picker entry: name, id and status.
+    /// Picker entry: the provider's name only (the id when it has none). Its id, access status
+    /// and authentication are the [`ProviderView::subtitle`].
     pub fn picker_label(&self) -> String {
-        format!("{} ({}) — {}", self.name, self.id, self.status.label())
+        if self.name.trim().is_empty() {
+            self.id.clone()
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// The secondary line under the chosen provider: id, access status, authentication and how
+    /// many models it lists.
+    pub fn subtitle(&self) -> String {
+        let auth = if self.auth.is_empty() {
+            "no authentication".to_owned()
+        } else {
+            self.auth.join(", ")
+        };
+        format!(
+            "{} · {} · {auth} · {} model{}",
+            self.id,
+            self.status.label(),
+            self.models,
+            if self.models == 1 { "" } else { "s" }
+        )
     }
 }
 
@@ -290,6 +312,44 @@ pub enum UiAnswerView {
     Cancel,
 }
 
+/// How far the model picker is from a model that Start agent (or Apply model and thinking) can
+/// use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Readiness {
+    /// The service has not reported its catalogue yet.
+    CatalogLoading,
+    /// The catalogue lists no provider; `error` is the service's reason, when it gave one.
+    NoProviders { error: Option<String> },
+    /// Providers are listed but none is chosen.
+    NoProviderChosen,
+    /// The chosen provider's models (named by the provider's name) are being loaded.
+    ModelsLoading { provider: String },
+    /// The chosen provider lists no models.
+    NoModels { provider: String },
+    /// A model is chosen.
+    Ready {
+        model: ModelView,
+        thinking: ThinkingLevel,
+    },
+}
+
+impl Readiness {
+    /// Why there is no usable model yet, as one short sentence; `None` when ready.
+    pub fn problem(&self) -> Option<String> {
+        Some(match self {
+            Self::CatalogLoading => "Loading the available models…".to_owned(),
+            Self::NoProviders { error: Some(_) } => "LADE can't load models right now.".to_owned(),
+            Self::NoProviders { error: None } => "No model providers are available.".to_owned(),
+            Self::NoProviderChosen => "Choose a model provider.".to_owned(),
+            Self::ModelsLoading { provider } => format!("Loading {provider}'s models…"),
+            Self::NoModels { provider } => {
+                format!("{provider} has no models available. Choose another provider.")
+            }
+            Self::Ready { .. } => return None,
+        })
+    }
+}
+
 /// IMP-011 service projections and transient choices held by the presentation store.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CompatState {
@@ -415,6 +475,32 @@ impl CompatState {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// How far the picker is from a usable model.
+    pub fn readiness(&self) -> Readiness {
+        let Some(catalog) = &self.catalog else {
+            return Readiness::CatalogLoading;
+        };
+        if catalog.providers.is_empty() {
+            return Readiness::NoProviders {
+                error: catalog.error.clone(),
+            };
+        }
+        let Some(id) = &self.choice.provider else {
+            return Readiness::NoProviderChosen;
+        };
+        let provider = catalog
+            .provider(id)
+            .map_or_else(|| id.clone(), ProviderView::picker_label);
+        match (self.models.get(id), self.chosen_model()) {
+            (None, _) => Readiness::ModelsLoading { provider },
+            (Some(_), None) => Readiness::NoModels { provider },
+            (Some(_), Some(model)) => Readiness::Ready {
+                model: model.clone(),
+                thinking: self.choice.thinking,
+            },
+        }
+    }
+
     /// The model the picker resolves to, if the provider's models are loaded: the chosen id, or
     /// the provider's first model when none (or one the catalogue no longer lists) was chosen.
     pub fn chosen_model(&self) -> Option<&ModelView> {
@@ -522,9 +608,10 @@ mod tests {
             variables: Vec::new(),
             models: 8,
         };
+        assert_eq!(provider.picker_label(), "OpenAI Codex");
         assert_eq!(
-            provider.picker_label(),
-            "OpenAI Codex (openai-codex) — restricted"
+            provider.subtitle(),
+            "openai-codex · restricted · OAuth login · 8 models"
         );
         assert_eq!(ThinkingLevel::default(), ThinkingLevel::Off);
     }

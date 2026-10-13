@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use super::compat::{ForkPosition, ModelChoice, ThinkingLevel, UiAnswerView};
+use super::compat::{ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView};
 use super::controller::Controller;
 use super::intents::Intent;
 use super::model::{ExecutionState, ModelRef, ObjectiveId};
@@ -88,19 +88,17 @@ impl Controller {
         }
     }
 
-    /// The picker's resolved model, or why there is none yet.
+    /// How far the picker is from a usable model.
+    pub fn readiness(&self) -> Readiness {
+        self.store.state().compat.readiness()
+    }
+
+    /// The picker's resolved model, or why there is none yet (one short sentence).
     pub fn chosen_model(&self) -> Result<(ModelRef, ThinkingLevel), String> {
-        let state = self.store.state();
-        let compat = &state.compat;
-        let provider = compat
-            .choice
-            .provider
-            .as_ref()
-            .ok_or("Choose a provider first")?;
-        let model = compat
-            .chosen_model()
-            .ok_or_else(|| format!("The models of {provider} are still loading"))?;
-        Ok((model.model_ref(), compat.choice.thinking))
+        match self.readiness() {
+            Readiness::Ready { model, thinking } => Ok((model.model_ref(), thinking)),
+            other => Err(other.problem().unwrap_or_default()),
+        }
     }
 
     /// The selected Objective with a live worker that can take a session operation now.
@@ -306,7 +304,16 @@ mod tests {
                 provider: Some("local-llm".into())
             }]
         );
-        assert!(controller.chosen_model().unwrap_err().contains("loading"));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::ModelsLoading {
+                provider: "Fixture".into()
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "Loading Fixture's models…"
+        );
         controller
             .store
             .apply_all(vec![StoreUpdate::Compat(CompatUpdate::Models {
@@ -322,6 +329,68 @@ mod tests {
         let (model, thinking) = controller.chosen_model().unwrap();
         assert_eq!(model, ModelRef::new("local-llm", "scripted"));
         assert_eq!(thinking, ThinkingLevel::Off);
+    }
+
+    fn catalog(providers: Vec<ProviderView>, error: Option<&str>) -> StoreUpdate {
+        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+            sdk_version: "0.85.1".into(),
+            providers,
+            error: error.map(str::to_owned),
+        }))
+    }
+
+    #[test]
+    fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
+        let (controller, _) = setup();
+        controller.store.update(|s| {
+            s.compat = Default::default();
+            ((), Vec::new())
+        });
+        assert_eq!(controller.readiness(), Readiness::CatalogLoading);
+        controller.store.apply(catalog(
+            Vec::new(),
+            Some("worker sandbox unavailable: sandbox_unavailable"),
+        ));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NoProviders {
+                error: Some("worker sandbox unavailable: sandbox_unavailable".into())
+            }
+        );
+        assert_eq!(
+            controller.chosen_model().unwrap_err(),
+            "LADE can't load models right now."
+        );
+        controller.store.apply(catalog(
+            vec![ProviderView {
+                id: "anthropic".into(),
+                name: "Anthropic".into(),
+                auth: vec!["API key".into()],
+                status: ProviderStatus::MissingCredentials,
+                reason: Some("Set ANTHROPIC_API_KEY".into()),
+                variables: vec!["ANTHROPIC_API_KEY".into()],
+                models: 0,
+            }],
+            None,
+        ));
+        assert_eq!(controller.readiness(), Readiness::NoProviderChosen);
+        controller.choose_model(ModelChoice {
+            provider: Some("anthropic".into()),
+            model: None,
+            thinking: ThinkingLevel::Off,
+        });
+        controller
+            .store
+            .apply(StoreUpdate::Compat(CompatUpdate::Models {
+                provider: "anthropic".into(),
+                models: Vec::new(),
+            }));
+        assert_eq!(
+            controller.readiness(),
+            Readiness::NoModels {
+                provider: "Anthropic".into()
+            }
+        );
     }
 
     #[test]
