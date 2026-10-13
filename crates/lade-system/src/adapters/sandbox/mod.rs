@@ -1,23 +1,27 @@
 //! bubblewrap sandbox construction for the pi worker, contained terminals and verification runs.
 //!
-//! The command line is `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm env -u
-//! PWD -- <argv>`: `prlimit` sets the resource limits on itself and `exec`s bwrap, so the limits are inherited by
-//! everything inside. Isolation: every namespace unshared (network always), nested user
-//! namespaces disabled, all capabilities dropped, a new session (no controlling-terminal
-//! injection), `--die-with-parent` plus the PID namespace so every descendant dies with the
-//! sandbox or with the supervisor, a read-only root built only from explicit binds, a private
-//! size-limited `/tmp` ([`SANDBOX_TMP_BYTES`]), private `/proc` and `/dev`, the [`seccomp`] filter,
-//! and a cleared environment with an explicit allowlist (`env -u PWD` removes the `PWD` bwrap
-//! exports for `--chdir`). There is no unsandboxed fallback: when [`sandbox_available`] fails,
-//! execution is blocked.
+//! The command line is `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate
+//! <processes> rm env -u PWD -u SHLVL -- <argv>`: `prlimit` sets the resource limits on itself and
+//! `exec`s bwrap, so the limits are inherited by everything inside. The process limit
+//! (`RLIMIT_NPROC`) is the exception: the gate sets it inside the sandbox's user namespace, where
+//! it counts only the sandbox's own processes, right before it executes the program (see
+//! [`Limits`]). Isolation: every namespace unshared (network always), nested user namespaces
+//! disabled, all capabilities dropped, a new session (no controlling-terminal injection),
+//! `--die-with-parent` plus the PID namespace so every descendant dies with the sandbox or with
+//! the supervisor, a read-only root built only from explicit binds, a private size-limited `/tmp`
+//! ([`SANDBOX_TMP_BYTES`]), private `/proc` and `/dev`, the [`seccomp`] filter, and a cleared
+//! environment with an explicit allowlist (`env -u PWD` removes the `PWD` bwrap exports for
+//! `--chdir`). There is no unsandboxed fallback: when [`sandbox_available`] fails, execution is
+//! blocked.
 //!
 //! Launch gate: bwrap copies a pipe into `/tmp/.lade-gate` (`--file`) while it sets up the
 //! sandbox, so it blocks until the supervisor opens the [`Gate`] (writes `go`) or loses it (the
 //! pipe closes empty); meanwhile only the outer bwrap and its fork, the future PID-namespace init,
 //! exist. A small bash gate inside the sandbox then starts the program only after `go`; an empty
-//! gate ends the sandbox with status 125 before anything runs. Supervisors record the sandbox
-//! (pidfile, cgroup placement) before opening the gate, so the program never runs unrecorded or
-//! unplaced, and a supervisor that dies first leaves nothing running. Every command line also
+//! gate, or a process limit the gate cannot set, ends the sandbox with status 125 before anything
+//! runs. Supervisors record the sandbox (pidfile, cgroup placement) before opening the gate, so
+//! the program never runs unrecorded or unplaced, and a supervisor that dies first leaves nothing
+//! running. Every command line also
 //! carries a marker argument ([`SandboxSpec::marker`]) by which the startup sweep finds sandboxes
 //! whose supervisor died after opening the gate but before bwrap armed its parent-death signals.
 //!
@@ -177,19 +181,24 @@ pub(crate) fn find_program(name: &str) -> Option<PathBuf> {
 /// Programs that remove `PWD` (exported by bwrap for `--chdir`) before the sandboxed program.
 const ENV_PROGRAMS: &[&str] = &["/usr/bin/env", "/bin/env"];
 /// Shells that run the launch gate inside the sandbox. bash (Essential on Debian, Ubuntu and
-/// Mint) is required: closing descriptors above 9 needs multi-digit redirections, which POSIX
-/// `sh` (dash) does not support.
+/// Mint, and bound with `/usr`) is required: closing descriptors above 9 needs multi-digit
+/// redirections and the process limit needs `ulimit -u`, neither of which POSIX `sh` (dash)
+/// supports.
 const SHELL_PROGRAMS: &[&str] = &["/usr/bin/bash", "/bin/bash"];
 const RM_PROGRAMS: &[&str] = &["/usr/bin/rm", "/bin/rm"];
 /// Where bwrap writes the launch gate's content inside the sandbox (private tmpfs).
 const GATE_FILE: &str = "/tmp/.lade-gate";
 /// The launch gate: the sandboxed program starts only if the supervisor wrote `go`. A gate the
 /// supervisor never opened (it died, or gave up on the launch) is empty, and the sandbox ends
-/// with status 125 before running anything. The file is removed first, then every descriptor
-/// above stderr is closed, so the program gets exactly stdin/stdout/stderr whatever bwrap
-/// passed through (bwrap forwards every inheritable descriptor it received, including ones a
-/// concurrent spawn or `laded`'s own parent left inheritable). `$1` is `rm`.
-const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; exec "$@""#;
+/// with status 125 before running anything. The file is removed first. Then the gate sets the
+/// process limit `$1` (`RLIMIT_NPROC`, soft and hard): here, inside the sandbox's user namespace,
+/// it counts only the sandbox's processes, and the gate forks nothing after it. A limit that
+/// cannot be set ends the sandbox with status 125 too. The program cannot raise it again (raising
+/// a hard limit needs `CAP_SYS_RESOURCE` in the initial user namespace). Last, every descriptor
+/// above stderr is closed, so the program gets exactly stdin/stdout/stderr whatever bwrap passed
+/// through (bwrap forwards every inheritable descriptor it received, including ones a concurrent
+/// spawn or `laded`'s own parent left inheritable). `$2` is `rm`.
+const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$2" -f /tmp/.lade-gate; [ "$gate" = go ] || exit 125; ulimit -S -H -u "$1" || exit 125; shift 2; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; exec "$@""#;
 
 /// Serializes sandbox spawns: the pipe ends bwrap reads are inheritable only inside this lock, so
 /// no sandbox can inherit another sandbox's descriptors.
@@ -370,6 +379,7 @@ impl SandboxSpec {
         }
         let tmp_bytes = OsString::from(self.tmp_bytes.to_string());
         let gate = OsString::from(gate.to_string());
+        let processes = OsString::from(self.limits.processes.to_string());
         push(&[
             "--proc".as_ref(),
             "/proc".as_ref(),
@@ -413,6 +423,7 @@ impl SandboxSpec {
             "-c".as_ref(),
             GATE_SCRIPT.as_ref(),
             "lade-gate".as_ref(),
+            &processes,
             self.rm_program.as_os_str(),
             self.env_program.as_os_str(),
             "-u".as_ref(),
@@ -426,10 +437,10 @@ impl SandboxSpec {
         args
     }
 
-    /// `prlimit … -- bwrap … -- bash -c <gate> lade-gate rm env -u PWD -u SHLVL -- argv`, with the outer
-    /// environment cleared (except the secret variables), stdin closed, the seccomp program on a
-    /// pipe (`--seccomp`) and the launch gate pipe (`--file`). Fails when this architecture has no
-    /// seccomp program.
+    /// `prlimit … -- bwrap … -- bash -c <gate> lade-gate <processes> rm env -u PWD -u SHLVL --
+    /// argv`, with the outer environment cleared (except the secret variables), stdin closed, the
+    /// seccomp program on a pipe (`--seccomp`) and the launch gate pipe (`--file`). Fails when this
+    /// architecture has no seccomp program.
     pub fn command(&self, tools: &SandboxTools) -> Result<SandboxCommand, SandboxError> {
         let program = seccomp::program().ok_or(SandboxError::InvalidSpec { what: "seccomp" })?;
         let io = |e: io::Error| SandboxError::Io { kind: e.kind() };

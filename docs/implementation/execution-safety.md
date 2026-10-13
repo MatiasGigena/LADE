@@ -22,9 +22,9 @@ canonicalizes the Node runtime and worker package, and creates the run directory
 4. Starts the per-launch gateway on `<socket_dir>/<first 12 hex of the objective id>-<generation>.sock`
    (`socket_dir` = `$RUNTIME/g` in `laded`; socket 0600, directory 0700; socket paths over 107 bytes are refused,
    and `laded` checks the widest one at startup). Pidfiles stay in `run_dir` (`$STATE/run`), whose length is free.
-5. Spawns `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm env -u PWD -u SHLVL -- node
-   --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped stdin/stdout/stderr,
-   with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
+5. Spawns `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate <processes> rm env -u PWD -u SHLVL
+   -- node --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped
+   stdin/stdout/stderr, with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
    records `STATE/run/worker-<objective>-<generation>.pid` (outer bwrap, then the PID-namespace init; each line `pid
    starttime`, starttime from `/proc/<pid>/stat` field 22), moves both into the Objective's cgroup leaf when cgroups
    are delegated, and only then opens the gate. A failure of either kills the sandbox and fails the launch.
@@ -103,13 +103,32 @@ they are the delivery-plan proposals and their approval is Matias's decision (#1
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |
 | address space (`RLIMIT_AS`) | **8 GiB** | 4 GiB | Node 22 cannot start under 4 GiB: V8 reserves heap and code ranges up front. With the default trap-handler WebAssembly bounds checking, every WebAssembly instance (Node's type stripper, undici's HTTP parser) reserves ~10 GiB of guard regions, which fails even at 16 GiB; `--disable-wasm-trap-handler` (explicit bounds checks) avoids this. `RLIMIT_AS` bounds virtual memory, not resident memory. |
-| processes (`RLIMIT_NPROC`) | 512 | 512 | per real UID, not enforced for root |
+| processes (`RLIMIT_NPROC`) | 512 | 512 | set by the launch gate inside the sandbox (see below), so it counts only the sandbox's own processes and threads; not enforced for root |
 | open files | 1024 | 1024 | |
 | file size | 512 MiB | 512 MiB | |
 | CPU time | none | none (verification: 600 s) | |
 | private `/tmp` | 1 GiB tmpfs | — | memory-backed; counts against `memory.max` under cgroups |
 | writable storage (worktree + session dir) | 2 GiB monitor | 2 GiB monitor | measured every 5 s by the service; above it the agent is stopped with `limit_reached` ([service.md](service.md#resource-limits-imp-006)); not a quota |
 | memory, processes/threads, CPU per Objective (cgroup v2) | 4 GiB `memory.max`, 512 `pids.max`, `cpu.max` unlimited | — | only with a delegated cgroup; shared by the Objective's worker, terminals and verification runs |
+
+### Process limit
+
+`RLIMIT_NPROC` is the one limit `prlimit` does not set. The kernel counts it per user per user namespace (Linux ≥
+5.14) and checks every level up to the host: set on bwrap, it would count every process and thread of the user's
+desktop (often well over 1,000), bwrap's namespace-creating clone would fail with `EAGAIN` (`bwrap: Creating new
+namespace failed: Resource temporarily unavailable`, so `sandbox_unavailable` and no agent could start), and the
+kernel would copy the value into the new user namespace as a cap on the user's host-wide count. Instead the launch
+gate, already inside the sandbox's user namespace, runs `ulimit -S -H -u <processes>` after the gate opened and
+before it executes the program (the gate forks nothing after it; bash is required, dash has no `ulimit -u`). There
+the count covers only the sandbox's own processes and threads (including the PID-namespace init). The program cannot
+undo it: soft and hard limit are both lowered, raising a hard limit needs `CAP_SYS_RESOURCE` in the initial user
+namespace (all capabilities are dropped in any case), every descendant inherits it, the PID namespace hides the outer
+bwrap from `prlimit`, and nested user namespaces are disabled (`--disable-userns`, seccomp). Each sandbox gets its
+own 512; the Objective-wide cap is `pids.max`, applied only with a delegated cgroup. Evidence:
+`adapters_sandbox.rs::probe_succeeds_while_the_user_runs_more_processes_than_the_limit` (the probe runs while the test
+process holds 576 extra threads; no `--nproc` reaches `prlimit`) and
+`process_limit_is_enforced_inside_the_sandbox_and_cannot_be_raised` (limit 32 with 64 extra host threads: soft and
+hard are 32, forks stop with `EAGAIN` below 32, raising it fails).
 
 ### cgroup v2 placement
 
@@ -171,8 +190,9 @@ program is started by a small bash gate script. bwrap copies the pipe into the f
 it blocks until the supervisor either writes `go` and closes the pipe (`Gate::open`) or loses it (the pipe closes
 empty: the supervisor died or abandoned the launch). Meanwhile the sandbox is only the outer bwrap and its fork (the
 future PID-namespace init); the program has not started. The gate script reads the file, removes it, and executes the
-program only after `go`; an empty gate ends the sandbox with status 125. Supervisors write the pidfile and place the
-cgroup before opening the gate, so:
+program only after `go`, after setting the [process limit](#process-limit); an empty gate, or a process limit it
+cannot set, ends the sandbox with status 125. Supervisors write the pidfile and place the cgroup before opening the
+gate, so:
 
 - **the program never runs unrecorded or outside its cgroup while the supervisor lives;**
 - **a supervisor that dies before opening the gate leaves nothing running** (the sandbox ends by itself);
@@ -382,7 +402,7 @@ process.
 | session dir, worker package, Node, gateway socket, credentials | **not bound / not set** |
 | network | none (`--unshare-net`, no gateway) |
 | environment | `HOME=/tmp`, `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `TERM=vt100`, `PS1`, `LADE_TERMINAL=read_write\|read_only` (bwrap's `PWD` removed; the shell sets its own) |
-| limits | `TERMINAL_LIMITS` (= `Limits::WORKER`) through `prlimit`: 4 GiB address space, 512 processes, 1024 files, 512 MiB file size; the seccomp filter (no `TIOCSTI`); the Objective's cgroup when delegated |
+| limits | `TERMINAL_LIMITS` (= `Limits::WORKER`): 4 GiB address space, 1024 files, 512 MiB file size through `prlimit`, 512 processes through the launch gate; the seccomp filter (no `TIOCSTI`); the Objective's cgroup when delegated |
 
 Teardown: `Terminal::kill` (explicit close, freeze, lifecycle, lease loss, `service.stop`, shutdown, `Drop`) sends
 `SIGKILL` to the PID-namespace init — ending every process of the terminal, including `setsid`/double-forked
@@ -405,8 +425,9 @@ interrupts it.
 - **Memory**: without a delegated cgroup only `RLIMIT_AS` (8 GiB virtual for the worker, 4 GiB for terminals)
   applies; resident memory and `/tmp` tmpfs pages are then not capped per Objective or in aggregate. With delegation
   the per-Objective `memory.max` applies; no aggregate limit across Objectives is set.
-- **Process count**: without delegation `RLIMIT_NPROC` is per real UID (shared with the user's other processes) and
-  not enforced for root; `pids.max` applies only with delegation.
+- **Process count**: without delegation only `RLIMIT_NPROC` applies, per sandbox (512 processes/threads each, so
+  an Objective with a worker, terminals and checks can hold several times 512) and not for root; the per-Objective
+  `pids.max` applies only with delegation.
 - **CPU**: no CPU ceiling for workers or terminals (§7 proposes none; `cpu.max` is configurable).
 - **Delegated cgroup path unexecuted**: the real placement test needs a delegated cgroup v2, which neither CI nor the
   development host provides.
@@ -434,8 +455,8 @@ interrupts it.
   and UDP have no network at all (not a bypass, a functional limitation).
 - **Worker output**: frames are schema-validated; content of valid frames (activity text) is untrusted and not
   otherwise filtered.
-- **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values, not an aggregate
-  per-Objective budget, and `RLIMIT_NPROC` is still per real UID (root: not enforced). With delegation the terminal
+- **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values and its own
+  `RLIMIT_NPROC` budget (root: not enforced), not an aggregate per-Objective budget. With delegation the terminal
   shares the Objective's cgroup limits with the agent. IMP-013 adds **counting** across Objectives in the
   service (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new
   writers; see [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many

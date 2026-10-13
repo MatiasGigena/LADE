@@ -10,10 +10,15 @@ use std::time::Duration;
 const GIB: u64 = 1 << 30;
 const MIB: u64 = 1 << 20;
 
-/// Resource limits applied through `prlimit` (soft = hard).
+/// Resource limits of one sandbox (soft = hard).
 ///
-/// `processes` is `RLIMIT_NPROC`, which the kernel counts per real UID (per user namespace on
-/// Linux ≥ 5.14) and does not enforce for host root.
+/// `processes` is `RLIMIT_NPROC`, set by the launch gate inside the sandbox right before it
+/// executes the program; every other limit is set by `prlimit` on bwrap. The kernel (Linux ≥
+/// 5.14) counts `RLIMIT_NPROC` per user per user namespace, so inside the sandbox's own user
+/// namespace it counts only the sandbox's processes and threads. Set on bwrap it would count every
+/// process of the user's desktop: bwrap could not create the namespace once those exceed it, and
+/// the kernel copies the creator's value into the new namespace as a cap on the user's host-wide
+/// count. Not enforced for host root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
     pub address_space_bytes: u64,
@@ -39,10 +44,10 @@ impl Limits {
         ..Self::WORKER
     };
 
+    /// The `prlimit` arguments: every limit except `processes`, which the launch gate sets.
     pub(super) fn prlimit_args(&self) -> Vec<OsString> {
         let mut args = vec![
             format!("--as={}", self.address_space_bytes),
-            format!("--nproc={}", self.processes),
             format!("--nofile={}", self.open_files),
             format!("--fsize={}", self.file_size_bytes),
         ];
