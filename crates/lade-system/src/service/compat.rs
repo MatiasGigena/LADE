@@ -39,7 +39,7 @@ use serde_json::Value;
 use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
 use crate::supervision::credentials::FIXTURE_PROVIDER;
-use crate::supervision::{AccessStatus, AuthKind, ProviderFacts};
+use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
 
 use super::convert::{
     conflict, counter, domain_rejection, invalid, new_uuid, not_found, now_ms, preview, rejection,
@@ -68,12 +68,47 @@ pub(crate) const RESTRICTIONS: &[&str] = &[
     "Custom providers (models.json) may not run shell commands and reference credentials only as $LADE_PROVIDER_* variables.",
 ];
 
+/// The catalogue's developer-facing error when the sandbox probe fails.
+pub(crate) const CATALOG_SANDBOX_FAILED: &str =
+    "LADE can't run agents on this computer because the sandbox check failed.";
+/// The catalogue's developer-facing error for any other failure of the catalogue run.
+pub(crate) const CATALOG_FAILED: &str =
+    "LADE couldn't load the list of models. Details are in the service diagnostics.";
+
 /// The SDK catalogue as parsed from the sandboxed catalogue run.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CatalogData {
     pub sdk_version: String,
     pub providers: Vec<(ProviderFacts, Vec<ModelInfo>)>,
+    /// Developer-facing sentence (`models.list` `error`).
     pub error: Option<String>,
+}
+
+/// Why the catalogue run failed: a developer-facing sentence and the technical detail (the
+/// failing step and its output), which goes to the service diagnostics only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CatalogFailure {
+    pub message: &'static str,
+    pub detail: String,
+}
+
+impl CatalogFailure {
+    fn other(detail: String) -> Self {
+        Self {
+            message: CATALOG_FAILED,
+            detail,
+        }
+    }
+
+    fn launch(error: &LaunchError) -> Self {
+        Self {
+            message: match error {
+                LaunchError::SandboxUnavailable(_) => CATALOG_SANDBOX_FAILED,
+                _ => CATALOG_FAILED,
+            },
+            detail: error.detail(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,15 +375,19 @@ impl Service {
                     .is_ok_and(|p| !p.is_empty())
                     .then_some(models);
                 let result = private_dir(&scratch)
-                    .map_err(|e| format!("catalogue scratch: {}", e.kind()))
+                    .map_err(|e| CatalogFailure::other(format!("catalogue scratch: {}", e.kind())))
                     .and_then(|()| {
                         launcher
                             .catalog(&scratch, models.as_deref())
-                            .map_err(|e| e.detail())
+                            .map_err(|e| CatalogFailure::launch(&e))
                     })
-                    .and_then(|bytes| parse_catalog(&bytes));
+                    .and_then(|bytes| parse_catalog(&bytes).map_err(CatalogFailure::other));
                 let _ = fs::remove_dir_all(&scratch);
-                JobOutput::Catalog(result)
+                // The technical detail goes to the diagnostics; the reply carries the sentence.
+                JobOutput::Catalog(result.map_err(|failure| {
+                    eprintln!("laded: model catalogue unavailable: {}", failure.detail);
+                    failure.message.to_owned()
+                }))
             });
         }
         Flow::Deferred
@@ -362,16 +401,11 @@ impl Service {
                 self.compat.catalog = Some(data.clone());
                 data
             }
-            Err(why) => {
-                eprintln!("laded: model catalogue unavailable");
-                Arc::new(fallback_catalog(
-                    self.test_fixture_provider,
-                    preview(
-                        &format!("the SDK model catalogue is unavailable ({why})"),
-                        512,
-                    ),
-                ))
-            }
+            // `message` is the developer-facing sentence; the job logged the technical detail.
+            Err(message) => Arc::new(fallback_catalog(
+                self.test_fixture_provider,
+                preview(&message, 512),
+            )),
         };
         for (ctx, query) in std::mem::take(&mut self.compat.catalog_waiting) {
             let reply = self.catalog_reply(&data, &query);
@@ -1462,4 +1496,21 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     file.write_all(&bytes).map_err(|_| {
         super::convert::durability("The session could not be copied for import. Try again.")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalogue_failures_keep_the_sentence_and_the_detail_apart() {
+        let sandbox = CatalogFailure::launch(&LaunchError::SandboxUnavailable(
+            "sandbox_unavailable: the probe sandbox exited with status 1: bwrap: Creating new namespace failed".into(),
+        ));
+        assert_eq!(sandbox.message, CATALOG_SANDBOX_FAILED);
+        assert!(sandbox.detail.contains("Creating new namespace failed"));
+        assert!(!sandbox.message.contains("sandbox_unavailable"));
+        let other = CatalogFailure::other("catalogue output is not JSON".into());
+        assert_eq!(other.message, CATALOG_FAILED);
+    }
 }

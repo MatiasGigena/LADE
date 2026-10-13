@@ -101,12 +101,43 @@ impl SandboxError {
     }
 }
 
+/// Diagnostic lines of a failed probe kept in its [`Display`](fmt::Display) form.
+const PROBE_DIAGNOSTIC_LINES: usize = 4;
+
+/// The code plus which probe step failed and why (for diagnostics, never shown as the
+/// developer-facing sentence). For [`SandboxError::Unavailable`] this is the exit status and
+/// the last lines bwrap or the launch gate printed, for example `sandbox_unavailable: the probe
+/// sandbox exited with status 1: bwrap: Creating new namespace failed: Resource temporarily
+/// unavailable`.
 impl fmt::Display for SandboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ToolMissing { tool } => write!(f, "{} ({tool})", self.code()),
-            Self::InvalidSpec { what } => write!(f, "{} ({what})", self.code()),
-            _ => f.write_str(self.code()),
+            Self::ToolMissing { tool } => {
+                write!(f, "{}: {tool} was not found on PATH", self.code())
+            }
+            Self::InvalidSpec { what } => {
+                write!(f, "{}: the sandbox {what} is invalid", self.code())
+            }
+            Self::Unavailable { exit_code, output } => {
+                write!(f, "{}: the probe sandbox ", self.code())?;
+                match exit_code {
+                    Some(code) => write!(f, "exited with status {code}")?,
+                    None => f.write_str("was killed or timed out")?,
+                }
+                let text = String::from_utf8_lossy(output);
+                let lines: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                let tail = &lines[lines.len().saturating_sub(PROBE_DIAGNOSTIC_LINES)..];
+                if tail.is_empty() {
+                    f.write_str(" without output")
+                } else {
+                    write!(f, ": {}", tail.join(" | "))
+                }
+            }
+            Self::Io { kind } => write!(f, "{}: {kind}", self.code()),
         }
     }
 }
@@ -730,5 +761,35 @@ pub fn sandbox_available(tools: &SandboxTools) -> Result<(), SandboxError> {
             exit_code: outcome.exit_code,
             output: outcome.output_tail,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SandboxError;
+
+    #[test]
+    fn a_failed_probe_names_its_step_and_output() {
+        let error = SandboxError::Unavailable {
+            exit_code: Some(1),
+            output: b"bwrap: Creating new namespace failed: Resource temporarily unavailable\n"
+                .to_vec(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "sandbox_unavailable: the probe sandbox exited with status 1: bwrap: Creating new namespace failed: Resource temporarily unavailable"
+        );
+        let silent = SandboxError::Unavailable {
+            exit_code: None,
+            output: Vec::new(),
+        };
+        assert_eq!(
+            silent.to_string(),
+            "sandbox_unavailable: the probe sandbox was killed or timed out without output"
+        );
+        assert_eq!(
+            SandboxError::ToolMissing { tool: "bwrap" }.to_string(),
+            "sandbox_tool_missing: bwrap was not found on PATH"
+        );
     }
 }
