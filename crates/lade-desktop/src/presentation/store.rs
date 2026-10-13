@@ -595,22 +595,20 @@ impl PresentationState {
         );
     }
 
-    /// A terminal request failed: shown in the terminal pane and kept under
+    /// A terminal request failed. A terminal that never opened leaves no session behind (the
+    /// pane must not read "The terminal failed." or offer "Open a new terminal"); the problem
+    /// stays on an earlier session of the Objective, if any, and under
     /// [`ActionSurface::Terminal`].
     fn terminal_problem(&mut self, objective_id: ObjectiveId, refusal: Refusal) -> Vec<Change> {
-        match self.terminal_for_mut(&objective_id) {
-            Some(session) => {
-                if session.status == TerminalStatus::Opening {
-                    session.status = TerminalStatus::Ended(TerminalEnd::Failed);
-                }
-                session.problem = Some(refusal.message.clone());
-            }
-            None => {
-                let mut session = TerminalSession::opening(objective_id.clone(), 80, 24);
-                session.status = TerminalStatus::Ended(TerminalEnd::Failed);
-                session.problem = Some(refusal.message.clone());
-                self.push_terminal(session);
-            }
+        if let Some(index) = self.terminals.iter().rposition(|t| {
+            t.objective_id == objective_id
+                && t.status == TerminalStatus::Opening
+                && t.terminal_id.is_none()
+        }) {
+            self.terminals.remove(index);
+        }
+        if let Some(session) = self.terminal_for_mut(&objective_id) {
+            session.problem = Some(refusal.message.clone());
         }
         self.keep_refusal(objective_id, ActionSurface::Terminal, refusal)
     }
@@ -1723,6 +1721,58 @@ mod tests {
         });
         assert!(state.last_refusal(&o, ActionSurface::Drafts).is_some());
         assert!(state.notices.is_empty());
+    }
+
+    #[test]
+    fn a_refused_open_leaves_no_failed_terminal_behind() {
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let o = ObjectiveId::new("o");
+        // The controller records an opening session before the request is answered.
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        let changes = state.apply(StoreUpdate::TerminalRefused {
+            objective_id: o.clone(),
+            refusal: refusal("Couldn't open terminal. Start the agent once."),
+        });
+        assert!(changes.contains(&Change::Terminal(o.clone())));
+        assert!(state.terminal_for(&o).is_none(), "no terminal ever opened");
+        assert_eq!(
+            state
+                .last_refusal(&o, ActionSurface::Terminal)
+                .map(|r| r.message.as_str()),
+            Some("Couldn't open terminal. Start the agent once.")
+        );
+        // A local problem without any session does not invent one either.
+        state.apply(StoreUpdate::TerminalProblem {
+            objective_id: o.clone(),
+            message: "Open terminal was not sent: not connected.".into(),
+        });
+        assert!(state.terminal_for(&o).is_none());
+        // An earlier session keeps its own status and carries the problem.
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::TerminalOpened {
+            objective_id: o.clone(),
+            terminal_id: "t".into(),
+            mode: TerminalMode::ReadWrite,
+            cols: 80,
+            rows: 24,
+        });
+        assert_eq!(state.last_refusal(&o, ActionSurface::Terminal), None);
+        state.apply(StoreUpdate::TerminalClosed {
+            terminal_id: "t".into(),
+            end: TerminalEnd::Closed,
+        });
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::TerminalRefused {
+            objective_id: o.clone(),
+            refusal: refusal("Couldn't open terminal. Too many terminals are open."),
+        });
+        let session = state.terminal_for(&o).unwrap();
+        assert_eq!(session.status, TerminalStatus::Ended(TerminalEnd::Closed));
+        assert_eq!(
+            session.problem.as_deref(),
+            Some("Couldn't open terminal. Too many terminals are open.")
+        );
+        assert_eq!(state.terminals.len(), 1);
     }
 
     #[test]
