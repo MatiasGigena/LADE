@@ -112,7 +112,11 @@ impl Screen {
         self.scrollback.len()
     }
 
-    /// Resizes the grid (keeping the bottom-most content and the cursor inside).
+    /// Resizes the grid. The cursor keeps its line: shrinking first drops the blank rows below
+    /// the cursor, then moves rows above it to the scrollback, and cuts rows below it only
+    /// when the cursor's line would otherwise leave the screen. The shell redraws its prompt on
+    /// the cursor's row after `SIGWINCH`, so a cursor moved to another row would leave the old
+    /// prompt behind and draw the caret away from it.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols = cols.clamp(MIN_COLS, MAX_COLS);
         let rows = rows.clamp(MIN_ROWS, MAX_ROWS);
@@ -122,11 +126,21 @@ impl Screen {
         for line in &mut self.grid {
             line.resize(cols, ' ');
         }
-        while self.grid.len() > rows {
+        while self.grid.len() > rows
+            && self.grid.len() > self.row + 1
+            && self
+                .grid
+                .last()
+                .is_some_and(|l| l.iter().all(|&c| c == ' '))
+        {
+            self.grid.pop();
+        }
+        while self.grid.len() > rows && self.row > 0 {
             let line = self.grid.remove(0);
             self.push_scrollback(&line);
-            self.row = self.row.saturating_sub(1);
+            self.row -= 1;
         }
+        self.grid.truncate(rows);
         while self.grid.len() < rows {
             self.grid.push(blank(cols));
         }
@@ -490,7 +504,9 @@ impl Screen {
             .collect()
     }
 
-    /// Scrollback plus screen as one text, and the cursor's character offset in it.
+    /// Scrollback plus screen as one text, and the cursor's character offset in it. Lines are
+    /// trimmed, except that the cursor's line keeps its blanks up to the cursor, so the caret
+    /// sits where the shell put it (after a prompt's trailing space, not against its `$`).
     pub fn render(&self) -> (String, usize) {
         let mut text = String::new();
         let mut offset = 0;
@@ -501,9 +517,14 @@ impl Screen {
         let screen = self.screen_lines();
         for (row, line) in screen.iter().enumerate() {
             if row == self.row {
-                offset = text.chars().count() + self.col.min(line.chars().count());
+                let start = text.chars().count();
+                text.push_str(line);
+                let len = line.chars().count();
+                text.extend(std::iter::repeat_n(' ', self.col.saturating_sub(len)));
+                offset = start + self.col;
+            } else {
+                text.push_str(line);
             }
-            text.push_str(line);
             if row + 1 < screen.len() {
                 text.push('\n');
             }
@@ -809,6 +830,70 @@ mod tests {
         assert_eq!(s.cursor(), (4, 19));
         s.feed("\x1b[uY");
         assert_eq!(s.screen_lines()[4], format!("{}Y", " ".repeat(19)));
+    }
+
+    /// What bash 5.2 writes on `SIGWINCH` (captured from the sandboxed shell): clear the line,
+    /// padding, then the prompt again at column 0 of the cursor's row.
+    const REDRAW: &str = "\r\x1b[K\0\0\0\0\0\0\0\0\0\0\0\0\r[lade] worktree$ ";
+
+    fn prompts(s: &Screen) -> usize {
+        s.render().0.matches("[lade] worktree$").count()
+    }
+
+    #[test]
+    fn a_shrinking_resize_keeps_the_cursor_on_its_line() {
+        // A fresh terminal: the prompt near the top, blank rows below it.
+        let mut s = Screen::new(80, 24);
+        s.feed("[lade] worktree$ ls\r\nREADME.md\r\n[lade] worktree$ ");
+        assert_eq!(s.cursor(), (2, 17));
+        s.resize(40, 10);
+        // The blank rows below the cursor go first: nothing reaches the scrollback and the
+        // cursor stays after the prompt it belongs to.
+        assert_eq!(s.cursor(), (2, 17));
+        assert_eq!(s.scrollback_len(), 0);
+        assert_eq!(s.screen_lines()[2], "[lade] worktree$");
+        s.feed(REDRAW);
+        assert_eq!(prompts(&s), 2, "{:?}", s.render().0);
+        let (text, offset) = s.render();
+        assert!(
+            text[..offset].ends_with("README.md\n[lade] worktree$ "),
+            "{text:?}"
+        );
+
+        // A full screen: the top rows go to the scrollback, the cursor keeps its line.
+        let mut s = Screen::new(80, 24);
+        for i in 0..23 {
+            s.feed(&format!("line {i}\r\n"));
+        }
+        s.feed("[lade] worktree$ ");
+        assert_eq!(s.cursor(), (23, 17));
+        s.resize(80, 10);
+        assert_eq!(s.cursor(), (9, 17));
+        assert_eq!(s.scrollback_len(), 14);
+        assert_eq!(s.screen_lines()[9], "[lade] worktree$");
+
+        // Text below the cursor (a full-screen program's status line) is cut only after the
+        // rows above the cursor are used up; the cursor's own line always stays.
+        let mut s = Screen::new(80, 24);
+        s.feed("\x1b[24;1Hstatus\x1b[1;1H[lade] worktree$ ");
+        s.resize(80, 10);
+        assert_eq!(s.cursor(), (0, 17));
+        assert_eq!(s.screen_lines()[0], "[lade] worktree$");
+    }
+
+    #[test]
+    fn the_caret_sits_after_the_prompts_trailing_space() {
+        let s = screen("abc\r\nbash-5.2$ ");
+        let (text, offset) = s.render();
+        assert_eq!(
+            text.chars().take(offset).collect::<String>(),
+            "abc\nbash-5.2$ "
+        );
+        // Blank cells before the cursor count; rows other than the cursor's stay trimmed.
+        let s = screen("x   \r\n\x1b[5C");
+        let (text, offset) = s.render();
+        assert!(text.starts_with("x\n     "), "{text:?}");
+        assert_eq!(offset, "x\n     ".len());
     }
 
     #[test]
