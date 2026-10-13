@@ -259,9 +259,9 @@ pub fn submit_feedback(
     if batch.deferred > 0 {
         dialog.body.append(&label(
             &format!(
-                "One submission takes at most {MAX_FEEDBACK_BATCH} items; {} more draft{} stay unsent for the next one.",
+                "One submission takes at most {MAX_FEEDBACK_BATCH} items; {} more {} unsent for the next one.",
                 batch.deferred,
-                if batch.deferred == 1 { "" } else { "s" }
+                if batch.deferred == 1 { "draft stays" } else { "drafts stay" }
             ),
             &["meta"],
         ));
