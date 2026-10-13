@@ -32,6 +32,7 @@ pub fn first_objective_state(controller: &Rc<Controller>) -> gtk::Widget {
         "Describe an outcome; the agent pursues it on its own branch and worktree, and you \
          review the result here.",
         Some(&create),
+        None,
     )
 }
 
@@ -270,6 +271,7 @@ impl Workbench {
             widgets::empty_state(
                 "Select an Objective",
                 "Choose one from Objectives to inspect its Change Set, evidence and feedback.",
+                None,
                 None,
             )
         });
@@ -554,7 +556,7 @@ impl Workbench {
             };
             self.body.set_visible(false);
             self.no_changes
-                .append(&widgets::empty_state(title, body, None));
+                .append(&widgets::empty_state(title, body, None, None));
             self.no_changes.set_visible(true);
         }
         self.updating.set(true);

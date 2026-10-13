@@ -510,17 +510,12 @@ impl TerminalPane {
             Empty::Opening => ("Opening the terminal…", "", None, true),
             Empty::CanOpen => ("No terminal open", "", Some(&self.open_button), true),
         };
-        let block = widgets::empty_state(title, body, action);
-        if scope && let Some(block) = block.downcast_ref::<gtk::Box>() {
-            let line = label(SCOPE_SENTENCE, &["meta"]);
-            line.set_xalign(0.5);
-            line.set_justify(gtk::Justification::Center);
-            line.set_max_width_chars(56);
-            line.set_tooltip_text(Some(SCOPE_FULL));
-            set_accessible_description(&line, SCOPE_FULL);
-            block.append(&line);
-        }
-        self.empty.append(&block);
+        self.empty.append(&widgets::empty_state(
+            title,
+            body,
+            action,
+            scope.then_some(SCOPE_SENTENCE),
+        ));
     }
 
     fn render(&self) {

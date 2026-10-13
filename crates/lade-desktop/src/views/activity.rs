@@ -496,26 +496,10 @@ impl Activity {
         }
     }
 
-    /// Rebuilds the agent area keeping focus where it was: by focus key, including a keyed
-    /// drop-down whose button or popover held the focus.
+    /// Rebuilds the agent area keeping focus where it was (by focus key, also inside a keyed
+    /// drop-down: see `widgets::rebuild_preserving_focus`).
     fn rebuild_agent(self: &Rc<Self>) {
-        let area = self.agent_area.upcast_ref::<gtk::Widget>();
-        let mut keyed = area.root().and_then(|r| r.focus());
-        while let Some(widget) = keyed.clone() {
-            if &widget == area {
-                keyed = None;
-                break;
-            }
-            if widget.widget_name().starts_with(widgets::FOCUS_KEY_PREFIX) {
-                break;
-            }
-            keyed = widget.parent();
-        }
-        let key = keyed.map(|w| w.widget_name().to_string());
         widgets::rebuild_preserving_focus(&self.agent_area, || self.render_agent());
-        if let Some(widget) = key.and_then(|k| widgets::find_named(area, &k)) {
-            widget.grab_focus();
-        }
     }
 
     fn composer_text(&self) -> String {
@@ -738,7 +722,8 @@ impl Activity {
         };
         self.empty.set_visible(empty.is_some());
         if let Some((title, body)) = empty {
-            self.empty.append(&widgets::empty_state(title, body, None));
+            self.empty
+                .append(&widgets::empty_state(title, body, None, None));
         }
     }
 

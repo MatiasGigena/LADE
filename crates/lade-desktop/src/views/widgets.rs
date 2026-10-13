@@ -386,8 +386,14 @@ pub fn inline_message(kind: MessageKind, text: &str, details: Option<&str>) -> g
 }
 
 /// A centred, calm empty state: a heading, an optional one-paragraph explanation (omitted when
-/// empty) and the relevant action, if any. No illustration or motivational copy (design.md §5).
-pub fn empty_state(title: &str, body: &str, action: Option<&gtk::Button>) -> gtk::Widget {
+/// empty), the relevant action, if any, and an optional metadata `note` after it (for example the
+/// scope of what the action opens). No illustration or motivational copy (design.md §5).
+pub fn empty_state(
+    title: &str,
+    body: &str,
+    action: Option<&gtk::Button>,
+    note: Option<&str>,
+) -> gtk::Widget {
     let block = vbox(space::GROUP);
     block.add_css_class("empty-block");
     block.set_halign(gtk::Align::Center);
@@ -410,6 +416,11 @@ pub fn empty_state(title: &str, body: &str, action: Option<&gtk::Button>) -> gtk
     if let Some(action) = action {
         action.set_halign(gtk::Align::Center);
         block.append(action);
+    }
+    if let Some(note) = note.filter(|n| !n.is_empty()) {
+        let line = label(note, &["meta"]);
+        centred(&line);
+        block.append(&line);
     }
     block.upcast()
 }
@@ -774,22 +785,34 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
 }
 
 /// Restores focus to the same keyed widget after `rebuild` replaced the container's children, or to
-/// the container's first focusable child; never moves focus that was elsewhere.
+/// the container's first focusable child; never moves focus that was elsewhere. The key is the
+/// focused widget's own or its nearest keyed ancestor's inside the container, so focus in a keyed
+/// drop-down's inner button or open popover (a child of the drop-down) returns to that drop-down.
 pub fn rebuild_preserving_focus(container: &impl IsA<gtk::Widget>, rebuild: impl FnOnce()) {
     let container = container.as_ref();
     let focused = container.root().and_then(|r| r.focus());
     let inside = focused
         .as_ref()
         .is_some_and(|f| f.is_ancestor(container) || f == container);
-    let key = focused
-        .filter(|_| inside)
-        .map(|f| f.widget_name().to_string());
+    let key = focused.filter(|_| inside).and_then(|focused| {
+        let mut widget = Some(focused);
+        while let Some(w) = widget {
+            let name = w.widget_name();
+            if name.starts_with(FOCUS_KEY_PREFIX) {
+                return Some(name.to_string());
+            }
+            if &w == container {
+                return None;
+            }
+            widget = w.parent();
+        }
+        None
+    });
     rebuild();
     if !inside {
         return;
     }
     let restored = key
-        .filter(|k| k.starts_with(FOCUS_KEY_PREFIX))
         .and_then(|k| find_named(container, &k))
         .is_some_and(|w| w.grab_focus());
     if !restored {

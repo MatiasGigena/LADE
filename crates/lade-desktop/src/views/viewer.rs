@@ -438,6 +438,7 @@ impl Viewer {
                 "Select a file to inspect",
                 "Choose a file from the Change Set to see its diff or full content.",
                 None,
+                None,
             ));
             self.stack.set_visible_child_name("message");
             return;
