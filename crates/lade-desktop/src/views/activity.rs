@@ -1,11 +1,13 @@
-//! Activity: the one home of Agent Session control — the agent's state line (model, execution,
-//! session and generation), Start / Cancel / Resume, the accepted inputs with their delivery
+//! Activity: the one home of Agent Session control — the agent's state in one sentence (session
+//! identity in its tooltip), Start / Cancel / Resume, the accepted inputs with their delivery
 //! state, the transcript with incremental appends and in-place delta updates, and the composer
 //! (Prompt / Steer / Follow-up). New items never take focus.
 //!
-//! The agent's contextual tools live here too, collapsed under one disclosure: the model and
-//! thinking picker (used by Start agent), the Agent Session section (tree, apply, compact, reload,
-//! export, import) and the LADE profile resources.
+//! Before the Objective has an Agent Session the transcript's place holds "Set up the agent":
+//! provider, model and thinking (and the LADE profile resources, collapsed). With a
+//! session, the model picker, the Agent Session tools and the profile
+//! resources are under one collapsed "Agent settings" disclosure. Nothing here scrolls inside
+//! the page: the work area itself scrolls.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -15,12 +17,13 @@ use gtk4 as gtk;
 
 use super::session;
 use super::widgets::{
-    self, action_row, hbox, label, set_accessible_label, set_focus_key, space, vbox,
+    self, MessageKind, hbox, label, set_accessible_label, set_focus_key, space, vbox,
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
-    ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState, ObjectiveId, Timestamp,
+    ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState, ExecutionState,
+    ObjectiveDetail, ObjectiveId, Timestamp,
 };
 use crate::presentation::panel::{self, Tone};
 use crate::presentation::store::{ActivityChange, Change};
@@ -32,15 +35,40 @@ const MODES: [DeliveryMode; 3] = [
     DeliveryMode::FollowUp,
 ];
 
+/// Shows a message area only while it holds something, so an empty one adds no spacing.
+fn fit(container: &gtk::Box) {
+    container.set_visible(container.first_child().is_some());
+}
+
 pub struct Activity {
     pub root: gtk::Box,
     controller: Rc<Controller>,
     title: gtk::Label,
     status: gtk::Label,
+    /// Start agent, Cancel agent and Resume agent, as the service offers them.
     controls: gtk::Box,
+    /// The latest local error of Start / Cancel / Resume, below the state line.
+    control_error: gtk::Box,
+    /// The setup card and the settings disclosure: rebuilt together, focus kept by key.
+    agent_area: gtk::Box,
+    /// "Set up the agent", in the transcript's place while there is no Agent Session.
+    setup: gtk::Box,
+    setup_body: gtk::Box,
+    setup_resources: gtk::Box,
+    /// "Agent settings" (collapsed) once there is an Agent Session, and its content.
+    settings: gtk::Box,
+    agent_panel: gtk::Box,
+    agent_error: RefCell<Option<String>>,
+    /// Accepted inputs: an always-visible line for uncertain or blocked delivery, the list
+    /// collapsed (and the disclosure hidden while nothing was accepted).
+    inputs_alert: gtk::Box,
+    inputs: gtk::Box,
+    inputs_list: gtk::Box,
     earlier: gtk::Button,
     list: gtk::ListBox,
     scroll: gtk::ScrolledWindow,
+    /// The transcript's empty state.
+    empty: gtk::Box,
     text_labels: RefCell<Vec<gtk::Label>>,
     shown_for: RefCell<Option<ObjectiveId>>,
     pub composer: gtk::TextView,
@@ -52,21 +80,14 @@ pub struct Activity {
     follow: Cell<bool>,
     auto_scrolling: Cell<bool>,
     scroll_pending: Cell<bool>,
-    /// Content of the collapsed agent tools (model, Agent Session, profile resources).
-    agent_panel: gtk::Box,
-    agent_error: RefCell<Option<String>>,
-    /// The latest local error of Start / Cancel / Resume, below the state line.
-    control_error: gtk::Box,
-    /// Accepted inputs: an always-visible line for uncertain or blocked delivery, the list
-    /// collapsed.
-    inputs_alert: gtk::Box,
-    inputs_list: gtk::Box,
 }
 
-/// Title (and accessible name) of the agent tools disclosure.
-pub const AGENT_TOOLS_TITLE: &str = "Model, Agent Session and profile";
+/// Title (and accessible name) of the agent tools disclosure shown with an Agent Session.
+pub const AGENT_SETTINGS_TITLE: &str = "Agent settings";
 /// Title (and accessible name) of the accepted-inputs disclosure.
 pub const INPUTS_TITLE: &str = "Accepted inputs and delivery";
+/// Heading of the card shown before the agent has an Agent Session.
+pub const SETUP_TITLE: &str = "Set up the agent";
 
 impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
@@ -79,54 +100,46 @@ impl Activity {
         set_focus_key(&title, "activity:title");
         title.set_focusable(true);
         titles.append(&title);
-        let status = label("", &["meta"]);
+        let status = label("", &["secondary"]);
         titles.append(&status);
-        let control_error = vbox(0);
-        titles.append(&control_error);
         head.append(&titles);
         let controls = hbox(space::ITEM);
         controls.set_hexpand(false);
         controls.set_valign(gtk::Align::Start);
         head.append(&controls);
         root.append(&head);
+        let control_error = vbox(0);
+        root.append(&control_error);
 
-        // Contextual agent tools, on demand: collapsed, bounded in height when open.
-        let agent_panel = vbox(space::PAGE);
-        agent_panel.add_css_class("agent-panel");
-        let agent_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(360)
-            .overlay_scrolling(false)
-            .child(&agent_panel)
-            .build();
-        set_accessible_label(&agent_scroll, AGENT_TOOLS_TITLE);
-        root.append(&widgets::disclosure(
-            AGENT_TOOLS_TITLE,
+        // The agent's setup (no session yet) or its settings (with one); never both.
+        let agent_area = vbox(space::SECTION);
+        let setup = vbox(space::SECTION);
+        setup.add_css_class("agent-setup");
+        let setup_body = vbox(space::GROUP);
+        setup.append(&setup_body);
+        let setup_resources = vbox(0);
+        setup.append(&widgets::disclosure(
+            session::RESOURCES_TITLE,
             false,
-            &agent_scroll,
+            &setup_resources,
             |_| {},
         ));
+        agent_area.append(&setup);
+        let agent_panel = vbox(space::PAGE);
+        agent_panel.add_css_class("agent-panel");
+        set_accessible_label(&agent_panel, AGENT_SETTINGS_TITLE);
+        let settings = widgets::disclosure(AGENT_SETTINGS_TITLE, false, &agent_panel, |_| {});
+        agent_area.append(&settings);
+        root.append(&agent_area);
 
         // Accepted inputs (prompts, steers, follow-ups and submitted feedback) with their
         // delivery state; an uncertain or blocked one is stated outside the disclosure.
         let inputs_alert = vbox(space::TIGHT);
         root.append(&inputs_alert);
         let inputs_list = vbox(space::TIGHT);
-        let inputs_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(240)
-            .overlay_scrolling(false)
-            .child(&inputs_list)
-            .build();
-        set_accessible_label(&inputs_scroll, INPUTS_TITLE);
-        root.append(&widgets::disclosure(
-            INPUTS_TITLE,
-            false,
-            &inputs_scroll,
-            |_| {},
-        ));
+        set_accessible_label(&inputs_list, INPUTS_TITLE);
+        let inputs = widgets::disclosure(INPUTS_TITLE, false, &inputs_list, |_| {});
+        root.append(&inputs);
 
         let earlier = widgets::button("Load earlier activity", &["quiet"]);
         earlier.set_halign(gtk::Align::Start);
@@ -139,6 +152,8 @@ impl Activity {
         scroll.set_vexpand(true);
         scroll.set_min_content_height(160);
         root.append(&scroll);
+        let empty = vbox(0);
+        root.append(&empty);
 
         let composer_box = vbox(space::ITEM);
         composer_box.add_css_class("composer");
@@ -171,9 +186,21 @@ impl Activity {
             title,
             status,
             controls,
+            control_error,
+            agent_area,
+            setup,
+            setup_body,
+            setup_resources,
+            settings,
+            agent_panel,
+            agent_error: RefCell::new(None),
+            inputs_alert,
+            inputs,
+            inputs_list,
             earlier,
             list,
             scroll,
+            empty,
             text_labels: RefCell::new(Vec::new()),
             shown_for: RefCell::new(None),
             composer,
@@ -185,11 +212,6 @@ impl Activity {
             follow: Cell::new(true),
             auto_scrolling: Cell::new(false),
             scroll_pending: Cell::new(false),
-            agent_panel,
-            agent_error: RefCell::new(None),
-            control_error,
-            inputs_alert,
-            inputs_list,
         });
         let set_explain = move |d: &gtk::DropDown| {
             let mode = MODES
@@ -252,24 +274,28 @@ impl Activity {
         activity
             .earlier
             .connect_clicked(move |_| controller.load_older_activity());
-        activity.render_header();
+        activity.render_state();
         activity.render_items();
         activity.render_agent();
         activity.render_inputs();
         activity
     }
 
-    /// The accepted-input ledger of the selected Objective, newest first.
+    /// The accepted-input ledger of the selected Objective, newest first. The disclosure is
+    /// hidden while nothing was accepted.
     fn render_inputs(&self) {
         widgets::clear(&self.inputs_alert);
         widgets::clear(&self.inputs_list);
         let inputs = {
             let state = self.controller.store.state();
-            let Some(id) = state.ui.selected.as_ref() else {
-                return;
-            };
-            state.inputs.get(id).cloned().unwrap_or_default()
+            state
+                .ui
+                .selected
+                .as_ref()
+                .and_then(|id| state.inputs.get(id).cloned())
+                .unwrap_or_default()
         };
+        self.inputs.set_visible(!inputs.is_empty());
         let troubled = inputs
             .iter()
             .filter(|i| {
@@ -285,10 +311,7 @@ impl Activity {
                 if troubled == 1 { "" } else { "s" }
             )));
         }
-        if inputs.is_empty() {
-            self.inputs_list
-                .append(&label("Nothing accepted yet.", &["meta"]));
-        }
+        fit(&self.inputs_alert);
         for input in inputs.iter().rev() {
             let row = vbox(space::TIGHT);
             row.add_css_class("evidence-row");
@@ -320,53 +343,101 @@ impl Activity {
         if let Err(message) = result {
             self.control_error.append(&widgets::error_line(&message));
         }
+        fit(&self.control_error);
     }
 
-    /// The agent tools: model and thinking, the Agent Session section and the LADE profile
-    /// resources, with the latest local error of a session operation.
-    fn render_agent(self: &Rc<Self>) {
-        widgets::clear(&self.agent_panel);
-        let detail = self.controller.store.state().selected_detail().cloned();
-        let Some(detail) = detail else {
-            self.agent_panel
-                .append(&label("Select an Objective to see its agent.", &["meta"]));
-            return;
-        };
+    /// The setup card's content: what the agent needs before it can start.
+    fn render_setup(self: &Rc<Self>) {
+        let body = &self.setup_body;
+        let heading = widgets::section_title(SETUP_TITLE);
+        body.append(&heading);
+        body.append(&label(
+            "Choose the model the agent works with. Once it starts, you can message it here and \
+             follow its work.",
+            &["secondary"],
+        ));
         if let Some(error) = self.agent_error.borrow().as_ref() {
-            self.agent_panel.append(&widgets::error_line(error));
+            body.append(&widgets::inline_message(MessageKind::Error, error, None));
+        }
+        body.append(&session::model_picker(&self.controller));
+        self.setup_resources
+            .append(&session::resources_section(&self.controller));
+    }
+
+    /// "Agent settings": model and thinking (for Apply model and thinking), the Agent Session
+    /// section and the LADE profile resources, with the latest local error of a session
+    /// operation.
+    fn render_settings(self: &Rc<Self>, detail: &ObjectiveDetail) {
+        let panel = &self.agent_panel;
+        if let Some(error) = self.agent_error.borrow().as_ref() {
+            panel.append(&widgets::inline_message(MessageKind::Error, error, None));
         }
         let model = vbox(space::GROUP);
         model.append(&widgets::section_title("Model and thinking"));
         model.append(&label(
-            "Used by Start agent and by Apply model and thinking.",
+            "Used by Apply model and thinking, and by Start agent.",
             &["meta"],
         ));
         model.append(&session::model_picker(&self.controller));
-        self.agent_panel.append(&model);
-        if detail.session.is_some() {
-            let this = Rc::downgrade(self);
-            let report: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
-                if let Some(this) = this.upgrade() {
-                    let changed = match result {
-                        Ok(()) => this.agent_error.replace(None).is_some(),
-                        Err(message) => {
-                            this.agent_error.replace(Some(message));
-                            true
-                        }
-                    };
-                    if changed {
-                        let panel = this.agent_panel.clone();
-                        widgets::rebuild_preserving_focus(&panel, || this.render_agent());
+        panel.append(&model);
+        let this = Rc::downgrade(self);
+        let report: Rc<dyn Fn(Result<(), String>)> = Rc::new(move |result| {
+            if let Some(this) = this.upgrade() {
+                let changed = match result {
+                    Ok(()) => this.agent_error.replace(None).is_some(),
+                    Err(message) => {
+                        this.agent_error.replace(Some(message));
+                        true
                     }
+                };
+                if changed {
+                    this.rebuild_agent();
                 }
-            });
-            self.agent_panel
-                .append(&session::session_section(&self.controller, &detail, report));
-        }
+            }
+        });
+        panel.append(&session::session_section(&self.controller, detail, report));
         let resources = vbox(space::GROUP);
         resources.append(&widgets::section_title(session::RESOURCES_TITLE));
         resources.append(&session::resources_section(&self.controller));
-        self.agent_panel.append(&resources);
+        panel.append(&resources);
+    }
+
+    /// The setup card (no Agent Session yet) or the settings (with one).
+    fn render_agent(self: &Rc<Self>) {
+        widgets::clear(&self.setup_body);
+        widgets::clear(&self.setup_resources);
+        widgets::clear(&self.agent_panel);
+        let detail = self.controller.store.state().selected_detail().cloned();
+        let session = detail.as_ref().is_some_and(|d| d.session.is_some());
+        self.setup.set_visible(detail.is_some() && !session);
+        self.settings.set_visible(session);
+        match detail {
+            Some(detail) if session => self.render_settings(&detail),
+            Some(_) => self.render_setup(),
+            None => {}
+        }
+    }
+
+    /// Rebuilds the agent area keeping focus where it was: by focus key, including a keyed
+    /// drop-down whose button or popover held the focus.
+    fn rebuild_agent(self: &Rc<Self>) {
+        let area = self.agent_area.upcast_ref::<gtk::Widget>();
+        let mut keyed = area.root().and_then(|r| r.focus());
+        while let Some(widget) = keyed.clone() {
+            if &widget == area {
+                keyed = None;
+                break;
+            }
+            if widget.widget_name().starts_with(widgets::FOCUS_KEY_PREFIX) {
+                break;
+            }
+            keyed = widget.parent();
+        }
+        let key = keyed.map(|w| w.widget_name().to_string());
+        widgets::rebuild_preserving_focus(&self.agent_area, || self.render_agent());
+        if let Some(widget) = key.and_then(|k| widgets::find_named(area, &k)) {
+            widget.grab_focus();
+        }
     }
 
     fn composer_text(&self) -> String {
@@ -398,41 +469,49 @@ impl Activity {
     pub fn refresh(self: &Rc<Self>, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
         let mut agent = false;
+        let mut state = false;
         for change in changes {
             match change {
                 Change::Selection => {
                     self.agent_error.replace(None);
                     widgets::clear(&self.control_error);
+                    fit(&self.control_error);
                     self.restore_composer();
-                    self.render_header();
                     self.render_items();
                     self.render_inputs();
+                    state = true;
                     agent = true;
                 }
                 Change::Inputs(id) if Some(id) == selected.as_ref() => self.render_inputs(),
                 Change::Catalog => {
-                    // The chosen model is named beside Start agent.
-                    self.render_header();
+                    state = true;
                     agent = true;
                 }
                 Change::Detail(id) if Some(id) == selected.as_ref() => {
-                    self.render_header();
+                    state = true;
                     agent = true;
                 }
                 Change::Session(id) if Some(id) == selected.as_ref() => agent = true,
                 Change::Resources => agent = true,
-                Change::Connection => self.render_header(),
-                Change::Activity(id, kind) if Some(id) == selected.as_ref() => match kind {
-                    ActivityChange::Reset => self.render_items(),
-                    ActivityChange::Appended { from_index } => self.append_items(*from_index),
-                    ActivityChange::Delta { index } => self.apply_delta(*index),
-                },
+                Change::Connection => state = true,
+                Change::Activity(id, kind) if Some(id) == selected.as_ref() => {
+                    match kind {
+                        ActivityChange::Reset => self.render_items(),
+                        ActivityChange::Appended { from_index } => {
+                            self.append_items(*from_index);
+                        }
+                        ActivityChange::Delta { index } => self.apply_delta(*index),
+                    }
+                    self.sync_body();
+                }
                 _ => {}
             }
         }
+        if state {
+            self.render_state();
+        }
         if agent {
-            let panel = self.agent_panel.clone();
-            widgets::rebuild_preserving_focus(&panel, || self.render_agent());
+            self.rebuild_agent();
         }
     }
 
@@ -452,7 +531,8 @@ impl Activity {
         self.updating.set(false);
     }
 
-    fn render_header(self: &Rc<Self>) {
+    /// Title, the state sentence, the header actions, Send, and which body shows.
+    fn render_state(self: &Rc<Self>) {
         let state = self.controller.store.state();
         let title = state.selected_summary().map_or_else(
             || "Activity".to_owned(),
@@ -463,7 +543,6 @@ impl Activity {
         self.title.set_text(&title);
         widgets::clear(&self.controls);
         widgets::clear(&self.send_area);
-        // One sentence for the state; the session's ids are its tooltip.
         let line = self.controller.agent_line();
         let (sentence, details) = match (&detail, line) {
             (Some(_), Some(line)) => (line.sentence, line.details),
@@ -473,47 +552,90 @@ impl Activity {
         self.status.set_text(&sentence);
         self.status.set_tooltip_text(details.as_deref());
         widgets::set_accessible_description(&self.status, details.as_deref().unwrap_or(""));
-        let Some(detail) = detail else {
-            return;
-        };
-        let controls = panel::activity_controls(&detail);
-        // The state line beside them states why one is unavailable; the reason is also the
-        // button's tooltip and accessible description.
-        for control in controls {
-            let this = Rc::downgrade(self);
-            let action = control.action;
-            let button =
-                widgets::compact_action(&control.label, &control.availability, move |_| {
-                    if let Some(this) = this.upgrade() {
-                        let controller = &this.controller;
-                        let result = match action {
-                            ActionName::ExecutionStart => {
-                                controller.chosen_model().and_then(|(model, thinking)| {
-                                    controller.start_execution(model, Some(thinking))
-                                })
-                            }
-                            ActionName::ExecutionCancel => controller.cancel(),
-                            _ => controller.resume(),
-                        };
-                        this.show_control_result(result);
-                    }
-                });
-            if control.tone == Tone::Primary {
-                button.add_css_class("primary");
-            }
-            self.controls.append(&button);
-        }
-        let this = Rc::downgrade(self);
-        self.send_area.append(&action_row(
-            "Send",
-            &detail.availability(ActionName::MessageSend),
-            &["primary"],
-            move |_| {
-                if let Some(this) = this.upgrade() {
-                    this.send();
+        if let Some(detail) = &detail {
+            // A disabled control's reason is its tooltip and accessible description.
+            for control in panel::activity_controls(detail) {
+                let this = Rc::downgrade(self);
+                let action = control.action;
+                let button =
+                    widgets::compact_action(&control.label, &control.availability, move |_| {
+                        if let Some(this) = this.upgrade() {
+                            let controller = &this.controller;
+                            let result = match action {
+                                ActionName::ExecutionStart => {
+                                    controller.chosen_model().and_then(|(model, thinking)| {
+                                        controller.start_execution(model, Some(thinking))
+                                    })
+                                }
+                                ActionName::ExecutionCancel => controller.cancel(),
+                                _ => controller.resume(),
+                            };
+                            this.show_control_result(result);
+                        }
+                    });
+                if control.tone == Tone::Primary {
+                    button.add_css_class("primary");
                 }
-            },
-        ));
+                self.controls.append(&button);
+            }
+            let this = Rc::downgrade(self);
+            self.send_area.append(&widgets::action_row(
+                "Send",
+                &detail.availability(ActionName::MessageSend),
+                &["primary"],
+                move |_| {
+                    if let Some(this) = this.upgrade() {
+                        this.send();
+                    }
+                },
+            ));
+        }
+        self.sync_body();
+    }
+
+    /// Shows the transcript, its empty state, or neither (the setup card stands in for both).
+    fn sync_body(&self) {
+        let state = self.controller.store.state();
+        let detail = state.selected_detail();
+        let session = detail.is_some_and(|d| d.session.is_some());
+        let execution = detail.map(|d| d.summary.execution.state);
+        let (loaded, items, more) = state
+            .ui
+            .selected
+            .as_ref()
+            .and_then(|id| state.activity.get(id))
+            .map_or((false, false, false), |log| {
+                (log.loaded, !log.items.is_empty(), log.has_more)
+            });
+        let has_detail = detail.is_some();
+        drop(state);
+        // The transcript shows while it loads (its "Loading…" row) and once it has items.
+        let transcript = has_detail && (items || (session && !loaded));
+        self.scroll.set_visible(transcript);
+        self.earlier.set_visible(transcript && more);
+        widgets::clear(&self.empty);
+        let empty = match execution {
+            None => Some((
+                "No Objective selected",
+                "Select an Objective to see its agent.",
+            )),
+            Some(_) if transcript || !session => None,
+            Some(ExecutionState::Idle) => {
+                Some(("No messages yet", "Send a prompt to start a turn."))
+            }
+            Some(ExecutionState::Starting | ExecutionState::Running) => Some((
+                "The agent is working",
+                "Its messages appear here as they arrive.",
+            )),
+            Some(_) => Some((
+                "No activity yet",
+                "The agent's messages appear here once it runs.",
+            )),
+        };
+        self.empty.set_visible(empty.is_some());
+        if let Some((title, body)) = empty {
+            self.empty.append(&widgets::empty_state(title, body, None));
+        }
     }
 
     fn item_row(item: &ActivityItem) -> (gtk::ListBoxRow, gtk::Label) {
@@ -577,22 +699,13 @@ impl Activity {
         let state = self.controller.store.state();
         let id = state.ui.selected.clone();
         *self.shown_for.borrow_mut() = id.clone();
-        let Some(id) = id else {
-            self.earlier.set_visible(false);
-            return;
-        };
-        let log = state.activity.get(&id).cloned().unwrap_or_default();
+        let log = id
+            .and_then(|id| state.activity.get(&id).cloned())
+            .unwrap_or_default();
         drop(state);
-        self.earlier.set_visible(log.has_more);
         if !log.loaded {
             let row = gtk::ListBoxRow::new();
             row.set_child(Some(&label("Loading activity…", &["meta"])));
-            self.list.append(&row);
-            return;
-        }
-        if log.items.is_empty() {
-            let row = gtk::ListBoxRow::new();
-            row.set_child(Some(&label("No activity yet.", &["meta"])));
             self.list.append(&row);
         }
         for item in &log.items {
@@ -601,6 +714,7 @@ impl Activity {
             self.text_labels.borrow_mut().push(text);
         }
         self.follow.set(true);
+        self.sync_body();
     }
 
     fn append_items(&self, from_index: usize) {
@@ -611,8 +725,8 @@ impl Activity {
         let Some(log) = state.activity.get(&id) else {
             return;
         };
-        // From the start, the list holds a placeholder row ("Loading…", "No activity yet.")
-        // instead of items: rebuild rather than append below it.
+        // From the start, the list may hold the "Loading activity…" row instead of items:
+        // rebuild rather than append below it.
         if from_index == 0 || self.text_labels.borrow().len() != from_index {
             drop(state);
             self.render_items();

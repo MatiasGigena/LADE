@@ -525,6 +525,12 @@ image.info-sign { color: @ink_metadata; }
 /* Activity --------------------------------------------------------------------------------- */
 
 .activity { padding: 24px; }
+/* "Set up the agent": one bounded group in the transcript's place (section padding). */
+.agent-setup {
+  border: 1px solid @border_separator;
+  border-radius: 8px;
+  padding: 16px;
+}
 .transcript > row.activity-item {
   padding: 12px 4px;
   border-bottom: 1px solid @border_separator;
