@@ -8,6 +8,10 @@
 //! no composer yet. With a session, the model picker, the Agent Session tools and the profile
 //! resources are under one collapsed "Agent settings" disclosure. Nothing here scrolls inside
 //! the page: the work area itself scrolls.
+//!
+//! The service's refusals are stated where their command was issued (`last_refusal`): Start in
+//! the setup card, Cancel / Resume and extension-dialog answers below the state line, Send below
+//! the composer, session operations in Agent settings.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -22,8 +26,8 @@ use super::widgets::{
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::model::{
-    ActionAvailability, ActionName, ActivityItem, ActivityRole, DeliveryMode, DeliveryState,
-    ExecutionState, ObjectiveDetail, ObjectiveId, Timestamp,
+    ActionAvailability, ActionName, ActionSurface, ActivityItem, ActivityRole, DeliveryMode,
+    DeliveryState, ExecutionState, ObjectiveDetail, ObjectiveId, Timestamp,
 };
 use crate::presentation::panel::{self, PanelAction, Tone};
 use crate::presentation::store::{ActivityChange, Change};
@@ -51,6 +55,9 @@ pub struct Activity {
     state_message: gtk::Box,
     /// The latest local error of Start / Cancel / Resume, below the state line.
     control_error: gtk::Box,
+    /// The service's latest refusal of Cancel / Resume (with an Agent Session; Start's is the
+    /// setup card's) and of an extension dialog's answer, below the state line.
+    control_refusal: gtk::Box,
     /// The setup card and the settings disclosure: rebuilt together, focus kept by key.
     agent_area: gtk::Box,
     /// "Set up the agent", in the transcript's place while there is no Agent Session.
@@ -79,6 +86,8 @@ pub struct Activity {
     mode: gtk::DropDown,
     send_area: gtk::Box,
     composer_error: gtk::Box,
+    /// The service's latest refusal of Send, below the composer.
+    send_refusal: gtk::Box,
     updating: Cell<bool>,
     follow: Cell<bool>,
     auto_scrolling: Cell<bool>,
@@ -115,6 +124,8 @@ impl Activity {
         root.append(&state_message);
         let control_error = vbox(0);
         root.append(&control_error);
+        let control_refusal = vbox(space::TIGHT);
+        root.append(&control_refusal);
 
         // The agent's setup (no session yet) or its settings (with one); never both.
         let agent_area = vbox(space::SECTION);
@@ -189,6 +200,9 @@ impl Activity {
         let composer_error = vbox(0);
         composer_error.set_visible(false);
         composer_box.append(&composer_error);
+        let send_refusal = vbox(0);
+        send_refusal.set_visible(false);
+        composer_box.append(&send_refusal);
         root.append(&composer_box);
 
         let activity = Rc::new(Self {
@@ -199,6 +213,7 @@ impl Activity {
             controls,
             state_message,
             control_error,
+            control_refusal,
             agent_area,
             setup,
             setup_body,
@@ -221,6 +236,7 @@ impl Activity {
             mode,
             send_area,
             composer_error,
+            send_refusal,
             updating: Cell::new(false),
             follow: Cell::new(true),
             auto_scrolling: Cell::new(false),
@@ -351,6 +367,18 @@ impl Activity {
         }
     }
 
+    /// The service's latest refusal of a command this Objective's `surface` issued, as an inline
+    /// message (the error code and raw detail in Details).
+    fn refusal(&self, surface: ActionSurface) -> Option<gtk::Box> {
+        let state = self.controller.store.state();
+        let refusal = state.last_refusal(state.ui.selected.as_ref()?, surface)?;
+        Some(widgets::inline_message(
+            MessageKind::Warning,
+            &refusal.message,
+            Some(&refusal.details),
+        ))
+    }
+
     fn show_control_result(&self, result: Result<(), String>) {
         widgets::clear(&self.control_error);
         if let Err(message) = result {
@@ -431,6 +459,10 @@ impl Activity {
                 if let ActionAvailability::Disabled { reason } = &start.availability {
                     row.append(&label(reason, &["meta"]));
                 }
+                // A refused Start is stated beside it, in the card.
+                if let Some(refusal) = self.refusal(ActionSurface::Agent) {
+                    row.append(&refusal);
+                }
                 body.append(&row);
             }
             None => body.append(&label(
@@ -449,6 +481,11 @@ impl Activity {
         let panel = &self.agent_panel;
         if let Some(error) = self.agent_error.borrow().as_ref() {
             panel.append(&widgets::inline_message(MessageKind::Error, error, None));
+        }
+        // The service's refusal of a session operation (tree, fork, import, export, compact,
+        // reload, model and thinking).
+        if let Some(refusal) = self.refusal(ActionSurface::Session) {
+            panel.append(&refusal);
         }
         let model = vbox(space::GROUP);
         model.append(&widgets::section_title("Model and thinking"));
@@ -638,6 +675,8 @@ impl Activity {
         widgets::clear(&self.controls);
         widgets::clear(&self.state_message);
         fit(&self.state_message);
+        widgets::clear(&self.control_refusal);
+        widgets::clear(&self.send_refusal);
         widgets::clear(&self.send_area);
         let line = self.controller.agent_line();
         let (sentence, details) = match (&detail, line) {
@@ -663,6 +702,19 @@ impl Activity {
             if let Some(control) = Self::relevant_control(detail) {
                 self.controls.append(&self.agent_button(&control));
             }
+            // Without an Agent Session a refused Start is the setup card's; an extension
+            // dialog's window is gone once answered, so its refusal is stated here.
+            let agent = detail
+                .session
+                .is_some()
+                .then(|| self.refusal(ActionSurface::Agent))
+                .flatten();
+            for refusal in agent.into_iter().chain(self.refusal(ActionSurface::Dialog)) {
+                self.control_refusal.append(&refusal);
+            }
+            if let Some(refusal) = self.refusal(ActionSurface::Send) {
+                self.send_refusal.append(&refusal);
+            }
             // Send's unavailable reason is its tooltip; the composer shows only with a session.
             let availability = detail.availability(ActionName::MessageSend);
             let this = Rc::downgrade(self);
@@ -676,6 +728,8 @@ impl Activity {
             }
             self.send_area.append(&send);
         }
+        fit(&self.control_refusal);
+        fit(&self.send_refusal);
         self.sync_body();
     }
 
