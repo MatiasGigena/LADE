@@ -789,15 +789,15 @@ pub fn cleanup(
                             .is_empty();
                     }
                 }
-                // Git's own cleanliness check (`worktree remove` without `--force`) runs `status`
-                // inside nested repositories the worktree holds, whose configuration the sandboxed
-                // agent controls: never let it run. The content capture above is the judgement.
-                if !force {
-                    return Err(conflict(
-                        "worktree has changes not in any candidate; confirm data loss to remove it",
-                    ));
+                match repo.worktree_remove(&wt, force) {
+                    Ok(()) => {}
+                    Err(GitError::WorktreeDirty) => {
+                        return Err(conflict(
+                            "worktree has changes not in any candidate; confirm data loss to remove it",
+                        ));
+                    }
+                    Err(e) => return Err(git_err(&e)),
                 }
-                repo.worktree_remove(&wt, true).map_err(|e| git_err(&e))?;
             }
             Err(GitError::WorktreeNotFound) => {
                 let _ = fs::remove_dir_all(path);

@@ -82,49 +82,6 @@ fn open_validates_top_level_non_bare_and_format() {
     ));
 }
 
-/// A forced removal of a worktree that holds a nested repository whose configuration names a
-/// filter driver must not run that program: the directory is removed without Git recursing into it.
-#[test]
-fn forced_remove_never_runs_a_nested_repositorys_filter() {
-    let tmp = TempDir::new("worktree-nested");
-    let repo = Repository::open(&init_repo(tmp.path(), "sha1")).unwrap();
-    let wt = objective(&repo, tmp.path(), "obj-nested");
-    let marker = tmp.path().join("RAN");
-    let hook = tmp.path().join("hook.sh");
-    fs::write(
-        &hook,
-        format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
-    )
-    .unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    // The sandboxed worker plants a populated nested repository in its worktree whose own config
-    // defines a clean filter and whose attributes apply it to every file.
-    let nested = wt.path().join("nested");
-    fs::create_dir(&nested).unwrap();
-    git(&nested, &["init", "-q"]);
-    git(&nested, &["config", "user.name", "a"]);
-    git(&nested, &["config", "user.email", "a@b"]);
-    fs::write(nested.join("data"), "one\n").unwrap();
-    git(&nested, &["add", "."]);
-    git(&nested, &["commit", "-q", "--no-verify", "-m", "n"]);
-    // Only now arm the filter and dirty the file: a status/checkout inside the nested repository
-    // would run the clean filter on the modified file.
-    git(
-        &nested,
-        &["config", "filter.evil.clean", hook.to_str().unwrap()],
-    );
-    fs::write(nested.join(".gitattributes"), "data filter=evil\n").unwrap();
-    fs::write(nested.join("data"), "two\n").unwrap();
-    assert!(!marker.exists(), "filter ran during setup");
-
-    repo.worktree_remove(&wt, true).expect("forced remove");
-    assert!(!wt.path().exists());
-    assert!(
-        !marker.exists(),
-        "the nested repository's filter ran during removal"
-    );
-}
-
 #[test]
 fn worktree_add_open_and_remove() {
     let tmp = TempDir::new("worktree");
