@@ -441,7 +441,8 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .viewer { border: 1px solid @border_separator; border-radius: 6px; }
 .viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
 .viewer-path { font-weight: 500; }
-.selection-line { padding: 4px 12px 0 12px; min-height: 18px; }
+/* Below the code, shown only with text (views::viewer): no band of its own when empty. */
+.selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
 .segmented button { border-radius: 0; min-height: 24px; padding: 4px 12px; }

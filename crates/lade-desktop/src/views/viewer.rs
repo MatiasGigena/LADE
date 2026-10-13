@@ -171,11 +171,6 @@ impl Viewer {
         toolbar.append(&add_feedback);
         root.append(&toolbar);
 
-        let selection_label = label("", &["meta", "selection-line"]);
-        selection_label.set_wrap(false);
-        selection_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        root.append(&selection_label);
-
         let buffer = sourceview5::Buffer::new(None);
         buffer.set_highlight_syntax(false);
         buffer.set_highlight_matching_brackets(false);
@@ -248,6 +243,14 @@ impl Viewer {
         stack.add_named(&message, Some("message"));
         stack.set_vexpand(true);
         root.append(&stack);
+        // Below the code, and only while it has something to say: appearing there it takes
+        // height from the bottom of the code area, so the code never moves under the pointer
+        // while a selection is being made, and no empty band sits above the code.
+        let selection_label = label("", &["meta", "selection-line"]);
+        selection_label.set_wrap(false);
+        selection_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        selection_label.set_visible(false);
+        root.append(&selection_label);
         let footer = hbox(space::GROUP);
         footer.add_css_class("viewer-footer");
         root.append(&footer);
@@ -443,7 +446,6 @@ impl Viewer {
             return;
         };
         self.toolbar.set_visible(true);
-        self.selection_label.set_visible(true);
         self.path_label.set_text(&key.path.display);
         self.path_label.set_tooltip_text(Some(&key.path.display));
         let basis = format::basis_label(&key.basis, detail.as_ref());
@@ -628,6 +630,11 @@ impl Viewer {
         let detail = state.selected_detail();
         let has_session = detail.is_some_and(|d| d.session.is_some());
         let selection = state.selected_ui().and_then(|u| u.selection.clone());
+        let file_open = state
+            .viewer
+            .key
+            .as_ref()
+            .is_some_and(|k| Some(&k.objective_id) == state.ui.selected.as_ref());
         // The how-to hint shows until the first selection in this window; afterwards the line
         // appears only for a selection or a reason it cannot be used. Add feedback always keeps
         // the hint as its tooltip and accessible description.
@@ -642,13 +649,14 @@ impl Viewer {
                 has_session,
             ),
         };
-        // The line keeps its height (style.css) so the code never moves under the pointer.
         let shown = if text == SELECTION_HINT && self.hint_seen.get() {
             ""
         } else {
             text.as_str()
         };
         self.selection_label.set_text(shown);
+        self.selection_label
+            .set_visible(file_open && !shown.is_empty());
         self.selection_label
             .set_tooltip_text((!shown.is_empty()).then_some(shown));
         self.add_feedback.set_sensitive(enabled);
