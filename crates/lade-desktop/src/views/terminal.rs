@@ -22,12 +22,13 @@ use super::widgets::{
 use super::workbench;
 use crate::presentation::controller::Controller;
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::model::{Lifecycle, ObjectiveId};
-use crate::presentation::panel;
+use crate::presentation::model::{
+    ActionAvailability, ActionSurface, ObjectiveDetail, ObjectiveId, Refusal,
+};
 use crate::presentation::store::{Change, MainView, StoreUpdate};
 use crate::presentation::terminal::{
     MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalStatus,
-    encode_key, local_open_blocker, paste_text,
+    awaits_first_start, encode_key, paste_text,
 };
 
 /// The terminal's scope in one line (an open terminal's header) and in full (its tooltip and
@@ -39,20 +40,28 @@ const SCOPE_FULL: &str = "A shell in this Objective's sandbox: its worktree only
      review. Closing the window or losing the connection ends it; nothing restarts on its own.";
 const SCOPE_SENTENCE: &str = "A shell in this Objective's sandbox: its worktree only, no \
      network, no credentials. Closing the window ends it.";
+const DISCONNECTED: &str = "A terminal opens while the window is connected to the service.";
+/// A service that projects no `terminal.open` for the Objective.
+const NOT_OFFERED: &str = "The service offers no terminal for this Objective.";
 
 /// What the pane shows while no terminal exists for the selected Objective.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Empty {
     /// The Workspace has no Objectives: the work area's first-Objective state.
     FirstObjective,
     NoSelection,
-    /// The lifecycle admits no terminal.
-    Finished,
     Disconnected,
-    /// Open is unavailable for this reason; the remedy is in Activity.
-    Blocked(&'static str),
+    /// The service's reason why no terminal can open; `activity` when the remedy is the agent's
+    /// first start, in Activity.
+    Unavailable {
+        reason: String,
+        activity: bool,
+    },
     Opening,
-    CanOpen,
+    /// Open is offered; `note` is the service's note on it (for example that it opens read-only).
+    CanOpen {
+        note: Option<String>,
+    },
 }
 
 pub struct TerminalPane {
@@ -70,9 +79,9 @@ pub struct TerminalPane {
     activity_button: gtk::Button,
     body: gtk::Stack,
     empty: gtk::Box,
-    shown_empty: Cell<Option<Empty>>,
-    /// The problem on display and whether it is a refused open.
-    shown_problem: RefCell<Option<(String, bool)>>,
+    shown_empty: RefCell<Option<Empty>>,
+    /// The refusal on display.
+    shown_problem: RefCell<Option<Refusal>>,
     pub view: gtk::TextView,
     size: Cell<(u16, u16)>,
     render_pending: Cell<bool>,
@@ -196,7 +205,7 @@ impl TerminalPane {
             activity_button,
             body,
             empty,
-            shown_empty: Cell::new(None),
+            shown_empty: RefCell::new(None),
             shown_problem: RefCell::new(None),
             view,
             size: Cell::new((80, 24)),
@@ -440,31 +449,34 @@ impl TerminalPane {
         self.close_button.set_visible(exists && !reopen);
     }
 
-    /// The latest problem: a refused open as a calm note (its service code in Details), any
-    /// other problem of an existing terminal as a warning. Rebuilt only when it changes, so an
-    /// expanded Details stays open across output.
-    fn show_problem(&self, problem: Option<(String, bool)>) {
+    /// The latest refusal of a terminal request (`last_refusal(o, Terminal)`): the service's
+    /// refusal as a calm note with its code in Details, a local problem (not sent, paste too
+    /// large) as a warning. Rebuilt only when it changes, so an expanded Details stays open
+    /// across output.
+    fn show_problem(&self, problem: Option<Refusal>) {
         if *self.shown_problem.borrow() == problem {
             return;
         }
         widgets::clear(&self.problem);
         self.shown_problem.replace(problem.clone());
-        if let Some((message, refused)) = problem {
-            let (text, details) = panel::refusal_parts(&message);
-            let kind = if refused {
-                MessageKind::Info
-            } else {
+        if let Some(refusal) = problem {
+            let kind = if refusal.details.is_empty() {
                 MessageKind::Warning
+            } else {
+                MessageKind::Info
             };
-            self.problem
-                .append(&widgets::inline_message(kind, &text, details.as_deref()));
+            self.problem.append(&widgets::inline_message(
+                kind,
+                &refusal.message,
+                Some(&refusal.details),
+            ));
         }
     }
 
     /// Shows the empty state for `kind` (rebuilt only when it changes).
     fn show_empty(&self, kind: Empty) {
         self.body.set_visible_child_name("empty");
-        if self.shown_empty.replace(Some(kind)) == Some(kind) {
+        if self.shown_empty.borrow().as_ref() == Some(&kind) {
             return;
         }
         // The kept buttons leave the previous block before it is replaced.
@@ -474,10 +486,11 @@ impl TerminalPane {
             }
         }
         widgets::clear(&self.empty);
-        let (title, body, action, scope) = match kind {
+        let (title, body, action, scope) = match &kind {
             Empty::FirstObjective => {
                 self.empty
                     .append(&workbench::first_objective_state(&self.controller));
+                self.shown_empty.replace(Some(kind));
                 return;
             }
             Empty::NoSelection => (
@@ -486,29 +499,21 @@ impl TerminalPane {
                 None,
                 false,
             ),
-            Empty::Finished => (
-                "No terminal",
-                "This Objective is finished; it has no worktree to open a terminal in.",
-                None,
-                false,
-            ),
-            Empty::Disconnected => (
-                "No terminal open",
-                "A terminal opens while the window is connected to the service.",
-                None,
-                true,
-            ),
-            Empty::Blocked(reason) => {
-                set_accessible_description(&self.activity_button, reason);
-                (
-                    "No terminal open",
-                    reason,
-                    Some(&self.activity_button),
-                    true,
-                )
+            Empty::Disconnected => ("No terminal open", DISCONNECTED, None, true),
+            Empty::Unavailable { reason, activity } => {
+                let action = activity.then(|| {
+                    set_accessible_description(&self.activity_button, reason);
+                    &self.activity_button
+                });
+                ("No terminal open", reason.as_str(), action, *activity)
             }
             Empty::Opening => ("Opening the terminal…", "", None, true),
-            Empty::CanOpen => ("No terminal open", "", Some(&self.open_button), true),
+            Empty::CanOpen { note } => (
+                "No terminal open",
+                note.as_deref().unwrap_or(""),
+                Some(&self.open_button),
+                true,
+            ),
         };
         self.empty.append(&widgets::empty_state(
             title,
@@ -516,17 +521,26 @@ impl TerminalPane {
             action,
             scope.then_some(SCOPE_SENTENCE),
         ));
+        self.shown_empty.replace(Some(kind));
     }
 
     fn render(&self) {
         let state = self.controller.store.state();
         let summary = state.selected_summary().cloned();
-        let detail = state.selected_detail().cloned();
+        let detail = state.selected_detail();
+        let availability = detail.map(ObjectiveDetail::terminal_availability);
+        let note = detail
+            .and_then(ObjectiveDetail::terminal_note)
+            .map(str::to_owned);
         let connected = state.connection.is_connected();
         let board_empty = workbench::board_is_empty(&state);
         let session = summary
             .as_ref()
             .and_then(|s| state.terminal_for(&s.objective_id))
+            .cloned();
+        let refusal = summary
+            .as_ref()
+            .and_then(|s| state.last_refusal(&s.objective_id, ActionSurface::Terminal))
             .cloned();
         drop(state);
         let Some(summary) = summary else {
@@ -543,45 +557,41 @@ impl TerminalPane {
         };
         self.title
             .set_text(&format!("Terminal — {}", summary.title));
-        let admits = matches!(
-            summary.lifecycle,
-            Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen | Lifecycle::Approved
-        );
-        let blocker = local_open_blocker(&summary, detail.as_ref());
-        // An open the service refused (or that was never sent) is not a terminal: no frame, no
-        // "failed" end, only the problem beside the empty state.
-        let session = session.filter(|s| !s.never_opened() || s.problem.is_some());
-        let exists = session
-            .as_ref()
-            .is_some_and(|s| !s.never_opened() && s.status != TerminalStatus::Opening);
         let open = session.as_ref().is_some_and(|s| s.is_open());
         let opening = session
             .as_ref()
             .is_some_and(|s| s.status == TerminalStatus::Opening);
-        let can_open = connected && admits && blocker.is_none() && !open && !opening;
-        // A refusal the blocker already explains is not repeated.
-        let problem = session.as_ref().and_then(|s| {
-            let refused = s.never_opened();
-            s.problem
-                .clone()
-                .filter(|_| !(refused && blocker.is_some()))
-                .map(|p| (p, refused))
-        });
-        self.show_problem(problem);
+        let exists = session.is_some() && !opening;
+        let enabled = availability == Some(ActionAvailability::Enabled);
+        let can_open = connected && enabled && !open && !opening;
+        // Why Open is unavailable, as the service projected it (`None` while the Objective's
+        // detail loads: Open stays insensitive without a reason to show yet).
+        let unavailable = match availability {
+            _ if !connected => Some(DISCONNECTED.to_owned()),
+            Some(ActionAvailability::Disabled { reason }) => Some(reason),
+            Some(ActionAvailability::NotOffered) => Some(NOT_OFFERED.to_owned()),
+            Some(ActionAvailability::Enabled) | None => None,
+        };
         if !exists {
+            // A refused open is not repeated while the empty state already says why Open is
+            // unavailable now.
+            self.show_problem(refusal.filter(|_| unavailable.is_none()));
             self.show_header(None, false, false);
             self.set_text("");
             self.open_button.set_sensitive(can_open);
-            self.show_empty(match blocker {
+            self.show_empty(match unavailable {
                 _ if opening => Empty::Opening,
-                _ if !admits => Empty::Finished,
                 _ if !connected => Empty::Disconnected,
-                Some(reason) => Empty::Blocked(reason),
-                None => Empty::CanOpen,
+                Some(reason) => Empty::Unavailable {
+                    reason,
+                    activity: awaits_first_start(&summary),
+                },
+                None => Empty::CanOpen { note },
             });
             return;
         }
-        self.shown_empty.set(None);
+        self.show_problem(refusal);
+        self.shown_empty.replace(None);
         self.body.set_visible_child_name("terminal");
         let status = session
             .as_ref()
@@ -591,17 +601,12 @@ impl TerminalPane {
                 TerminalStatus::Ended(end) => end.message(),
             });
         self.show_header(Some(&status), !open, can_open);
-        // A disabled Open a new terminal keeps its reason (tooltip and accessible description).
-        let why_not = match blocker {
-            _ if can_open => "",
-            _ if !admits => "This Objective is finished; it has no worktree to open a terminal in.",
-            _ if !connected => "A terminal opens while the window is connected to the service.",
-            Some(reason) => reason,
-            None => "",
-        };
+        // Open a new terminal keeps why it is unavailable, or the service's note on it, as its
+        // tooltip and accessible description.
+        let hint = unavailable.or(note).unwrap_or_default();
         self.reopen_button
-            .set_tooltip_text((!why_not.is_empty()).then_some(why_not));
-        set_accessible_description(&self.reopen_button, why_not);
+            .set_tooltip_text((!hint.is_empty()).then_some(hint.as_str()));
+        set_accessible_description(&self.reopen_button, &hint);
         set_accessible_label(
             &self.view,
             &match session.as_ref().and_then(|s| s.mode) {

@@ -1580,6 +1580,13 @@ mod tests {
         );
         // A lost connection ends terminals locally too (the service ended them with the lease).
         controller.open_terminal(80, 24).unwrap();
+        controller.store.apply(StoreUpdate::TerminalOpened {
+            objective_id: id.clone(),
+            terminal_id: "00000000-0000-4000-8000-000000000043".into(),
+            mode: TerminalMode::ReadWrite,
+            cols: 80,
+            rows: 24,
+        });
         controller.store.apply(StoreUpdate::Connection(
             super::super::model::ConnectionState::Reconnecting { attempt: 1 },
         ));

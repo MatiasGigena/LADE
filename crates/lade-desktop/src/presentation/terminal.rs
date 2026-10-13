@@ -12,7 +12,7 @@
 
 use std::collections::VecDeque;
 
-use super::model::{Lifecycle, ObjectiveDetail, ObjectiveId, ObjectiveSummary};
+use super::model::{Lifecycle, ObjectiveId, ObjectiveSummary};
 
 /// Lines kept above the visible screen.
 pub const SCROLLBACK_LINES: usize = 2000;
@@ -701,8 +701,6 @@ pub struct TerminalSession {
     pub status: TerminalStatus,
     pub screen: Screen,
     pub last_seq: u64,
-    /// The latest refusal or input problem, shown in the pane (not as a notice).
-    pub problem: Option<String>,
 }
 
 impl TerminalSession {
@@ -714,19 +712,11 @@ impl TerminalSession {
             status: TerminalStatus::Opening,
             screen: Screen::new(cols, rows),
             last_seq: 0,
-            problem: None,
         }
     }
 
     pub fn is_open(&self) -> bool {
         self.status == TerminalStatus::Open
-    }
-
-    /// The service never opened this terminal (its open was refused or not sent): there is no
-    /// shell, output or end to show, only the problem. The store records such an attempt as
-    /// `Ended(Failed)` without a terminal id.
-    pub fn never_opened(&self) -> bool {
-        self.terminal_id.is_none() && matches!(self.status, TerminalStatus::Ended(_))
     }
 
     /// Applies one output event; a sequence gap or a service-side drop is marked in the text.
@@ -745,22 +735,12 @@ impl TerminalSession {
     }
 }
 
-/// Why Open terminal is unavailable although the lifecycle admits a terminal: an Objective that
-/// never had an agent session has no worktree yet (the first start creates it), so the service
-/// would refuse the open.
-pub const NO_WORKTREE_REASON: &str = "Start the agent once to create this Objective's worktree.";
-
-/// Interim client-side availability of Open terminal beyond the lifecycle, until the service
-/// publishes it: `Some(reason)` for a defined Objective that has never run the agent. Only this
-/// function decides it, so the service's availability can replace it in one place.
-pub fn local_open_blocker(
-    summary: &ObjectiveSummary,
-    detail: Option<&ObjectiveDetail>,
-) -> Option<&'static str> {
-    let never_started = summary.lifecycle == Lifecycle::Defined
-        && summary.execution.generation == 0
-        && detail.is_none_or(|d| d.session.is_none());
-    never_started.then_some(NO_WORKTREE_REASON)
+/// Whether the remedy for an unavailable terminal is in Activity: a defined Objective has not
+/// started its agent yet, and that first start creates the worktree a terminal opens in. Only
+/// where the pane points; whether a terminal can open is the service's projection
+/// (`ObjectiveDetail::terminal_availability`).
+pub fn awaits_first_start(summary: &ObjectiveSummary) -> bool {
+    summary.lifecycle == Lifecycle::Defined
 }
 
 #[cfg(test)]
@@ -873,46 +853,26 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_open_is_not_a_terminal_that_ended() {
-        let mut refused = TerminalSession::opening(ObjectiveId::new("o"), 80, 24);
-        refused.status = TerminalStatus::Ended(TerminalEnd::Failed);
-        assert!(refused.never_opened());
-        let mut exited = refused.clone();
-        exited.terminal_id = Some("t".into());
-        assert!(!exited.never_opened());
-        let opening = TerminalSession::opening(ObjectiveId::new("o"), 80, 24);
-        assert!(!opening.never_opened());
-    }
-
-    #[test]
-    fn an_objective_that_never_ran_the_agent_cannot_open_a_terminal() {
+    fn only_a_defined_objective_points_to_activity_for_its_terminal() {
         use crate::presentation::model::{ConnectionState, ExecutionState};
         use crate::presentation::store::PresentationState;
         let mut state = PresentationState::new(ConnectionState::Connected);
         for update in crate::presentation::test_fixture::fixture_updates() {
             state.apply(update);
         }
-        let mut detail = state
+        let mut summary = state
             .details
             .values()
             .find_map(|d| d.loaded().cloned())
-            .unwrap();
-        detail.summary.lifecycle = Lifecycle::Defined;
-        detail.summary.execution.state = ExecutionState::None;
-        detail.summary.execution.generation = 0;
-        detail.session = None;
-        let summary = detail.summary.clone();
-        assert_eq!(
-            local_open_blocker(&summary, Some(&detail)),
-            Some(NO_WORKTREE_REASON)
-        );
-        assert_eq!(local_open_blocker(&summary, None), Some(NO_WORKTREE_REASON));
-        let mut started = summary.clone();
-        started.execution.generation = 1;
-        assert_eq!(local_open_blocker(&started, None), None);
-        let mut active = summary;
-        active.lifecycle = Lifecycle::Active;
-        assert_eq!(local_open_blocker(&active, Some(&detail)), None);
+            .unwrap()
+            .summary;
+        summary.lifecycle = Lifecycle::Defined;
+        summary.execution.state = ExecutionState::None;
+        assert!(awaits_first_start(&summary));
+        for lifecycle in [Lifecycle::Active, Lifecycle::Frozen, Lifecycle::Discarded] {
+            summary.lifecycle = lifecycle;
+            assert!(!awaits_first_start(&summary), "{lifecycle:?}");
+        }
     }
 
     #[test]

@@ -596,9 +596,9 @@ impl PresentationState {
     }
 
     /// A terminal request failed. A terminal that never opened leaves no session behind (the
-    /// pane must not read "The terminal failed." or offer "Open a new terminal"); the problem
-    /// stays on an earlier session of the Objective, if any, and under
-    /// [`ActionSurface::Terminal`].
+    /// pane must not read "The terminal failed." or offer "Open a new terminal"); an earlier
+    /// session of the Objective keeps its own status. The problem is kept under
+    /// [`ActionSurface::Terminal`], the pane's one place for it.
     fn terminal_problem(&mut self, objective_id: ObjectiveId, refusal: Refusal) -> Vec<Change> {
         if let Some(index) = self.terminals.iter().rposition(|t| {
             t.objective_id == objective_id
@@ -606,9 +606,6 @@ impl PresentationState {
                 && t.terminal_id.is_none()
         }) {
             self.terminals.remove(index);
-        }
-        if let Some(session) = self.terminal_for_mut(&objective_id) {
-            session.problem = Some(refusal.message.clone());
         }
         self.keep_refusal(objective_id, ActionSurface::Terminal, refusal)
     }
@@ -633,7 +630,16 @@ impl PresentationState {
                         editor.connection_lost();
                         changes.push(Change::DraftStatus(editor.draft_id.clone()));
                     }
-                    // The service ends terminals with the lease.
+                    // The service ends terminals with the lease; an open still unanswered never
+                    // opened, so it leaves nothing behind.
+                    self.terminals.retain(|t| {
+                        let pending =
+                            t.status == TerminalStatus::Opening && t.terminal_id.is_none();
+                        if pending {
+                            changes.push(Change::Terminal(t.objective_id.clone()));
+                        }
+                        !pending
+                    });
                     for session in &mut self.terminals {
                         if !matches!(session.status, TerminalStatus::Ended(_)) {
                             session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
@@ -1088,7 +1094,6 @@ impl PresentationState {
                 session.terminal_id = Some(terminal_id);
                 session.mode = Some(mode);
                 session.status = TerminalStatus::Open;
-                session.problem = None;
                 session.screen.resize(usize::from(cols), usize::from(rows));
                 self.refusals
                     .remove(&(objective_id.clone(), ActionSurface::Terminal));
@@ -1747,7 +1752,7 @@ mod tests {
             message: "Open terminal was not sent: not connected.".into(),
         });
         assert!(state.terminal_for(&o).is_none());
-        // An earlier session keeps its own status and carries the problem.
+        // An earlier session keeps its own status; the problem stays under the surface.
         state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
         state.apply(StoreUpdate::TerminalOpened {
             objective_id: o.clone(),
@@ -1769,10 +1774,22 @@ mod tests {
         let session = state.terminal_for(&o).unwrap();
         assert_eq!(session.status, TerminalStatus::Ended(TerminalEnd::Closed));
         assert_eq!(
-            session.problem.as_deref(),
+            state
+                .last_refusal(&o, ActionSurface::Terminal)
+                .map(|r| r.message.as_str()),
             Some("Couldn't open terminal. Too many terminals are open.")
         );
         assert_eq!(state.terminals.len(), 1);
+        // A lost connection leaves no pending open behind either.
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
+            attempt: 1,
+        }));
+        assert_eq!(state.terminals.len(), 1);
+        assert_eq!(
+            state.terminal_for(&o).map(|t| t.status.clone()),
+            Some(TerminalStatus::Ended(TerminalEnd::Closed))
+        );
     }
 
     #[test]
