@@ -392,17 +392,17 @@ impl App {
             }
         }));
         let weak = Rc::downgrade(self);
-        self.header.shortcuts_button.connect_clicked(move |b| {
+        self.header.set_on_shortcuts(Rc::new(move |opener| {
             if let Some(app) = weak.upgrade() {
-                dialogs::shortcuts(b, &app.controller, app.keys_path.clone());
+                dialogs::shortcuts(opener, &app.controller, app.keys_path.clone());
             }
-        });
+        }));
         let weak = Rc::downgrade(self);
-        self.header.exit_button.connect_clicked(move |_| {
+        self.header.set_on_exit(Rc::new(move |opener| {
             if let Some(app) = weak.upgrade() {
-                app.confirm_exit();
+                app.confirm_exit(opener);
             }
-        });
+        }));
         self.install_shortcuts();
     }
 
@@ -477,7 +477,7 @@ impl App {
             AppAction::LeaveTerminal => self.leave_terminal(),
             AppAction::TerminalCopy => self.terminal.copy(),
             AppAction::TerminalPaste => self.terminal.paste(),
-            AppAction::Exit => self.confirm_exit(),
+            AppAction::Exit => self.header.request_exit(),
             AppAction::NextRegion => self.cycle_regions(true),
             AppAction::PreviousRegion => self.cycle_regions(false),
             AppAction::ShowWorkbench => self.controller.set_view(MainView::Workbench),
@@ -493,11 +493,7 @@ impl App {
                 dialogs::open_workspace(self.window.upcast_ref(), &self.controller);
             }
             AppAction::ToggleViewerMode => self.controller.toggle_viewer_mode(),
-            AppAction::ShowShortcuts => dialogs::shortcuts(
-                &self.header.shortcuts_button,
-                &self.controller,
-                self.keys_path.clone(),
-            ),
+            AppAction::ShowShortcuts => self.header.show_shortcuts(),
             AppAction::SendMessage => {
                 if !self.activity.composer_has_focus() {
                     return glib::Propagation::Proceed;
@@ -542,8 +538,8 @@ impl App {
 
     /// Explicit Exit: confirms, then stops the service (agents and terminals) when this window
     /// controls it; the window closes once the service confirms. Closing the window instead
-    /// keeps authorized background work running.
-    fn confirm_exit(self: &Rc<Self>) {
+    /// keeps authorized background work running. Focus returns to `opener` if Exit is cancelled.
+    fn confirm_exit(self: &Rc<Self>, opener: &gtk::Widget) {
         let controls = self.store.state().connection.is_connected();
         let body = if controls {
             "Exit stops the LADE service: running agents are stopped and recorded as interrupted, terminals end, and nothing resumes on its own when LADE starts again. To keep agents working in the background, close the window instead."
@@ -551,21 +547,14 @@ impl App {
             "This window does not control the LADE service, so Exit only closes the window. The service and its agents are not affected."
         };
         let weak = Rc::downgrade(self);
-        dialogs::confirm(
-            &self.header.exit_button,
-            "Exit LADE?",
-            body,
-            "Exit",
-            controls,
-            move || {
-                if let Some(app) = weak.upgrade()
-                    && app.guard_unsaved(CloseAfter::Exit)
-                {
-                    app.finish_close(CloseAfter::Exit);
-                }
-                Ok(())
-            },
-        );
+        dialogs::confirm(opener, "Exit LADE?", body, "Exit", controls, move || {
+            if let Some(app) = weak.upgrade()
+                && app.guard_unsaved(CloseAfter::Exit)
+            {
+                app.finish_close(CloseAfter::Exit);
+            }
+            Ok(())
+        });
     }
 
     /// The desktop session is ending: stop the service per policy (no lingering, no resume).
@@ -1099,7 +1088,7 @@ impl App {
         // gets the whole width.
         self.right.set_visible(c.centre || c.inspector);
         self.region_bar.set_visible(c.region_switches);
-        self.header.set_compact(class == LayoutClass::Compact);
+        self.header.set_compact(c.compact_header);
         self.workbench
             .set_objective_details(c.objective_details, c.details_toggle);
         self.updating_layout.set(true);

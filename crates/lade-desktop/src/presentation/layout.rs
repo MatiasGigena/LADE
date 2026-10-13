@@ -115,8 +115,10 @@ pub struct Composition {
     pub inspector: bool,
     /// The explicit region switches below the header.
     pub region_switches: bool,
-    /// The profile name beside the avatar (the avatar keeps its accessible name).
-    pub profile_name: bool,
+    /// The compact header: search behind an icon with a popover, the connection status as its
+    /// sign only, Keyboard shortcuts and Exit in a menu, the profile as its avatar only (it keeps
+    /// its accessible name). Every header control stays reachable; nothing is clipped.
+    pub compact_header: bool,
     /// Outcome, journey and version line above the Change Set.
     pub objective_details: bool,
     /// The toggle that collapses or expands those Objective details.
@@ -130,7 +132,7 @@ pub fn composition(class: LayoutClass, region: Region, details_expanded: bool) -
             centre: true,
             inspector: true,
             region_switches: false,
-            profile_name: true,
+            compact_header: false,
             objective_details: true,
             details_toggle: false,
         },
@@ -144,7 +146,7 @@ pub fn composition(class: LayoutClass, region: Region, details_expanded: bool) -
                 centre: shown == Region::Main,
                 inspector: shown == Region::Inspector,
                 region_switches: true,
-                profile_name: false,
+                compact_header: true,
                 objective_details: details_expanded,
                 details_toggle: true,
             }
@@ -192,7 +194,7 @@ mod tests {
     fn wide_shows_every_region_without_switches() {
         for region in REGION_ORDER {
             let c = composition(LayoutClass::Wide, region, false);
-            assert!(c.rail && c.centre && c.inspector && c.objective_details && c.profile_name);
+            assert!(c.rail && c.centre && c.inspector && c.objective_details && !c.compact_header);
             assert!(!c.region_switches && !c.details_toggle);
         }
     }
@@ -203,7 +205,7 @@ mod tests {
             let c = composition(LayoutClass::Compact, region, false);
             let shown = [c.rail, c.centre, c.inspector];
             assert_eq!(shown.iter().filter(|s| **s).count(), 1, "{region:?}");
-            assert!(c.region_switches && c.details_toggle && !c.profile_name);
+            assert!(c.region_switches && c.details_toggle && c.compact_header);
             assert!(!c.objective_details);
         }
         assert!(composition(LayoutClass::Compact, Region::Header, false).centre);
