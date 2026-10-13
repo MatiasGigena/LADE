@@ -186,10 +186,11 @@ impl App {
         centre.add_named(&terminal.root, Some("terminal"));
         centre.set_hexpand(true);
         centre.set_vexpand(true);
-        // Each page is as tall as its own content: Activity grows with its transcript and
-        // settings (the work area scrolls), and that height must not stretch the Workbench or the
-        // Terminal below the window.
+        // Each page is sized by its own content: Activity grows with its transcript and settings
+        // (the work area scrolls), and neither that height nor the natural width of its long
+        // lines may stretch the Workbench or the Terminal past the window.
         centre.set_vhomogeneous(false);
+        centre.set_hhomogeneous(false);
         centre.add_css_class("centre-stack");
         let centre_region = widgets::region_scroll(&centre);
         centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
