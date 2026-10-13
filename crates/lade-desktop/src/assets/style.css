@@ -443,7 +443,9 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
 .segmented button { border-radius: 0; min-height: 24px; padding: 4px 12px; }
 .segmented button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
-.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-left-width: 0; }
+.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+/* One shared 1px divider between neighbours: every segment after the first drops its left border. */
+.segmented button:not(:first-child) { border-left-width: 0; }
 .segmented button:checked { background-color: @fill_selected; font-weight: 600; }
 
 textview.code-view, textview.code-view > text {
