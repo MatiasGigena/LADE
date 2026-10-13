@@ -295,6 +295,13 @@ for name, recipe, expected in [
         ('nodes-over', dict(nodes=True), 'limit_reached'), ('frame-over', dict(padding=1048577), 'frame_size'),
         ('frame-exact', dict(padding=1048576), 'ok')]:
     case(name, 'json', recipe, expected)
+# Exactly 16,384 values (1 root + 16 arrays + 16,367 zeros): a comma after the last value is malformed JSON, not a
+# 16,385th value, so it rejects as invalid_json rather than limit_reached.
+full_budget = '[' + ','.join('[' + ','.join(['0'] * n) + ']' for n in [1023] * 15 + [1022]) + ']'
+for name, text, expected in [('nodes-exact', full_budget, 'ok'),
+                             ('nodes-exact-trailing-comma', full_budget[:-2] + ',]]', 'invalid_json'),
+                             ('nodes-exact-dangling-comma', full_budget[:-2] + ',', 'invalid_json')]:
+    case(name, 'json', dict(text=text), expected)
 hello = envelope(dict(kind='hello'))
 abort = envelope(dict(kind='session.abort'))
 case('client-header-over', 'transport', dict(hex='00100001'), 'frame_size', framing='client', contract='client')
