@@ -25,6 +25,7 @@ use super::convert::{
     conflict, counter, invalid, new_uuid, not_found, parse_uuid, rejection, wire_id,
 };
 use super::handlers::Pending;
+use super::project::TERMINAL_SANDBOX_UNAVAILABLE;
 use super::{Flow, JobOutput, ReqCtx, Service};
 
 /// Terminals per Objective (bounded load; the total is `ResourceLimits::max_terminals`).
@@ -143,7 +144,7 @@ impl Service {
                     ErrorCode::LimitReached,
                     SafeAction::None,
                     &format!(
-                        "{open} of {MAX_PER_OBJECTIVE} terminals of this Objective and {total} of {max} in total are open (laded --max-terminals {max}); close one first"
+                        "Too many terminals are open ({open} of {MAX_PER_OBJECTIVE} for this Objective, {total} of {max} in total). Close one first."
                     ),
                 ));
             }
@@ -152,7 +153,7 @@ impl Service {
             }
             let tools = self
                 .sandbox_tools()
-                .ok_or_else(|| unavailable("terminal sandbox unavailable (bubblewrap/prlimit)"))?;
+                .ok_or_else(|| unavailable(TERMINAL_SANDBOX_UNAVAILABLE))?;
             let st = self.obj(oid)?;
             let ws = self.ws_of(st)?;
             let terminal_id = new_uuid();
@@ -190,7 +191,7 @@ impl Service {
             move || {
                 JobOutput::Terminal(Terminal::open(&tools, &request).map_err(|e| {
                     eprintln!("laded: terminal could not start: {}", e.kind());
-                    unavailable("the terminal sandbox could not start")
+                    unavailable("The terminal could not start. Try again.")
                 }))
             },
         );
@@ -213,7 +214,9 @@ impl Service {
             let scope = self.terminal_scope(oid);
             let admitted = match scope {
                 Ok(now_writable) if still_controller && (now_writable || !writable) => Ok(()),
-                Ok(_) => Err(conflict("a review freeze started; open the terminal again")),
+                Ok(_) => Err(conflict(
+                    "The work was frozen for review while the terminal started. Open it again for a read-only terminal.",
+                )),
                 Err(rejection) => Err(rejection),
             };
             match admitted {
@@ -270,7 +273,7 @@ impl Service {
                 std::io::ErrorKind::WouldBlock => rejection(
                     ErrorCode::LimitReached,
                     SafeAction::None,
-                    "the terminal is not reading input; wait or close it",
+                    "The terminal isn't reading input. Wait, or close it.",
                 ),
                 _ => not_found("terminal"),
             })

@@ -335,7 +335,7 @@ fn empty_change_set_disables_freeze_with_the_same_reason_as_the_rejection() {
     let reason = freeze.reason.clone().unwrap();
     assert_eq!(
         reason,
-        "No changes to freeze — complete without changes instead"
+        "There are no changes to freeze. Complete without changes instead."
     );
     // The request agrees, without stopping the live execution first.
     let rejected = client

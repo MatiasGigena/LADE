@@ -67,7 +67,7 @@ pub struct SaveDraft {
 
 fn check_body(body: &str) -> Result<(), DomainError> {
     if body.len() > MAX_TEXT_BYTES {
-        return Err(DomainError::LimitReached("draft body too large"));
+        return Err(DomainError::LimitReached("The draft is too long."));
     }
     Ok(())
 }
@@ -86,7 +86,9 @@ pub fn save_draft(
     match existing {
         None if request.expected_revision == Revision::new(0) => {
             if objective.lifecycle().is_terminal() {
-                return Err(DomainError::InvalidLifecycle("objective is closed"));
+                return Err(DomainError::InvalidLifecycle(
+                    crate::domain::objectives::CLOSED,
+                ));
             }
             let Some(session) = objective.execution().session() else {
                 return Err(DomainError::ExecutionUnavailable);
@@ -114,7 +116,7 @@ pub fn save_draft(
             Err(DomainError::NotFound("draft"))
         }
         Some(_) if request.expected_revision == Revision::new(0) => {
-            Err(DomainError::Conflict("draft already exists"))
+            Err(DomainError::Conflict("This draft already exists."))
         }
         Some(mut draft) => {
             draft.update(
@@ -159,11 +161,13 @@ impl Draft {
     fn check_editable(&self, expected_revision: Revision) -> Result<(), DomainError> {
         if !self.is_unsent() {
             return Err(DomainError::InvalidLifecycle(
-                "submitted drafts are history",
+                "This draft was already submitted and can't be changed.",
             ));
         }
         if expected_revision != self.record.revision {
-            return Err(DomainError::Conflict("draft revision mismatch"));
+            return Err(DomainError::Conflict(
+                "The draft was changed elsewhere. Refresh and try again.",
+            ));
         }
         Ok(())
     }
@@ -316,11 +320,22 @@ pub struct BatchEntry<'a> {
     pub current: CurrentContent<'a>,
 }
 
+/// Why input (a message or feedback) is refused for an Objective in `lifecycle` (not active).
+pub const fn input_refusal(lifecycle: Lifecycle) -> &'static str {
+    match lifecycle {
+        Lifecycle::Defined | Lifecycle::Active => "Start the agent before sending input.",
+        Lifecycle::Frozen | Lifecycle::Approved => {
+            "Return the candidate for revision before sending more input."
+        }
+        _ => crate::domain::objectives::CLOSED,
+    }
+}
+
 fn check_accepting(objective: &Objective, acceptance: &Acceptance) -> Result<(), DomainError> {
     if objective.lifecycle() != Lifecycle::Active {
-        return Err(DomainError::InvalidLifecycle(
-            "input requires an active objective; return a frozen candidate for revision first",
-        ));
+        return Err(DomainError::InvalidLifecycle(input_refusal(
+            objective.lifecycle(),
+        )));
     }
     objective
         .execution()
@@ -349,10 +364,10 @@ pub fn accept_message(
 ) -> Result<AcceptedInput, DomainError> {
     check_accepting(objective, &acceptance)?;
     if text.trim().is_empty() {
-        return Err(DomainError::InvalidRequest("message text is required"));
+        return Err(DomainError::InvalidRequest("Type a message first."));
     }
     if text.len() > MAX_TEXT_BYTES {
-        return Err(DomainError::LimitReached("message too large"));
+        return Err(DomainError::LimitReached("The message is too long."));
     }
     Ok(AcceptedInput {
         id: acceptance.input_id,
@@ -380,16 +395,20 @@ pub fn accept_feedback(
     now: Timestamp,
 ) -> Result<AcceptedInput, DomainError> {
     if batch.is_empty() {
-        return Err(DomainError::InvalidRequest("feedback batch is empty"));
+        return Err(DomainError::InvalidRequest(
+            "Select at least one draft to submit.",
+        ));
     }
     if batch.len() > MAX_BATCH_ITEMS {
-        return Err(DomainError::LimitReached("feedback batch too large"));
+        return Err(DomainError::LimitReached(
+            "Too many drafts for one submission. Submit fewer at once.",
+        ));
     }
     if note
         .as_deref()
         .is_some_and(|text| text.len() > MAX_TEXT_BYTES)
     {
-        return Err(DomainError::LimitReached("note too large"));
+        return Err(DomainError::LimitReached("The note is too long."));
     }
     for (index, entry) in batch.iter().enumerate() {
         if batch[..index]
@@ -403,13 +422,17 @@ pub fn accept_feedback(
             return Err(DomainError::NotFound("draft"));
         }
         if !entry.draft.is_unsent() {
-            return Err(DomainError::Conflict("draft already submitted"));
+            return Err(DomainError::Conflict("A draft was already submitted."));
         }
         if record.revision != entry.revision {
-            return Err(DomainError::Conflict("draft revision mismatch"));
+            return Err(DomainError::Conflict(
+                "A draft changed after you reviewed it. Refresh and try again.",
+            ));
         }
         if record.body.trim().is_empty() {
-            return Err(DomainError::InvalidRequest("feedback comment is required"));
+            return Err(DomainError::InvalidRequest(
+                "Every draft needs a comment before it can be submitted.",
+            ));
         }
     }
     check_accepting(objective, &acceptance)?;
@@ -442,7 +465,9 @@ pub fn accept_feedback(
         .collect();
     let rendered_text = render_feedback(&items, note.as_deref());
     if rendered_text.len() > MAX_TEXT_BYTES {
-        return Err(DomainError::LimitReached("rendered feedback too large"));
+        return Err(DomainError::LimitReached(
+            "The feedback is too long to send at once. Submit fewer drafts.",
+        ));
     }
     for entry in batch.iter_mut() {
         entry.draft.record.state = DraftState::Submitted {
@@ -660,11 +685,13 @@ mod tests {
                 update(1, "lost update"),
                 ts(5)
             ),
-            Err(DomainError::Conflict("draft revision mismatch"))
+            Err(DomainError::Conflict(
+                "The draft was changed elsewhere. Refresh and try again."
+            ))
         );
         assert_eq!(
             save_draft(Some(saved.clone()), &objective, update(0, "dup"), ts(5)),
-            Err(DomainError::Conflict("draft already exists"))
+            Err(DomainError::Conflict("This draft already exists."))
         );
         assert_eq!(
             save_draft(None, &objective, update(3, "missing"), ts(5)),
@@ -824,11 +851,15 @@ mod tests {
         }];
         assert_eq!(
             accept_feedback(&objective, acceptance(&objective), &mut batch, None, ts(5)),
-            Err(DomainError::Conflict("draft revision mismatch"))
+            Err(DomainError::Conflict(
+                "A draft changed after you reviewed it. Refresh and try again."
+            ))
         );
         assert_eq!(
             accept_feedback(&objective, acceptance(&objective), &mut [], None, ts(5)),
-            Err(DomainError::InvalidRequest("feedback batch is empty"))
+            Err(DomainError::InvalidRequest(
+                "Select at least one draft to submit."
+            ))
         );
         let mut empty_body = save_new(&objective, 2, "fn main()", "  ");
         let mut batch = [BatchEntry {
@@ -880,7 +911,9 @@ mod tests {
                 None,
                 ts(5)
             ),
-            Err(DomainError::LimitReached("feedback batch too large"))
+            Err(DomainError::LimitReached(
+                "Too many drafts for one submission. Submit fewer at once."
+            ))
         );
         let mut full = entries(&mut drafts[..256], &same);
         let input = accept_feedback(&objective, acceptance(&objective), &mut full, None, ts(5))

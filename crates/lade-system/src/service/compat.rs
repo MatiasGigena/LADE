@@ -502,7 +502,7 @@ impl Service {
             return Err(rejection(
                 ErrorCode::StaleReference,
                 SafeAction::Refresh,
-                "no profile extension with this name currently has this content; list resources again",
+                "This extension changed since it was listed. Review it again.",
             ));
         }
         let key = (cmd.name.clone(), sha);
@@ -529,7 +529,7 @@ impl Service {
         if !source.is_absolute() {
             self.finish(
                 ctx,
-                Err(invalid("the import source must be an absolute path")),
+                Err(invalid("Choose the folder to import by its full path.")),
             );
             return Flow::Done;
         }
@@ -538,7 +538,7 @@ impl Service {
             self.finish(
                 ctx,
                 Err(invalid(
-                    "the import source must be outside the LADE profile",
+                    "Choose a folder outside the LADE profile to import from.",
                 )),
             );
             return Flow::Done;
@@ -546,7 +546,7 @@ impl Service {
         self.spawn(Pending::ProfileImport { ctx }, move || {
             JobOutput::Profile(
                 profile::import(&source, &profile)
-                    .map_err(|e| format!("profile import failed: {}", e.kind())),
+                    .map_err(|e| format!("The profile could not be imported ({}).", e.kind())),
             )
         });
         Flow::Deferred
@@ -585,7 +585,9 @@ impl Service {
     fn command_target(&mut self, oid: ObjectiveId, op: Op) -> Result<(), Rejection> {
         self.check_idle(oid)?;
         if self.command_pending(oid) {
-            return Err(conflict("another session command is in progress"));
+            return Err(conflict(
+                "Another session operation is in progress. Wait for it to finish.",
+            ));
         }
         let st = self.obj(oid)?;
         let state = st.objective().execution().state();
@@ -598,11 +600,11 @@ impl Service {
         if !ready || self.runtime.get(&oid).is_none_or(|rt| rt.control.is_none()) {
             return Err(rejection(
                 ErrorCode::ExecutionUnavailable,
-                SafeAction::Refresh,
+                SafeAction::None,
                 if state.is_live() {
-                    "wait until the current turn has finished"
+                    "Wait until the agent finishes its current turn."
                 } else {
-                    "start or resume the execution first"
+                    "Start or resume the agent first."
                 },
             ));
         }
@@ -632,8 +634,8 @@ impl Service {
                 ctx,
                 Err(rejection(
                     ErrorCode::ExecutionUnavailable,
-                    SafeAction::Refresh,
-                    "the worker link is gone",
+                    SafeAction::None,
+                    "The agent stopped unexpectedly. Resume it and try again.",
                 )),
             );
             return Flow::Done;
@@ -761,7 +763,12 @@ impl Service {
             JobOutput::Snapshot(
                 snapshot(&source, &dest, &approved)
                     .map(|resources| (resources, dest))
-                    .map_err(|e| format!("profile snapshot failed: {}", e.kind())),
+                    .map_err(|e| {
+                        format!(
+                            "The profile could not be prepared for the session ({}).",
+                            e.kind()
+                        )
+                    }),
             )
         });
         Flow::Deferred
@@ -816,7 +823,7 @@ impl Service {
             let live = st.objective().execution().state().is_live();
             if live && session.model.provider() != model.provider() {
                 return Err(invalid(
-                    "changing the provider needs a new launch: stop the execution, configure, then resume",
+                    "Changing the provider needs a restart: stop the agent, change the model, then resume it.",
                 ));
             }
             Ok((oid, model, live))
@@ -941,15 +948,17 @@ impl Service {
         let live = self.live(oid);
         let current = live.pi.as_ref().map(|p| p.generation);
         let Some(open) = live.ui.get(&ui_id) else {
-            return Err(not_found(
-                "open dialog (it was answered, closed or replaced)",
+            return Err(rejection(
+                ErrorCode::NotFound,
+                SafeAction::None,
+                "This dialog was already answered, closed or replaced.",
             ));
         };
         if open.generation != cmd.generation.value() || current != Some(open.generation) {
             return Err(rejection(
                 ErrorCode::StaleExecution,
                 SafeAction::Refresh,
-                "the dialog belongs to a replaced session generation",
+                "This dialog belongs to an earlier session and can no longer be answered.",
             ));
         }
         let body = WorkerBody::UiRespond {
@@ -965,8 +974,8 @@ impl Service {
         if !matches!(sent, Some(Ok(()))) {
             return Err(rejection(
                 ErrorCode::ExecutionUnavailable,
-                SafeAction::Refresh,
-                "the worker link is gone",
+                SafeAction::None,
+                "The agent stopped unexpectedly. Resume it and try again.",
             ));
         }
         let data = ReplyData::UiRespond(Empty {});
@@ -1248,7 +1257,7 @@ impl Service {
             Err(rejection(
                 ErrorCode::Conflict,
                 SafeAction::Refresh,
-                &format!("pi refused the session operation: {message}"),
+                &format!("The Agent Session refused this: {message}"),
             ))
         };
         self.finish(pending.ctx, result);
@@ -1319,7 +1328,7 @@ impl Service {
                 Err(rejection(
                     ErrorCode::Interrupted,
                     SafeAction::Refresh,
-                    "the worker stopped before the session operation finished",
+                    "The agent stopped before the session operation finished.",
                 )),
             );
         }
@@ -1347,13 +1356,13 @@ impl Service {
                     Err(rejection(
                         ErrorCode::Interrupted,
                         SafeAction::Refresh,
-                        "the session operation did not finish in time",
+                        "The session operation didn't finish in time.",
                     )),
                 );
                 self.notice(
                     NoticeLevel::Warning,
                     "session_command_timeout",
-                    "a session operation timed out",
+                    "A session operation timed out.",
                 );
                 self.dispatch_queued(oid, None);
             }
@@ -1420,12 +1429,12 @@ pub(crate) fn snapshot(
 /// header. The source is opened read-only and never modified.
 fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     if !source.is_absolute() {
-        return Err(invalid("the session file path must be absolute"));
+        return Err(invalid("Choose the session file by its full path."));
     }
     let meta = fs::metadata(source).map_err(|_| not_found("session file"))?;
     if !meta.is_file() || meta.len() > MAX_IMPORT_BYTES {
         return Err(invalid(
-            "the session file must be a regular file of at most 16 MiB",
+            "The session file must be a regular file of at most 16 MiB.",
         ));
     }
     let bytes = fs::read(source).map_err(|_| not_found("readable session file"))?;
@@ -1435,17 +1444,22 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
         .is_some_and(|v| v.get("type").and_then(Value::as_str) == Some("session"));
     if !is_session {
         return Err(invalid(
-            "not a pi session file (the first line must be a session header)",
+            "This isn't a pi session file (its first line must be a session header).",
         ));
     }
     let dir = copy.parent().ok_or_else(|| invalid("import directory"))?;
-    private_dir(dir).map_err(|_| super::convert::durability("import directory unavailable"))?;
+    private_dir(dir).map_err(|_| {
+        super::convert::durability("The session could not be copied for import. Try again.")
+    })?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(copy)
-        .map_err(|_| super::convert::durability("import copy failed"))?;
-    file.write_all(&bytes)
-        .map_err(|_| super::convert::durability("import copy failed"))
+        .map_err(|_| {
+            super::convert::durability("The session could not be copied for import. Try again.")
+        })?;
+    file.write_all(&bytes).map_err(|_| {
+        super::convert::durability("The session could not be copied for import. Try again.")
+    })
 }
