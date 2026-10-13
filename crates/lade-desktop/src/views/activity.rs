@@ -103,6 +103,14 @@ pub const AGENT_SETTINGS_TITLE: &str = "Agent settings";
 pub const INPUTS_TITLE: &str = "Accepted inputs and delivery";
 /// Heading of the card shown before the agent has an Agent Session.
 pub const SETUP_TITLE: &str = "Set up the agent";
+/// The setup card's explanation: before the first start the picker is Start agent's.
+const SETUP_NOTE: &str = "Choose the model the agent works with, then Start agent. Once it starts, \
+                          you can message it here and follow its work.";
+/// Agent settings' note on the model and thinking: once started, they apply only on request.
+const SETTINGS_MODEL_NOTE: &str = "To switch the agent to another model or thinking level, choose them here and use Apply model \
+     and thinking below.";
+/// The same note while the stopped agent's action is Start agent again, which uses the choice.
+const SETTINGS_RESTART_NOTE: &str = "Start agent, above, starts the agent again with these.";
 
 impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
@@ -444,11 +452,7 @@ impl Activity {
         let body = &vbox(space::GROUP);
         let heading = widgets::section_title(SETUP_TITLE);
         body.append(&heading);
-        body.append(&label(
-            "Choose the model the agent works with. Once it starts, you can message it here and \
-             follow its work.",
-            &["secondary"],
-        ));
+        body.append(&label(SETUP_NOTE, &["secondary"]));
         if let Some(error) = self.agent_error.borrow().as_ref() {
             body.append(&widgets::inline_message(MessageKind::Error, error, None));
         }
@@ -500,8 +504,16 @@ impl Activity {
         }
         let model = vbox(space::GROUP);
         model.append(&widgets::section_title("Model and thinking"));
+        // The agent has started (the setup card names Start agent before that): these change it
+        // through Apply model and thinking, or when the header offers Start agent again.
+        let restart =
+            Self::relevant_control(detail).is_some_and(|c| c.action == ActionName::ExecutionStart);
         model.append(&label(
-            "Used by Apply model and thinking, and by Start agent.",
+            if restart {
+                SETTINGS_RESTART_NOTE
+            } else {
+                SETTINGS_MODEL_NOTE
+            },
             &["meta"],
         ));
         model.append(&session::model_picker(&self.controller));
