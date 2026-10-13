@@ -439,7 +439,7 @@ fn start_without_a_sandbox_is_refused_synchronously() {
     assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
     assert_eq!(
         refused.detail,
-        "worker sandbox unavailable: bwrap not found"
+        "LADE can't run agents on this computer because the sandbox check failed."
     );
     assert_eq!(
         detail(&mut client, &objective).execution.state,
