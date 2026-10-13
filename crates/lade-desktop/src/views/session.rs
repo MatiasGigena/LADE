@@ -126,10 +126,16 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
         let subtitle = provider.subtitle();
         provider_field.append(&label(&subtitle, &["meta"]));
         widgets::set_accessible_description(&providers, &subtitle);
+        // The service's reason is one sentence; where a missing key goes is the collapsed Details.
         if let Some(reason) = &provider.reason {
             provider_field.append(&match provider.status {
                 ProviderStatus::Available => label(reason, &["meta"]).upcast::<gtk::Widget>(),
-                _ => widgets::inline_message(MessageKind::Warning, reason, None).upcast(),
+                _ => widgets::inline_message(
+                    MessageKind::Warning,
+                    reason,
+                    provider.credential_help().as_deref(),
+                )
+                .upcast(),
             });
         }
     }

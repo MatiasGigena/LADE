@@ -84,6 +84,24 @@ fn cloud(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Why a provider is missing its key, as one short sentence for the developer. Where a key can
+/// go (`laded`'s environment, the keyring, `credentials.env`) is the user guide's to explain and
+/// the client's to offer from the published variable names. The restricted OAuth login of a
+/// provider that also takes a key is a trust rule of the profile inventory, not repeated here.
+fn missing_key(facts: &ProviderFacts, auth: &[AuthKind]) -> String {
+    let name = if facts.name.trim().is_empty() {
+        &facts.id
+    } else {
+        &facts.name
+    };
+    let key = if auth.contains(&AuthKind::SubscriptionToken) {
+        "an API key or subscription token"
+    } else {
+        "an API key"
+    };
+    format!("Add {key} for {name} to use it.")
+}
+
 /// Classifies one provider against the reviewed egress policies, the credential source and the
 /// LADE profile's custom providers.
 pub fn classify(
@@ -119,10 +137,7 @@ pub fn classify(
                 endpoint
             } else {
                 format!(
-                    "{endpoint}; set {} in the laded environment, the Secret Service (laded \
-                     credentials set {} --variable NAME; read only when execution starts) or \
-                     ~/.config/lade/credentials.env",
-                    provider.vars.join(" and "),
+                    "Add the key for the custom provider {} to use it.",
                     provider.id
                 )
             }),
@@ -174,22 +189,7 @@ pub fn classify(
     // The Secret Service is not asked here (that would read every provider's key): a key kept
     // only there shows as missing until execution starts and looks it up.
     let available = credentials.is_available(&facts.id);
-    let mut reason = if available {
-        None
-    } else {
-        Some(format!(
-            "set {} in the laded environment, the Secret Service (laded credentials set {}; read \
-             only when execution starts) or ~/.config/lade/credentials.env",
-            vars.join(" or "),
-            facts.id
-        ))
-    };
-    if let Some(note) = oauth_note {
-        reason = Some(match reason {
-            Some(missing) => format!("{missing}; {note}"),
-            None => note,
-        });
-    }
+    let reason = (!available).then(|| missing_key(facts, &auth));
     ProviderAccess {
         auth,
         status: if available {
@@ -241,7 +241,16 @@ mod tests {
                 AuthKind::OauthLogin
             ]
         );
-        assert!(anthropic.reason.as_deref().unwrap().contains("OAuth login"));
+        // One short sentence: where keys go and the OAuth trust rule are explained elsewhere.
+        assert_eq!(
+            anthropic.reason.as_deref(),
+            Some("Add an API key or subscription token for anthropic to use it.")
+        );
+        let groq = classify(&facts("groq", true, None), &policies, &empty, &[]);
+        assert_eq!(
+            groq.reason.as_deref(),
+            Some("Add an API key for groq to use it.")
+        );
         assert!(
             anthropic
                 .variables
@@ -259,6 +268,7 @@ mod tests {
             &[],
         );
         assert_eq!(subscribed.status, AccessStatus::Available);
+        assert_eq!(subscribed.reason, None);
 
         let codex = classify(
             &facts("openai-codex", false, Some("OpenAI (ChatGPT Plus/Pro)")),

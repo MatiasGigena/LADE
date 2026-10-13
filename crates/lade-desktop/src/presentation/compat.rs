@@ -98,6 +98,35 @@ impl ProviderView {
             if self.models == 1 { "" } else { "s" }
         )
     }
+
+    /// For a provider that needs credentials: where its key can go, for a collapsed *Details*
+    /// under the service's one-sentence reason. Built only from what the service published (the
+    /// provider id and its credential variable names) and the credential sources of the user
+    /// guide (§5); `None` for any other status or without variable names.
+    pub fn credential_help(&self) -> Option<String> {
+        if self.status != ProviderStatus::MissingCredentials || self.variables.is_empty() {
+            return None;
+        }
+        let id = &self.id;
+        // A custom provider needs every one of its variables, each stored by name.
+        let (variables, keyring) = if self.auth.iter().any(|a| a == "custom provider") {
+            (
+                self.variables.join(" and "),
+                format!("laded credentials set {id} --variable NAME"),
+            )
+        } else {
+            (
+                self.variables.join(" or "),
+                format!("laded credentials set {id}"),
+            )
+        };
+        Some(format!(
+            "Needs {variables}.\n\
+             Keyring: {keyring}\n\
+             File: ~/.config/lade/credentials.env (mode 0600), one NAME=value per line\n\
+             laded's environment works too. Keys are read when the agent starts."
+        ))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -614,5 +643,33 @@ mod tests {
             "openai-codex · restricted · OAuth login · 8 models"
         );
         assert_eq!(ThinkingLevel::default(), ThinkingLevel::Off);
+        assert_eq!(
+            provider.credential_help(),
+            None,
+            "only for missing credentials"
+        );
+    }
+
+    #[test]
+    fn credential_help_names_only_the_published_variables() {
+        let mut provider = ProviderView {
+            id: "anthropic".into(),
+            name: "Anthropic".into(),
+            auth: vec!["API key".into(), "subscription token".into()],
+            status: ProviderStatus::MissingCredentials,
+            reason: Some("Add an API key or subscription token for Anthropic to use it.".into()),
+            variables: vec!["ANTHROPIC_API_KEY".into(), "ANTHROPIC_OAUTH_TOKEN".into()],
+            models: 23,
+        };
+        let help = provider.credential_help().unwrap();
+        assert!(help.starts_with("Needs ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN."));
+        assert!(help.contains("laded credentials set anthropic\n"));
+        provider.auth = vec!["custom provider".into()];
+        provider.variables = vec!["LADE_PROVIDER_A".into(), "LADE_PROVIDER_B".into()];
+        let help = provider.credential_help().unwrap();
+        assert!(help.starts_with("Needs LADE_PROVIDER_A and LADE_PROVIDER_B."));
+        assert!(help.contains("--variable NAME"));
+        provider.variables.clear();
+        assert_eq!(provider.credential_help(), None);
     }
 }

@@ -624,7 +624,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
                     "anthropic",
                     "Anthropic",
                     ProviderStatus::MissingCredentials,
-                    Some("set ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN in the laded environment or ~/.config/lade/credentials.env"),
+                    Some("Add an API key or subscription token for Anthropic to use it."),
                     &["API key", "subscription token", "OAuth login"],
                 ),
                 provider(
