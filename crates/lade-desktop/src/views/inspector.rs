@@ -19,17 +19,17 @@ use gtk4 as gtk;
 use super::dialogs;
 use super::session;
 use super::widgets::{
-    self, action_row, field, hbox, label, set_accessible_description, set_accessible_label,
-    set_focus_key, space, vbox,
+    self, MessageKind, action_row, field, hbox, inline_message, label, set_accessible_description,
+    set_accessible_label, set_focus_key, space, vbox,
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::drafts::SaveStatus;
 use crate::presentation::format;
 use crate::presentation::model::{
     ActionAvailability, ActionName, CandidateStatus, DeliveryMode, DraftId, NoticeLevel,
-    ObjectiveDetail, Timestamp, VerificationState,
+    ObjectiveDetail, ObjectiveId, Timestamp, VerificationState,
 };
-use crate::presentation::panel::{self, PanelAction, Tone};
+use crate::presentation::panel::{self, PanelAction, Surface, Tone};
 use crate::presentation::store::{Change, InspectorTab, MainView};
 use crate::presentation::text_bound::TEXT_LIMIT;
 
@@ -55,7 +55,10 @@ pub struct Inspector {
     drafts_heading: gtk::Box,
     submit_box: gtk::Box,
     drafts: RefCell<HashMap<DraftId, DraftWidgets>>,
+    /// The latest local error of an Overview action, shown beside the Overview's actions.
     last_error: RefCell<Option<String>>,
+    /// The latest local error of Run check, shown beside it.
+    check_error: RefCell<Option<String>>,
     check_entry: gtk::Entry,
     updating: Cell<bool>,
     on_draft_edit: RefCell<Option<Rc<dyn Fn()>>>,
@@ -127,6 +130,7 @@ impl Inspector {
             submit_box,
             drafts: RefCell::new(HashMap::new()),
             last_error: RefCell::new(None),
+            check_error: RefCell::new(None),
             check_entry,
             updating: Cell::new(false),
             on_draft_edit: RefCell::new(None),
@@ -166,8 +170,11 @@ impl Inspector {
             match change {
                 Change::Selection => {
                     self.last_error.replace(None);
+                    self.check_error.replace(None);
                     (overview, evidence, drafts, submit) = (true, true, true, true);
                 }
+                // Whether the agent can start at all (the Overview's pointer to Activity).
+                Change::Catalog => overview = true,
                 Change::Connection | Change::Workspaces => {
                     (overview, evidence, submit) = (true, true, true);
                 }
@@ -212,17 +219,52 @@ impl Inspector {
         self.updating.set(false);
     }
 
+    /// Shows a local error of an Overview action (or clears it) beside the Overview's actions.
     fn report(self: &Rc<Self>, result: Result<(), String>) {
-        let changed = match result {
-            Ok(()) => self.last_error.replace(None).is_some(),
-            Err(message) => {
-                self.last_error.replace(Some(message));
-                true
-            }
-        };
-        if changed {
+        if Self::keep_error(&self.last_error, result) {
             widgets::rebuild_preserving_focus(&self.overview.clone(), || self.render_overview());
         }
+    }
+
+    /// Shows a local error of Run check (or clears it) beside Run check.
+    fn report_check(self: &Rc<Self>, result: Result<(), String>) {
+        if Self::keep_error(&self.check_error, result) {
+            widgets::rebuild_preserving_focus(&self.evidence.clone(), || self.render_evidence());
+        }
+    }
+
+    /// Records `result`'s error in `slot`; `true` when what is shown changes.
+    fn keep_error(slot: &RefCell<Option<String>>, result: Result<(), String>) -> bool {
+        match result {
+            Ok(()) => slot.replace(None).is_some(),
+            Err(message) => {
+                slot.replace(Some(message));
+                true
+            }
+        }
+    }
+
+    /// The selected Objective's latest command status when its action lives on `surface`: a
+    /// refusal as an inline message (service code in Details), progress as a quiet line.
+    fn command_status(&self, objective: &ObjectiveId, surface: Surface) -> Option<gtk::Widget> {
+        let status = self
+            .controller
+            .store
+            .state()
+            .command_status
+            .get(objective)
+            .cloned()
+            .filter(|s| panel::command_surface(&s.message) == Some(surface))?;
+        let (text, details) = panel::refusal_parts(&status.message);
+        Some(match status.level {
+            NoticeLevel::Info => label(&text, &["meta"]).upcast(),
+            NoticeLevel::Warning => {
+                inline_message(MessageKind::Warning, &text, details.as_deref()).upcast()
+            }
+            NoticeLevel::Error => {
+                inline_message(MessageKind::Error, &text, details.as_deref()).upcast()
+            }
+        })
     }
 
     fn detail(&self) -> Option<ObjectiveDetail> {
@@ -231,15 +273,14 @@ impl Inspector {
 
     fn render_overview(self: &Rc<Self>) {
         widgets::clear(&self.overview);
+        // Nothing selected: the work area alone says what to do (the inspector stays blank).
+        let selected = self.controller.store.state().ui.selected.is_some();
+        self.root.set_show_tabs(selected);
         let Some(detail) = self.detail() else {
-            self.overview.append(&label(
-                if self.controller.store.state().ui.selected.is_some() {
-                    "Loading Objective…"
-                } else {
-                    "Select an Objective to see its status and next step."
-                },
-                &["meta"],
-            ));
+            if selected {
+                self.overview
+                    .append(&label("Loading Objective…", &["meta"]));
+            }
             return;
         };
         let summary = &detail.summary;
@@ -251,13 +292,16 @@ impl Inspector {
         if let Some(approval) = &detail.approval {
             next_area.append(&label(format::approval_label(approval.state), &["meta"]));
         }
-        // An agent control the Objective waits for is Activity's: one line and a jump there.
-        if let Some(pointer) = panel::agent_pointer(&detail) {
+        // An agent control the Objective waits for is Activity's: one line and a jump there. It
+        // does not suggest starting an agent that cannot start (no usable model provider).
+        let blocker = panel::start_blocker(self.controller.store.state().compat.catalog.as_ref());
+        let pointer = panel::agent_pointer(&detail, blocker.as_deref());
+        if let Some(pointer) = &pointer {
             let row = vbox(0);
-            row.append(&label(&pointer, &["meta"]));
+            row.append(&label(pointer, &["meta"]));
             let open = widgets::button("Open Activity", &["quiet", "list-action-button"]);
             open.set_halign(gtk::Align::Start);
-            set_accessible_description(&open, &pointer);
+            set_accessible_description(&open, pointer);
             set_focus_key(&open, "overview:open-activity");
             let controller = self.controller.clone();
             open.connect_clicked(move |_| controller.set_view(MainView::Activity));
@@ -267,27 +311,17 @@ impl Inspector {
         let next = panel::next_action(&detail);
         match &next {
             Some(next) => next_area.append(&self.action_widget(&detail, next, true)),
-            None if !summary.lifecycle.is_archived() && panel::agent_pointer(&detail).is_none() => {
+            None if !summary.lifecycle.is_archived() && pointer.is_none() => {
                 next_area.append(&label("No step is available right now.", &["meta"]))
             }
             None => {}
         }
+        // Only the outcome of the Overview's own actions; other surfaces show theirs.
         if let Some(error) = self.last_error.borrow().as_ref() {
-            next_area.append(&widgets::error_line(error));
+            next_area.append(&inline_message(MessageKind::Error, error, None));
         }
-        let command = self
-            .controller
-            .store
-            .state()
-            .command_status
-            .get(&summary.objective_id)
-            .cloned();
-        if let Some(command) = command {
-            next_area.append(&match command.level {
-                NoticeLevel::Info => label(&command.message, &["meta"]).upcast::<gtk::Widget>(),
-                NoticeLevel::Warning => widgets::warning_line(&command.message).upcast(),
-                NoticeLevel::Error => widgets::error_line(&command.message).upcast(),
-            });
+        if let Some(status) = self.command_status(&summary.objective_id, Surface::Overview) {
+            next_area.append(&status);
         }
         if next_area.first_child().is_some() {
             self.overview.append(&next_area);
@@ -523,10 +557,6 @@ impl Inspector {
     fn render_evidence(self: &Rc<Self>) {
         widgets::clear(&self.evidence);
         let Some(detail) = self.detail() else {
-            self.evidence.append(&label(
-                "Select an Objective to see its evidence.",
-                &["meta"],
-            ));
             return;
         };
         let candidates = section("Candidates");
@@ -566,11 +596,15 @@ impl Inspector {
             if c.base_target_commit != detail.integration_target.commit
                 && c.status == CandidateStatus::Current
             {
-                row.append(&widgets::warning_line(&format!(
-                    "Target moved: candidate was frozen on {}, target is now {}",
-                    c.base_target_commit.short(),
-                    detail.integration_target.commit.short()
-                )));
+                row.append(&inline_message(
+                    MessageKind::Warning,
+                    &format!(
+                        "Target moved: candidate was frozen on {}, target is now {}",
+                        c.base_target_commit.short(),
+                        detail.integration_target.commit.short()
+                    ),
+                    None,
+                ));
             }
             set_accessible_label(
                 &row,
@@ -585,11 +619,25 @@ impl Inspector {
         }
         self.evidence.append(&candidates);
 
-        let checks = section("Checks");
-        checks.append(&label(
-            "Service-observed: LADE ran these commands and recorded exit and output. Agent statements are claims, not evidence.",
-            &["meta"],
-        ));
+        // What a check is, on an information sign beside the heading (tooltip and the
+        // heading's accessible description) rather than a standing paragraph.
+        let checks = vbox(space::GROUP);
+        let checks_heading = hbox(space::ITEM);
+        let checks_title = widgets::section_title("Checks");
+        checks_heading.append(&checks_title);
+        let about = "Service-observed: LADE ran these commands and recorded exit and output. \
+                     Agent statements are claims, not evidence.";
+        let info = gtk::Image::builder()
+            .icon_name("help-about-symbolic")
+            .accessible_role(gtk::AccessibleRole::Presentation)
+            .valign(gtk::Align::Center)
+            .tooltip_text(about)
+            .build();
+        info.add_css_class("info-sign");
+        set_accessible_description(&checks_title, about);
+        checks_title.set_tooltip_text(Some(about));
+        checks_heading.append(&info);
+        checks.append(&checks_heading);
         let current = detail.current_candidate().map(|c| c.candidate_id.clone());
         let configured = self
             .controller
@@ -722,12 +770,18 @@ impl Inspector {
         run.append(&action_row("Run check", &verify, &[], move |_| {
             if let Some(this) = this.upgrade() {
                 let result = this.controller.verify(&entry.text());
-                this.report(result.clone());
+                this.report_check(result.clone());
                 if let Err(message) = result {
                     entry.set_tooltip_text(Some(&message));
                 }
             }
         }));
+        if let Some(error) = self.check_error.borrow().as_ref() {
+            run.append(&inline_message(MessageKind::Error, error, None));
+        }
+        if let Some(status) = self.command_status(&detail.summary.objective_id, Surface::Evidence) {
+            run.append(&status);
+        }
         run.append(&label(
             "Runs in an isolated verification copy of the current candidate; it cannot change the candidate.",
             &["meta"],
@@ -885,8 +939,10 @@ impl Inspector {
         if shown != stale {
             widgets::clear(&w.stale);
             if stale {
-                w.stale.append(&widgets::warning_line(
+                w.stale.append(&inline_message(
+                    MessageKind::Warning,
                     "Stale reference — the inspected bytes changed. Re-anchor or remove this item; it blocks the whole batch.",
+                    None,
                 ));
             }
         }
@@ -979,7 +1035,7 @@ impl Inspector {
             return;
         };
         let s = section("Submit feedback");
-        let mode = widgets::dropdown(&["Steer", "Follow-up"]);
+        let mode = widgets::dropdown_or(&["Steer", "Follow-up"], "No delivery mode available");
         set_accessible_label(&mode, "Delivery mode");
         set_focus_key(&mode, "submit:mode");
         if let Some(index) = FEEDBACK_MODES.iter().position(|m| *m == batch.mode) {
@@ -1010,7 +1066,7 @@ impl Inspector {
         );
         s.append(&field("Destination", &label(&destination, &[])));
         for blocker in &batch.blockers {
-            s.append(&widgets::warning_line(blocker));
+            s.append(&inline_message(MessageKind::Warning, blocker, None));
         }
         let availability = if batch.blockers.is_empty() {
             ActionAvailability::Enabled
