@@ -231,7 +231,9 @@ a reused `request_id` with different content is `duplicate_conflict`):
 - `objective.update_intent`: core CAS on `intent_revision`.
 - `execution.start` / `execution.resume`: after the core transition is checked, the launcher's `preflight(provider)`
   (sandbox probe, egress policy, credentials) runs; a failure rejects synchronously with `execution_unavailable`
-  (detail names missing credential variables, never values) and nothing is recorded. Otherwise the core transition
+  (detail names missing credential variables, never values; a failed sandbox probe reads "LADE can't run agents on
+  this computer because the sandbox check failed." and its technical detail goes to the service diagnostics) and
+  nothing is recorded. Otherwise the core transition
   (new session / new generation) is committed first; then the
   pool provisions the worktree (`worktree_add` of the Objective branch at the start commit under
   `$STATE/worktrees/<id>`; never the shared checkout) and calls the launcher with `worker.start`. Launch failure →
@@ -486,15 +488,16 @@ none resumed.
 ## Aggregate limits and storage pressure (IMP-013)
 
 Source: `service/limits.rs`. Accounting across Objectives lives in the service only (sandbox limits —
-`prlimit`, cgroups — are the launcher's). Every limit is configurable, printed at startup and named in the
-refusal and in `available_actions`; the defaults are **proposals awaiting approval** (#14 policy):
+`prlimit`, cgroups — are the launcher's). Every limit is configurable and printed at startup with its option; the
+refusal and `available_actions` state it in plain words (without the option); the defaults are **proposals
+awaiting approval** (#14 policy):
 
 | Limit | Flag | Default | At the limit |
 | --- | --- | --- | --- |
-| live agent executions (one sandboxed worker each) | `--max-workers` | 16 | `execution.start`/`resume` → `limit_reached` "N of N agents are running (laded --max-workers N); stop one or raise the limit"; nothing is recorded; the action shows the same reason |
+| live agent executions (one sandboxed worker each) | `--max-workers` | 16 | `execution.start`/`resume` → `limit_reached` "N of N agents are already running, the most LADE runs at once. Stop one to start another."; nothing is recorded; the action shows the same reason |
 | contained terminals in total | `--max-terminals` | 16 (4 per Objective, fixed) | `terminal.open` → `limit_reached` naming both counts |
 | free space on the state filesystem: warning | `--storage-warn-mib` | 2048 | `service.notice {level: warning, code: storage_low}` (on the transition and to every newly attached client) |
-| free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "storage pressure: … free, below the … reserve" — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
+| free space: reserve | `--storage-reserve-mib` | 512 | `service.notice {level: error, code: storage_critical}`; new writers are refused with `limit_reached` "The disk that holds LADE's data has … MiB free, below the … MiB LADE keeps in reserve. Free some space and try again." — `execution.start`/`resume`, writable `terminal.open`, `review.verify`; back above: `storage_ok` |
 
 The free-space reserve complements, and does not replace, the per-execution writable-storage monitor (IMP-006:
 worktree + session directory against `WRITABLE_STORAGE_BYTES`, the agent stopped with `limit_reached`): that one

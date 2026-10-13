@@ -113,10 +113,24 @@ Appended record of what the native client implements; it does not change the app
 | Kind | Token | Value | Use |
 | --- | --- | --- | --- |
 | Spacing | tight / item / group / section / page | 4 / 8 / 12 / 16 / 24 px (32 for empty-state margins) | `views::widgets::space` for gaps between widgets; the same scale for CSS paddings |
-| Type | title | 20px, 600 | Objective and page titles (`.objective-heading`, `.empty-title`) |
-| Type | heading | 15px, 600 | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
+| Type | title | 24px, 600 | Objective and page titles (`.objective-heading`, `.empty-title`) |
+| Type | heading | 16px, 600 | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
 | Type | body | platform size, 400 (600 for emphasis by weight) | Plain labels |
 | Type | meta | 13px, 400, metadata ink (600 for group headings) | Secondary text, reasons, identities |
 | Type | mono | 13px monospace | Code, paths, ids, commands |
 
-Presentation rules applied with these tokens: every fact and action has one home surface ([surface inventory](../implementation/evidence/calm-ui/surface-inventory.md); `presentation::panel::home`), other surfaces get at most a one-line pointer with a jump. Status is a sign plus text (no pill box) in the Objectives list; the right panel's Overview shows the approval state, the one next review action the service enables for the lifecycle step (its reason in one line when blocked), then *More actions* (destructive actions last, separated) and *Details*, both collapsed; Activity owns Agent Session control (state, Start/Cancel/Resume, accepted inputs and delivery, model and thinking, session tools, profile resources). Disabled actions keep their visible reason where they are shown, plus tooltip and accessible description.
+Shared components (`crates/lade-desktop/src/views/widgets.rs`), used instead of one-off layouts:
+
+| Component | What it is | Used for |
+| --- | --- | --- |
+| `empty_state` | Centred heading, an optional one-paragraph explanation, the one relevant action and an optional metadata note after it; no illustration | First Objective (work area, Activity, Terminal), no selection, no changes, no file, no terminal |
+| `inline_message` | Sign and plain sentence on the kind's semantic fill (info, warning, error); technical detail (error code, raw service text) in a collapsed *Details* and the accessible description | Refusals beside the control that issued the command, load failures, the catalogue warning |
+| `text_field` / `placeholder_text` | Metadata label above a bounded multi-line field with a visible placeholder (shown while empty and unfocused) | Intent fields, the composer, override reasons |
+| `dropdown_or` | Drop-down that ellipsizes a long choice (full text in tooltip and list) and, with no choices, is insensitive and says what is missing | Provider, model, thinking, delivery mode, integration target |
+| `disclosure` | Quiet full-width toggle (▸/▾) showing or hiding its content | More actions, Details, Agent settings, Accepted inputs, profile resources |
+| `action_row`, `list_action_row`, `compact_action` | An action whose availability is the service's projection: a disabled one keeps its place with its reason (visible, tooltip, accessible description); a not-offered one is hidden; black only when cleanly available | Overview next action, More actions, Activity's agent action and Send |
+| Header search | Entry and scope drop-down as one seamless linked control: one boundary, one focus ring | Ctrl+K search |
+
+A refused command is shown once, on the surface that issued it (`PresentationState::last_refusal` per Objective and `ActionSurface`), as an `inline_message` in plain words; it clears when that surface's command succeeds or the Objective changes. Refusals no Objective surface can show are the only global notices.
+
+Presentation rules applied with these tokens: every fact and action has one home surface ([surface inventory](../implementation/evidence/calm-ui/surface-inventory.md); `presentation::panel::home`), other surfaces get at most a one-line pointer with a jump. Status is a sign plus text (no pill box) in the Objectives list; the right panel's Overview shows the approval state, the one next review action the service enables for the lifecycle step (its reason in one line when blocked), then *More actions* (destructive actions last, separated) and *Details*, both collapsed; Activity owns Agent Session control (state, Start/Cancel/Resume, accepted inputs and delivery, model and thinking, session tools, profile resources): before the first start a *Set up the agent* card with Start agent stands in the transcript's place; afterwards the header shows the one agent action that applies and *Agent settings* (collapsed) holds the rest. Disabled actions keep their visible reason where they are shown, plus tooltip and accessible description.
