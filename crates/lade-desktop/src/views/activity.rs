@@ -363,8 +363,10 @@ impl Activity {
             self.agent_panel
                 .append(&session::session_section(&self.controller, &detail, report));
         }
-        self.agent_panel
-            .append(&session::resources_section(&self.controller));
+        let resources = vbox(space::GROUP);
+        resources.append(&widgets::section_title(session::RESOURCES_TITLE));
+        resources.append(&session::resources_section(&self.controller));
+        self.agent_panel.append(&resources);
     }
 
     fn composer_text(&self) -> String {
