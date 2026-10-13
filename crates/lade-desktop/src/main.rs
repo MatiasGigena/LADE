@@ -103,6 +103,14 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
+    // LADE's interface is English, so GTK's own strings (dialog buttons, context menus, the file
+    // chooser) must be too. GTK would call `setlocale(LC_ALL, "")` during initialisation and then
+    // translate them into the desktop language; without that call the process keeps the "C"
+    // locale, where gettext returns GTK's English source strings. Unlike setting LANGUAGE this
+    // needs no `unsafe` environment mutation, and the service, agents and terminals spawned later
+    // still inherit the developer's unchanged locale environment. Numbers and dates are formatted
+    // by LADE itself, locale-independently; GTK's own text is UTF-8 regardless of the C locale.
+    gtk4::disable_setlocale();
     // The window is single-instance: a second launch activates the running window (GApplication
     // on the session bus) instead of opening another approval authority; the service's single
     // controlling lease refuses any other client anyway. Without a session bus GApplication runs

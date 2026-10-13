@@ -63,8 +63,15 @@ pub fn load_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
-    // Focusing a selectable label (titles, ids) must not select its whole text.
     if let Some(settings) = gtk::Settings::default() {
+        // LADE looks the same on every desktop: GTK's own light Adwaita theme and the Adwaita
+        // icons, never the desktop's theme (whose colours leak through) or icon set (which may
+        // lack symbolic icons such as `edit-clear-symbolic`, drawn as a filled square).
+        // Application-set values take precedence over the desktop's XSETTINGS.
+        settings.set_gtk_theme_name(Some("Adwaita"));
+        settings.set_gtk_icon_theme_name(Some("Adwaita"));
+        settings.set_gtk_application_prefer_dark_theme(false);
+        // Focusing a selectable label (titles, ids) must not select its whole text.
         settings.set_gtk_label_select_on_focus(false);
     }
 }
