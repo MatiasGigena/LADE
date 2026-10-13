@@ -17,25 +17,62 @@ use gtk::{gdk, glib};
 use gtk4 as gtk;
 
 use super::widgets::{
-    self, hbox, label, set_accessible_description, set_accessible_label, space, vbox,
+    self, MessageKind, hbox, label, set_accessible_description, set_accessible_label, space, vbox,
 };
+use super::workbench;
 use crate::presentation::controller::Controller;
 use crate::presentation::keys::{AppAction, Keymap};
 use crate::presentation::model::{Lifecycle, ObjectiveId};
-use crate::presentation::store::{Change, StoreUpdate};
+use crate::presentation::panel;
+use crate::presentation::store::{Change, MainView, StoreUpdate};
 use crate::presentation::terminal::{
     MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalStatus,
-    encode_key, paste_text,
+    encode_key, local_open_blocker, paste_text,
 };
+
+/// The terminal's scope in one line (an open terminal's header) and in full (its tooltip and
+/// accessible description, and the empty state).
+const SCOPE_LINE: &str =
+    "Sandboxed: this worktree only · no network · no credentials · ends with the window";
+const SCOPE_FULL: &str = "A shell in this Objective's sandbox: its worktree only, no network, no \
+     credentials, the same limits as the agent. Read-only while a Change Set is frozen for \
+     review. Closing the window or losing the connection ends it; nothing restarts on its own.";
+const SCOPE_SENTENCE: &str = "A shell in this Objective's sandbox: its worktree only, no \
+     network, no credentials. Closing the window ends it.";
+
+/// What the pane shows while no terminal exists for the selected Objective.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Empty {
+    /// The Workspace has no Objectives: the work area's first-Objective state.
+    FirstObjective,
+    NoSelection,
+    /// The lifecycle admits no terminal.
+    Finished,
+    Disconnected,
+    /// Open is unavailable for this reason; the remedy is in Activity.
+    Blocked(&'static str),
+    Opening,
+    CanOpen,
+}
 
 pub struct TerminalPane {
     pub root: gtk::Box,
     controller: Rc<Controller>,
     title: gtk::Label,
     status: gtk::Label,
+    scope: gtk::Label,
     problem: gtk::Box,
-    pub open_button: gtk::Button,
+    /// Header action after a terminal ended ("Open a new terminal").
+    reopen_button: gtk::Button,
     close_button: gtk::Button,
+    /// The empty state's actions, kept across rebuilds (focus and handlers stay).
+    open_button: gtk::Button,
+    activity_button: gtk::Button,
+    body: gtk::Stack,
+    empty: gtk::Box,
+    shown_empty: Cell<Option<Empty>>,
+    /// The problem on display and whether it is a refused open.
+    shown_problem: RefCell<Option<(String, bool)>>,
     pub view: gtk::TextView,
     size: Cell<(u16, u16)>,
     render_pending: Cell<bool>,
@@ -87,31 +124,30 @@ impl TerminalPane {
         let title = widgets::heading("Terminal", "objective-heading");
         title.set_focusable(true);
         titles.append(&title);
+        // Status and scope describe a terminal that exists; the empty state says the rest.
         let status = label("", &["meta"]);
         titles.append(&status);
+        let scope = label(SCOPE_LINE, &["meta"]);
+        scope.set_tooltip_text(Some(SCOPE_FULL));
+        set_accessible_description(&scope, SCOPE_FULL);
+        titles.append(&scope);
         head.append(&titles);
         let controls = hbox(space::ITEM);
         controls.set_valign(gtk::Align::Start);
-        let open_button = widgets::button("Open terminal", &["primary"]);
+        let reopen_button = widgets::button("Open a new terminal", &[]);
         let close_button = widgets::button("Close terminal", &[]);
-        controls.append(&open_button);
+        controls.append(&reopen_button);
         controls.append(&close_button);
         head.append(&controls);
         root.append(&head);
-        // The scope in one line; the full statement is its tooltip and accessible description.
-        let full_scope = "A shell in this Objective's sandbox: its worktree only, no network, no \
-             credentials, the same limits as the agent. Read-only while a Change Set is frozen for \
-             review. Closing the window or losing the connection ends it; nothing restarts on its \
-             own.";
-        let scope = label(
-            "Sandboxed: this worktree only · no network · no credentials · ends with the window",
-            &["meta"],
-        );
-        scope.set_tooltip_text(Some(full_scope));
-        set_accessible_description(&scope, full_scope);
-        titles.append(&scope);
         let problem = vbox(0);
         root.append(&problem);
+
+        let open_button = widgets::button("Open terminal", &["primary"]);
+        set_accessible_description(&open_button, SCOPE_FULL);
+        let activity_button = widgets::button("Open Activity", &["quiet"]);
+        let empty = vbox(0);
+        empty.set_vexpand(true);
 
         let view = gtk::TextView::new();
         view.add_css_class("terminal-view");
@@ -121,7 +157,7 @@ impl TerminalPane {
         view.set_wrap_mode(gtk::WrapMode::None);
         view.set_focusable(true);
         view.set_left_margin(8);
-        view.set_top_margin(6);
+        view.set_top_margin(8);
         set_accessible_label(&view, "Terminal output");
         let scroll = gtk::ScrolledWindow::builder()
             .child(&view)
@@ -130,7 +166,12 @@ impl TerminalPane {
             .min_content_height(160)
             .build();
         scroll.add_css_class("terminal-frame");
-        // The probe reports the area the grid gets, so the PTY size follows the window.
+        // The bordered frame exists only with a terminal; otherwise the empty state.
+        let body = gtk::Stack::new();
+        body.add_named(&empty, Some("empty"));
+        body.add_named(&scroll, Some("terminal"));
+        // The probe reports the area the grid gets, so the PTY size follows the window (also
+        // while the empty state shows, so a new terminal opens at the right size).
         let probe = gtk::DrawingArea::new();
         probe.set_hexpand(true);
         probe.set_vexpand(true);
@@ -138,7 +179,7 @@ impl TerminalPane {
         probe.set_focusable(false);
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&probe));
-        overlay.add_overlay(&scroll);
+        overlay.add_overlay(&body);
         overlay.set_vexpand(true);
         root.append(&overlay);
 
@@ -147,9 +188,16 @@ impl TerminalPane {
             controller: controller.clone(),
             title,
             status,
+            scope,
             problem,
-            open_button,
+            reopen_button,
             close_button,
+            open_button,
+            activity_button,
+            body,
+            empty,
+            shown_empty: Cell::new(None),
+            shown_problem: RefCell::new(None),
             view,
             size: Cell::new((80, 24)),
             render_pending: Cell::new(false),
@@ -162,12 +210,17 @@ impl TerminalPane {
     }
 
     fn connect(self: &Rc<Self>, probe: &gtk::DrawingArea) {
-        let weak = Rc::downgrade(self);
-        self.open_button.connect_clicked(move |_| {
-            if let Some(pane) = weak.upgrade() {
-                pane.open();
-            }
-        });
+        for button in [&self.open_button, &self.reopen_button] {
+            let weak = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(pane) = weak.upgrade() {
+                    pane.open();
+                }
+            });
+        }
+        let controller = self.controller.clone();
+        self.activity_button
+            .connect_clicked(move |_| controller.set_view(MainView::Activity));
         let weak = Rc::downgrade(self);
         self.close_button.connect_clicked(move |_| {
             if let Some(pane) = weak.upgrade() {
@@ -238,13 +291,21 @@ impl TerminalPane {
         };
     }
 
-    /// Moves focus into the terminal (or to Open terminal when none is open).
+    /// Moves focus into the terminal (or to the action that opens one, or explains why not).
     pub fn focus(&self) {
         let open = self.with_session(|s| s.is_open()).unwrap_or(false);
+        let usable = |b: &gtk::Button| b.is_mapped() && b.is_sensitive();
         if open {
             self.view.grab_focus();
-        } else if self.open_button.is_sensitive() {
-            self.open_button.grab_focus();
+        } else if let Some(button) = [
+            &self.open_button,
+            &self.reopen_button,
+            &self.activity_button,
+        ]
+        .into_iter()
+        .find(|b| usable(b))
+        {
+            button.grab_focus();
         } else {
             self.title.grab_focus();
         }
@@ -360,10 +421,114 @@ impl TerminalPane {
         }
     }
 
+    /// The header lines and actions of an existing terminal: its status, the scope and, once it
+    /// ended, Open a new terminal (`reopen`, primary only when available); Close while open.
+    /// `None` hides them (the empty state speaks instead).
+    fn show_header(&self, status: Option<&str>, reopen: bool, can_open: bool) {
+        let exists = status.is_some();
+        self.status.set_text(status.unwrap_or(""));
+        self.status.set_visible(exists);
+        self.scope.set_visible(exists);
+        self.reopen_button.set_visible(exists && reopen);
+        self.reopen_button.set_sensitive(can_open);
+        // The black primary treatment is for an available action only.
+        if can_open {
+            self.reopen_button.add_css_class("primary");
+        } else {
+            self.reopen_button.remove_css_class("primary");
+        }
+        self.close_button.set_visible(exists && !reopen);
+    }
+
+    /// The latest problem: a refused open as a calm note (its service code in Details), any
+    /// other problem of an existing terminal as a warning. Rebuilt only when it changes, so an
+    /// expanded Details stays open across output.
+    fn show_problem(&self, problem: Option<(String, bool)>) {
+        if *self.shown_problem.borrow() == problem {
+            return;
+        }
+        widgets::clear(&self.problem);
+        self.shown_problem.replace(problem.clone());
+        if let Some((message, refused)) = problem {
+            let (text, details) = panel::refusal_parts(&message);
+            let kind = if refused {
+                MessageKind::Info
+            } else {
+                MessageKind::Warning
+            };
+            self.problem
+                .append(&widgets::inline_message(kind, &text, details.as_deref()));
+        }
+    }
+
+    /// Shows the empty state for `kind` (rebuilt only when it changes).
+    fn show_empty(&self, kind: Empty) {
+        self.body.set_visible_child_name("empty");
+        if self.shown_empty.replace(Some(kind)) == Some(kind) {
+            return;
+        }
+        // The kept buttons leave the previous block before it is replaced.
+        for button in [&self.open_button, &self.activity_button] {
+            if let Some(parent) = button.parent().and_downcast::<gtk::Box>() {
+                parent.remove(button);
+            }
+        }
+        widgets::clear(&self.empty);
+        let (title, body, action, scope) = match kind {
+            Empty::FirstObjective => {
+                self.empty
+                    .append(&workbench::first_objective_state(&self.controller));
+                return;
+            }
+            Empty::NoSelection => (
+                "No Objective selected",
+                "Select an Objective to open a terminal in its sandbox.",
+                None,
+                false,
+            ),
+            Empty::Finished => (
+                "No terminal",
+                "This Objective is finished; it has no worktree to open a terminal in.",
+                None,
+                false,
+            ),
+            Empty::Disconnected => (
+                "No terminal open",
+                "A terminal opens while the window is connected to the service.",
+                None,
+                true,
+            ),
+            Empty::Blocked(reason) => {
+                set_accessible_description(&self.activity_button, reason);
+                (
+                    "No terminal open",
+                    reason,
+                    Some(&self.activity_button),
+                    true,
+                )
+            }
+            Empty::Opening => ("Opening the terminal…", "", None, true),
+            Empty::CanOpen => ("No terminal open", "", Some(&self.open_button), true),
+        };
+        let block = widgets::empty_state(title, body, action);
+        if scope && let Some(block) = block.downcast_ref::<gtk::Box>() {
+            let line = label(SCOPE_SENTENCE, &["meta"]);
+            line.set_xalign(0.5);
+            line.set_justify(gtk::Justification::Center);
+            line.set_max_width_chars(56);
+            line.set_tooltip_text(Some(SCOPE_FULL));
+            set_accessible_description(&line, SCOPE_FULL);
+            block.append(&line);
+        }
+        self.empty.append(&block);
+    }
+
     fn render(&self) {
         let state = self.controller.store.state();
         let summary = state.selected_summary().cloned();
+        let detail = state.selected_detail().cloned();
         let connected = state.connection.is_connected();
+        let board_empty = workbench::board_is_empty(&state);
         let session = summary
             .as_ref()
             .and_then(|s| state.terminal_for(&s.objective_id))
@@ -371,13 +536,14 @@ impl TerminalPane {
         drop(state);
         let Some(summary) = summary else {
             self.title.set_text("Terminal");
-            self.status
-                .set_text("Select an Objective to open a terminal in its sandbox.");
-            self.open_button.set_sensitive(false);
-            self.open_button.remove_css_class("primary");
-            self.close_button.set_sensitive(false);
+            self.show_header(None, false, false);
+            self.show_problem(None);
             self.set_text("");
-            widgets::clear(&self.problem);
+            self.show_empty(if board_empty {
+                Empty::FirstObjective
+            } else {
+                Empty::NoSelection
+            });
             return;
         };
         self.title
@@ -386,34 +552,61 @@ impl TerminalPane {
             summary.lifecycle,
             Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen | Lifecycle::Approved
         );
-        let status = match &session {
-            None if !admits => "This Objective is finished; it has no terminal.".to_owned(),
-            None => "No terminal is open.".to_owned(),
-            Some(s) => match &s.status {
+        let blocker = local_open_blocker(&summary, detail.as_ref());
+        // An open the service refused (or that was never sent) is not a terminal: no frame, no
+        // "failed" end, only the problem beside the empty state.
+        let session = session.filter(|s| !s.never_opened() || s.problem.is_some());
+        let exists = session
+            .as_ref()
+            .is_some_and(|s| !s.never_opened() && s.status != TerminalStatus::Opening);
+        let open = session.as_ref().is_some_and(|s| s.is_open());
+        let opening = session
+            .as_ref()
+            .is_some_and(|s| s.status == TerminalStatus::Opening);
+        let can_open = connected && admits && blocker.is_none() && !open && !opening;
+        // A refusal the blocker already explains is not repeated.
+        let problem = session.as_ref().and_then(|s| {
+            let refused = s.never_opened();
+            s.problem
+                .clone()
+                .filter(|_| !(refused && blocker.is_some()))
+                .map(|p| (p, refused))
+        });
+        self.show_problem(problem);
+        if !exists {
+            self.show_header(None, false, false);
+            self.set_text("");
+            self.open_button.set_sensitive(can_open);
+            self.show_empty(match blocker {
+                _ if opening => Empty::Opening,
+                _ if !admits => Empty::Finished,
+                _ if !connected => Empty::Disconnected,
+                Some(reason) => Empty::Blocked(reason),
+                None => Empty::CanOpen,
+            });
+            return;
+        }
+        self.shown_empty.set(None);
+        self.body.set_visible_child_name("terminal");
+        let status = session
+            .as_ref()
+            .map_or_else(String::new, |s| match &s.status {
                 TerminalStatus::Opening => "Opening the sandboxed shell…".to_owned(),
                 TerminalStatus::Open => s.mode.map_or("Open", TerminalMode::label).to_owned(),
                 TerminalStatus::Ended(end) => end.message(),
-            },
+            });
+        self.show_header(Some(&status), !open, can_open);
+        // A disabled Open a new terminal keeps its reason (tooltip and accessible description).
+        let why_not = match blocker {
+            _ if can_open => "",
+            _ if !admits => "This Objective is finished; it has no worktree to open a terminal in.",
+            _ if !connected => "A terminal opens while the window is connected to the service.",
+            Some(reason) => reason,
+            None => "",
         };
-        self.status.set_text(&status);
-        let open = session.as_ref().is_some_and(|s| s.is_open());
-        let busy = session
-            .as_ref()
-            .is_some_and(|s| matches!(s.status, TerminalStatus::Opening | TerminalStatus::Open));
-        let can_open = connected && admits && !busy;
-        self.open_button.set_sensitive(can_open);
-        // The black primary treatment is for an available action only.
-        if can_open {
-            self.open_button.add_css_class("primary");
-        } else {
-            self.open_button.remove_css_class("primary");
-        }
-        self.open_button.set_label(if session.is_some() {
-            "Open a new terminal"
-        } else {
-            "Open terminal"
-        });
-        self.close_button.set_sensitive(open);
+        self.reopen_button
+            .set_tooltip_text((!why_not.is_empty()).then_some(why_not));
+        set_accessible_description(&self.reopen_button, why_not);
         set_accessible_label(
             &self.view,
             &match session.as_ref().and_then(|s| s.mode) {
@@ -424,10 +617,6 @@ impl TerminalPane {
                 None => "Terminal output".to_owned(),
             },
         );
-        widgets::clear(&self.problem);
-        if let Some(problem) = session.as_ref().and_then(|s| s.problem.clone()) {
-            self.problem.append(&widgets::warning_line(&problem));
-        }
         let (text, cursor) = session
             .as_ref()
             .map(|s| s.screen.render())
