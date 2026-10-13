@@ -189,6 +189,12 @@ impl TerminalPane {
         let overlay = gtk::Overlay::new();
         overlay.set_child(Some(&probe));
         overlay.add_overlay(&body);
+        // The body takes exactly the probe's area. Left to GtkOverlay, an overlay child gets its
+        // preferred size, measured at its natural width: with an open terminal that was taller
+        // than the page, so the frame ran past the bottom of the window.
+        overlay.connect_get_child_position(|overlay, _| {
+            Some(gdk::Rectangle::new(0, 0, overlay.width(), overlay.height()))
+        });
         overlay.set_vexpand(true);
         root.append(&overlay);
 
