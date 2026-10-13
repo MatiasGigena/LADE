@@ -459,34 +459,22 @@ impl Activity {
         let detail = state.selected_detail().cloned();
         drop(state);
         self.title.set_text(&title);
-        let (mut line, full) = self.controller.execution_line().unwrap_or_else(|| {
-            let none = "Select an Objective to see its Agent Session.".to_owned();
-            (none.clone(), none)
-        });
         widgets::clear(&self.controls);
         widgets::clear(&self.send_area);
+        // One sentence for the state; the session's ids are its tooltip.
+        let line = self.controller.agent_line();
+        let (sentence, details) = match (&detail, line) {
+            (Some(_), Some(line)) => (line.sentence, line.details),
+            (Some(_), None) => ("Loading the agent's state…".to_owned(), None),
+            (None, _) => ("Select an Objective to see its agent.".to_owned(), None),
+        };
+        self.status.set_text(&sentence);
+        self.status.set_tooltip_text(details.as_deref());
+        widgets::set_accessible_description(&self.status, details.as_deref().unwrap_or(""));
         let Some(detail) = detail else {
-            self.status.set_text(&line);
             return;
         };
         let controls = panel::activity_controls(&detail);
-        // Starting uses the model chosen under "Model, Agent Session and profile": name it here.
-        if controls
-            .iter()
-            .any(|p| p.action == ActionName::ExecutionStart && p.tone == Tone::Primary)
-        {
-            line.push_str(&match self.controller.chosen_model() {
-                Ok((model, thinking)) => format!(
-                    " · starts with {} · thinking {}",
-                    model.label(),
-                    thinking.label()
-                ),
-                Err(message) => format!(" · {message}"),
-            });
-        }
-        self.status.set_text(&line);
-        self.status.set_tooltip_text(Some(&full));
-        widgets::set_accessible_description(&self.status, &full);
         // The state line beside them states why one is unavailable; the reason is also the
         // button's tooltip and accessible description.
         for control in controls {
