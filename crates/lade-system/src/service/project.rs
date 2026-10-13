@@ -35,9 +35,11 @@ pub const NO_CHANGES_TO_FREEZE: &str =
 /// Shared by the `review.verify` projection and its rejection.
 pub const VERIFICATION_SANDBOX_UNAVAILABLE: &str =
     "Checks can't run because the sandbox check failed on this computer.";
-/// The `terminal.open` refusal without a working sandbox.
+/// Shared by the `terminal.open` projection and its rejection.
 pub const TERMINAL_SANDBOX_UNAVAILABLE: &str =
     "Terminals can't open because the sandbox check failed on this computer.";
+/// Shared by the `terminal.open` projection and its rejection.
+pub const NO_WORKTREE_YET: &str = "Start the agent once to create this Objective's worktree.";
 /// Disabled reason of every action while another operation holds the Objective.
 pub const BUSY: &str = "Another operation is in progress. Wait for it to finish.";
 const CLOSED: &str = "This Objective is closed.";
@@ -78,6 +80,21 @@ fn input_blocker(
             Some("Return the candidate for revision before sending more input.")
         }
         _ => Some(CLOSED),
+    }
+}
+
+/// Why a contained terminal cannot be opened for `st` (sandbox and limits aside). Shared by the
+/// `terminal.open` projection and its rejection.
+pub(crate) fn terminal_blocker(st: &ObjState) -> Option<&'static str> {
+    let record = st.objective().record();
+    if record.cleaned_up {
+        Some("This Objective was cleaned up, so it has no worktree for a terminal.")
+    } else if record.lifecycle.is_terminal() {
+        Some("Terminals open only while the Objective is in progress or under review.")
+    } else if !st.row.worktree.as_ref().is_some_and(|w| w.is_dir()) {
+        Some(NO_WORKTREE_YET)
+    } else {
+        None
     }
 }
 
@@ -456,7 +473,7 @@ impl Service {
         // Aggregate quota and storage pressure (service/limits.rs), named in the reason.
         let worker_blocker = self.worker_blocker(oid);
         let storage_blocker = self.storage_blocker();
-        let mut out = Vec::with_capacity(16);
+        let mut out = Vec::with_capacity(17);
         out.push(gate(
             ActionName::ObjectiveUpdateIntent,
             busy_reason.or(match lifecycle {
@@ -725,6 +742,23 @@ impl Service {
             ActionName::ObjectiveDeleteHistory,
             busy_reason.or(delete_history_blocker(st)),
         ));
+        // Interaction, not an operation: the same scope `terminal.open` enforces (service/terminal.rs).
+        out.push(match terminal_blocker(st) {
+            Some(why) => disabled(ActionName::TerminalOpen, why),
+            None if self.sandbox_tools().is_none() => {
+                disabled(ActionName::TerminalOpen, TERMINAL_SANDBOX_UNAVAILABLE)
+            }
+            None if matches!(lifecycle, Lifecycle::Frozen | Lifecycle::Approved)
+                || busy == Some("freeze") =>
+            {
+                AvailableAction {
+                    action: ActionName::TerminalOpen,
+                    enabled: true,
+                    reason: Some("Opens read-only while the work is frozen for review.".into()),
+                }
+            }
+            None => enabled(ActionName::TerminalOpen),
+        });
         out
     }
 

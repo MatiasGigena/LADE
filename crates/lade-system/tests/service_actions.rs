@@ -3,9 +3,10 @@
 //! Objective in that state: an enabled action's request must be accepted and a disabled action's
 //! request must be rejected.
 //!
-//! `feedback.submit` is excluded here (it needs inspected drafts; the flow tests cover it), and an
-//! enabled `review.approve` is sent with an override reason, which the projection announces as
-//! required when evidence is missing.
+//! `feedback.submit` is excluded here (it needs inspected drafts; the flow tests cover it), as is
+//! `terminal.open` (a real sandboxed shell; `service_terminal.rs` checks its projection against
+//! the refusal), and an enabled `review.approve` is sent with an override reason, which the
+//! projection announces as required when evidence is missing.
 
 mod service_support;
 
@@ -210,7 +211,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
             text: "hello".into(),
             mode: DeliveryMode::Prompt,
         }),
-        ActionName::FeedbackSubmit => return None,
+        ActionName::FeedbackSubmit | ActionName::TerminalOpen => return None,
         ActionName::ReviewFreeze => Request::ReviewFreeze(selector(&objective)),
         ActionName::ReviewReturn => Request::ReviewReturn(CandidateCommand {
             objective_id: objective,
@@ -271,7 +272,7 @@ fn every_projected_action_agrees_with_its_request() {
     for state in STATES {
         let probe = build(&env, &mut client, &ws.workspace_id, state);
         let actions = detail(&mut client, &probe).available_actions;
-        assert_eq!(actions.len(), 16, "one entry per action");
+        assert_eq!(actions.len(), 17, "one entry per action");
         for available in actions {
             // A fresh Objective per action: requests mutate state.
             let objective = build(&env, &mut client, &ws.workspace_id, state);

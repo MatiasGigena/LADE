@@ -25,7 +25,7 @@ use super::convert::{
     conflict, counter, invalid, new_uuid, not_found, parse_uuid, rejection, wire_id,
 };
 use super::handlers::Pending;
-use super::project::TERMINAL_SANDBOX_UNAVAILABLE;
+use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Flow, JobOutput, ReqCtx, Service};
 
 /// Terminals per Objective (bounded load; the total is `ResourceLimits::max_terminals`).
@@ -97,31 +97,18 @@ impl Service {
     /// Whether a terminal may be opened for `oid` now, and whether it may write the worktree.
     fn terminal_scope(&self, oid: ObjectiveId) -> Result<bool, Rejection> {
         let st = self.obj(oid)?;
-        let record = st.objective().record();
-        let lifecycle_error =
-            |detail: &str| rejection(ErrorCode::InvalidLifecycle, SafeAction::Refresh, detail);
-        if record.cleaned_up {
-            return Err(lifecycle_error(
-                "the Objective was cleaned up; it has no worktree",
+        // A precondition, not stale state: refreshing does not help (the projection says why).
+        if let Some(why) = terminal_blocker(st) {
+            return Err(rejection(
+                ErrorCode::InvalidLifecycle,
+                SafeAction::None,
+                why,
             ));
         }
-        let writable = match st.objective().lifecycle() {
-            Lifecycle::Defined | Lifecycle::Active => {
-                self.runtime.get(&oid).and_then(|r| r.busy) != Some("freeze")
-            }
+        Ok(match st.objective().lifecycle() {
             Lifecycle::Frozen | Lifecycle::Approved => false,
-            _ => {
-                return Err(lifecycle_error(
-                    "a terminal opens only for an Objective in progress or under review",
-                ));
-            }
-        };
-        if !st.row.worktree.as_ref().is_some_and(|w| w.is_dir()) {
-            return Err(lifecycle_error(
-                "the Objective has no worktree yet; start the agent once to create it",
-            ));
-        }
-        Ok(writable)
+            _ => self.runtime.get(&oid).and_then(|r| r.busy) != Some("freeze"),
+        })
     }
 
     pub(crate) fn terminal_open(&mut self, ctx: ReqCtx, cmd: &TerminalOpenCommand) -> Flow {

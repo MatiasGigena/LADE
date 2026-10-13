@@ -89,7 +89,7 @@ export type SessionInfo = { "session_id": Id; "association_revision": Counter; "
 
 export type ChangeCounts = { "files": Counter; "added": Counter; "removed": Counter };
 
-export type ActionName = "objective.update_intent" | "execution.start" | "execution.cancel" | "execution.resume" | "message.send" | "feedback.submit" | "review.freeze" | "review.return" | "review.verify" | "review.approve" | "review.refresh" | "review.integrate" | "objective.complete" | "objective.discard" | "objective.cleanup" | "objective.delete_history";
+export type ActionName = "objective.update_intent" | "execution.start" | "execution.cancel" | "execution.resume" | "message.send" | "feedback.submit" | "review.freeze" | "review.return" | "review.verify" | "review.approve" | "review.refresh" | "review.integrate" | "objective.complete" | "objective.discard" | "objective.cleanup" | "objective.delete_history" | "terminal.open";
 
 export type AvailableAction = { "action": ActionName; "enabled": boolean; "reason"?: ShortText };
 

@@ -182,8 +182,9 @@ fn badge(b: wire::Badge) -> view::Badge {
     }
 }
 
-fn action_name(a: wire::ActionName) -> view::ActionName {
-    match a {
+/// `None` for `terminal.open`, which is not an Objective operation of the view.
+fn action_name(a: wire::ActionName) -> Option<view::ActionName> {
+    Some(match a {
         wire::ActionName::ObjectiveUpdateIntent => view::ActionName::ObjectiveUpdateIntent,
         wire::ActionName::ExecutionStart => view::ActionName::ExecutionStart,
         wire::ActionName::ExecutionCancel => view::ActionName::ExecutionCancel,
@@ -200,7 +201,8 @@ fn action_name(a: wire::ActionName) -> view::ActionName {
         wire::ActionName::ObjectiveDiscard => view::ActionName::ObjectiveDiscard,
         wire::ActionName::ObjectiveCleanup => view::ActionName::ObjectiveCleanup,
         wire::ActionName::ObjectiveDeleteHistory => view::ActionName::ObjectiveDeleteHistory,
-    }
+        wire::ActionName::TerminalOpen => return None,
+    })
 }
 
 fn activity_role(r: types::ActivityRole) -> view::ActivityRole {
@@ -390,10 +392,12 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
         available_actions: d
             .available_actions
             .iter()
-            .map(|a| view::AvailableAction {
-                action: action_name(a.action),
-                enabled: a.enabled,
-                reason: a.reason.clone(),
+            .filter_map(|a| {
+                Some(view::AvailableAction {
+                    action: action_name(a.action)?,
+                    enabled: a.enabled,
+                    reason: a.reason.clone(),
+                })
             })
             .collect(),
         history_deleted: d.history_deleted == Some(true),

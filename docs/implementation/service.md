@@ -298,9 +298,11 @@ Terminal requests (`terminal.open/input/resize/close`, IMP-012) are interaction,
 current candidate, evidence, target movement, busy marker, latest capture, verification sandbox) with a reason when
 disabled; approval with missing or failed evidence is enabled with a reason stating that an override reason is
 required, and input (`message.send`, `feedback.submit`) to a stopped execution is enabled with a reason saying it waits
-for Resume (it is accepted with delivery `blocked: execution_unavailable`). `tests/service_actions.rs` checks, for
-eleven Objective states, that every enabled action's request is accepted and every disabled action's request is
-rejected.
+for Resume (it is accepted with delivery `blocked`, and `blocked_reason` says to resume). `tests/service_actions.rs`
+checks, for eleven Objective states, that every enabled action's request is accepted and every disabled action's
+request is rejected. `terminal.open` is projected from the same scope check its request uses
+(`service_terminal.rs` checks that the reason equals the refusal). Reasons and refusal details are short
+developer-facing sentences that name the next step (sentence case, ending with a period, no internal codes).
 
 Events carry a monotonically increasing `sequence` per service epoch: `objective.changed` + `objective.detail` after
 every Objective change, `activity.appended` per item, `activity.delta` coalesced per 100 ms tick, `draft.changed`,
@@ -362,7 +364,7 @@ only ask the service, which allocates the PTY itself and starts the shell in the
 the worker's `prlimit` quotas.
 
 - **Scope.** `terminal.open {objective_id, cols, rows}` (sizes 1..=500 × 1..=200) is accepted only for an Objective
-  whose worktree exists (`invalid_lifecycle` "start the agent once" otherwise, and after Cleanup) and whose lifecycle
+  whose worktree exists (`invalid_lifecycle` with action `none`, "Start the agent once to create this Objective's worktree." otherwise; after Cleanup it says so) and whose lifecycle
   is `defined`/`active` (read-write) or `frozen`/`approved` (**read-only**: the worktree is bound read-only). Any
   other lifecycle is `invalid_lifecycle`. Without a working sandbox: `execution_unavailable` — there is no
   unsandboxed terminal. At most 4 terminals per Objective and `--max-terminals` (default 16) across all Objectives (`limit_reached`, naming both counts; before IMP-013 the total was wrongly counted per Objective). The sandbox starts on

@@ -363,7 +363,8 @@
         "objective.complete",
         "objective.discard",
         "objective.cleanup",
-        "objective.delete_history"
+        "objective.delete_history",
+        "terminal.open"
       ]
     },
     "AvailableAction": {
