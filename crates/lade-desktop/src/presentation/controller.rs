@@ -690,19 +690,30 @@ impl Controller {
         // A larger set is submitted in several batches; the rest stay unsent drafts.
         let deferred = items.len().saturating_sub(MAX_FEEDBACK_BATCH);
         items.truncate(MAX_FEEDBACK_BATCH);
+        let destination = detail.and_then(|d| d.session.clone());
         let mut blockers = Vec::new();
-        match detail.map(|d| d.availability(ActionName::FeedbackSubmit)) {
-            Some(ActionAvailability::Enabled) => {}
-            Some(ActionAvailability::Disabled { reason }) => blockers.push(reason),
-            Some(ActionAvailability::NotOffered) | None => {
-                blockers.push("Submitting feedback is not offered for this Objective".to_owned());
-            }
-        }
+        // A client message that already explains the state (no connection, no Agent Session to
+        // address, nothing to submit) stands alone: the service's reason would only restate it.
+        let explained = !connected || destination.is_none() || items.is_empty();
         if !connected {
             blockers.push("Not connected to the service".to_owned());
         }
+        if destination.is_none() {
+            blockers.push(
+                "There is no Agent Session to send feedback to — start the agent in Activity first"
+                    .to_owned(),
+            );
+        }
         if items.is_empty() {
             blockers.push("No drafts to submit".to_owned());
+        }
+        if !explained {
+            match detail.map(|d| d.availability(ActionName::FeedbackSubmit)) {
+                Some(ActionAvailability::Enabled) => {}
+                Some(ActionAvailability::Disabled { reason }) => blockers.push(reason),
+                Some(ActionAvailability::NotOffered) | None => blockers
+                    .push("Submitting feedback is not offered for this Objective".to_owned()),
+            }
         }
         let stale: Vec<&BatchItem> = items.iter().filter(|i| i.stale).collect();
         if !stale.is_empty() {
@@ -724,10 +735,6 @@ impl Controller {
             .any(|d| !d.is_saved() && !d.body.is_empty())
         {
             blockers.push("Wait until every draft is saved".to_owned());
-        }
-        let destination = detail.and_then(|d| d.session.clone());
-        if destination.is_none() {
-            blockers.push("No destination Agent Session".to_owned());
         }
         Some(FeedbackBatch {
             items,
@@ -1738,6 +1745,42 @@ mod tests {
         assert_eq!(
             agent_line(&refused, &Readiness::NoProviderChosen).sentence,
             "The agent hasn't started and can't be started right now."
+        );
+    }
+
+    #[test]
+    fn feedback_without_a_session_states_that_once() {
+        let (controller, _) = setup();
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+        controller.select_objective(&id);
+        controller.store.update(|s| {
+            if let Some(Load::Loaded(detail)) = s.details.get_mut(&id) {
+                *detail = without_session(detail, None);
+                for available in &mut detail.available_actions {
+                    if available.action == ActionName::FeedbackSubmit {
+                        available.enabled = false;
+                        available.reason = Some("input requires an active objective".into());
+                    }
+                }
+            }
+            ((), Vec::new())
+        });
+        let batch = controller.feedback_batch().unwrap();
+        assert!(
+            batch
+                .blockers
+                .iter()
+                .any(|b| b.contains("no Agent Session")),
+            "{:?}",
+            batch.blockers
+        );
+        assert!(
+            !batch
+                .blockers
+                .iter()
+                .any(|b| b == "input requires an active objective"),
+            "the service reason would only restate it: {:?}",
+            batch.blockers
         );
     }
 
