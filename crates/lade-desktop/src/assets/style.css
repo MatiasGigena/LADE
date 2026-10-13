@@ -72,6 +72,9 @@ label:disabled { color: @ink_metadata; }
 row:focus:focus-visible, textview:focus:focus-visible, label:focus:focus-visible {
   outline-offset: -2px;
 }
+/* A focusable page title (Workbench, Activity, Terminal) sits in the page padding: its ring goes
+ * around the text instead of over its first and last glyphs. */
+label.objective-heading:focus:focus-visible { outline-offset: 4px; border-radius: 4px; }
 /* Text inputs: the field's own boundary becomes the 2 px ring (black border plus a 1 px inset
  * shadow), with no second frame or gap; the focused text node inside draws nothing. */
 entry:focus-within, spinbutton:focus-within, scrolledwindow.text-input:focus-within {

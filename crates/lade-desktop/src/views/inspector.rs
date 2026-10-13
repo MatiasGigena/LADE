@@ -315,7 +315,7 @@ impl Inspector {
         let blocker = panel::start_blocker(self.controller.store.state().compat.catalog.as_ref());
         let pointer = panel::agent_pointer(&detail, blocker.as_deref());
         if let Some(pointer) = &pointer {
-            let row = vbox(0);
+            let row = vbox(space::TIGHT);
             row.append(&label(pointer, &["meta"]));
             let open = widgets::button("Open Activity", &["quiet", "list-action-button"]);
             open.set_halign(gtk::Align::Start);
@@ -840,7 +840,7 @@ impl Inspector {
         if editors.is_empty() {
             // How to start a draft is the viewer's hint; accepted feedback and its delivery are
             // Activity's ledger: one line and a jump there.
-            let none = vbox(0);
+            let none = vbox(space::TIGHT);
             none.append(&label(
                 "No unsent drafts. Accepted feedback and its delivery are listed in Activity.",
                 &["meta"],
