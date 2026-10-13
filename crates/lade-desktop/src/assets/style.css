@@ -396,18 +396,18 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 /* Centre ----------------------------------------------------------------------------------- */
 
 .centre-page { padding: 24px; }
-.centre-empty { padding: 32px; }
-.empty-state { padding: 64px 32px 32px 64px; }
+.empty-state { padding: 32px; }
 .breadcrumb-current { font-size: 13px; font-weight: 500; }
 
 /* Journey: small and secondary; the current step stands out by weight and ink, not a box. */
 .journey { padding-top: 4px; }
 .journey-dot {
-  min-width: 12px;
-  min-height: 12px;
+  min-width: 16px;
+  min-height: 16px;
   border-radius: 9999px;
   border: 2px solid @ink_secondary;
-  font-size: 8px;
+  font-size: 13px;
+  line-height: 1;
   font-weight: 700;
   padding: 0;
 }
@@ -421,11 +421,11 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .basis-selector > button { min-width: 220px; }
 .version-line { padding: 0; }
 
-.file-scroll { border-right: 1px solid @border_separator; }
+/* Flat file rows beside the viewer's frame: no border of their own (one divider, not two). */
 .file-list > row {
   border-radius: 6px;
-  padding: 8px 10px;
-  margin: 1px 8px 1px 0;
+  padding: 8px 12px;
+  margin: 0 0 4px 0;
   min-height: 32px;
 }
 .file-list > row:hover { background-color: @fill_hover; }
@@ -439,7 +439,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .selection-line { padding: 4px 12px 0 12px; min-height: 18px; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
-.segmented button { border-radius: 0; min-height: 22px; padding: 2px 10px; }
+.segmented button { border-radius: 0; min-height: 24px; padding: 4px 12px; }
 .segmented button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
 .segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-left-width: 0; }
 .segmented button:checked { background-color: @fill_selected; font-weight: 600; }
@@ -488,6 +488,7 @@ notebook.inspector > header > tabs > tab:checked {
 notebook.inspector > stack { background-color: @surface; }
 .inspector-page { padding: 16px 16px 24px 16px; }
 .field-key { min-width: 88px; }
+image.info-sign { color: @ink_metadata; }
 .evidence-row { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .output {
   background-color: @fill_inset;
@@ -501,7 +502,7 @@ notebook.inspector > stack { background-color: @surface; }
 .excerpt {
   background-color: @fill_inset;
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 8px;
   color: @ink_secondary;
 }
 .save-state.save-failed { color: @del_ink; font-weight: 600; }
