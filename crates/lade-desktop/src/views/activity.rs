@@ -4,8 +4,8 @@
 //! delta updates, and the composer (Prompt / Steer / Follow-up). New items never take focus.
 //!
 //! Before the Objective has an Agent Session the transcript's place holds "Set up the agent":
-//! provider, model, thinking and Start agent (and the LADE profile resources, collapsed). With a
-//! session, the model picker, the Agent Session tools and the profile
+//! provider, model, thinking and Start agent (and the LADE profile resources, collapsed); there is
+//! no composer yet. With a session, the model picker, the Agent Session tools and the profile
 //! resources are under one collapsed "Agent settings" disclosure. Nothing here scrolls inside
 //! the page: the work area itself scrolls.
 
@@ -73,6 +73,7 @@ pub struct Activity {
     empty: gtk::Box,
     text_labels: RefCell<Vec<gtk::Label>>,
     shown_for: RefCell<Option<ObjectiveId>>,
+    composer_box: gtk::Box,
     pub composer: gtk::TextView,
     composer_input: Rc<widgets::LimitedInput>,
     mode: gtk::DropDown,
@@ -166,21 +167,27 @@ impl Activity {
         set_focus_key(&composer, "activity:composer");
         let composer_input =
             widgets::LimitedInput::new(&composer, TEXT_LIMIT, "this message to the agent");
-        composer_box.append(&composer_input.field(&widgets::bounded_text(&composer, 64, 160)));
+        composer_box.append(&composer_input.field(&widgets::placeholder_text(
+            &composer,
+            "Message the agent…",
+            64,
+            160,
+        )));
         let row = hbox(space::GROUP);
-        let mode = gtk::DropDown::from_strings(&["Prompt", "Steer", "Follow-up"]);
+        let mode = widgets::dropdown(&["Prompt", "Steer", "Follow-up"]);
+        mode.set_hexpand(false);
         set_accessible_label(&mode, "Delivery mode");
-        mode.set_valign(gtk::Align::Start);
+        mode.set_valign(gtk::Align::Center);
         row.append(&mode);
         let explain = label("", &["meta"]);
         explain.set_hexpand(true);
         row.append(&explain);
-        let send_area = vbox(space::TIGHT);
-        send_area.set_hexpand(false);
-        send_area.set_size_request(160, -1);
+        let send_area = hbox(0);
+        send_area.set_valign(gtk::Align::Center);
         row.append(&send_area);
         composer_box.append(&row);
         let composer_error = vbox(0);
+        composer_error.set_visible(false);
         composer_box.append(&composer_error);
         root.append(&composer_box);
 
@@ -208,6 +215,7 @@ impl Activity {
             empty,
             text_labels: RefCell::new(Vec::new()),
             shown_for: RefCell::new(None),
+            composer_box,
             composer,
             composer_input,
             mode,
@@ -527,8 +535,13 @@ impl Activity {
                 self.composer_input.set_text("");
                 self.store_composer();
             }
-            Err(message) => self.composer_error.append(&widgets::error_line(&message)),
+            Err(message) => self.composer_error.append(&widgets::inline_message(
+                MessageKind::Error,
+                &message,
+                None,
+            )),
         }
+        fit(&self.composer_error);
     }
 
     pub fn composer_has_focus(&self) -> bool {
@@ -666,22 +679,24 @@ impl Activity {
             if let Some(control) = Self::relevant_control(detail) {
                 self.controls.append(&self.agent_button(&control));
             }
+            // Send's unavailable reason is its tooltip; the composer shows only with a session.
+            let availability = detail.availability(ActionName::MessageSend);
             let this = Rc::downgrade(self);
-            self.send_area.append(&widgets::action_row(
-                "Send",
-                &detail.availability(ActionName::MessageSend),
-                &["primary"],
-                move |_| {
-                    if let Some(this) = this.upgrade() {
-                        this.send();
-                    }
-                },
-            ));
+            let send = widgets::compact_action("Send", &availability, move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.send();
+                }
+            });
+            if availability == ActionAvailability::Enabled {
+                send.add_css_class("primary");
+            }
+            self.send_area.append(&send);
         }
         self.sync_body();
     }
 
-    /// Shows the transcript, its empty state, or neither (the setup card stands in for both).
+    /// Shows the transcript, its empty state, or neither (the setup card stands in for both),
+    /// and the composer only once there is an Agent Session to message.
     fn sync_body(&self) {
         let state = self.controller.store.state();
         let detail = state.selected_detail();
@@ -701,6 +716,7 @@ impl Activity {
         let transcript = has_detail && (items || (session && !loaded));
         self.scroll.set_visible(transcript);
         self.earlier.set_visible(transcript && more);
+        self.composer_box.set_visible(session);
         widgets::clear(&self.empty);
         let empty = match execution {
             None => Some((
