@@ -8,6 +8,7 @@ import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { Id } from "../dto.ts";
 import { counter, newId } from "../schema.ts";
+import { prefix } from "./activity.ts";
 import type { OutboundBody, RespondBody, UiAnswer, UiPrompt } from "./wire.ts";
 
 type Notify = (title: string, text: string, isError: boolean) => void;
@@ -36,10 +37,6 @@ export class UnsupportedUiError extends Error {
 }
 
 interface Pending { generation: number; resolve: (answer: UiAnswer | undefined) => void }
-
-function clip(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max) : text;
-}
 
 export class UiBridge {
   private readonly send: (body: OutboundBody) => void;
@@ -117,17 +114,22 @@ export class UiBridge {
 
     return {
       select: async (title, options, opts) => {
-        const answer = value(await this.ask({ kind: "select", title: clip(title, 512), options: options.slice(0, 64).map(option => clip(option, 512)) }, opts));
+        // The wire needs at least one choice; an empty list fails instead of being answered.
+        if (options.length === 0) throw new Error("LADE: a select dialog needs at least one option");
+        const shown = options.slice(0, 64).map(option => prefix(option, 512));
+        const answer = value(await this.ask({ kind: "select", title: prefix(title, 512), options: shown }, opts));
+        // The developer chose among the shown (possibly clipped) options; return the extension's own.
+        const index = answer === undefined ? -1 : shown.indexOf(answer);
 
-        return answer !== undefined && options.includes(answer) ? answer : undefined;
+        return index < 0 ? undefined : options[index];
       },
       confirm: async (title, message, opts) => {
-        const answer = await this.ask({ kind: "confirm", title: clip(title, 512), message: clip(message, 4096) }, opts);
+        const answer = await this.ask({ kind: "confirm", title: prefix(title, 512), message: prefix(message, 4096) }, opts);
 
         return answer?.kind === "confirm" && answer.confirmed;
       },
-      input: async (title, placeholder, opts) => value(await this.ask({ kind: "input", title: clip(title, 512), placeholder: clip(placeholder ?? "", 512) }, opts)),
-      editor: async (title, prefill) => value(await this.ask({ kind: "editor", title: clip(title, 512), prefill: clip(prefill ?? "", 65_536) }, undefined)),
+      input: async (title, placeholder, opts) => value(await this.ask({ kind: "input", title: prefix(title, 512), placeholder: prefix(placeholder ?? "", 512) }, opts)),
+      editor: async (title, prefill) => value(await this.ask({ kind: "editor", title: prefix(title, 512), prefill: prefix(prefill ?? "", 65_536) }, undefined)),
       notify: (message, type) => { this.notify("Extension notice", message, type === "error"); },
       onTerminalInput: () => () => {},
       setStatus: () => {},

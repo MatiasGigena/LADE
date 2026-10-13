@@ -7,6 +7,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import { prefix } from "./activity.ts";
 import type { LoadedResource, WorkerResources } from "./wire.ts";
 
 type ExtensionPaths = Parameters<ResourceLoader["extendResources"]>[0];
@@ -216,12 +217,12 @@ export class LadeResourceLoader implements ResourceLoader {
   report(): LoadedResource[] {
     const resources = this.inputs.resources;
     const profile = resources?.profile_dir;
-    const label = (path: string): string => basename(path).slice(0, 256) || "resource";
+    const label = (path: string): string => prefix(basename(path), 256) || "resource";
     const loaded: LoadedResource[] = [];
 
-    for (const skill of this.getSkills().skills) loaded.push({ kind: "skill", name: skill.name.slice(0, 256) || "skill", source: "lade_profile", status: "loaded" });
+    for (const skill of this.getSkills().skills) loaded.push({ kind: "skill", name: prefix(skill.name, 256) || "skill", source: "lade_profile", status: "loaded" });
 
-    for (const prompt of this.getPrompts().prompts) loaded.push({ kind: "prompt", name: prompt.name.slice(0, 256) || "prompt", source: "lade_profile", status: "loaded" });
+    for (const prompt of this.getPrompts().prompts) loaded.push({ kind: "prompt", name: prefix(prompt.name, 256) || "prompt", source: "lade_profile", status: "loaded" });
 
     for (const file of this.getAgentsFiles().agentsFiles) loaded.push({ kind: "context", name: label(file.path), source: profile !== undefined && within(profile, file.path) ? "lade_profile" : "repository", status: "loaded" });
     const byPath = new Map((resources?.extensions ?? []).map(extension => [extension.path, extension]));
@@ -235,7 +236,7 @@ export class LadeResourceLoader implements ResourceLoader {
 
     for (const failure of extensions.errors) {
       const approved = byPath.get(failure.path);
-      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: failure.error.replace(/\p{Cc}+/gu, " ").slice(0, 512) };
+      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: prefix(failure.error.replace(/\p{Cc}+/gu, " "), 512) };
 
       if (approved) entry.sha256 = approved.sha256;
       loaded.push(entry);

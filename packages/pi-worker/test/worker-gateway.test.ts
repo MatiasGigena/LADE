@@ -69,6 +69,13 @@ const gateway = createNetServer(client => {
       return;
     }
 
+    // A gateway that drops the connection without any reply (e.g. while it is stopping).
+    if (authority.startsWith("silent.")) {
+      client.end();
+
+      return;
+    }
+
     const upstream = connect({ host: "127.0.0.1", port: portOf(origin) }, () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       client.pipe(upstream); upstream.pipe(client);
@@ -162,4 +169,19 @@ test("without a gateway socket every connection fails with a clear reason", asyn
   const tunnels = authorities.length;
   await assert.rejects(echo(`ws://provider.lade.test:${portOf(origin)}/`), /websocket failed/);
   assert.equal(authorities.length, tunnels);
+});
+
+test("a tunnel closed before the gateway replies fails instead of hanging", { timeout: 5_000 }, async () => {
+  await assert.rejects(tunnel(socketPath, "silent.lade.test:443"), { code: "gateway_protocol" });
+});
+
+test("an established tunnel is not destroyed by its user's own idle timeout", { timeout: 5_000 }, async () => {
+  const socket = await tunnel(socketPath, `idle.lade.test:${portOf(origin)}`);
+  open.add(socket);
+  // Socket timeouts only notify; whoever set one decides whether to close (node:http semantics).
+  socket.setTimeout(20);
+  await new Promise(resolve => socket.once("timeout", resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(socket.destroyed, false);
+  socket.destroy();
 });

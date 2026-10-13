@@ -6,7 +6,7 @@ import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CH
 import { createWorkerDecoder, Decoder, encode, encodeWorkerBody } from "../src/framing.ts";
 import type { WorkerBody } from "../src/dto.ts";
 import { RequestHistory } from "../src/history.ts";
-import { WireError, MAX_FRAME } from "../src/json.ts";
+import { boundedJson, WireError, MAX_FRAME, MAX_NODES } from "../src/json.ts";
 import type { JsonValue } from "../src/json.ts";
 
 function id(n: number): string { return `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`; }
@@ -116,4 +116,17 @@ test("worker API distinguishes directions and rejects client bodies", () => {
   assert.throws(() => encodeWorkerBody({ kind: "worker.error", code: "internal", message: "x".repeat(513) }), { code: "invalid_schema" });
   assert.throws(() => parseId("ABCDEF00-0000-4000-8000-000000000000"), { code: "invalid_schema" });
   assert.match(newId(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("a trailing or dangling array comma is invalid_json even when the node budget is spent", () => {
+  // 1 root + 43 arrays of 380 values = MAX_NODES exactly; Rust's sequence access rejects the
+  // comma before it asks for (and counts) another value.
+  const inner = `[${Array.from({ length: 380 }, () => "0").join(",")}]`;
+  const body = Array.from({ length: 43 }, () => inner).join(",");
+  assert.equal(1 + 43 * 381, MAX_NODES);
+  assert.doesNotThrow(() => boundedJson(Buffer.from(`[${body}]`)));
+  assert.throws(() => boundedJson(Buffer.from(`[${body},]`)), { code: "invalid_json" });
+  assert.throws(() => boundedJson(Buffer.from(`[${body}, ]`)), { code: "invalid_json" });
+  assert.throws(() => boundedJson(Buffer.from(`[${body},`)), { code: "invalid_json" });
+  assert.throws(() => boundedJson(Buffer.from(`[${body},0]`)), { code: "limit_reached" });
 });

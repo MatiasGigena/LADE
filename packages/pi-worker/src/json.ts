@@ -105,6 +105,14 @@ export function boundedJson(bytes: Uint8Array): JsonValue {
         if (next === close) return array ? list : object;
 
         if (next !== ",") throw new WireError("invalid_json");
+
+        if (array) {
+          // Like Rust's sequence access: a comma must be followed by a value, checked before
+          // that value is requested (and counted against the node budget).
+          whitespace();
+
+          if (pos >= text.length || text[pos] === close) throw new WireError("invalid_json");
+        }
       }
 
       throw new WireError("invalid_json");
