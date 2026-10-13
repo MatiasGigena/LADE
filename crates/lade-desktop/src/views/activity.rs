@@ -622,7 +622,9 @@ impl Activity {
         let Some(log) = state.activity.get(&id) else {
             return;
         };
-        if self.text_labels.borrow().len() != from_index {
+        // From the start, the list holds a placeholder row ("Loading…", "No activity yet.")
+        // instead of items: rebuild rather than append below it.
+        if from_index == 0 || self.text_labels.borrow().len() != from_index {
             drop(state);
             self.render_items();
             return;

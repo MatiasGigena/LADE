@@ -8,7 +8,9 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, space, vbox};
-use crate::presentation::controller::{Controller, FeedbackBatch, UnsavedDraft};
+use crate::presentation::controller::{
+    Controller, FeedbackBatch, MAX_FEEDBACK_BATCH, UnsavedDraft,
+};
 use crate::presentation::format;
 use crate::presentation::intents::StartPoint;
 use crate::presentation::keys::{self, AppAction, Keymap};
@@ -254,6 +256,16 @@ pub fn submit_feedback(
         .child(&items)
         .build();
     dialog.body.append(&scroll);
+    if batch.deferred > 0 {
+        dialog.body.append(&label(
+            &format!(
+                "One submission takes at most {MAX_FEEDBACK_BATCH} items; {} more draft{} stay unsent for the next one.",
+                batch.deferred,
+                if batch.deferred == 1 { "" } else { "s" }
+            ),
+            &["meta"],
+        ));
+    }
     dialog.body.append(&label(
         "Submitting asks the service to accept these items as one immutable input. It grants no execution permission and is not approval.",
         &["meta"],

@@ -259,7 +259,7 @@ impl Screen {
             ']' => self.state = Parse::Osc,
             '(' | ')' | '*' | '+' => self.state = Parse::Charset,
             '7' => self.saved_cursor = (self.row, self.col),
-            '8' => (self.row, self.col) = self.saved_cursor,
+            '8' => self.restore_cursor(),
             'D' => self.line_feed(),
             'E' => {
                 self.col = 0;
@@ -396,7 +396,7 @@ impl Screen {
                 }
             }
             's' => self.saved_cursor = (self.row, self.col),
-            'u' => (self.row, self.col) = self.saved_cursor,
+            'u' => self.restore_cursor(),
             'h' | 'l' if private => {
                 let on = command == 'h';
                 for mode in &values {
@@ -412,6 +412,13 @@ impl Screen {
             // SGR, device status and everything else: accepted, no visible effect.
             _ => {}
         }
+    }
+
+    /// DECRC: the saved position, kept inside a grid that may have shrunk since it was saved.
+    fn restore_cursor(&mut self) {
+        let (row, col) = self.saved_cursor;
+        self.row = row.min(self.rows - 1);
+        self.col = col.min(self.cols - 1);
     }
 
     fn erase_display(&mut self, mode: usize) {
@@ -786,6 +793,17 @@ mod tests {
         // SGR and OSC are consumed without visible effect.
         let s = screen("\x1b[1;31mred\x1b[0m\x1b]0;title\x07!");
         assert_eq!(s.screen_lines()[0], "red!");
+    }
+
+    #[test]
+    fn a_cursor_saved_before_a_shrinking_resize_is_restored_inside_the_grid() {
+        let mut s = Screen::new(80, 40);
+        s.feed("\x1b[40;80H\x1b7\x1b[s");
+        s.resize(20, 5);
+        s.feed("\x1b8X");
+        assert_eq!(s.cursor(), (4, 19));
+        s.feed("\x1b[uY");
+        assert_eq!(s.screen_lines()[4], format!("{}Y", " ".repeat(19)));
     }
 
     #[test]

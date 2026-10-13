@@ -80,6 +80,8 @@ pub struct DraftEditor {
     edit_generation: u64,
     saved_generation: u64,
     in_flight: Option<InFlight>,
+    /// A save whose reply was lost with the link: if `drafts.list` shows it landed, it is ours.
+    lost: Option<InFlight>,
     first_unsaved_edit: Option<Millis>,
     last_edit: Option<Millis>,
     failed: Option<String>,
@@ -108,6 +110,7 @@ impl DraftEditor {
             edit_generation: 0,
             saved_generation: 0,
             in_flight: None,
+            lost: None,
             first_unsaved_edit: None,
             last_edit: None,
             failed: None,
@@ -222,6 +225,8 @@ impl DraftEditor {
         }
         self.durable_revision = draft.revision;
         self.durable_body = draft.body.clone();
+        let lost = self.lost.take();
+        let ours = |f: &InFlight| f.body == draft.body && draft.revision > f.expected_revision;
         if draft.body == self.body {
             self.saved_generation = self.edit_generation;
             self.in_flight = None;
@@ -229,9 +234,11 @@ impl DraftEditor {
             self.first_unsaved_edit = None;
         } else if let Some(flight) = self
             .in_flight
-            .take_if(|f| f.body == draft.body && draft.revision > f.expected_revision)
+            .take_if(|f| ours(f))
+            .or_else(|| lost.filter(ours))
         {
-            // Our request landed; newer local edits remain dirty and will be scheduled.
+            // Our request landed (possibly before the link dropped); newer local edits remain
+            // dirty and will be scheduled.
             self.saved_generation = flight.generation;
             self.first_unsaved_edit
                 .get_or_insert(self.last_edit.unwrap_or(0));
@@ -253,7 +260,8 @@ impl DraftEditor {
     pub fn connection_lost(&mut self) {
         // Keep the text dirty; a later acknowledgement with this body clears it. Until drafts are
         // re-queried, no new save is sent so a landed write is never blindly overwritten.
-        if self.in_flight.take().is_some() {
+        if let Some(flight) = self.in_flight.take() {
+            self.lost = Some(flight);
             self.awaiting_reconcile = true;
             // The text is unsaved again: once reconciled it is due without a new keystroke.
             self.first_unsaved_edit
@@ -264,6 +272,7 @@ impl DraftEditor {
     /// Drafts were re-queried after reconnect and this draft's durable revision is unchanged.
     pub fn reconciled(&mut self) {
         self.awaiting_reconcile = false;
+        self.lost = None;
     }
 
     pub fn retry(&mut self, now: Millis) {
@@ -441,6 +450,23 @@ mod tests {
         // drafts.list after reconnect shows the save did land.
         e.acknowledge(&durable(&request.body, 1));
         assert_eq!(e.status(true), SaveStatus::Saved { revision: 1 });
+    }
+
+    #[test]
+    fn own_save_that_landed_during_a_disconnect_is_not_a_conflict() {
+        let mut e = editor();
+        e.edit("x", 0);
+        let request = e.poll(300, true).unwrap();
+        e.edit("xy", 350);
+        e.connection_lost();
+        // drafts.list after reconnect: the lost save did land, with the older text.
+        e.acknowledge(&durable(&request.body, 1));
+        assert_eq!(e.status(true), SaveStatus::Unsaved);
+        let next = e.poll(10_000, true).expect("the newer text is saved next");
+        assert_eq!((next.expected_revision, next.body.as_str()), (1, "xy"));
+        // A foreign revision after that is still a conflict.
+        e.acknowledge(&durable("theirs", 2));
+        assert_eq!(e.status(true), SaveStatus::Conflict { revision: 2 });
     }
 
     #[test]
