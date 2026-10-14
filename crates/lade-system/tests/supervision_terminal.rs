@@ -177,6 +177,24 @@ fn seccomp_refuses_terminal_input_injection_and_pwd_is_the_shells_own() {
     );
 }
 
+/// The prompt names LADE and the terminal's mode. `PS1` must reach the interactive shell even
+/// though the sandbox's launch gate is a non-interactive bash, which drops an inherited `PS1`.
+#[test]
+fn prompt_names_lade_and_the_terminal_mode() {
+    for (tag, writable, prompt) in [
+        ("term-prompt-rw", true, "[lade] worktree$ "),
+        ("term-prompt-ro", false, "[lade read-only] worktree$ "),
+    ] {
+        let Some(fx) = Fixture::new(tag) else {
+            return;
+        };
+        let terminal = fx.open(writable);
+        let mut seen = String::new();
+        read_until(&terminal, &mut seen, prompt);
+        assert!(!seen.contains("bash-"), "{seen:?}");
+    }
+}
+
 #[test]
 fn read_only_terminal_cannot_write_the_worktree() {
     let Some(fx) = Fixture::new("term-ro") else {

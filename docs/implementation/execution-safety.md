@@ -22,9 +22,9 @@ canonicalizes the Node runtime and worker package, and creates the run directory
 4. Starts the per-launch gateway on `<socket_dir>/<first 12 hex of the objective id>-<generation>.sock`
    (`socket_dir` = `$RUNTIME/g` in `laded`; socket 0600, directory 0700; socket paths over 107 bytes are refused,
    and `laded` checks the widest one at startup). Pidfiles stay in `run_dir` (`$STATE/run`), whose length is free.
-5. Spawns `prlimit <non-process limits> -- bwrap <isolation> -- bash -c <gate> lade-gate rm <process limit> env -u PWD -u SHLVL -- node
-   --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped stdin/stdout/stderr,
-   with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
+5. Spawns `prlimit <limits> -- bwrap <isolation> -- bash -c <gate> lade-gate <processes> rm env -u PWD -u SHLVL
+   -- node --disable-wasm-trap-handler <worker_dir>/src/worker.ts` in its own process group with piped
+   stdin/stdout/stderr, with the [launch gate](#launch-gate-and-supervisor-loss) closed. While bwrap waits on the gate the launcher
    records `STATE/run/worker-<objective>-<generation>.pid` (outer bwrap, then the PID-namespace init; each line `pid
    starttime`, starttime from `/proc/<pid>/stat` field 22), moves both into the Objective's cgroup leaf when cgroups
    are delegated, and only then opens the gate. A failure of either kills the sandbox and fails the launch.
@@ -103,7 +103,7 @@ they are proposed implementation defaults and their approval is Matias's decisio
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |
 | address space (`RLIMIT_AS`) | **8 GiB** | 4 GiB | Node 22 cannot start under 4 GiB: V8 reserves heap and code ranges up front. With the default trap-handler WebAssembly bounds checking, every WebAssembly instance (Node's type stripper, undici's HTTP parser) reserves ~10 GiB of guard regions, which fails even at 16 GiB; `--disable-wasm-trap-handler` (explicit bounds checks) avoids this. `RLIMIT_AS` bounds virtual memory, not resident memory. |
-| processes/threads (`RLIMIT_NPROC`) | 512 | 512 | applied inside the sandbox's user namespace; per real UID there, not enforced for root |
+| processes (`RLIMIT_NPROC`) | 512 | 512 | set by the launch gate inside the sandbox (see below), so it counts only the sandbox's own processes and threads; not enforced for root |
 | open files | 1024 | 1024 | |
 | file size | 512 MiB | 512 MiB | |
 | CPU time | none | none (verification: 600 s) | |
@@ -111,33 +111,75 @@ they are proposed implementation defaults and their approval is Matias's decisio
 | writable storage (worktree + session dir) | 2 GiB monitor | 2 GiB monitor | measured every 5 s by the service; above it the agent is stopped with `limit_reached` ([service.md](service.md#resource-limits-imp-006)); not a quota |
 | memory, processes/threads, CPU per Objective (cgroup v2) | 4 GiB `memory.max`, 512 `pids.max`, `cpu.max` unlimited | — | only with a delegated cgroup; shared by the Objective's worker, terminals and verification runs |
 
-The outer `prlimit` sets address-space, file, descriptor and CPU limits. The trusted gate applies both soft and
-hard `RLIMIT_NPROC` with Bash's `ulimit` **after** namespace creation and before executing the workload; failure
-exits 125. Applying it before `bwrap` would count the desktop user's existing threads against the sandbox's 512
-budget and fail namespace creation with `EAGAIN` on a busy host. No limit value is increased. The regression test
-`process_limit_is_applied_inside_the_user_namespace_and_enforced` exercises limits of 1 and 16, checks both limit
-values, and verifies that excess forks fail while permitted forks work.
+### Process limit
+
+`RLIMIT_NPROC` is the one limit `prlimit` does not set. The kernel counts it per user per user namespace (Linux ≥
+5.14) and checks every level up to the host: set on bwrap, it would count every process and thread of the user's
+desktop (often well over 1,000), bwrap's namespace-creating clone would fail with `EAGAIN` (`bwrap: Creating new
+namespace failed: Resource temporarily unavailable`, so `sandbox_unavailable` and no agent could start), and the
+kernel would copy the value into the new user namespace as a cap on the user's host-wide count. Instead the launch
+gate, already inside the sandbox's user namespace, runs `ulimit -S -H -u <processes>` after the gate opened and
+before it executes the program (the gate forks nothing after it; bash is required, dash has no `ulimit -u`). There
+the count covers only the sandbox's own processes and threads (including the PID-namespace init). The program cannot
+undo it: soft and hard limit are both lowered, raising a hard limit needs `CAP_SYS_RESOURCE` in the initial user
+namespace (all capabilities are dropped in any case), every descendant inherits it, the PID namespace hides the outer
+bwrap from `prlimit`, and nested user namespaces are disabled (`--disable-userns`, seccomp). Each sandbox gets its
+own 512; the Objective-wide cap is `pids.max`, applied only with a delegated cgroup. Evidence:
+`adapters_sandbox.rs::probe_succeeds_while_the_user_runs_more_processes_than_the_limit` (the probe runs while the test
+process holds 576 extra threads; no `--nproc` reaches `prlimit`) and
+`process_limit_is_enforced_inside_the_sandbox_and_cannot_be_raised` (limit 32 with 64 extra host threads: soft and
+hard are 32, forks stop with `EAGAIN` below 32, raising it fails).
 
 ### cgroup v2 placement
 
-`adapters::sandbox::cgroup`. When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), its cgroup is
-delegated: systemd sets the `user.delegate` (or `trusted.delegate`) extended attribute and chowns it to the service
-user. `detect` checks, in order: a cgroup v2 membership line (`0::<path>` in `/proc/self/cgroup`), cgroup2 mounted at
-`/sys/fs/cgroup`, the delegation attribute, ownership by the service's uid, and the `memory pids cpu` controllers.
-Then it moves `laded` into `<unit>/service` (cgroup v2 forbids processes in inner nodes), enables the controllers on
-`<unit>` and `<unit>/sandboxes`, and each Objective gets `<unit>/sandboxes/<objective>` with the limits above and one
-leaf per sandbox. The launcher, terminals and verification move the outer bwrap and the PID-namespace init into the
-leaf while the gate is closed (nothing else exists yet), verify membership through `/proc/<pid>/cgroup`, then open
-the gate, so every descendant is accounted. The leaf is killed (`cgroup.kill`) and removed after the sandbox ends;
-leftovers are removed at the next start. Any failed check gives the explicit diagnostic `cgroup limits unavailable
-(<reason>); sandboxes use the prlimit limits only` and the prlimit-only behaviour; LADE never writes into a cgroup it
-was not delegated and never refuses to start for lack of delegation.
+`adapters::sandbox::cgroup`. When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), the systemd user
+manager delegates the unit's cgroup to it. `detect` checks, in order, before writing anything:
 
-Evidence: `tests/adapters_cgroup.rs` — the fallback reasons (v1/hybrid, not mounted, not delegated: nothing
-written), the exact files written into a delegated subtree (on a directory standing in for cgroupfs), missing
-controllers. `delegated_cgroup_contains_and_limits_a_sandbox` exercises real placement and `pids.max` only with
-`LADE_TEST_DELEGATED_CGROUP=1` inside a delegated scope (`systemd-run --user --scope -p Delegate=yes …`); it has
-**not been executed** (neither CI nor the development host has a delegated cgroup v2; the host is cgroup v1/hybrid).
+1. a cgroup v2 membership line (`0::<path>` in `/proc/self/cgroup`) and cgroup2 mounted at `/sys/fs/cgroup`;
+2. the cgroup is owned by the service's uid;
+3. the cgroup's manager states the delegation: either the `trusted.delegate` or `user.delegate` extended attribute is
+   `1` (set by the **system** manager, for example on `user@<uid>.service`), or the cgroup is a `.service` or
+   `.scope` below `user@<euid>.service` and the user manager itself reports that unit with exactly this
+   `ControlGroup=` and `Delegate=yes` (`/usr/bin/systemctl --user show`, empty environment but `XDG_RUNTIME_DIR`,
+   5 s bound). The user manager of systemd 255 sets **no** delegation attribute on the units it delegates (checked on
+   the development host: neither a `Delegate=yes` scope nor a `Delegate=memory pids cpu` service gets one), so with
+   the attribute check alone every user unit, the shipped one included, fell back;
+4. `cgroup.procs`, `cgroup.threads` and `cgroup.subtree_control` are writable, and `cgroup.controllers` offers
+   `memory pids cpu`.
+
+Ownership and writability alone are not evidence: below `user@<uid>.service` every cgroup belongs to the user,
+including a terminal's app scope and any service without `Delegate=`. Writing there would move another
+application's processes, or leave the limits to a manager that considers the cgroup's `cgroup.subtree_control` its
+own and may rewrite it, silently dropping the `pids`/`memory` controllers and every sandbox limit with them. A
+`user.delegate` attribute can be set by the user on their own cgroups; it is accepted because it is systemd's
+documented signal and setting it is the same principal opting in, not an escalation.
+
+Then it moves `laded`, and any other process of the delegated cgroup, into `<unit>/service` (cgroup v2 forbids
+processes in inner nodes), enables the controllers on `<unit>` and `<unit>/sandboxes`, and proves enforcement before
+relying on it: a probe cgroup `<unit>/sandboxes/delegation-probe` must be on cgroupfs v2, offer the three controllers
+and take `pids.max` = 1, and a shell moved into it must be refused its next fork (`pids.events` `max` ≥ 1); the probe
+is removed. Each Objective gets `<unit>/sandboxes/<objective>` with the limits above and one leaf per sandbox. The
+launcher, terminals and verification move the outer bwrap and the PID-namespace init into the leaf while the gate is
+closed (nothing else exists yet), verify membership through `/proc/<pid>/cgroup`, then open the gate, so every
+descendant is accounted. The leaf is killed (`cgroup.kill`) and removed after the sandbox ends; leftovers are removed
+at the next start. On success the journal says how delegation was established (`cgroup v2 delegated (systemd user
+manager: lade.service has Delegate=yes)`). Any failed check gives the explicit diagnostic `cgroup limits unavailable
+(<reason>); sandboxes use the prlimit limits only` and the prlimit-only behaviour; LADE never writes into a cgroup it
+was not delegated and never refuses to start for lack of delegation. A failure after the move (controllers refused,
+the probe) leaves `laded` in `<unit>/service`, inside its own delegated cgroup.
+
+Evidence: `tests/adapters_cgroup.rs` — the fallback reasons (v1/hybrid, not mounted, not a user-manager unit, the
+manager reporting `Delegate=no`, another `ControlGroup=`, no answer: nothing written), a delegate attribute accepted
+without asking the manager, non-writable interface files, the exact files written into a delegated subtree (on a
+directory standing in for cgroupfs), missing controllers, a cgroup that cannot be emptied (no controllers enabled).
+`delegated_cgroup_contains_and_limits_a_sandbox` exercises real detection, the enforcement probe, placement and
+`pids.max` with `LADE_TEST_DELEGATED_CGROUP=1` inside a delegated cgroup:
+`LADE_TEST_DELEGATED_CGROUP=1 systemd-run --user --scope -p Delegate=yes ./scripts/cargo test -p lade-system --locked
+--test adapters_cgroup`. It passes on the development host (cgroup v2, systemd 255, kernel 7.0) in a transient
+`Delegate=yes` scope and in a transient service with `Delegate=memory pids cpu`; in a scope without `Delegate=` and
+in the desktop's app scope it falls back with `the systemd user manager reports Delegate=no` and writes nothing.
+`laded serve` in a transient service with the shipped unit's `Delegate=` and hardening options logs the delegated
+subtree. Not executed: the installed `lade.service` itself, and `memory.max` enforcement (no OOM test).
 
 ### Seccomp filter
 
@@ -178,8 +220,9 @@ program is started by a small bash gate script. bwrap copies the pipe into the f
 it blocks until the supervisor either writes `go` and closes the pipe (`Gate::open`) or loses it (the pipe closes
 empty: the supervisor died or abandoned the launch). Meanwhile the sandbox is only the outer bwrap and its fork (the
 future PID-namespace init); the program has not started. The gate script reads the file, removes it, and executes the
-program only after `go` and successful process-limit setup; an empty gate or a failed limit setup ends the sandbox with status 125. Supervisors write the pidfile and place the
-cgroup before opening the gate, so:
+program only after `go`, after setting the [process limit](#process-limit); an empty gate, or a process limit it
+cannot set, ends the sandbox with status 125. Supervisors write the pidfile and place the cgroup before opening the
+gate, so:
 
 - **the program never runs unrecorded or outside its cgroup while the supervisor lives;**
 - **a supervisor that dies before opening the gate leaves nothing running** (the sandbox ends by itself);
@@ -370,8 +413,8 @@ process.
 1. The service allocates the PTY: `posix_openpt(O_RDWR|O_NOCTTY|O_CLOEXEC)`, `grantpt`, `unlockpt`, window size,
    then the user side through `TIOCGPTPEER` (no path lookup) — all via rustix (`pty`, `termios` features), no
    `unsafe`. The service never acquires it as a controlling terminal.
-2. `adapters::sandbox::terminal_spec`: `prlimit <non-process worker limits> -- bwrap <the worker isolation> --
-   <launch gate with process-limit setup> /usr/bin/setsid --ctty --wait /usr/bin/bash -i` (first of `/usr/bin/bash`, `/bin/bash`, `/usr/bin/sh`, `/bin/sh`;
+2. `adapters::sandbox::terminal_spec`: `prlimit <worker limits> -- bwrap <the worker isolation> --
+   /usr/bin/setsid --ctty --wait /usr/bin/bash -i` (first of `/usr/bin/bash`, `/bin/bash`, `/usr/bin/sh`, `/bin/sh`;
    without `setsid` the shell runs without a controlling terminal). The user side is the shell's stdin/stdout/stderr;
    the service's copies are closed right after the spawn, nothing else is inherited. Inside, `setsid --ctty` makes
    the PTY the shell's controlling terminal (job control, `^C` reaches the foreground job). The PTY is private to
@@ -389,7 +432,7 @@ process.
 | session dir, worker package, Node, gateway socket, credentials | **not bound / not set** |
 | network | none (`--unshare-net`, no gateway) |
 | environment | `HOME=/tmp`, `PATH=/usr/bin:/bin`, `LANG=C.UTF-8`, `TERM=vt100`, `PS1`, `LADE_TERMINAL=read_write\|read_only` (bwrap's `PWD` removed; the shell sets its own) |
-| limits | `TERMINAL_LIMITS` (= `Limits::WORKER`) through `prlimit` and the gate's `ulimit`: 4 GiB address space, 512 processes, 1024 files, 512 MiB file size; the seccomp filter (no `TIOCSTI`); the Objective's cgroup when delegated |
+| limits | `TERMINAL_LIMITS` (= `Limits::WORKER`): 4 GiB address space, 1024 files, 512 MiB file size through `prlimit`, 512 processes through the launch gate; the seccomp filter (no `TIOCSTI`); the Objective's cgroup when delegated |
 
 Teardown: `Terminal::kill` (explicit close, freeze, lifecycle, lease loss, `service.stop`, shutdown, `Drop`) sends
 `SIGKILL` to the PID-namespace init — ending every process of the terminal, including `setsid`/double-forked
@@ -412,11 +455,13 @@ interrupts it.
 - **Memory**: without a delegated cgroup only `RLIMIT_AS` (8 GiB virtual for the worker, 4 GiB for terminals)
   applies; resident memory and `/tmp` tmpfs pages are then not capped per Objective or in aggregate. With delegation
   the per-Objective `memory.max` applies; no aggregate limit across Objectives is set.
-- **Process count**: without delegation `RLIMIT_NPROC` is per real UID inside each sandbox's user namespace, not
-  an aggregate per-Objective budget, and is not enforced for root; `pids.max` applies only with delegation.
+- **Process count**: without delegation only `RLIMIT_NPROC` applies, per sandbox (512 processes/threads each, so
+  an Objective with a worker, terminals and checks can hold several times 512) and not for root; the per-Objective
+  `pids.max` applies only with delegation.
 - **CPU**: no CPU ceiling for workers or terminals (§7 proposes none; `cpu.max` is configurable).
-- **Delegated cgroup path unexecuted**: the real placement test needs a delegated cgroup v2, which neither CI nor the
-  development host provides.
+- **Delegated cgroup path partly executed**: the real placement and `pids.max` test passes on the development host
+  in transient delegated units (`systemd-run --user`); CI has no delegated cgroup v2, the installed unit has not been
+  run, and `memory.max` enforcement is untested.
 - **Supervisor-loss window**: a sandbox whose supervisor died after opening the gate but before bwrap armed its
   parent-death signals keeps running until the next `laded` start (startup sweep by marker) or until the unit stops.
 - **Seccomp scope**: a denylist; `ptrace` and `io_uring` are not filtered; the remaining kernel attack surface is that
@@ -441,8 +486,8 @@ interrupts it.
   and UDP have no network at all (not a bypass, a functional limitation).
 - **Worker output**: frames are schema-validated; content of valid frames (activity text) is untrusted and not
   otherwise filtered.
-- **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values, not an aggregate
-  per-Objective budget, and `RLIMIT_NPROC` is per real UID inside each sandbox's user namespace (root: not enforced). With delegation the terminal
+- **Terminal quotas**: without delegation the terminal gets the per-process `prlimit` values and its own
+  `RLIMIT_NPROC` budget (root: not enforced), not an aggregate per-Objective budget. With delegation the terminal
   shares the Objective's cgroup limits with the agent. IMP-013 adds **counting** across Objectives in the
   service (`--max-workers`, `--max-terminals`, a free-space reserve on the state filesystem that refuses new
   writers; see [service.md](service.md#aggregate-limits-and-storage-pressure-imp-013)) — that bounds how many

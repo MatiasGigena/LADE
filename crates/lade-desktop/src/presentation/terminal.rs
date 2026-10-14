@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::model::ObjectiveId;
+use super::model::{Lifecycle, ObjectiveId, ObjectiveSummary};
 
 pub const SCROLLBACK_LINES: usize = 2000;
 pub const MAX_PARAMS: usize = 16;
@@ -99,11 +99,21 @@ impl Screen {
         for line in &mut self.grid {
             line.resize(cols, ' ');
         }
-        while self.grid.len() > rows {
+        while self.grid.len() > rows
+            && self.grid.len() > self.row + 1
+            && self
+                .grid
+                .last()
+                .is_some_and(|l| l.iter().all(|&c| c == ' '))
+        {
+            self.grid.pop();
+        }
+        while self.grid.len() > rows && self.row > 0 {
             let line = self.grid.remove(0);
             self.push_scrollback(&line);
-            self.row = self.row.saturating_sub(1);
+            self.row -= 1;
         }
+        self.grid.truncate(rows);
         while self.grid.len() < rows {
             self.grid.push(blank(cols));
         }
@@ -472,9 +482,14 @@ impl Screen {
         let screen = self.screen_lines();
         for (row, line) in screen.iter().enumerate() {
             if row == self.row {
-                offset = text.chars().count() + self.col.min(line.chars().count());
+                let start = text.chars().count();
+                text.push_str(line);
+                let len = line.chars().count();
+                text.extend(std::iter::repeat_n(' ', self.col.saturating_sub(len)));
+                offset = start + self.col;
+            } else {
+                text.push_str(line);
             }
-            text.push_str(line);
             if row + 1 < screen.len() {
                 text.push('\n');
             }
@@ -660,7 +675,6 @@ pub struct TerminalSession {
     pub status: TerminalStatus,
     pub screen: Screen,
     pub last_seq: u64,
-    pub problem: Option<String>,
 }
 
 impl TerminalSession {
@@ -672,7 +686,6 @@ impl TerminalSession {
             status: TerminalStatus::Opening,
             screen: Screen::new(cols, rows),
             last_seq: 0,
-            problem: None,
         }
     }
 
@@ -693,6 +706,10 @@ impl TerminalSession {
         }
         self.screen.feed(data);
     }
+}
+
+pub fn awaits_first_start(summary: &ObjectiveSummary) -> bool {
+    summary.lifecycle == Lifecycle::Defined
 }
 
 #[cfg(test)]
@@ -759,6 +776,61 @@ mod tests {
         assert_eq!(s.screen_lines()[4], format!("{}Y", " ".repeat(19)));
     }
 
+    const REDRAW: &str = "\r\x1b[K\0\0\0\0\0\0\0\0\0\0\0\0\r[lade] worktree$ ";
+
+    fn prompts(s: &Screen) -> usize {
+        s.render().0.matches("[lade] worktree$").count()
+    }
+
+    #[test]
+    fn a_shrinking_resize_keeps_the_cursor_on_its_line() {
+        let mut s = Screen::new(80, 24);
+        s.feed("[lade] worktree$ ls\r\nREADME.md\r\n[lade] worktree$ ");
+        assert_eq!(s.cursor(), (2, 17));
+        s.resize(40, 10);
+        assert_eq!(s.cursor(), (2, 17));
+        assert_eq!(s.scrollback_len(), 0);
+        assert_eq!(s.screen_lines()[2], "[lade] worktree$");
+        s.feed(REDRAW);
+        assert_eq!(prompts(&s), 2, "{:?}", s.render().0);
+        let (text, offset) = s.render();
+        assert!(
+            text[..offset].ends_with("README.md\n[lade] worktree$ "),
+            "{text:?}"
+        );
+
+        let mut s = Screen::new(80, 24);
+        for i in 0..23 {
+            s.feed(&format!("line {i}\r\n"));
+        }
+        s.feed("[lade] worktree$ ");
+        assert_eq!(s.cursor(), (23, 17));
+        s.resize(80, 10);
+        assert_eq!(s.cursor(), (9, 17));
+        assert_eq!(s.scrollback_len(), 14);
+        assert_eq!(s.screen_lines()[9], "[lade] worktree$");
+
+        let mut s = Screen::new(80, 24);
+        s.feed("\x1b[24;1Hstatus\x1b[1;1H[lade] worktree$ ");
+        s.resize(80, 10);
+        assert_eq!(s.cursor(), (0, 17));
+        assert_eq!(s.screen_lines()[0], "[lade] worktree$");
+    }
+
+    #[test]
+    fn the_caret_sits_after_the_prompts_trailing_space() {
+        let s = screen("abc\r\nbash-5.2$ ");
+        let (text, offset) = s.render();
+        assert_eq!(
+            text.chars().take(offset).collect::<String>(),
+            "abc\nbash-5.2$ "
+        );
+        let s = screen("x   \r\n\x1b[5C");
+        let (text, offset) = s.render();
+        assert!(text.starts_with("x\n     "), "{text:?}");
+        assert_eq!(offset, "x\n     ".len());
+    }
+
     #[test]
     fn modes_are_tracked() {
         let mut s = screen("\x1b[?1h\x1b[?2004h\x1b[?25l");
@@ -798,6 +870,29 @@ mod tests {
         assert!(text.contains("[… output skipped …]"), "{text}");
         assert!(!text.contains("late"));
         assert_eq!(session.screen.skipped_bytes, 5000);
+    }
+
+    #[test]
+    fn only_a_defined_objective_points_to_activity_for_its_terminal() {
+        use crate::presentation::model::{ConnectionState, ExecutionState};
+        use crate::presentation::store::PresentationState;
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        for update in crate::presentation::test_fixture::fixture_updates() {
+            state.apply(update);
+        }
+        let mut summary = state
+            .details
+            .values()
+            .find_map(|d| d.loaded().cloned())
+            .unwrap()
+            .summary;
+        summary.lifecycle = Lifecycle::Defined;
+        summary.execution.state = ExecutionState::None;
+        assert!(awaits_first_start(&summary));
+        for lifecycle in [Lifecycle::Active, Lifecycle::Frozen, Lifecycle::Discarded] {
+            summary.lifecycle = lifecycle;
+            assert!(!awaits_first_start(&summary), "{lifecycle:?}");
+        }
     }
 
     #[test]

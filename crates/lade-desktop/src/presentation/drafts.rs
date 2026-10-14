@@ -1,4 +1,5 @@
-use super::model::{Draft, DraftId, DraftState, ObjectiveId, Reference, SessionId};
+use super::format::sentence;
+use super::model::{Draft, DraftId, DraftState, ObjectiveId, Reference, Refusal, SessionId};
 
 pub type Millis = u64;
 
@@ -12,7 +13,7 @@ pub enum SaveStatus {
     Unsaved,
     Saving,
     Saved { revision: u64 },
-    Failed { message: String },
+    Failed { message: String, details: String },
     Disconnected,
     Conflict { revision: u64 },
 }
@@ -24,7 +25,7 @@ impl SaveStatus {
             Self::Unsaved => "Unsaved".to_owned(),
             Self::Saving => "Saving…".to_owned(),
             Self::Saved { revision } => format!("Saved r{revision}"),
-            Self::Failed { message } => format!("Save failed — {message}"),
+            Self::Failed { message, .. } => format!("Save failed. {}", sentence(message)),
             Self::Disconnected => "Disconnected — not saved".to_owned(),
             Self::Conflict { revision } => {
                 format!("Newer saved revision r{revision} exists — choose which text to keep")
@@ -66,7 +67,7 @@ pub struct DraftEditor {
     lost: Option<InFlight>,
     first_unsaved_edit: Option<Millis>,
     last_edit: Option<Millis>,
-    failed: Option<String>,
+    failed: Option<Refusal>,
     conflict: Option<u64>,
     awaiting_reconcile: bool,
 }
@@ -220,8 +221,15 @@ impl DraftEditor {
     }
 
     pub fn fail(&mut self, message: &str) {
+        self.fail_with(&Refusal {
+            message: message.to_owned(),
+            details: String::new(),
+        });
+    }
+
+    pub fn fail_with(&mut self, refusal: &Refusal) {
         self.in_flight = None;
-        self.failed = Some(message.to_owned());
+        self.failed = Some(refusal.clone());
     }
 
     pub fn connection_lost(&mut self) {
@@ -261,9 +269,10 @@ impl DraftEditor {
         if let Some(revision) = self.conflict {
             return SaveStatus::Conflict { revision };
         }
-        if let Some(message) = &self.failed {
+        if let Some(refusal) = &self.failed {
             return SaveStatus::Failed {
-                message: message.clone(),
+                message: refusal.message.clone(),
+                details: refusal.details.clone(),
             };
         }
         if self.in_flight.is_some() || self.dirty() {
@@ -387,8 +396,22 @@ mod tests {
         assert_eq!(
             e.status(true),
             SaveStatus::Failed {
-                message: "storage full".into()
+                message: "storage full".into(),
+                details: String::new(),
             }
+        );
+        assert_eq!(e.status(true).label(), "Save failed. Storage full.");
+        e.fail_with(&Refusal {
+            message: "The draft was not written.".into(),
+            details: "durability_failure: the draft was not written".into(),
+        });
+        let SaveStatus::Failed { message, details } = e.status(true) else {
+            panic!("failed");
+        };
+        assert_eq!(message, "The draft was not written.");
+        assert!(
+            details.starts_with("durability_failure"),
+            "the code stays in the details"
         );
         assert!(e.poll(10_000, true).is_none());
         e.retry(10_000);

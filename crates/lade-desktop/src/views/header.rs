@@ -8,7 +8,9 @@ use super::widgets::{self, hbox, label, set_accessible_label, space, vbox};
 use crate::presentation::controller::Controller;
 use crate::presentation::format;
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::model::{ConnectionState, Load, SearchResult, SearchScope};
+use crate::presentation::model::{
+    ConnectionState, Load, SearchResult, SearchResultKind, SearchScope,
+};
 use crate::presentation::store::{Change, MainView};
 
 pub fn connection_text(connection: &ConnectionState) -> (String, String) {
@@ -40,11 +42,27 @@ pub fn connection_text(connection: &ConnectionState) -> (String, String) {
     }
 }
 
+fn notifications_note(reason: &str) -> String {
+    format!(
+        ". Desktop notifications are unavailable ({reason}); Objectives that need you are marked in the Objectives list."
+    )
+}
+
 const SCOPES: [SearchScope; 3] = [
     SearchScope::Objectives,
     SearchScope::Files,
     SearchScope::Content,
 ];
+
+fn search_placeholder(scope: SearchScope) -> &'static str {
+    match scope {
+        SearchScope::Objectives => "Search Objectives…",
+        SearchScope::Files => "Search file names…",
+        SearchScope::Content => "Search file content…",
+    }
+}
+
+pub type OpenerHandler = Rc<dyn Fn(&gtk::Widget)>;
 
 pub struct Header {
     pub root: gtk::Box,
@@ -54,7 +72,11 @@ pub struct Header {
     activity_tab: gtk::ToggleButton,
     terminal_tab: gtk::ToggleButton,
     status: gtk::Label,
-    pub search_entry: gtk::SearchEntry,
+    search: gtk::Box,
+    search_slot: gtk::Box,
+    search_holder: gtk::Box,
+    search_button: gtk::MenuButton,
+    search_entry: gtk::SearchEntry,
     scope: gtk::DropDown,
     popover: gtk::Popover,
     popover_heading: gtk::Label,
@@ -63,8 +85,14 @@ pub struct Header {
     shown_results: RefCell<Vec<SearchResult>>,
     nav: gtk::Box,
     profile_name: gtk::Label,
-    pub shortcuts_button: gtk::Button,
-    pub exit_button: gtk::Button,
+    shortcuts_button: gtk::Button,
+    exit_button: gtk::Button,
+    menu_button: gtk::MenuButton,
+    menu_shortcuts: (gtk::Button, gtk::Label),
+    menu_exit: (gtk::Button, gtk::Label),
+    on_shortcuts: RefCell<Option<OpenerHandler>>,
+    on_exit: RefCell<Option<OpenerHandler>>,
+    compact: Cell<bool>,
     updating: Cell<bool>,
 }
 
@@ -86,6 +114,47 @@ fn draw_mark(area: &gtk::DrawingArea) {
         cr.close_path();
         let _ = cr.stroke();
     });
+}
+
+fn icon_button(icon: &str, name: &str) -> gtk::Button {
+    let button = gtk::Button::from_icon_name(icon);
+    button.add_css_class("icon-button");
+    button.set_valign(gtk::Align::Center);
+    set_accessible_label(&button, name);
+    button
+}
+
+fn icon_menu_button(icon: &str, name: &str, popover: &gtk::Popover) -> gtk::MenuButton {
+    let button = gtk::MenuButton::builder()
+        .icon_name(icon)
+        .popover(popover)
+        .valign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    button.add_css_class("icon-button");
+    button.set_tooltip_text(Some(name));
+    set_accessible_label(&button, name);
+    button
+}
+
+fn menu_item(text: &str, destructive: bool) -> (gtk::Button, gtk::Label) {
+    let row = hbox(space::GROUP);
+    let name = label(text, &[]);
+    name.set_wrap(false);
+    name.set_hexpand(true);
+    row.append(&name);
+    let accel = label("", &["meta"]);
+    accel.set_wrap(false);
+    row.append(&accel);
+    let button = gtk::Button::new();
+    button.set_child(Some(&row));
+    button.add_css_class("quiet");
+    button.add_css_class("menu-item");
+    if destructive {
+        button.add_css_class("destructive-quiet");
+    }
+    set_accessible_label(&button, text);
+    (button, accel)
 }
 
 impl Header {
@@ -137,12 +206,12 @@ impl Header {
         let search = hbox(0);
         search.add_css_class("search");
         search.set_valign(gtk::Align::Center);
-        let scope = gtk::DropDown::from_strings(&["Objectives", "Files", "Content"]);
+        let scope = gtk::DropDown::from_strings(&SCOPES.map(format::scope_label));
         scope.add_css_class("search-scope");
         scope.set_tooltip_text(Some("Search scope"));
         set_accessible_label(&scope, "Search scope");
         let search_entry = gtk::SearchEntry::builder()
-            .placeholder_text("Search objectives, files, or content…")
+            .placeholder_text(search_placeholder(SCOPES[0]))
             .width_chars(12)
             .max_width_chars(34)
             .build();
@@ -150,7 +219,17 @@ impl Header {
         set_accessible_label(&search_entry, "Global search");
         search.append(&search_entry);
         search.append(&scope);
-        root.append(&search);
+        let search_slot = hbox(0);
+        search_slot.set_valign(gtk::Align::Center);
+        search_slot.append(&search);
+        root.append(&search_slot);
+
+        let search_popover = gtk::Popover::new();
+        search_popover.add_css_class("search-popover");
+        let search_holder = hbox(0);
+        search_popover.set_child(Some(&search_holder));
+        let search_button = icon_menu_button("system-search-symbolic", "Search", &search_popover);
+        root.append(&search_button);
 
         let popover = gtk::Popover::new();
         popover.add_css_class("search-results");
@@ -176,16 +255,22 @@ impl Header {
         popover_box.append(&results_scroll);
         popover.set_child(Some(&popover_box));
 
-        let shortcuts_button = gtk::Button::from_icon_name("input-keyboard-symbolic");
-        shortcuts_button.add_css_class("icon-button");
-        shortcuts_button.set_valign(gtk::Align::Center);
-        set_accessible_label(&shortcuts_button, "Keyboard shortcuts");
+        let shortcuts_button = icon_button("input-keyboard-symbolic", "Keyboard shortcuts");
         root.append(&shortcuts_button);
-        let exit_button = gtk::Button::from_icon_name("system-shutdown-symbolic");
-        exit_button.add_css_class("icon-button");
-        exit_button.set_valign(gtk::Align::Center);
-        set_accessible_label(&exit_button, "Exit LADE and stop its agents");
+        let exit_button = icon_button("system-shutdown-symbolic", "Exit LADE and stop its agents");
         root.append(&exit_button);
+
+        let menu = gtk::Popover::new();
+        menu.add_css_class("header-menu");
+        let menu_box = vbox(0);
+        let menu_shortcuts = menu_item("Keyboard shortcuts", false);
+        let menu_exit = menu_item("Exit LADE…", true);
+        menu_box.append(&menu_shortcuts.0);
+        menu_box.append(&menu_exit.0);
+        menu.set_child(Some(&menu_box));
+        let menu_button =
+            icon_menu_button("open-menu-symbolic", "Keyboard shortcuts and Exit", &menu);
+        root.append(&menu_button);
 
         let profile = hbox(space::ITEM);
         profile.add_css_class("profile");
@@ -216,6 +301,10 @@ impl Header {
             activity_tab,
             terminal_tab,
             status,
+            search,
+            search_slot,
+            search_holder,
+            search_button,
             search_entry,
             scope,
             popover,
@@ -227,6 +316,12 @@ impl Header {
             profile_name: name,
             shortcuts_button,
             exit_button,
+            menu_button,
+            menu_shortcuts,
+            menu_exit,
+            on_shortcuts: RefCell::new(None),
+            on_exit: RefCell::new(None),
+            compact: Cell::new(false),
             updating: Cell::new(false),
         });
         header.connect();
@@ -253,9 +348,15 @@ impl Header {
         let this = Rc::downgrade(self);
         self.search_entry.connect_activate(move |entry| {
             if let Some(this) = this.upgrade() {
-                let scope = SCOPES[this.scope.selected() as usize % SCOPES.len()];
-                this.controller.search(scope, &entry.text());
+                this.controller.search(this.selected_scope(), &entry.text());
                 this.popover.popup();
+            }
+        });
+        let this = Rc::downgrade(self);
+        self.scope.connect_selected_notify(move |_| {
+            if let Some(this) = this.upgrade() {
+                this.search_entry
+                    .set_placeholder_text(Some(search_placeholder(this.selected_scope())));
             }
         });
         let entry = self.search_entry.clone();
@@ -269,16 +370,71 @@ impl Header {
                 let result = this.shown_results.borrow().get(index).cloned();
                 if let Some(result) = result {
                     this.popover.popdown();
+                    this.search_button.popdown();
                     this.controller.open_search_result(&result);
                 }
             }
         });
+        for (button, exit) in [(&self.shortcuts_button, false), (&self.exit_button, true)] {
+            let this = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.run(exit);
+                }
+            });
+        }
+        for (button, exit) in [(&self.menu_shortcuts.0, false), (&self.menu_exit.0, true)] {
+            let this = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(this) = this.upgrade() {
+                    this.menu_button.popdown();
+                    this.run(exit);
+                }
+            });
+        }
+    }
+
+    fn selected_scope(&self) -> SearchScope {
+        SCOPES[self.scope.selected() as usize % SCOPES.len()]
+    }
+
+    pub fn set_on_shortcuts(&self, handler: OpenerHandler) {
+        *self.on_shortcuts.borrow_mut() = Some(handler);
+    }
+
+    pub fn set_on_exit(&self, handler: OpenerHandler) {
+        *self.on_exit.borrow_mut() = Some(handler);
+    }
+
+    pub fn show_shortcuts(&self) {
+        self.run(false);
+    }
+
+    pub fn request_exit(&self) {
+        self.run(true);
+    }
+
+    fn run(&self, exit: bool) {
+        let (handler, wide) = if exit {
+            (self.on_exit.borrow().clone(), &self.exit_button)
+        } else {
+            (self.on_shortcuts.borrow().clone(), &self.shortcuts_button)
+        };
+        let opener: gtk::Widget = if self.compact.get() {
+            self.menu_button.clone().upcast()
+        } else {
+            wide.clone().upcast()
+        };
+        if let Some(handler) = handler {
+            handler(&opener);
+        }
     }
 
     pub fn refresh(&self, changes: &[Change]) {
         for change in changes {
             match change {
                 Change::Connection => self.refresh_connection(),
+                Change::DesktopAttention => self.refresh_notifications(),
                 Change::View => self.refresh_view(),
                 Change::Search => self.refresh_search(),
                 _ => {}
@@ -287,6 +443,9 @@ impl Header {
     }
 
     pub fn set_compact(&self, compact: bool) {
+        if self.compact.replace(compact) == compact {
+            return;
+        }
         self.root
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
         self.nav.set_margin_start(if compact {
@@ -296,22 +455,43 @@ impl Header {
         });
         self.nav
             .set_spacing(if compact { space::SECTION } else { space::PAGE });
+        let (from, to) = if compact {
+            (&self.search_slot, &self.search_holder)
+        } else {
+            (&self.search_holder, &self.search_slot)
+        };
+        self.popover.popdown();
+        self.search_button.popdown();
+        from.remove(&self.search);
+        to.append(&self.search);
+        self.search_slot.set_visible(!compact);
+        self.search_button.set_visible(compact);
+        self.shortcuts_button.set_visible(!compact);
+        self.exit_button.set_visible(!compact);
+        self.menu_button.set_visible(compact);
         self.profile_name.set_visible(!compact);
+        self.status.set_width_chars(if compact { -1 } else { 14 });
+        self.refresh_connection();
     }
 
     pub fn set_shortcut_hints(&self, keymap: &Keymap) {
-        self.shortcuts_button.set_tooltip_text(Some(&format!(
-            "Keyboard shortcuts ({})",
-            keymap.label(AppAction::ShowShortcuts)
-        )));
-        self.search_entry.set_tooltip_text(Some(&format!(
-            "Global search ({})",
-            keymap.label(AppAction::FocusSearch)
-        )));
+        let shortcuts = keymap.label(AppAction::ShowShortcuts);
+        let search = keymap.label(AppAction::FocusSearch);
+        let exit = keymap.label(AppAction::Exit);
+        self.shortcuts_button
+            .set_tooltip_text(Some(&format!("Keyboard shortcuts ({shortcuts})")));
+        self.search_entry
+            .set_tooltip_text(Some(&format!("Global search ({search})")));
+        self.search_button
+            .set_tooltip_text(Some(&format!("Search ({search})")));
         self.exit_button.set_tooltip_text(Some(&format!(
-            "Exit: stop the service, its agents and terminals ({}). Closing the window keeps them running.",
-            keymap.label(AppAction::Exit)
+            "Exit: stop the service, its agents and terminals ({exit}). Closing the window keeps them running."
         )));
+        self.menu_shortcuts.1.set_text(&shortcuts);
+        self.menu_exit.1.set_text(&exit);
+        self.menu_exit.0.set_tooltip_text(Some(
+            "Stop the service, its agents and terminals. Closing the window keeps them running.",
+        ));
         self.terminal_tab.set_tooltip_text(Some(&format!(
             "Terminal in the Objective sandbox ({})",
             keymap.label(AppAction::ShowTerminal)
@@ -319,6 +499,9 @@ impl Header {
     }
 
     pub fn focus_search(&self) {
+        if self.compact.get() {
+            self.search_button.popup();
+        }
         self.search_entry.grab_focus();
     }
 
@@ -335,10 +518,37 @@ impl Header {
 
     fn refresh_connection(&self) {
         let state = self.controller.store.state();
-        let (short, full) = connection_text(&state.connection);
-        self.status.set_text(&short);
+        let (short, mut full) = connection_text(&state.connection);
+        if let Some(reason) = &state.notifications_unavailable {
+            full.push_str(&notifications_note(reason));
+        }
+        let shown = if self.compact.get() {
+            short
+                .split_once(' ')
+                .map_or(short.as_str(), |(sign, _)| sign)
+        } else {
+            short.as_str()
+        };
+        self.status.set_text(shown);
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
+    }
+
+    fn refresh_notifications(&self) {
+        self.refresh_connection();
+        let reason = self
+            .controller
+            .store
+            .state()
+            .notifications_unavailable
+            .clone();
+        if let Some(reason) = reason {
+            widgets::announce(
+                &self.status,
+                notifications_note(&reason).trim_start_matches(". "),
+                gtk::AccessibleAnnouncementPriority::Low,
+            );
+        }
     }
 
     fn refresh_search(&self) {
@@ -387,9 +597,7 @@ impl Header {
                         &[],
                         gtk::pango::EllipsizeMode::Middle,
                     ));
-                    if result.path.is_some()
-                        && result.kind != crate::presentation::model::SearchResultKind::File
-                    {
+                    if result.path.is_some() && result.kind != SearchResultKind::File {
                         content.append(&widgets::line_label(
                             &result.preview,
                             &["meta", "mono"],
@@ -414,6 +622,7 @@ impl Header {
                 }
             }
         }
+        self.results.set_visible(!shown.is_empty());
         *self.shown_results.borrow_mut() = shown;
     }
 }

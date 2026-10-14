@@ -6,10 +6,12 @@ use gtk::gio;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::widgets::{self, Dialog, field, hbox, label, set_accessible_label, space, vbox};
+use super::widgets::{
+    self, Dialog, MessageKind, field, hbox, label, set_accessible_label, set_focus_key, space, vbox,
+};
 use crate::presentation::compat::{
-    ForkPosition, ModelChoice, ProviderStatus, ResourceKind, ResourceState, ThinkingLevel,
-    UiAnswerView, UiDialog, UiPromptView,
+    ForkPosition, ModelChoice, ProviderStatus, Readiness, ResourceKind, ResourceState,
+    ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
@@ -22,29 +24,82 @@ fn section(title: &str) -> gtk::Box {
     section
 }
 
+fn picker_field(title: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let field = vbox(space::TIGHT);
+    field.append(&label(title, &["meta"]));
+    field.append(control);
+    field
+}
+
+fn import_profile_dialog(opener: &gtk::Button, controller: &Rc<Controller>) {
+    let Some(window) = opener.root().and_downcast::<gtk::Window>() else {
+        return;
+    };
+    let dialog = gtk::FileDialog::builder()
+        .title("Choose a pi agent directory (for example ~/.pi/agent)")
+        .accept_label("Import a copy")
+        .modal(true)
+        .build();
+    let controller = controller.clone();
+    dialog.select_folder(Some(&window), None::<&gio::Cancellable>, move |result| {
+        if let Ok(Some(path)) = result.map(|f| f.path()) {
+            controller.import_profile(path);
+        }
+    });
+}
+
+const IMPORT_PROFILE: &str = "Import a pi profile…";
+const IMPORT_PROFILE_TOOLTIP: &str = "Copies AGENTS.md, skills, prompts, extensions and a valid models.json; the source is never changed";
+
 pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
-    controller.picker_defaults();
-    let block = vbox(space::ITEM);
+    let block = vbox(space::GROUP);
     let state = controller.store.state();
     let compat = &state.compat;
     let Some(catalog) = compat.catalog.clone() else {
-        block.append(&label(
-            "Loading the model catalogue from the service…",
-            &["meta"],
-        ));
+        block.append(&label("Loading the available models…", &["meta"]));
         return block;
     };
+    let readiness = compat.readiness();
     let choice = compat.choice.clone();
     let models = compat.chosen_models().to_vec();
     drop(state);
 
-    if let Some(error) = &catalog.error {
-        block.append(&widgets::warning_line(error));
+    if catalog.providers.is_empty() {
+        let sentence = match &catalog.error {
+            Some(_) => "LADE can't load models right now.",
+            None => "No model providers are available.",
+        };
+        block.append(&widgets::inline_message(
+            MessageKind::Warning,
+            sentence,
+            catalog.error.as_deref(),
+        ));
+        let actions = hbox(space::ITEM);
+        let retry = widgets::button("Retry loading models", &[]);
+        let c = controller.clone();
+        retry.connect_clicked(move |_| c.load_models(None));
+        actions.append(&retry);
+        let import = widgets::button(IMPORT_PROFILE, &[]);
+        import.set_tooltip_text(Some(IMPORT_PROFILE_TOOLTIP));
+        let c = controller.clone();
+        import.connect_clicked(move |b| import_profile_dialog(b, &c));
+        actions.append(&import);
+        block.append(&actions);
+        return block;
     }
+    if let Some(error) = &catalog.error {
+        block.append(&widgets::inline_message(
+            MessageKind::Warning,
+            "Some model providers may be missing.",
+            Some(error),
+        ));
+    }
+
     let names: Vec<String> = catalog.providers.iter().map(|p| p.picker_label()).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let providers = widgets::dropdown(&refs);
+    let providers = widgets::dropdown_or(&refs, "No model providers are available");
     set_accessible_label(&providers, "Provider for the agent");
+    set_focus_key(&providers, "agent:provider");
     if let Some(index) = choice
         .provider
         .as_ref()
@@ -53,25 +108,33 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     {
         providers.set_selected(index);
     }
-    block.append(&label("Provider", &["meta"]));
-    block.append(&providers);
+    let provider_field = picker_field("Provider", &providers);
     if let Some(provider) = choice.provider.as_ref().and_then(|p| catalog.provider(p)) {
-        let auth = if provider.auth.is_empty() {
-            "none".to_owned()
-        } else {
-            provider.auth.join(", ")
-        };
-        block.append(&label(
-            &format!("Authentication: {auth} · {} model(s)", provider.models),
-            &["meta"],
-        ));
+        let subtitle = provider.subtitle();
+        provider_field.append(&label(&subtitle, &["meta"]));
+        widgets::set_accessible_description(&providers, &subtitle);
         if let Some(reason) = &provider.reason {
-            match provider.status {
-                ProviderStatus::Available => block.append(&label(reason, &["meta"])),
-                _ => block.append(&widgets::warning_line(reason)),
-            }
+            provider_field.append(&match provider.status {
+                ProviderStatus::Available => label(reason, &["meta"]).upcast::<gtk::Widget>(),
+                _ => widgets::inline_message(
+                    MessageKind::Warning,
+                    reason,
+                    provider.credential_help().as_deref(),
+                )
+                .upcast(),
+            });
+        }
+        if provider.status == ProviderStatus::MissingCredentials {
+            let check = widgets::button("Check again", &[]);
+            check.set_halign(gtk::Align::Start);
+            check.set_tooltip_text(Some("Ask LADE again whether this provider has a key"));
+            set_focus_key(&check, "agent:check-credentials");
+            let (c, id) = (controller.clone(), provider.id.clone());
+            check.connect_clicked(move |_| c.load_models(Some(id.clone())));
+            provider_field.append(&check);
         }
     }
+    block.append(&provider_field);
     let catalog_for_providers = catalog.clone();
     let controller_for_providers = controller.clone();
     let thinking_now = choice.thinking;
@@ -96,8 +159,9 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
         })
         .collect();
     let model_refs: Vec<&str> = model_names.iter().map(String::as_str).collect();
-    let model_choice = widgets::dropdown(&model_refs);
+    let model_choice = widgets::dropdown_or(&model_refs, "No models available");
     set_accessible_label(&model_choice, "Model for the agent");
+    set_focus_key(&model_choice, "agent:model");
     if let Some(index) = choice
         .model
         .as_ref()
@@ -106,23 +170,31 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     {
         model_choice.set_selected(index);
     }
-    block.append(&label("Model", &["meta"]));
-    if models.is_empty() {
-        block.append(&label("Loading this provider's models…", &["meta"]));
-    } else {
-        block.append(&model_choice);
+    let ready_model = match &readiness {
+        Readiness::Ready { model, .. } => Some(model.clone()),
+        _ => None,
+    };
+    let provider_problem = matches!(
+        readiness,
+        Readiness::NeedsCredentials { .. } | Readiness::Restricted { .. }
+    );
+    match (&ready_model, readiness.problem()) {
+        (Some(_), _) => block.append(&picker_field("Model", &model_choice)),
+        (None, Some(_)) if provider_problem => {}
+        (None, Some(problem)) => {
+            block.append(&picker_field("Model", &label(&problem, &["secondary"])));
+        }
+        (None, None) => {}
     }
-    let thinking_levels: Vec<ThinkingLevel> = controller
-        .store
-        .state()
-        .compat
-        .chosen_model()
+    let thinking_levels: Vec<ThinkingLevel> = ready_model
+        .as_ref()
         .map(|m| m.thinking.clone())
         .filter(|levels| !levels.is_empty())
         .unwrap_or_else(|| ThinkingLevel::ALL.to_vec());
     let thinking_names: Vec<&str> = thinking_levels.iter().map(|l| l.label()).collect();
-    let thinking = widgets::dropdown(&thinking_names);
+    let thinking = widgets::dropdown_or(&thinking_names, "No thinking levels");
     set_accessible_label(&thinking, "Thinking level");
+    set_focus_key(&thinking, "agent:thinking");
     if let Some(index) = thinking_levels
         .iter()
         .position(|l| *l == choice.thinking)
@@ -130,8 +202,9 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     {
         thinking.set_selected(index);
     }
-    block.append(&label("Thinking", &["meta"]));
-    block.append(&thinking);
+    if ready_model.is_some() {
+        block.append(&picker_field("Thinking", &thinking));
+    }
 
     let models_for_choice = models.clone();
     let controller_for_models = controller.clone();
@@ -189,7 +262,8 @@ pub fn session_section(
         Some(view) => {
             s.append(&label(
                 &format!(
-                    "Thinking {} · this generation: {}",
+                    "Model {} · thinking {} · this generation: {}",
+                    view.model.label(),
                     view.thinking.label(),
                     view.reason
                 ),
@@ -338,8 +412,10 @@ pub fn session_section(
     s
 }
 
+pub const RESOURCES_TITLE: &str = "LADE profile resources";
+
 pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
-    let s = section("LADE profile resources");
+    let s = vbox(space::GROUP);
     let Some(inventory) = controller.store.state().compat.inventory.clone() else {
         s.append(&label("Loading the LADE profile…", &["meta"]));
         return s;
@@ -407,39 +483,35 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
         }
         s.append(&row);
     }
-    let rules = gtk::Expander::new(Some("Trust rules and restrictions"));
-    let list = vbox(space::TIGHT);
-    for restriction in &inventory.restrictions {
-        list.append(&label(restriction, &["meta"]));
+    if !inventory.restrictions.is_empty() {
+        let list = vbox(space::TIGHT);
+        for restriction in &inventory.restrictions {
+            list.append(&label(restriction, &["meta"]));
+        }
+        s.append(&widgets::disclosure(
+            "Trust rules and restrictions",
+            false,
+            &list,
+            |_| {},
+        ));
     }
-    rules.set_child(Some(&list));
-    s.append(&rules);
-    let c = controller.clone();
-    let import = widgets::button("Import from a pi profile…", &[]);
-    import.set_tooltip_text(Some(
-        "Copies AGENTS.md, skills, prompts, extensions and a valid models.json; the source is never changed",
-    ));
-    import.connect_clicked(move |b| {
-        let Some(window) = b.root().and_downcast::<gtk::Window>() else {
-            return;
-        };
-        let dialog = gtk::FileDialog::builder()
-            .title("Choose a pi agent directory (for example ~/.pi/agent)")
-            .accept_label("Import a copy")
-            .modal(true)
-            .build();
-        let controller = c.clone();
-        dialog.select_folder(Some(&window), None::<&gio::Cancellable>, move |result| {
-            if let Ok(Some(path)) = result.map(|f| f.path()) {
-                controller.import_profile(path);
-            }
-        });
-    });
-    s.append(&import);
+    let actions = hbox(space::ITEM);
+    let no_providers = matches!(
+        controller.store.state().compat.readiness(),
+        Readiness::NoProviders { .. }
+    );
+    if !no_providers {
+        let c = controller.clone();
+        let import = widgets::button(IMPORT_PROFILE, &[]);
+        import.set_tooltip_text(Some(IMPORT_PROFILE_TOOLTIP));
+        import.connect_clicked(move |b| import_profile_dialog(b, &c));
+        actions.append(&import);
+    }
     let c = controller.clone();
     let refresh = widgets::button("Refresh resources", &[]);
     refresh.connect_clicked(move |_| c.load_resources());
-    s.append(&refresh);
+    actions.append(&refresh);
+    s.append(&actions);
     s
 }
 
@@ -505,7 +577,7 @@ fn present(
         }
         UiPromptView::Select { options, .. } => {
             let refs: Vec<&str> = options.iter().map(String::as_str).collect();
-            let choice = widgets::dropdown(&refs);
+            let choice = widgets::dropdown_or(&refs, "The extension offered no choices");
             set_accessible_label(&choice, "Choice");
             shell.body.append(&choice);
             let options = options.clone();

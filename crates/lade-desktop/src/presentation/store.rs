@@ -7,10 +7,10 @@ use super::drafts::DraftEditor;
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
 use super::model::{
-    ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState, DeliveryMode,
-    Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, ObjectiveDetail,
-    ObjectiveId, ObjectiveSummary, Reference, RepoPath, SearchResults, ServiceNotice, Settings,
-    Side, VerificationSummary, Workspace, WorkspaceId,
+    ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
+    DeliveryMode, Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, NoticeLevel,
+    ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath, SearchResults,
+    ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
 };
 use super::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
@@ -71,6 +71,14 @@ pub enum StoreUpdate {
         draft_id: DraftId,
         message: String,
     },
+    DraftSaveRefused {
+        draft_id: DraftId,
+        refusal: Refusal,
+    },
+    DraftDeleteRefused {
+        draft_id: DraftId,
+        refusal: Refusal,
+    },
     DraftDeleted {
         draft_id: DraftId,
     },
@@ -94,6 +102,15 @@ pub enum StoreUpdate {
         objective_id: ObjectiveId,
         status: Option<ServiceNotice>,
     },
+    Refused {
+        objective_id: ObjectiveId,
+        surface: ActionSurface,
+        refusal: Refusal,
+    },
+    RefusalCleared {
+        objective_id: ObjectiveId,
+        surface: ActionSurface,
+    },
     Compat(CompatUpdate),
     TerminalOpened {
         objective_id: ObjectiveId,
@@ -115,6 +132,10 @@ pub enum StoreUpdate {
     TerminalProblem {
         objective_id: ObjectiveId,
         message: String,
+    },
+    TerminalRefused {
+        objective_id: ObjectiveId,
+        refusal: Refusal,
     },
     ServiceStopped,
     NotificationsUnavailable {
@@ -251,6 +272,12 @@ pub struct Reveal {
     pub end: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct KeptRefusal {
+    refusal: Refusal,
+    revision: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ActivityLog {
     pub items: Vec<ActivityItem>,
@@ -282,6 +309,7 @@ pub struct PresentationState {
     pub notices: Vec<ServiceNotice>,
     pub notices_received: usize,
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
+    refusals: HashMap<(ObjectiveId, ActionSurface), KeptRefusal>,
     pub ui: UiState,
     pub compat: CompatState,
     pub terminals: Vec<TerminalSession>,
@@ -293,6 +321,18 @@ impl Default for PresentationState {
     fn default() -> Self {
         Self::new(ConnectionState::Connecting)
     }
+}
+
+fn refusal_changes(objective_id: ObjectiveId, surface: ActionSurface) -> Vec<Change> {
+    let mut changes = vec![Change::Detail(objective_id.clone())];
+    match surface {
+        ActionSurface::Terminal => changes.push(Change::Terminal(objective_id)),
+        ActionSurface::Drafts | ActionSurface::Feedback => {
+            changes.push(Change::Drafts(objective_id));
+        }
+        _ => {}
+    }
+    changes
 }
 
 impl PresentationState {
@@ -318,6 +358,7 @@ impl PresentationState {
             notices: Vec::new(),
             notices_received: 0,
             command_status: HashMap::new(),
+            refusals: HashMap::new(),
             ui: UiState::default(),
             compat: CompatState::default(),
             terminals: Vec::new(),
@@ -439,6 +480,60 @@ impl PresentationState {
         }
     }
 
+    pub fn last_refusal(
+        &self,
+        objective_id: &ObjectiveId,
+        surface: ActionSurface,
+    ) -> Option<&Refusal> {
+        self.refusals
+            .get(&(objective_id.clone(), surface))
+            .map(|kept| &kept.refusal)
+    }
+
+    pub fn command_note(&self, objective_id: &ObjectiveId) -> Option<&ServiceNotice> {
+        self.command_status.get(objective_id)
+    }
+
+    fn keep_refusal(
+        &mut self,
+        objective_id: ObjectiveId,
+        surface: ActionSurface,
+        refusal: Refusal,
+    ) -> Vec<Change> {
+        let revision = self.objective(&objective_id).map(|o| o.revision);
+        self.refusals.insert(
+            (objective_id.clone(), surface),
+            KeptRefusal { refusal, revision },
+        );
+        refusal_changes(objective_id, surface)
+    }
+
+    fn objective_revised(&mut self, objective_id: &ObjectiveId, revision: u64) {
+        self.refusals.retain(|(id, _), kept| {
+            if id != objective_id {
+                return true;
+            }
+            match kept.revision {
+                Some(r) => r == revision,
+                None => {
+                    kept.revision = Some(revision);
+                    true
+                }
+            }
+        });
+    }
+
+    fn terminal_problem(&mut self, objective_id: ObjectiveId, refusal: Refusal) -> Vec<Change> {
+        if let Some(index) = self.terminals.iter().rposition(|t| {
+            t.objective_id == objective_id
+                && t.status == TerminalStatus::Opening
+                && t.terminal_id.is_none()
+        }) {
+            self.terminals.remove(index);
+        }
+        self.keep_refusal(objective_id, ActionSurface::Terminal, refusal)
+    }
+
     fn push_notice(&mut self, notice: ServiceNotice) {
         self.notices_received += 1;
         self.notices.push(notice);
@@ -458,6 +553,14 @@ impl PresentationState {
                         editor.connection_lost();
                         changes.push(Change::DraftStatus(editor.draft_id.clone()));
                     }
+                    self.terminals.retain(|t| {
+                        let pending =
+                            t.status == TerminalStatus::Opening && t.terminal_id.is_none();
+                        if pending {
+                            changes.push(Change::Terminal(t.objective_id.clone()));
+                        }
+                        !pending
+                    });
                     for session in &mut self.terminals {
                         if !matches!(session.status, TerminalStatus::Ended(_)) {
                             session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
@@ -512,6 +615,7 @@ impl PresentationState {
             }
             StoreUpdate::ObjectiveChanged(summary) => {
                 let id = summary.objective_id.clone();
+                self.objective_revised(&id, summary.revision);
                 self.upsert_summary(summary.clone());
                 if let Some(Load::Loaded(detail)) = self.details.get_mut(&id) {
                     detail.summary = summary;
@@ -520,6 +624,7 @@ impl PresentationState {
             }
             StoreUpdate::ObjectiveDetail(detail) => {
                 let id = detail.summary.objective_id.clone();
+                self.objective_revised(&id, detail.summary.revision);
                 self.upsert_summary(detail.summary.clone());
                 self.details.insert(id.clone(), Load::Loaded(*detail));
                 vec![Change::Objectives, Change::Detail(id)]
@@ -728,6 +833,31 @@ impl PresentationState {
                 }
                 None => Vec::new(),
             },
+            StoreUpdate::DraftSaveRefused { draft_id, refusal } => {
+                match self.draft_mut(&draft_id) {
+                    Some(editor) => {
+                        editor.fail_with(&refusal);
+                        vec![Change::DraftStatus(draft_id)]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            StoreUpdate::DraftDeleteRefused { draft_id, refusal } => {
+                match self.draft_mut(&draft_id).map(|d| d.objective_id.clone()) {
+                    Some(objective_id) => {
+                        self.keep_refusal(objective_id, ActionSurface::Drafts, refusal)
+                    }
+                    None => {
+                        let code = refusal.details.split(':').next().unwrap_or_default();
+                        self.push_notice(ServiceNotice {
+                            level: NoticeLevel::Warning,
+                            code: code.to_owned(),
+                            message: refusal.message,
+                        });
+                        vec![Change::Notices]
+                    }
+                }
+            }
             StoreUpdate::DraftDeleted { draft_id } => {
                 let mut changes = Vec::new();
                 for (objective_id, editors) in &mut self.drafts {
@@ -817,6 +947,18 @@ impl PresentationState {
                     Vec::new()
                 }
             }
+            StoreUpdate::Refused {
+                objective_id,
+                surface,
+                refusal,
+            } => self.keep_refusal(objective_id, surface, refusal),
+            StoreUpdate::RefusalCleared {
+                objective_id,
+                surface,
+            } => match self.refusals.remove(&(objective_id.clone(), surface)) {
+                Some(_) => refusal_changes(objective_id, surface),
+                None => Vec::new(),
+            },
             StoreUpdate::Compat(update) => self
                 .compat
                 .apply(update)
@@ -855,8 +997,9 @@ impl PresentationState {
                 session.terminal_id = Some(terminal_id);
                 session.mode = Some(mode);
                 session.status = TerminalStatus::Open;
-                session.problem = None;
                 session.screen.resize(usize::from(cols), usize::from(rows));
+                self.refusals
+                    .remove(&(objective_id.clone(), ActionSurface::Terminal));
                 vec![Change::Terminal(objective_id)]
             }
             StoreUpdate::TerminalOutput {
@@ -883,23 +1026,17 @@ impl PresentationState {
             StoreUpdate::TerminalProblem {
                 objective_id,
                 message,
-            } => {
-                match self.terminal_for_mut(&objective_id) {
-                    Some(session) => {
-                        if session.status == TerminalStatus::Opening {
-                            session.status = TerminalStatus::Ended(TerminalEnd::Failed);
-                        }
-                        session.problem = Some(message);
-                    }
-                    None => {
-                        let mut session = TerminalSession::opening(objective_id.clone(), 80, 24);
-                        session.status = TerminalStatus::Ended(TerminalEnd::Failed);
-                        session.problem = Some(message);
-                        self.push_terminal(session);
-                    }
-                }
-                vec![Change::Terminal(objective_id)]
-            }
+            } => self.terminal_problem(
+                objective_id,
+                Refusal {
+                    message,
+                    details: String::new(),
+                },
+            ),
+            StoreUpdate::TerminalRefused {
+                objective_id,
+                refusal,
+            } => self.terminal_problem(objective_id, refusal),
             StoreUpdate::ServiceStopped => {
                 self.service_stopped = true;
                 vec![Change::Lifetime]
@@ -1372,6 +1509,192 @@ mod tests {
             .map(|d| d.ui_id.as_str())
             .collect();
         assert_eq!(open, ["still-open"]);
+    }
+
+    fn refusal(message: &str) -> Refusal {
+        Refusal {
+            message: message.into(),
+            details: format!("invalid_lifecycle: {message}"),
+        }
+    }
+
+    #[test]
+    fn refusals_are_kept_per_surface_until_that_surface_succeeds_or_the_objective_changes() {
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let o = ObjectiveId::new("o");
+        let mut current = summary("o", Attention::Idle, Lifecycle::Active, 1);
+        state.apply(StoreUpdate::ObjectiveChanged(current.clone()));
+        let refused = |surface| StoreUpdate::Refused {
+            objective_id: o.clone(),
+            surface,
+            refusal: refusal("Couldn't send message. Start the agent first."),
+        };
+        let changes = state.apply(refused(ActionSurface::Send));
+        assert!(changes.contains(&Change::Detail(o.clone())));
+        state.apply(refused(ActionSurface::Review));
+        assert_eq!(
+            state.last_refusal(&o, ActionSurface::Send),
+            Some(&refusal("Couldn't send message. Start the agent first."))
+        );
+        assert_eq!(state.last_refusal(&o, ActionSurface::Agent), None);
+        state.apply(StoreUpdate::ObjectiveChanged(current.clone()));
+        assert!(state.last_refusal(&o, ActionSurface::Send).is_some());
+        state.apply(StoreUpdate::RefusalCleared {
+            objective_id: o.clone(),
+            surface: ActionSurface::Send,
+        });
+        assert_eq!(state.last_refusal(&o, ActionSurface::Send), None);
+        assert!(state.last_refusal(&o, ActionSurface::Review).is_some());
+        current.revision = 2;
+        state.apply(StoreUpdate::ObjectiveChanged(current));
+        assert_eq!(state.last_refusal(&o, ActionSurface::Review), None);
+    }
+
+    #[test]
+    fn command_notes_are_kept_apart_from_refusals() {
+        let mut state = PresentationState::default();
+        let o = ObjectiveId::new("o");
+        let note = ServiceNotice {
+            level: crate::presentation::model::NoticeLevel::Info,
+            code: "query_operation".into(),
+            message: "Checking outcome of “Integrate”…".into(),
+        };
+        state.apply(StoreUpdate::CommandStatus {
+            objective_id: o.clone(),
+            status: Some(note.clone()),
+        });
+        let changes = state.apply(StoreUpdate::Refused {
+            objective_id: o.clone(),
+            surface: ActionSurface::Review,
+            refusal: refusal("Couldn't integrate. The target moved."),
+        });
+        assert_eq!(changes, [Change::Detail(o.clone())]);
+        assert_eq!(
+            state.command_note(&o),
+            Some(&note),
+            "a refusal is not a note"
+        );
+        state.apply(StoreUpdate::CommandStatus {
+            objective_id: o.clone(),
+            status: None,
+        });
+        assert_eq!(state.command_note(&o), None);
+        assert!(state.last_refusal(&o, ActionSurface::Review).is_some());
+        state.apply(StoreUpdate::Refused {
+            objective_id: o.clone(),
+            surface: ActionSurface::Drafts,
+            refusal: refusal("Couldn't delete draft."),
+        });
+        let changes = state.apply(StoreUpdate::RefusalCleared {
+            objective_id: o.clone(),
+            surface: ActionSurface::Drafts,
+        });
+        assert!(changes.contains(&Change::Drafts(o)));
+    }
+
+    #[test]
+    fn draft_refusals_land_on_the_draft_and_its_objective() {
+        use crate::presentation::drafts::{DraftEditor, SaveStatus};
+        use crate::presentation::model::{ArtifactDigest, CaptureId, ReferenceVersion, SessionId};
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let o = ObjectiveId::new("o");
+        let reference = Reference {
+            artifact_digest: ArtifactDigest::new("digest"),
+            path: RepoPath::utf8("a.txt"),
+            version: ReferenceVersion::Working {
+                capture_id: CaptureId::new("cap"),
+            },
+            side: Side::New,
+            byte_start: 0,
+            byte_end: 1,
+            selected_text: "a".into(),
+            line_hint: Some(1),
+        };
+        let id = DraftId::new("d");
+        let editor = DraftEditor::new_local(id.clone(), o.clone(), SessionId::new("s"), reference);
+        state.drafts.insert(o.clone(), vec![editor]);
+        state.apply(StoreUpdate::DraftSaveRefused {
+            draft_id: id.clone(),
+            refusal: Refusal {
+                message: "The draft was not written.".into(),
+                details: "durability_failure: the draft was not written".into(),
+            },
+        });
+        let status = state.draft_mut(&id).unwrap().status(true);
+        assert_eq!(status.label(), "Save failed. The draft was not written.");
+        assert!(
+            matches!(status, SaveStatus::Failed { details, .. } if details.starts_with("durability_failure"))
+        );
+        assert!(
+            state.command_status.is_empty(),
+            "shown beside the draft only"
+        );
+        state.apply(StoreUpdate::DraftDeleteRefused {
+            draft_id: id,
+            refusal: refusal("Couldn't delete draft. The draft was already submitted."),
+        });
+        assert!(state.last_refusal(&o, ActionSurface::Drafts).is_some());
+        assert!(state.notices.is_empty());
+    }
+
+    #[test]
+    fn a_refused_open_leaves_no_failed_terminal_behind() {
+        let mut state = PresentationState::new(ConnectionState::Connected);
+        let o = ObjectiveId::new("o");
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        let changes = state.apply(StoreUpdate::TerminalRefused {
+            objective_id: o.clone(),
+            refusal: refusal("Couldn't open terminal. Start the agent once."),
+        });
+        assert!(changes.contains(&Change::Terminal(o.clone())));
+        assert!(state.terminal_for(&o).is_none(), "no terminal ever opened");
+        assert_eq!(
+            state
+                .last_refusal(&o, ActionSurface::Terminal)
+                .map(|r| r.message.as_str()),
+            Some("Couldn't open terminal. Start the agent once.")
+        );
+        state.apply(StoreUpdate::TerminalProblem {
+            objective_id: o.clone(),
+            message: "Open terminal was not sent: not connected.".into(),
+        });
+        assert!(state.terminal_for(&o).is_none());
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::TerminalOpened {
+            objective_id: o.clone(),
+            terminal_id: "t".into(),
+            mode: TerminalMode::ReadWrite,
+            cols: 80,
+            rows: 24,
+        });
+        assert_eq!(state.last_refusal(&o, ActionSurface::Terminal), None);
+        state.apply(StoreUpdate::TerminalClosed {
+            terminal_id: "t".into(),
+            end: TerminalEnd::Closed,
+        });
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::TerminalRefused {
+            objective_id: o.clone(),
+            refusal: refusal("Couldn't open terminal. Too many terminals are open."),
+        });
+        let session = state.terminal_for(&o).unwrap();
+        assert_eq!(session.status, TerminalStatus::Ended(TerminalEnd::Closed));
+        assert_eq!(
+            state
+                .last_refusal(&o, ActionSurface::Terminal)
+                .map(|r| r.message.as_str()),
+            Some("Couldn't open terminal. Too many terminals are open.")
+        );
+        assert_eq!(state.terminals.len(), 1);
+        state.push_terminal(TerminalSession::opening(o.clone(), 80, 24));
+        state.apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
+            attempt: 1,
+        }));
+        assert_eq!(state.terminals.len(), 1);
+        assert_eq!(
+            state.terminal_for(&o).map(|t| t.status.clone()),
+            Some(TerminalStatus::Ended(TerminalEnd::Closed))
+        );
     }
 
     #[test]

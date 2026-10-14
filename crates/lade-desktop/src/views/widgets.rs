@@ -135,9 +135,16 @@ impl LimitedInput {
         input
     }
 
-    pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
+    pub fn field(&self, field: &impl IsA<gtk::Widget>) -> gtk::Box {
         let unit = vbox(0);
-        unit.append(scroll);
+        unit.append(field);
+        self.error.add_css_class("limited-error");
+        unit.append(&self.error);
+        unit
+    }
+
+    pub fn labelled(&self, label: &str, placeholder: &str, min: i32, max: i32) -> gtk::Box {
+        let unit = text_field(label, placeholder, &self.view, min, max);
         self.error.add_css_class("limited-error");
         unit.append(&self.error);
         unit
@@ -221,18 +228,150 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
         .min_content_height(min)
         .max_content_height(max)
         .propagate_natural_height(true)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(view)
         .build();
+    scroll.set_overflow(gtk::Overflow::Hidden);
     scroll.add_css_class("text-input");
     scroll
+}
+
+pub fn placeholder_text(
+    view: &gtk::TextView,
+    placeholder: &str,
+    min: i32,
+    max: i32,
+) -> gtk::Overlay {
+    let overlay = gtk::Overlay::new();
+    overlay.set_child(Some(&bounded_text(view, min, max)));
+    let hint = label(placeholder, &["text-placeholder"]);
+    hint.set_can_target(false);
+    hint.set_valign(gtk::Align::Start);
+    overlay.add_overlay(&hint);
+    overlay.set_clip_overlay(&hint, true);
+    set_accessible_description(view, placeholder);
+    let update = {
+        let hint = hint.clone();
+        move |buffer: &gtk::TextBuffer| hint.set_visible(buffer.char_count() == 0)
+    };
+    update(&view.buffer());
+    view.buffer().connect_changed(update);
+    overlay
+}
+
+pub fn text_field(
+    label_text: &str,
+    placeholder: &str,
+    view: &gtk::TextView,
+    min: i32,
+    max: i32,
+) -> gtk::Box {
+    let unit = vbox(space::TIGHT);
+    unit.add_css_class("text-field");
+    unit.append(&label(label_text, &["meta"]));
+    set_accessible_label(view, label_text);
+    unit.append(&placeholder_text(view, placeholder, min, max));
+    unit
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageKind {
+    Info,
+    Warning,
+    Error,
+}
+
+impl MessageKind {
+    fn sign(self) -> &'static str {
+        match self {
+            Self::Info => "i",
+            Self::Warning => "⚠",
+            Self::Error => "✕",
+        }
+    }
+
+    fn class(self) -> &'static str {
+        match self {
+            Self::Info => "message-info",
+            Self::Warning => "message-warning",
+            Self::Error => "message-error",
+        }
+    }
+
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Info => "Note",
+            Self::Warning => "Warning",
+            Self::Error => "Error",
+        }
+    }
+}
+
+pub fn inline_message(kind: MessageKind, text: &str, details: Option<&str>) -> gtk::Box {
+    let root = vbox(space::TIGHT);
+    root.add_css_class("inline-message");
+    root.add_css_class(kind.class());
+    let row = hbox(space::ITEM);
+    let sign = gtk::Label::new(Some(kind.sign()));
+    sign.add_css_class("message-sign");
+    sign.set_valign(gtk::Align::Start);
+    row.append(&sign);
+    let message = label(text, &[]);
+    message.set_hexpand(true);
+    row.append(&message);
+    root.append(&row);
+    set_accessible_label(&root, &format!("{}: {text}", kind.prefix()));
+    if let Some(details) = details.filter(|d| !d.is_empty()) {
+        let code = label(details, &["mono", "message-details"]);
+        code.set_selectable(true);
+        root.append(&disclosure("Details", false, &code, |_| {}));
+        set_accessible_description(&root, details);
+    }
+    root
+}
+
+pub fn empty_state(
+    title: &str,
+    body: &str,
+    action: Option<&gtk::Button>,
+    note: Option<&str>,
+) -> gtk::Widget {
+    let block = vbox(space::GROUP);
+    block.add_css_class("empty-block");
+    block.set_halign(gtk::Align::Center);
+    block.set_valign(gtk::Align::Center);
+    block.set_hexpand(true);
+    block.set_vexpand(true);
+    let centred = |text: &gtk::Label| {
+        text.set_xalign(0.5);
+        text.set_justify(gtk::Justification::Center);
+        text.set_max_width_chars(56);
+    };
+    let heading = heading(title, "empty-heading");
+    centred(&heading);
+    block.append(&heading);
+    if !body.is_empty() {
+        let text = label(body, &["secondary"]);
+        centred(&text);
+        block.append(&text);
+    }
+    if let Some(action) = action {
+        action.set_halign(gtk::Align::Center);
+        block.append(action);
+    }
+    if let Some(note) = note.filter(|n| !n.is_empty()) {
+        let line = label(note, &["meta"]);
+        centred(&line);
+        block.append(&line);
+    }
+    block.upcast()
 }
 
 pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .overlay_scrolling(false)
+        .overlay_scrolling(true)
         .child(child)
         .build()
 }
@@ -267,10 +406,23 @@ fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
 }
 
 pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
-    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(choices)), None::<gtk::Expression>);
+    dropdown_or(choices, "None available")
+}
+
+pub fn dropdown_or(choices: &[&str], empty: &str) -> gtk::DropDown {
+    let shown: &[&str] = if choices.is_empty() {
+        &[empty]
+    } else {
+        choices
+    };
+    let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(shown)), None::<gtk::Expression>);
     dropdown.set_factory(Some(&string_factory(true)));
     dropdown.set_list_factory(Some(&string_factory(false)));
     dropdown.set_hexpand(true);
+    if choices.is_empty() {
+        dropdown.set_sensitive(false);
+        set_accessible_description(&dropdown, empty);
+    }
     let update = |d: &gtk::DropDown| {
         let text = d
             .selected_item()
@@ -536,7 +688,6 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(space::GROUP);
     let key_label = label(key, &["meta", "field-key"]);
     key_label.set_valign(gtk::Align::Start);
-    key_label.set_width_chars(10);
     key_label.set_max_width_chars(10);
     row.append(&key_label);
     value.set_hexpand(true);
@@ -550,15 +701,25 @@ pub fn rebuild_preserving_focus(container: &impl IsA<gtk::Widget>, rebuild: impl
     let inside = focused
         .as_ref()
         .is_some_and(|f| f.is_ancestor(container) || f == container);
-    let key = focused
-        .filter(|_| inside)
-        .map(|f| f.widget_name().to_string());
+    let key = focused.filter(|_| inside).and_then(|focused| {
+        let mut widget = Some(focused);
+        while let Some(w) = widget {
+            let name = w.widget_name();
+            if name.starts_with(FOCUS_KEY_PREFIX) {
+                return Some(name.to_string());
+            }
+            if &w == container {
+                return None;
+            }
+            widget = w.parent();
+        }
+        None
+    });
     rebuild();
     if !inside {
         return;
     }
     let restored = key
-        .filter(|k| k.starts_with(FOCUS_KEY_PREFIX))
         .and_then(|k| find_named(container, &k))
         .is_some_and(|w| w.grab_focus());
     if !restored {
@@ -616,7 +777,6 @@ impl Dialog {
         window.add_css_class("lade-dialog");
         let outer = vbox(space::SECTION);
         outer.add_css_class("dialog-content");
-        outer.append(&section_title(title));
         let body = vbox(space::GROUP);
         outer.append(&body);
         let error = vbox(0);

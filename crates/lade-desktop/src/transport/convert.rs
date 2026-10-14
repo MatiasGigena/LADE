@@ -171,8 +171,8 @@ fn badge(b: wire::Badge) -> view::Badge {
     }
 }
 
-fn action_name(a: wire::ActionName) -> view::ActionName {
-    match a {
+fn action_name(a: wire::ActionName) -> Option<view::ActionName> {
+    Some(match a {
         wire::ActionName::ObjectiveUpdateIntent => view::ActionName::ObjectiveUpdateIntent,
         wire::ActionName::ExecutionStart => view::ActionName::ExecutionStart,
         wire::ActionName::ExecutionCancel => view::ActionName::ExecutionCancel,
@@ -189,7 +189,8 @@ fn action_name(a: wire::ActionName) -> view::ActionName {
         wire::ActionName::ObjectiveDiscard => view::ActionName::ObjectiveDiscard,
         wire::ActionName::ObjectiveCleanup => view::ActionName::ObjectiveCleanup,
         wire::ActionName::ObjectiveDeleteHistory => view::ActionName::ObjectiveDeleteHistory,
-    }
+        wire::ActionName::TerminalOpen => return None,
+    })
 }
 
 fn activity_role(r: types::ActivityRole) -> view::ActivityRole {
@@ -237,14 +238,49 @@ pub fn error_code(code: wire::ErrorCode) -> &'static str {
     }
 }
 
-pub fn safe_action(action: wire::SafeAction) -> Option<&'static str> {
+pub fn advice(code: wire::ErrorCode, action: wire::SafeAction) -> Option<&'static str> {
+    use wire::ErrorCode as E;
+    let stale = matches!(
+        code,
+        E::StaleService
+            | E::StaleAssociation
+            | E::StaleExecution
+            | E::StaleReference
+            | E::StaleCandidate
+            | E::StaleTarget
+    );
     match action {
-        wire::SafeAction::Refresh => Some("Refresh and try again."),
+        wire::SafeAction::Refresh if stale => Some("Refresh and try again."),
         wire::SafeAction::InspectPrevious => Some("Inspect the previous version."),
-        wire::SafeAction::QueryOperation => Some("Checking the recorded outcome."),
-        wire::SafeAction::RetryRead => Some("Retry."),
-        wire::SafeAction::ExplicitContinue => Some("Continue explicitly if intended."),
-        wire::SafeAction::None => None,
+        wire::SafeAction::RetryRead => Some("Try again."),
+        _ => None,
+    }
+}
+
+pub fn fallback_reason(code: wire::ErrorCode) -> &'static str {
+    use wire::ErrorCode as E;
+    match code {
+        E::Unauthorized => "This window is not allowed to do that.",
+        E::StaleService => "The service restarted.",
+        E::StaleAssociation => "The Agent Session changed.",
+        E::StaleExecution => "The agent was restarted.",
+        E::StaleReference => "Some feedback no longer matches the current code.",
+        E::StaleCandidate => "A newer candidate exists.",
+        E::StaleTarget => "The Integration Target moved.",
+        E::InvalidLifecycle => "That isn't possible in the Objective's current state.",
+        E::UnsupportedContent => "This content isn't supported.",
+        E::VersionMismatch => "This window and the service are different versions.",
+        E::DurabilityFailure => "LADE couldn't record it, so nothing was changed.",
+        E::PermissionDenied => "Permission was denied.",
+        E::LimitReached => "A limit was reached.",
+        E::Interrupted => "It was interrupted.",
+        E::UnknownOperation => "The service has no record of it.",
+        E::ReplayExpired => "Its outcome can no longer be checked.",
+        E::DuplicateConflict => "It conflicts with an earlier request.",
+        E::NotFound => "It no longer exists.",
+        E::InvalidRequest => "The request was not valid.",
+        E::Conflict => "Something changed in the meantime.",
+        E::ExecutionUnavailable => "The agent isn't running.",
     }
 }
 
@@ -374,12 +410,22 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
         available_actions: d
             .available_actions
             .iter()
-            .map(|a| view::AvailableAction {
-                action: action_name(a.action),
-                enabled: a.enabled,
-                reason: a.reason.clone(),
+            .filter_map(|a| {
+                Some(view::AvailableAction {
+                    action: action_name(a.action)?,
+                    enabled: a.enabled,
+                    reason: a.reason.clone(),
+                })
             })
             .collect(),
+        terminal_open: d
+            .available_actions
+            .iter()
+            .find(|a| a.action == wire::ActionName::TerminalOpen)
+            .map(|a| view::TerminalOpenAction {
+                enabled: a.enabled,
+                reason: a.reason.clone(),
+            }),
         history_deleted: d.history_deleted == Some(true),
     }
 }

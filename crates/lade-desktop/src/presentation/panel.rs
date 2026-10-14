@@ -1,3 +1,4 @@
+use super::compat::{Catalog, ProviderStatus};
 use super::format;
 use super::model::{
     ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
@@ -231,10 +232,16 @@ pub fn activity_controls(detail: &ObjectiveDetail) -> Vec<PanelAction> {
         .collect()
 }
 
-pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
+pub fn agent_pointer(detail: &ObjectiveDetail, start_blocker: Option<&str>) -> Option<String> {
     let enabled = |a| detail.availability(a) == ActionAvailability::Enabled;
     if enabled(ActionName::ExecutionStart) {
-        Some("The agent has not started yet — start it in Activity.".to_owned())
+        Some(match start_blocker {
+            Some(blocker) => format!(
+                "The agent has not started — it cannot start yet: {}. Details are in Activity.",
+                blocker.trim_end_matches('.')
+            ),
+            None => "The agent has not started yet — start it in Activity.".to_owned(),
+        })
     } else if enabled(ActionName::ExecutionResume) {
         Some(format!(
             "The agent is stopped ({}) — resume it in Activity.",
@@ -243,6 +250,24 @@ pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
     } else {
         None
     }
+}
+
+pub fn start_blocker(catalog: Option<&Catalog>) -> Option<String> {
+    let catalog = catalog?;
+    if catalog
+        .providers
+        .iter()
+        .any(|p| p.status != ProviderStatus::MissingCredentials)
+    {
+        return None;
+    }
+    Some(
+        catalog
+            .error
+            .clone()
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or_else(|| "no model provider has credentials".to_owned()),
+    )
 }
 
 pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
@@ -483,7 +508,14 @@ mod tests {
         let mut d = with(&base, &all(&[ActionName::ExecutionStart]));
         d.summary.lifecycle = Lifecycle::Defined;
         assert!(next_action(&d).is_none());
-        assert!(agent_pointer(&d).unwrap().contains("Activity"));
+        assert!(
+            agent_pointer(&d, None)
+                .unwrap()
+                .contains("start it in Activity")
+        );
+        let blocked = agent_pointer(&d, Some("no model provider has credentials")).unwrap();
+        assert!(blocked.contains("cannot start yet: no model provider has credentials."));
+        assert!(!blocked.contains("start it in"));
         assert!(!overview_actions(&d).contains(&ActionName::ExecutionStart));
         let controls = activity_controls(&d);
         let start = controls
@@ -500,9 +532,13 @@ mod tests {
         let mut d = with(&base, &all(&[ActionName::ExecutionResume]));
         d.summary.lifecycle = Lifecycle::Active;
         d.summary.execution.state = ExecutionState::Cancelled;
-        assert!(agent_pointer(&d).unwrap().contains("resume it in Activity"));
+        assert!(
+            agent_pointer(&d, None)
+                .unwrap()
+                .contains("resume it in Activity")
+        );
         let d = with(&base, &all(&[]));
-        assert!(agent_pointer(&d).is_none());
+        assert!(agent_pointer(&d, None).is_none());
     }
 
     #[test]

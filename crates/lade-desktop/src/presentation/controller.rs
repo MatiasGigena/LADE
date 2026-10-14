@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use super::compat::Readiness;
 use super::drafts::{DraftEditor, Millis, SaveStatus};
 use super::format;
 use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
 use super::model::{
-    ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId,
+    ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId, ExecutionState,
     Intent as ObjectiveIntent, Load, ModelRef, ObjectiveDetail, ObjectiveId, Reference,
     ReferenceVersion, RepoPath, SearchResult, SearchResultKind, SearchScope, SessionInfo, Side,
     VerificationState,
@@ -54,7 +55,14 @@ pub struct Controller {
 
 impl Controller {
     pub fn new(store: Rc<Store>, sink: Rc<dyn IntentSink>) -> Rc<Self> {
-        Rc::new(Self { store, sink })
+        let controller = Rc::new(Self { store, sink });
+        let weak = Rc::downgrade(&controller);
+        controller.store.subscribe(move |changes| {
+            if let Some(controller) = weak.upgrade() {
+                controller.follow_store(changes);
+            }
+        });
+        controller
     }
 
     fn emit(&self, intent: Intent) {
@@ -649,19 +657,28 @@ impl Controller {
             .collect();
         let deferred = items.len().saturating_sub(MAX_FEEDBACK_BATCH);
         items.truncate(MAX_FEEDBACK_BATCH);
+        let destination = detail.and_then(|d| d.session.clone());
         let mut blockers = Vec::new();
-        match detail.map(|d| d.availability(ActionName::FeedbackSubmit)) {
-            Some(ActionAvailability::Enabled) => {}
-            Some(ActionAvailability::Disabled { reason }) => blockers.push(reason),
-            Some(ActionAvailability::NotOffered) | None => {
-                blockers.push("Submitting feedback is not offered for this Objective".to_owned());
-            }
-        }
+        let explained = !connected || destination.is_none() || items.is_empty();
         if !connected {
             blockers.push("Not connected to the service".to_owned());
         }
+        if destination.is_none() {
+            blockers.push(
+                "There is no Agent Session to send feedback to — start the agent in Activity first"
+                    .to_owned(),
+            );
+        }
         if items.is_empty() {
             blockers.push("No drafts to submit".to_owned());
+        }
+        if !explained {
+            match detail.map(|d| d.availability(ActionName::FeedbackSubmit)) {
+                Some(ActionAvailability::Enabled) => {}
+                Some(ActionAvailability::Disabled { reason }) => blockers.push(reason),
+                Some(ActionAvailability::NotOffered) | None => blockers
+                    .push("Submitting feedback is not offered for this Objective".to_owned()),
+            }
         }
         let stale: Vec<&BatchItem> = items.iter().filter(|i| i.stale).collect();
         if !stale.is_empty() {
@@ -683,10 +700,6 @@ impl Controller {
             .any(|d| !d.is_saved() && !d.body.is_empty())
         {
             blockers.push("Wait until every draft is saved".to_owned());
-        }
-        let destination = detail.and_then(|d| d.session.clone());
-        if destination.is_none() {
-            blockers.push("No destination Agent Session".to_owned());
         }
         Some(FeedbackBatch {
             items,
@@ -1233,34 +1246,82 @@ impl Controller {
         connected
     }
 
-    pub fn execution_line(&self) -> Option<(String, String)> {
-        self.with_detail(|d| {
-            let execution = format::execution_label_for(d);
-            match &d.session {
-                Some(s) => (
-                    format!(
-                        "{} · {} · Session {} · generation {}",
-                        s.model.label(),
-                        execution,
-                        s.session_id.short(),
-                        s.execution_generation
-                    ),
-                    format!(
-                        "Agent Session {} · association r{} · execution generation {} · model {} · {}",
-                        s.session_id.as_str(),
-                        s.association_revision,
-                        s.execution_generation,
-                        s.model.label(),
-                        execution
-                    ),
-                ),
-                None => {
-                    let line = format!("No Agent Session yet · {execution}");
-                    (line.clone(), line)
-                }
-            }
-        })
+    pub fn agent_line(&self) -> Option<AgentLine> {
+        let readiness = self.readiness();
+        self.with_detail(|d| agent_line(d, &readiness))
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLine {
+    pub sentence: String,
+    pub details: Option<String>,
+}
+
+fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLine {
+    let resumable = d.availability(ActionName::ExecutionResume) == ActionAvailability::Enabled;
+    let resume = |what: &str| {
+        if resumable {
+            format!("{what} Resume it to continue the same Agent Session.")
+        } else {
+            what.to_owned()
+        }
+    };
+    let sentence = match (&d.session, d.summary.execution.state) {
+        (_, ExecutionState::Starting) => "The agent is starting.".to_owned(),
+        (_, ExecutionState::Running) => "The agent is working on a turn.".to_owned(),
+        (_, ExecutionState::Idle) => "The agent is idle and waiting for your message.".to_owned(),
+        (_, ExecutionState::Stopping) => "The agent is stopping.".to_owned(),
+        (_, ExecutionState::Cancelled) => resume("The agent was cancelled."),
+        (_, ExecutionState::Failed) => resume("The agent stopped after an error."),
+        (Some(_), ExecutionState::None) => resume("The agent isn't running."),
+        (None, ExecutionState::None) => match d.availability(ActionName::ExecutionStart) {
+            ActionAvailability::NotOffered => "The agent hasn't started.".to_owned(),
+            ActionAvailability::Disabled { .. } => {
+                "The agent hasn't started and can't be started right now.".to_owned()
+            }
+            ActionAvailability::Enabled => format!(
+                "The agent hasn't started. {}",
+                match readiness {
+                    Readiness::Ready { model, .. } =>
+                        format!("Start it below with {}.", model.name),
+                    Readiness::CatalogLoading => "Loading the models it can use…".to_owned(),
+                    Readiness::NoProviders { .. } => {
+                        "No model provider is available to start it.".to_owned()
+                    }
+                    Readiness::NoProviderChosen => {
+                        "Choose a model provider below to start it.".to_owned()
+                    }
+                    Readiness::ModelsLoading { provider } => {
+                        format!("Loading {provider}'s models…")
+                    }
+                    Readiness::NoModels { provider } => {
+                        format!("{provider} has no models; choose another provider below.")
+                    }
+                    Readiness::NeedsCredentials { provider } => format!(
+                        "Add credentials for {provider} to start it, or choose another provider \
+                         below."
+                    ),
+                    Readiness::Restricted { provider } =>
+                        format!("{provider} can't be used in LADE; choose another provider below."),
+                }
+            ),
+        },
+    };
+    let details = d.session.as_ref().map(|s| {
+        let mut details = format!(
+            "Agent Session {} · association r{} · execution generation {} · model {}",
+            s.session_id.as_str(),
+            s.association_revision,
+            s.execution_generation,
+            s.model.label(),
+        );
+        if let Some(thinking) = s.thinking {
+            details.push_str(&format!(" · thinking {}", thinking.label()));
+        }
+        details
+    });
+    AgentLine { sentence, details }
 }
 
 #[cfg(test)]
@@ -1454,6 +1515,13 @@ mod tests {
             "an ended terminal takes no input"
         );
         controller.open_terminal(80, 24).unwrap();
+        controller.store.apply(StoreUpdate::TerminalOpened {
+            objective_id: id.clone(),
+            terminal_id: "00000000-0000-4000-8000-000000000043".into(),
+            mode: TerminalMode::ReadWrite,
+            cols: 80,
+            rows: 24,
+        });
         controller.store.apply(StoreUpdate::Connection(
             super::super::model::ConnectionState::Reconnecting { attempt: 1 },
         ));
@@ -1548,6 +1616,121 @@ mod tests {
         let err = controller.integrate().unwrap_err();
         assert!(!err.is_empty());
         assert!(sink.intents.borrow().is_empty());
+    }
+
+    fn without_session(
+        detail: &ObjectiveDetail,
+        start: Option<(bool, Option<&str>)>,
+    ) -> ObjectiveDetail {
+        let mut d = detail.clone();
+        d.session = None;
+        d.summary.execution.state = ExecutionState::None;
+        d.available_actions.retain(|a| {
+            !matches!(
+                a.action,
+                ActionName::ExecutionStart | ActionName::ExecutionResume
+            )
+        });
+        if let Some((enabled, reason)) = start {
+            d.available_actions
+                .push(super::super::model::AvailableAction {
+                    action: ActionName::ExecutionStart,
+                    enabled,
+                    reason: reason.map(str::to_owned),
+                });
+        }
+        d
+    }
+
+    #[test]
+    fn the_agent_line_is_one_sentence_per_state_with_ids_only_in_the_details() {
+        let (controller, _) = setup();
+        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
+        let detail = controller
+            .store
+            .state()
+            .selected_detail()
+            .cloned()
+            .expect("fixture detail");
+        let line = agent_line(&detail, &Readiness::CatalogLoading);
+        let session = detail.session.clone().expect("fixture session");
+        assert!(!line.sentence.contains(session.session_id.short()));
+        assert!(
+            line.details
+                .as_deref()
+                .is_some_and(|d| d.contains(session.session_id.as_str()))
+        );
+        let fresh = without_session(&detail, Some((true, None)));
+        for (readiness, sentence) in [
+            (
+                Readiness::NoProviderChosen,
+                "The agent hasn't started. Choose a model provider below to start it.",
+            ),
+            (
+                Readiness::NoProviders {
+                    error: Some("sandbox_unavailable".into()),
+                },
+                "The agent hasn't started. No model provider is available to start it.",
+            ),
+            (
+                Readiness::ModelsLoading {
+                    provider: "Fixture".into(),
+                },
+                "The agent hasn't started. Loading Fixture's models…",
+            ),
+            (
+                Readiness::NeedsCredentials {
+                    provider: "Anthropic".into(),
+                },
+                "The agent hasn't started. Add credentials for Anthropic to start it, or choose \
+                 another provider below.",
+            ),
+        ] {
+            let line = agent_line(&fresh, &readiness);
+            assert_eq!(line.sentence, sentence);
+            assert_eq!(line.details, None, "no session, nothing technical");
+        }
+        let refused = without_session(&detail, Some((false, Some("why"))));
+        assert_eq!(
+            agent_line(&refused, &Readiness::NoProviderChosen).sentence,
+            "The agent hasn't started and can't be started right now."
+        );
+    }
+
+    #[test]
+    fn feedback_without_a_session_states_that_once() {
+        let (controller, _) = setup();
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+        controller.select_objective(&id);
+        controller.store.update(|s| {
+            if let Some(Load::Loaded(detail)) = s.details.get_mut(&id) {
+                *detail = without_session(detail, None);
+                for available in &mut detail.available_actions {
+                    if available.action == ActionName::FeedbackSubmit {
+                        available.enabled = false;
+                        available.reason = Some("input requires an active objective".into());
+                    }
+                }
+            }
+            ((), Vec::new())
+        });
+        let batch = controller.feedback_batch().unwrap();
+        assert!(
+            batch
+                .blockers
+                .iter()
+                .any(|b| b.contains("no Agent Session")),
+            "{:?}",
+            batch.blockers
+        );
+        assert!(
+            !batch
+                .blockers
+                .iter()
+                .any(|b| b == "input requires an active objective"),
+            "the service reason would only restate it: {:?}",
+            batch.blockers
+        );
     }
 
     #[test]

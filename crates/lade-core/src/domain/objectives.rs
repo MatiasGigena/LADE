@@ -6,6 +6,11 @@ use crate::error::DomainError;
 pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_BRANCH_BYTES: usize = 255;
 
+pub const CLOSED: &str = "This Objective is closed.";
+pub const INTENT_CHANGED: &str = "The intent was changed elsewhere. Refresh and try again.";
+pub const UNSENT_DRAFTS_NEED_CONFIRMATION: &str =
+    "This Objective has unsent drafts. Confirm that they may be deleted.";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Title(String);
 
@@ -15,7 +20,7 @@ impl Title {
         let count = trimmed.chars().count();
         if count == 0 || count > MAX_TITLE_CHARS || trimmed.chars().any(char::is_control) {
             return Err(DomainError::InvalidRequest(
-                "title must be 1-200 characters without control characters",
+                "The title must be 1 to 200 characters on one line.",
             ));
         }
         Ok(Self(trimmed.to_string()))
@@ -49,7 +54,9 @@ impl BranchName {
                 .split('/')
                 .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"));
         if !valid {
-            return Err(DomainError::InvalidRequest("invalid branch name"));
+            return Err(DomainError::InvalidRequest(
+                "That isn't a valid branch name.",
+            ));
         }
         Ok(Self(name.to_string()))
     }
@@ -73,13 +80,15 @@ pub struct Intent {
 impl Intent {
     pub fn new(outcome: &str, constraints: &str, acceptance: &str) -> Result<Self, DomainError> {
         if outcome.trim().is_empty() {
-            return Err(DomainError::InvalidRequest("intent outcome is required"));
+            return Err(DomainError::InvalidRequest(
+                "Describe the outcome you want.",
+            ));
         }
         if [outcome, constraints, acceptance]
             .iter()
             .any(|field| field.len() > MAX_TEXT_BYTES)
         {
-            return Err(DomainError::LimitReached("intent field too large"));
+            return Err(DomainError::LimitReached("An intent field is too long."));
         }
         Ok(Self {
             outcome: outcome.to_string(),
@@ -280,12 +289,12 @@ impl Objective {
             for &to in path {
                 if !record.lifecycle.permits(to) {
                     return Err(DomainError::InvalidLifecycle(
-                        "lifecycle transition not permitted",
+                        "That isn't possible in the Objective's current state.",
                     ));
                 }
                 let excludes_writers = to != Lifecycle::Active;
                 if excludes_writers && record.execution.state().is_live() {
-                    return Err(DomainError::InvalidLifecycle("stop execution first"));
+                    return Err(DomainError::InvalidLifecycle("Stop the agent first."));
                 }
                 record.lifecycle = to;
             }
@@ -305,11 +314,11 @@ impl Objective {
                 Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen
             ) {
                 return Err(DomainError::InvalidLifecycle(
-                    "intent can change only before approval",
+                    "The intent can't change after approval. Return the candidate for revision first.",
                 ));
             }
             if record.intent_revision != expected_intent_revision {
-                return Err(DomainError::Conflict("intent revision mismatch"));
+                return Err(DomainError::Conflict(INTENT_CHANGED));
             }
             record.intent_revision = record.intent_revision.advance()?;
             record.intent = intent;
@@ -326,7 +335,7 @@ impl Objective {
         self.update(now, |record| {
             if !matches!(record.lifecycle, Lifecycle::Defined | Lifecycle::Active) {
                 return Err(DomainError::InvalidLifecycle(
-                    "execution starts only before review",
+                    "The agent can start only before review. Return the candidate for revision first.",
                 ));
             }
             let generation = record.execution.start(session_id, model)?;
@@ -339,7 +348,7 @@ impl Objective {
         self.update(now, |record| {
             if record.lifecycle != Lifecycle::Active {
                 return Err(DomainError::InvalidLifecycle(
-                    "resume requires an active objective",
+                    "The agent can be resumed only while the Objective is in progress.",
                 ));
             }
             record.execution.resume()
@@ -402,7 +411,7 @@ impl Objective {
         self.update(now, |record| {
             if record.lifecycle != Lifecycle::Active {
                 return Err(DomainError::InvalidLifecycle(
-                    "session replacement requires an active objective",
+                    "The session can be replaced only while the Objective is in progress.",
                 ));
             }
             record.execution.rebind_live_session(generation, session_id)
@@ -412,7 +421,7 @@ impl Objective {
     pub fn select_model(&mut self, model: ModelRef, now: Timestamp) -> Result<(), DomainError> {
         self.update(now, |record| {
             if record.lifecycle.is_terminal() {
-                return Err(DomainError::InvalidLifecycle("objective is closed"));
+                return Err(DomainError::InvalidLifecycle(CLOSED));
             }
             record.execution.select_model(model)
         })
@@ -426,7 +435,7 @@ impl Objective {
     ) -> Result<Revision, DomainError> {
         self.update(now, |record| {
             if record.lifecycle.is_terminal() {
-                return Err(DomainError::InvalidLifecycle("objective is closed"));
+                return Err(DomainError::InvalidLifecycle(CLOSED));
             }
             record.execution.replace_session(session_id, model)
         })
@@ -441,16 +450,16 @@ impl Objective {
         self.update(now, |record| {
             if !record.lifecycle.is_terminal() {
                 return Err(DomainError::InvalidLifecycle(
-                    "cleanup requires a completed or discarded objective",
+                    "Clean up becomes available once the Objective is integrated, completed or discarded.",
                 ));
             }
             if record.cleaned_up {
-                return Err(DomainError::InvalidLifecycle("already cleaned up"));
+                return Err(DomainError::InvalidLifecycle(
+                    "This Objective is already cleaned up.",
+                ));
             }
             if unsent_drafts > 0 && !confirm_data_loss {
-                return Err(DomainError::Conflict(
-                    "unsent drafts require data-loss confirmation",
-                ));
+                return Err(DomainError::Conflict(UNSENT_DRAFTS_NEED_CONFIRMATION));
             }
             record.cleaned_up = true;
             Ok(())
@@ -682,7 +691,7 @@ mod tests {
         let intent = Intent::new("new outcome", "", "").expect("intent");
         assert_eq!(
             objective.update_intent(Revision::new(2), intent.clone(), ts(2)),
-            Err(DomainError::Conflict("intent revision mismatch"))
+            Err(DomainError::Conflict(INTENT_CHANGED))
         );
         assert_eq!(
             objective.update_intent(Revision::INITIAL, intent.clone(), ts(2)),
@@ -732,9 +741,7 @@ mod tests {
             .expect("discard");
         assert_eq!(
             objective.cleanup(1, false, ts(3)),
-            Err(DomainError::Conflict(
-                "unsent drafts require data-loss confirmation"
-            ))
+            Err(DomainError::Conflict(UNSENT_DRAFTS_NEED_CONFIRMATION))
         );
         objective.cleanup(1, true, ts(3)).expect("confirmed");
         assert!(objective.record().cleaned_up);

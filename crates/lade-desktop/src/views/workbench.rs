@@ -4,17 +4,51 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
+use super::dialogs;
 use super::viewer::Viewer;
-use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
+use super::widgets::{
+    self, MessageKind, hbox, inline_message, label, set_accessible_label, set_focus_key, space,
+    vbox,
+};
 use crate::presentation::controller::Controller;
 use crate::presentation::format::{self, JOURNEY_STEPS, StepState};
 use crate::presentation::model::{Basis, ChangedFile, Load, RepoPath};
 use crate::presentation::panel;
-use crate::presentation::store::Change;
+use crate::presentation::store::{Change, PresentationState};
+
+/// The work area's state for a Workspace without Objectives: one instruction and the New
+/// Objective action (the same dialog as the Objectives list's). The inspector stays blank.
+pub fn first_objective_state(controller: &Rc<Controller>) -> gtk::Widget {
+    let create = widgets::button("New Objective", &["primary"]);
+    set_focus_key(&create, "centre:new-objective");
+    create.set_sensitive(controller.store.state().connection.is_connected());
+    let opener = controller.clone();
+    create.connect_clicked(move |b| dialogs::new_objective(b, &opener));
+    widgets::empty_state(
+        "Create your first Objective",
+        "Describe an outcome; the agent pursues it on its own branch and worktree, and you \
+         review the result here.",
+        Some(&create),
+        None,
+    )
+}
+
+/// The Workspace has no Objectives at all (none active, none archived).
+pub fn board_is_empty(state: &PresentationState) -> bool {
+    let board = state.board();
+    board.groups.iter().all(|(_, o)| o.is_empty()) && board.archive.is_empty()
+}
 
 pub struct Workbench {
     pub root: gtk::Stack,
     controller: Rc<Controller>,
+    /// The page without a selected Objective (first Objective, or select one).
+    none: gtk::Box,
+    /// What the page shows: (no Objectives at all, connected).
+    shown_none: Cell<Option<(bool, bool)>>,
+    /// The file list and viewer, or the empty Change Set in their place.
+    body: gtk::Box,
+    no_changes: gtk::Box,
     heading: gtk::Box,
     basis: gtk::DropDown,
     bases: RefCell<Vec<Basis>>,
@@ -38,13 +72,8 @@ impl Workbench {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = gtk::Stack::new();
         root.add_css_class("centre");
-        let none = vbox(space::GROUP);
-        none.add_css_class("centre-empty");
-        none.append(&widgets::heading("Select an Objective", "empty-heading"));
-        none.append(&label(
-            "Choose an Objective from the list to inspect its Change Set, evidence and feedback.",
-            &["secondary"],
-        ));
+        let none = vbox(0);
+        none.set_vexpand(true);
         root.add_named(&none, Some("none"));
 
         let page = vbox(space::PAGE);
@@ -95,12 +124,20 @@ impl Workbench {
         viewer.root.set_hexpand(true);
         body.append(&viewer.root);
         change_set.append(&body);
+        let no_changes = vbox(0);
+        no_changes.set_vexpand(true);
+        no_changes.set_visible(false);
+        change_set.append(&no_changes);
         page.append(&change_set);
         root.add_named(&page, Some("objective"));
 
         let workbench = Rc::new(Self {
             root,
             controller: controller.clone(),
+            none,
+            shown_none: Cell::new(None),
+            body,
+            no_changes,
             heading,
             basis,
             bases: RefCell::new(vec![Basis::Working]),
@@ -175,6 +212,7 @@ impl Workbench {
                     heading = true;
                 }
                 Change::Changes(id) if mine(id) => change_set = true,
+                Change::Objectives if selected.is_none() => heading = true,
                 Change::Viewer => self.sync_file_selection(),
                 _ => {}
             }
@@ -210,6 +248,28 @@ impl Workbench {
         }
     }
 
+    /// The page without a selected Objective: the first-Objective state when the Workspace has
+    /// none, otherwise one line pointing to the list (rebuilt only when that changes).
+    fn render_none(&self, board_empty: bool) {
+        let connected = self.controller.store.state().connection.is_connected();
+        // The connection decides whether New Objective is available.
+        let key = (board_empty, connected);
+        if self.shown_none.replace(Some(key)) == Some(key) {
+            return;
+        }
+        widgets::clear(&self.none);
+        self.none.append(&if board_empty {
+            first_objective_state(&self.controller)
+        } else {
+            widgets::empty_state(
+                "Select an Objective",
+                "Choose one from Objectives to inspect its Change Set, evidence and feedback.",
+                None,
+                None,
+            )
+        });
+    }
+
     pub fn set_file_list_width(&self, width: i32) {
         self.files_scroll.set_size_request(width, -1);
     }
@@ -219,9 +279,13 @@ impl Workbench {
         let mut details: Vec<gtk::Widget> = Vec::new();
         let state = self.controller.store.state();
         let Some(summary) = state.selected_summary().cloned() else {
+            let empty = board_is_empty(&state);
+            drop(state);
+            self.render_none(empty);
             self.root.set_visible_child_name("none");
             return;
         };
+        self.shown_none.set(None);
         self.root.set_visible_child_name("objective");
         let detail = state.selected_detail().cloned();
         let has_inputs = state
@@ -259,7 +323,7 @@ impl Workbench {
                     connector.set_hexpand(true);
                     journey.append(&connector);
                 }
-                let item = hbox(6);
+                let item = hbox(space::ITEM);
                 let dot = gtk::Label::new(Some(match step {
                     StepState::Done => "✓",
                     StepState::Current | StepState::Upcoming => "",
@@ -357,6 +421,9 @@ impl Workbench {
         widgets::clear(&self.change_heading);
         widgets::clear(&self.version);
         widgets::clear(&self.files_status);
+        widgets::clear(&self.no_changes);
+        self.no_changes.set_visible(false);
+        self.body.set_visible(true);
         self.updating.set(true);
         while let Some(row) = self.files.row_at_index(0) {
             self.files.remove(&row);
@@ -373,7 +440,7 @@ impl Workbench {
         let changes = state.changes.get(&id).cloned().unwrap_or(Load::NotLoaded);
         drop(state);
 
-        let title = widgets::section_title("Change set");
+        let title = widgets::section_title("Change Set");
         self.change_heading.append(&title);
         match &changes {
             Load::NotLoaded | Load::Loading => {
@@ -382,9 +449,9 @@ impl Workbench {
                 return;
             }
             Load::Failed(message) => {
-                self.files_status.append(&widgets::error_line(&format!(
-                    "Change Set unavailable — {message}"
-                )));
+                // A plain sentence ("Couldn't load Change Set. …"), never an error code.
+                self.files_status
+                    .append(&inline_message(MessageKind::Error, message, None));
                 let retry = widgets::button("Retry", &[]);
                 let controller = self.controller.clone();
                 retry.connect_clicked(move |_| controller.refresh_changes());
@@ -394,17 +461,20 @@ impl Workbench {
             Load::Loaded(_) => {}
         }
         let Load::Loaded(list) = changes else { return };
-        let summary = hbox(space::GROUP);
-        summary.set_valign(gtk::Align::Center);
         let n = list.files.len();
-        let files_label = label(
-            &format!("{n} file{} changed", if n == 1 { "" } else { "s" }),
-            &["meta"],
-        );
-        files_label.set_wrap(false);
-        summary.append(&files_label);
-        summary.append(&widgets::counts(list.total_added, list.total_removed));
-        self.change_heading.append(&summary);
+        // An empty Change Set says so once, below, instead of "0 files changed +0 −0".
+        if n > 0 {
+            let summary = hbox(space::GROUP);
+            summary.set_valign(gtk::Align::Center);
+            let files_label = label(
+                &format!("{n} file{} changed", if n == 1 { "" } else { "s" }),
+                &["meta"],
+            );
+            files_label.set_wrap(false);
+            summary.append(&files_label);
+            summary.append(&widgets::counts(list.total_added, list.total_removed));
+            self.change_heading.append(&summary);
+        }
 
         let status = match &ui.basis {
             Basis::Candidate { candidate_id } => detail
@@ -432,9 +502,13 @@ impl Workbench {
         }
         if working_updated && ui.basis == Basis::Working {
             let row = hbox(space::GROUP);
-            row.append(&widgets::warning_line(
+            let message = inline_message(
+                MessageKind::Warning,
                 "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
-            ));
+                None,
+            );
+            message.set_hexpand(true);
+            row.append(&message);
             let refresh = widgets::button("Refresh", &[]);
             refresh.set_valign(gtk::Align::Center);
             let controller = self.controller.clone();
@@ -448,11 +522,23 @@ impl Workbench {
                 Some(path) => format!("{}: {}", path.display, notice.message),
                 None => notice.message.clone(),
             };
-            self.version.append(&widgets::warning_line(&text));
+            self.version
+                .append(&inline_message(MessageKind::Warning, &text, None));
         }
         if list.files.is_empty() {
-            self.files_status
-                .append(&label("No changes against the target.", &["meta"]));
+            // One empty state in place of the file list and the viewer (no toolbar, no frame).
+            let (title, body) = match ui.basis {
+                Basis::Working => ("No changes yet", "The agent's edits appear here."),
+                Basis::Candidate { .. } => (
+                    "No changes",
+                    "This candidate has no changes against the target.",
+                ),
+                Basis::Since { .. } => ("No changes", "Nothing changed between these candidates."),
+            };
+            self.body.set_visible(false);
+            self.no_changes
+                .append(&widgets::empty_state(title, body, None, None));
+            self.no_changes.set_visible(true);
         }
         self.updating.set(true);
         for file in &list.files {

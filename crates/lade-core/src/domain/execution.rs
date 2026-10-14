@@ -19,7 +19,7 @@ impl ModelRef {
         };
         if !valid(provider) || !valid(id) {
             return Err(DomainError::InvalidRequest(
-                "model provider/id must be non-empty labels",
+                "Choose a model: the provider and model names can't be empty or contain spaces.",
             ));
         }
         Ok(Self {
@@ -55,7 +55,9 @@ impl ExecutionGeneration {
         self.0
             .checked_add(1)
             .map(Self)
-            .ok_or(DomainError::LimitReached("execution generation exhausted"))
+            .ok_or(DomainError::LimitReached(
+                "The agent of this Objective can't be started again.",
+            ))
     }
 }
 
@@ -166,7 +168,7 @@ impl Execution {
     ) -> Result<ExecutionGeneration, DomainError> {
         if self.state != ExecutionState::None || self.session.is_some() {
             return Err(DomainError::InvalidLifecycle(
-                "execution already started; resume instead",
+                "The agent has already started. Use Resume instead.",
             ));
         }
         let generation = self.generation.advance()?;
@@ -186,7 +188,7 @@ impl Execution {
             ExecutionState::Cancelled { .. } | ExecutionState::Failed { .. }
         ) {
             return Err(DomainError::InvalidLifecycle(
-                "only a cancelled or failed execution can resume",
+                "Only a stopped or failed agent can be resumed.",
             ));
         }
         let generation = self.generation.advance()?;
@@ -260,7 +262,7 @@ impl Execution {
                 self.state = ExecutionState::Stopping;
                 Ok(())
             }
-            _ => Err(DomainError::InvalidLifecycle("no live execution to stop")),
+            _ => Err(DomainError::InvalidLifecycle("The agent isn't running.")),
         }
     }
 
@@ -308,7 +310,7 @@ impl Execution {
         self.check_generation(generation)?;
         if self.state != ExecutionState::Idle {
             return Err(DomainError::InvalidLifecycle(
-                "session replacement needs an idle execution",
+                "Wait until the agent is idle before replacing its session.",
             ));
         }
         let Some(current) = &self.session else {
@@ -343,7 +345,7 @@ impl Execution {
     ) -> Result<Revision, DomainError> {
         if self.state.is_live() {
             return Err(DomainError::InvalidLifecycle(
-                "stop execution before replacing the session",
+                "Stop the agent before replacing its session.",
             ));
         }
         let Some(current) = &self.session else {

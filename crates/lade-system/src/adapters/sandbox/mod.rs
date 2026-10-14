@@ -66,12 +66,37 @@ impl SandboxError {
     }
 }
 
+const PROBE_DIAGNOSTIC_LINES: usize = 4;
+
 impl fmt::Display for SandboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ToolMissing { tool } => write!(f, "{} ({tool})", self.code()),
-            Self::InvalidSpec { what } => write!(f, "{} ({what})", self.code()),
-            _ => f.write_str(self.code()),
+            Self::ToolMissing { tool } => {
+                write!(f, "{}: {tool} was not found on PATH", self.code())
+            }
+            Self::InvalidSpec { what } => {
+                write!(f, "{}: the sandbox {what} is invalid", self.code())
+            }
+            Self::Unavailable { exit_code, output } => {
+                write!(f, "{}: the probe sandbox ", self.code())?;
+                match exit_code {
+                    Some(code) => write!(f, "exited with status {code}")?,
+                    None => f.write_str("was killed or timed out")?,
+                }
+                let text = String::from_utf8_lossy(output);
+                let lines: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect();
+                let tail = &lines[lines.len().saturating_sub(PROBE_DIAGNOSTIC_LINES)..];
+                if tail.is_empty() {
+                    f.write_str(" without output")
+                } else {
+                    write!(f, ": {}", tail.join(" | "))
+                }
+            }
+            Self::Io { kind } => write!(f, "{}: {kind}", self.code()),
         }
     }
 }
@@ -110,7 +135,7 @@ const ENV_PROGRAMS: &[&str] = &["/usr/bin/env", "/bin/env"];
 const SHELL_PROGRAMS: &[&str] = &["/usr/bin/bash", "/bin/bash"];
 const RM_PROGRAMS: &[&str] = &["/usr/bin/rm", "/bin/rm"];
 const GATE_FILE: &str = "/tmp/.lade-gate";
-const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; ulimit -S -H -u "$1" || exit 125; shift; exec "$@""#;
+const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$2" -f /tmp/.lade-gate; [ "$gate" = go ] || exit 125; ulimit -S -H -u "$1" || exit 125; shift 2; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; exec "$@""#;
 
 static SPAWN: Mutex<()> = Mutex::new(());
 
@@ -272,6 +297,7 @@ impl SandboxSpec {
         }
         let tmp_bytes = OsString::from(self.tmp_bytes.to_string());
         let gate = OsString::from(gate.to_string());
+        let processes = OsString::from(self.limits.processes.to_string());
         push(&[
             "--proc".as_ref(),
             "/proc".as_ref(),
@@ -305,15 +331,14 @@ impl SandboxSpec {
         for (key, value) in &self.env {
             push(&["--setenv".as_ref(), key.as_os_str(), value.as_os_str()]);
         }
-        let processes = OsString::from(self.limits.processes.to_string());
         push(&[
             "--".as_ref(),
             self.shell_program.as_os_str(),
             "-c".as_ref(),
             GATE_SCRIPT.as_ref(),
             "lade-gate".as_ref(),
-            self.rm_program.as_os_str(),
             &processes,
+            self.rm_program.as_os_str(),
             self.env_program.as_os_str(),
             "-u".as_ref(),
             "PWD".as_ref(),
@@ -562,6 +587,16 @@ pub struct TerminalLaunch {
 }
 
 pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxError> {
+    let (mode, prompt) = if launch.writable {
+        ("read_write", "[lade] \\W\\$ ")
+    } else {
+        ("read_only", "[lade read-only] \\W\\$ ")
+    };
+    let env_program = ENV_PROGRAMS
+        .iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file())
+        .ok_or(SandboxError::ToolMissing { tool: "env" })?;
     let mut argv = Vec::new();
     if let Some(setsid) = &launch.setsid {
         argv.extend([
@@ -570,7 +605,12 @@ pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxErro
             "--wait".into(),
         ]);
     }
-    argv.extend([launch.shell.clone().into_os_string(), "-i".into()]);
+    argv.extend([
+        env_program.into_os_string(),
+        format!("PS1={prompt}").into(),
+        launch.shell.clone().into_os_string(),
+        "-i".into(),
+    ]);
     let mut spec = SandboxSpec::new(argv, &launch.worktree, launch.limits)?;
     spec.ro_bind(&launch.repo_common_dir)?;
     if launch.writable {
@@ -578,16 +618,10 @@ pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxErro
     } else {
         spec.ro_bind(&launch.worktree)?;
     }
-    let (mode, prompt) = if launch.writable {
-        ("read_write", "[lade] \\W\\$ ")
-    } else {
-        ("read_only", "[lade read-only] \\W\\$ ")
-    };
     spec.env("HOME", "/tmp")?
         .env("PATH", SANDBOX_PATH)?
         .env("LANG", "C.UTF-8")?
         .env("TERM", "vt100")?
-        .env("PS1", prompt)?
         .env("LADE_TERMINAL", mode)?;
     Ok(spec)
 }
@@ -608,5 +642,35 @@ pub fn sandbox_available(tools: &SandboxTools) -> Result<(), SandboxError> {
             exit_code: outcome.exit_code,
             output: outcome.output_tail,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SandboxError;
+
+    #[test]
+    fn a_failed_probe_names_its_step_and_output() {
+        let error = SandboxError::Unavailable {
+            exit_code: Some(1),
+            output: b"bwrap: Creating new namespace failed: Resource temporarily unavailable\n"
+                .to_vec(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "sandbox_unavailable: the probe sandbox exited with status 1: bwrap: Creating new namespace failed: Resource temporarily unavailable"
+        );
+        let silent = SandboxError::Unavailable {
+            exit_code: None,
+            output: Vec::new(),
+        };
+        assert_eq!(
+            silent.to_string(),
+            "sandbox_unavailable: the probe sandbox was killed or timed out without output"
+        );
+        assert_eq!(
+            SandboxError::ToolMissing { tool: "bwrap" }.to_string(),
+            "sandbox_tool_missing: bwrap was not found on PATH"
+        );
     }
 }

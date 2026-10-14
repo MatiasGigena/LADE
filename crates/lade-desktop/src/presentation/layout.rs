@@ -96,7 +96,7 @@ pub struct Composition {
     pub centre: bool,
     pub inspector: bool,
     pub region_switches: bool,
-    pub profile_name: bool,
+    pub compact_header: bool,
     pub objective_details: bool,
     pub details_toggle: bool,
 }
@@ -108,7 +108,7 @@ pub fn composition(class: LayoutClass, region: Region, details_expanded: bool) -
             centre: true,
             inspector: true,
             region_switches: false,
-            profile_name: true,
+            compact_header: false,
             objective_details: true,
             details_toggle: false,
         },
@@ -122,7 +122,7 @@ pub fn composition(class: LayoutClass, region: Region, details_expanded: bool) -
                 centre: shown == Region::Main,
                 inspector: shown == Region::Inspector,
                 region_switches: true,
-                profile_name: false,
+                compact_header: true,
                 objective_details: details_expanded,
                 details_toggle: true,
             }
@@ -169,7 +169,7 @@ mod tests {
     fn wide_shows_every_region_without_switches() {
         for region in REGION_ORDER {
             let c = composition(LayoutClass::Wide, region, false);
-            assert!(c.rail && c.centre && c.inspector && c.objective_details && c.profile_name);
+            assert!(c.rail && c.centre && c.inspector && c.objective_details && !c.compact_header);
             assert!(!c.region_switches && !c.details_toggle);
         }
     }
@@ -180,7 +180,7 @@ mod tests {
             let c = composition(LayoutClass::Compact, region, false);
             let shown = [c.rail, c.centre, c.inspector];
             assert_eq!(shown.iter().filter(|s| **s).count(), 1, "{region:?}");
-            assert!(c.region_switches && c.details_toggle && !c.profile_name);
+            assert!(c.region_switches && c.details_toggle && c.compact_header);
             assert!(!c.objective_details);
         }
         assert!(composition(LayoutClass::Compact, Region::Header, false).centre);

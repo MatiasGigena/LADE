@@ -371,6 +371,33 @@ pub enum ActionAvailability {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalOpenAction {
+    pub enabled: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ActionSurface {
+    Intent,
+    Agent,
+    Session,
+    Send,
+    Drafts,
+    Feedback,
+    Review,
+    Checks,
+    Closing,
+    Terminal,
+    Dialog,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub message: String,
+    pub details: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectiveDetail {
     pub summary: ObjectiveSummary,
     pub intent: Intent,
@@ -385,6 +412,7 @@ pub struct ObjectiveDetail {
     pub change_counts: ChangeCounts,
     pub unsent_drafts: u64,
     pub available_actions: Vec<AvailableAction>,
+    pub terminal_open: Option<TerminalOpenAction>,
     pub history_deleted: bool,
 }
 
@@ -400,6 +428,26 @@ impl ObjectiveDetail {
                     .unwrap_or_else(|| "Unavailable — the service gave no reason".to_owned()),
             },
         }
+    }
+
+    pub fn terminal_availability(&self) -> ActionAvailability {
+        match &self.terminal_open {
+            None => ActionAvailability::NotOffered,
+            Some(a) if a.enabled => ActionAvailability::Enabled,
+            Some(a) => ActionAvailability::Disabled {
+                reason: a
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "Unavailable — the service gave no reason".to_owned()),
+            },
+        }
+    }
+
+    pub fn terminal_note(&self) -> Option<&str> {
+        self.terminal_open
+            .as_ref()
+            .filter(|a| a.enabled)
+            .and_then(|a| a.reason.as_deref())
     }
 
     pub fn current_candidate(&self) -> Option<&CandidateSummary> {

@@ -53,13 +53,13 @@ find_button() {
   case $1 in
     black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
   esac
 }
 click_start() {
   key ctrl+2
   tries=0
-  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260); do
+  until XY=$(import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 270 1100 150 750); do
     tries=$((tries + 1)); [ $tries -le 40 ] || fail "no Start agent button"; sleep 0.5
   done
   click ${XY% *} ${XY#* } 1
@@ -141,9 +141,12 @@ python3 -I "$ROOT/scripts/perf-sample.py" cpu "$STATE" "$T" 60 "idle, window ope
 
 phase objective
 key ctrl+n
-click 280 106 0.3; typ "Reference trace"
-click 280 195 0.3; typ "one-worker reference workload"
-click 469 625 3
+typ "Reference trace"
+key Tab
+typ "one-worker reference workload"
+key Tab Tab Tab Tab Tab Tab
+key Return
+sleep 2
 click_start
 wait_for 60 "sandboxed worker started" session_ready
 sleep 5
@@ -176,9 +179,9 @@ awk 'BEGIN { for (i = 0; i < 2000; i++) printf "new line %036d\n", i }' >"$d/c-r
 awk 'BEGIN { for (i = 0; i < 19999; i++) printf "let value_%07d: u64 = %08d; // reference line %014d\n", i, i, i }' >"$d/a-ref.rs"
 step "reference files: a-ref.rs $(wc -c <"$d/a-ref.rs") bytes, b-ref.txt $(wc -c <"$d/b-ref.txt") bytes, c-ref-diff.txt $(git -C "$d" diff --no-color c-ref-diff.txt | wc -l) diff lines / $(git -C "$d" diff --no-color c-ref-diff.txt | wc -c) bytes"
 key ctrl+1
-click 1057 249 3
-ROW_A=262; ROW_B=318; ROW_C=374; ROW_H=430
-click 920 262 1
+click 1057 265 3
+ROW_A=277; ROW_B=333; ROW_C=389; ROW_H=445
+click 920 277 1
 step "Full file opens: $N × b-ref.txt (1,280,000 bytes), $((N / 2)) × a-ref.rs (highlighted), alternating with hello.txt"
 i=1
 while [ $i -le "$N" ]; do
@@ -195,7 +198,7 @@ done
 click 330 $ROW_A 3
 x mousemove 700 880; sleep 1
 import -window root "$OUT/perf-highlighted-file$SUFFIX.png"
-click 867 262 1
+click 867 277 1
 step "diff opens: $N × c-ref-diff.txt (4,000 lines), alternating with hello.txt"
 i=1
 while [ $i -le "$N" ]; do
@@ -206,7 +209,7 @@ done
 
 phase drafts
 step "draft saves: $N single keystrokes, each waits for its acknowledgement"
-x mousemove 622 342 click --repeat 2 --delay 80 1
+x mousemove 622 358 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 i=1
@@ -219,15 +222,18 @@ while [ $i -le "$N" ]; do
 done
 
 phase review
-click 1175 78 1
+click 1170 80 1
 click_inspector "Freeze for review" black
 wait_for 60 "candidate" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3
-click_inspector "Approve Candidate 1" approve-candidate-1
+click_inspector "Approve Candidate 1" outline
 typ "Reference trace: no check configured."
-click 382 299 3
+key Tab Tab
+key Return
+sleep 2
 click_inspector "Integrate into main" black
-click 374 160 1
+key Tab
+key Return
 wait_for 60 "integration" sh -c "git -C '$REPO' log -1 --format=%s main | grep -q 'Reference trace'"
 sleep 3
 phase idle-after

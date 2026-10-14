@@ -148,7 +148,8 @@ client.update({
     'ActionName': enum('objective.update_intent', 'execution.start', 'execution.cancel', 'execution.resume',
                        'message.send', 'feedback.submit', 'review.freeze', 'review.return', 'review.verify',
                        'review.approve', 'review.refresh', 'review.integrate', 'objective.complete',
-                       'objective.discard', 'objective.cleanup', 'objective.delete_history'),
+                       'objective.discard', 'objective.cleanup', 'objective.delete_history',
+                       'terminal.open'),
     'AvailableAction': obj({'action': ref('ActionName'), 'enabled': BOOL}, {'reason': ref('ShortText')}),
     'CandidateSummary': obj({'candidate_id': ID, 'ordinal': COUNTER, 'commit': ref('GitId'),
                              'base_target_commit': ref('GitId'),
@@ -380,7 +381,8 @@ EVENTS = [
     ('ui.closed', 'UiClosed'),
     ('resources.changed', 'ResourceInventory'),
 ]
-assert set(client['ActionName']['enum']) <= {n for n, m, _, _ in REQUESTS if m}
+# Actions name operations, plus the one interaction whose availability the service projects.
+assert set(client['ActionName']['enum']) <= {n for n, m, _, _ in REQUESTS if m} | {'terminal.open'}
 
 
 def result(data):

@@ -77,7 +77,8 @@ impl Service {
         let max = self.limits.max_workers;
         if live >= max {
             return Some(format!(
-                "{live} of {max} agents are running (laded --max-workers {max}); stop one or raise the limit"
+                "{live} of {max} agents are already running, the most LADE runs at once. Stop one \
+                 to start another."
             ));
         }
         self.storage_blocker()
@@ -86,7 +87,8 @@ impl Service {
     pub(crate) fn storage_blocker(&self) -> Option<String> {
         (self.free_space.level == Pressure::Critical).then(|| {
             format!(
-                "storage pressure: {} MiB free on the state filesystem, below the {} MiB reserve (laded --storage-reserve-mib); free space and retry",
+                "The disk that holds LADE's data has {} MiB free, below the {} MiB LADE keeps in \
+                 reserve. Free some space and try again.",
                 self.free_space.free.map_or(0, mib),
                 mib(self.limits.storage_reserve_bytes)
             )
@@ -121,15 +123,18 @@ impl Service {
             Pressure::Normal if transition => self.notice(
                 NoticeLevel::Info,
                 "storage_ok",
-                &format!("{free} MiB free on the state filesystem; new work is accepted again"),
+                &format!(
+                    "The disk that holds LADE's data has {free} MiB free again. New work is \
+                     accepted again."
+                ),
             ),
             Pressure::Normal => {}
             Pressure::Low => self.notice(
                 NoticeLevel::Warning,
                 "storage_low",
                 &format!(
-                    "only {free} MiB free on the state filesystem (warning below {} MiB); new agents, terminals and checks stop at {} MiB",
-                    mib(self.limits.storage_warn_bytes),
+                    "The disk that holds LADE's data has only {free} MiB free. New agents, \
+                     terminals and checks stop below the {} MiB reserve.",
                     mib(self.limits.storage_reserve_bytes)
                 ),
             ),

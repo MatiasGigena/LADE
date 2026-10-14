@@ -18,7 +18,6 @@ pub struct Rail {
     controller: Rc<Controller>,
     content: gtk::Box,
     lists: RefCell<Vec<(gtk::ListBox, Vec<ObjectiveId>)>>,
-    channel_note: gtk::Label,
     pub new_button: gtk::Button,
     on_new: RefCell<Option<ButtonHandler>>,
     on_open: RefCell<Option<Rc<dyn Fn()>>>,
@@ -40,11 +39,6 @@ impl Rail {
         outer.append(&heading_row);
         let content = vbox(space::SECTION);
         outer.append(&content);
-        let channel_note = widgets::label("", &["meta"]);
-        channel_note.set_wrap(false);
-        channel_note.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        channel_note.set_visible(false);
-        outer.append(&channel_note);
         let root = widgets::region_scroll(&outer);
         root.add_css_class("rail-scroll");
         set_accessible_label(&root, "Objectives");
@@ -53,7 +47,6 @@ impl Rail {
             controller: controller.clone(),
             content,
             lists: RefCell::new(Vec::new()),
-            channel_note,
             new_button,
             on_new: RefCell::new(None),
             on_open: RefCell::new(None),
@@ -80,24 +73,6 @@ impl Rail {
     }
 
     pub fn refresh(&self, changes: &[Change]) {
-        if changes.contains(&Change::DesktopAttention) {
-            let reason = self
-                .controller
-                .store
-                .state()
-                .notifications_unavailable
-                .clone();
-            if let Some(reason) = reason {
-                let full = format!(
-                    "Desktop notifications are unavailable ({reason}); Objectives that need you are marked here."
-                );
-                self.channel_note
-                    .set_text("○ Desktop notifications unavailable");
-                self.channel_note.set_tooltip_text(Some(&full));
-                set_accessible_label(&self.channel_note, &full);
-                self.channel_note.set_visible(true);
-            }
-        }
         if changes.iter().any(|c| {
             matches!(
                 c,
@@ -178,21 +153,7 @@ impl Rail {
             .set_sensitive(state.connection.is_connected());
         let board = state.board();
         if board.groups.is_empty() && board.archive.is_empty() {
-            self.content
-                .append(&widgets::heading("No Objectives yet", "empty-heading"));
-            self.content.append(&label(
-                "Define an outcome for the agent to pursue in an isolated worktree.",
-                &["secondary"],
-            ));
-            let create = widgets::button("New Objective", &["primary"]);
-            create.set_halign(gtk::Align::Start);
-            let this_new = self.on_new.borrow().clone();
-            create.connect_clicked(move |b| {
-                if let Some(handler) = &this_new {
-                    handler(b);
-                }
-            });
-            self.content.append(&create);
+            self.content.append(&label("No Objectives yet.", &["meta"]));
             return;
         }
         let mut lists = Vec::new();

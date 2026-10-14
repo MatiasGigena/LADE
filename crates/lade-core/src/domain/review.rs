@@ -349,7 +349,7 @@ impl Review {
     fn validate_new_candidate(&self, new: &NewCandidate) -> Result<u32, DomainError> {
         if new.changes.files == 0 {
             return Err(DomainError::InvalidRequest(
-                "empty change set; complete without changes instead",
+                "There are no changes to freeze. Complete without changes instead.",
             ));
         }
         if self.candidate(new.id).is_some() {
@@ -407,7 +407,9 @@ impl Review {
             .iter()
             .any(|v| v.outcome == VerificationOutcome::Running)
         {
-            return Err(DomainError::Conflict("stop running verification first"));
+            return Err(DomainError::Conflict(
+                "Wait for the running check to finish.",
+            ));
         }
         Ok(())
     }
@@ -421,7 +423,7 @@ impl Review {
         self.check_objective(objective)?;
         if objective.lifecycle() != Lifecycle::Active {
             return Err(DomainError::InvalidLifecycle(
-                "freeze requires an active objective",
+                "Only an Objective in progress can be frozen for review.",
             ));
         }
         let ordinal = self.validate_new_candidate(&new)?;
@@ -439,7 +441,11 @@ impl Review {
         let path: &[Lifecycle] = match objective.lifecycle() {
             Lifecycle::Frozen => &[Lifecycle::Active],
             Lifecycle::Approved => &[Lifecycle::Frozen, Lifecycle::Active],
-            _ => return Err(DomainError::InvalidLifecycle("nothing frozen to return")),
+            _ => {
+                return Err(DomainError::InvalidLifecycle(
+                    "There is no frozen candidate to return.",
+                ));
+            }
         };
         let latest = self
             .latest_candidate()
@@ -466,7 +472,7 @@ impl Review {
         self.check_objective(objective)?;
         if objective.lifecycle() != Lifecycle::Frozen {
             return Err(DomainError::InvalidLifecycle(
-                "verification requires a frozen, unapproved candidate",
+                "Checks run only on a frozen candidate that isn't approved yet.",
             ));
         }
         self.current_named(new.candidate_id)?;
@@ -479,7 +485,7 @@ impl Review {
                 .all(|arg| !arg.contains('\0') && arg.len() <= MAX_TEXT_BYTES)
             && new.cwd_label.len() <= MAX_TEXT_BYTES;
         if !argv_valid {
-            return Err(DomainError::InvalidRequest("invalid verification command"));
+            return Err(DomainError::InvalidRequest("Enter a valid check command."));
         }
         if self.verifications.iter().any(|v| v.id == new.id) {
             return Err(DomainError::Conflict("verification id reused"));
@@ -540,7 +546,7 @@ impl Review {
         self.check_objective(objective)?;
         if objective.lifecycle() != Lifecycle::Frozen {
             return Err(DomainError::InvalidLifecycle(
-                "approval requires a frozen candidate",
+                "Freeze the work for review before approving.",
             ));
         }
         let candidate = self.current_named(command.candidate_id)?;
@@ -556,15 +562,21 @@ impl Review {
             .as_ref()
             .is_some_and(|reason| reason.len() > MAX_TEXT_BYTES)
         {
-            return Err(DomainError::LimitReached("override reason too large"));
+            return Err(DomainError::LimitReached(
+                "The override reason is too long.",
+            ));
         }
         match self.evidence(candidate.id) {
             Evidence::Passed => {}
-            Evidence::Running => return Err(DomainError::Conflict("verification still running")),
+            Evidence::Running => {
+                return Err(DomainError::Conflict(
+                    "Wait for the running check to finish.",
+                ));
+            }
             Evidence::Missing | Evidence::Failed if override_reason.is_some() => {}
             Evidence::Missing | Evidence::Failed => {
                 return Err(DomainError::InvalidRequest(
-                    "verification missing or failed; override reason required",
+                    "Checks are missing or failed. Give a reason to approve anyway.",
                 ));
             }
         }
@@ -653,13 +665,15 @@ impl Review {
             Lifecycle::Approved => true,
             _ => {
                 return Err(DomainError::InvalidLifecycle(
-                    "refresh requires a frozen candidate",
+                    "Only a frozen candidate can be refreshed.",
                 ));
             }
         };
         let candidate = self.current_named(candidate_id)?;
         if candidate.base_target_commit == *current_target {
-            return Err(DomainError::Conflict("target has not moved"));
+            return Err(DomainError::Conflict(
+                "The Integration Target hasn't moved, so there is nothing to refresh.",
+            ));
         }
         match outcome {
             RefreshOutcome::Rebuilt(new) => {
@@ -696,7 +710,7 @@ impl Review {
         self.check_objective(objective)?;
         if objective.lifecycle() != Lifecycle::Approved {
             return Err(DomainError::InvalidLifecycle(
-                "integration requires an approved candidate",
+                "Approve the candidate before integrating.",
             ));
         }
         let approval = self
@@ -705,7 +719,9 @@ impl Review {
             .find(|approval| approval.id == approval_id)
             .ok_or(DomainError::NotFound("approval"))?;
         if approval.state != ApprovalState::Valid {
-            return Err(DomainError::Conflict("approval is no longer valid"));
+            return Err(DomainError::Conflict(
+                "The approval is no longer valid. Approve again.",
+            ));
         }
         let candidate = self.current_named(approval.candidate_id)?;
         if approval.target_commit != *current_target
@@ -776,7 +792,9 @@ impl Review {
     ) -> Result<(), DomainError> {
         self.check_objective(objective)?;
         if !change_set_empty {
-            return Err(DomainError::Conflict("change set is not empty"));
+            return Err(DomainError::Conflict(
+                "There are changes. Freeze them for review, or discard the Objective.",
+            ));
         }
         self.check_no_running_verification()?;
         objective.transition(&[Lifecycle::CompletedNoChanges], now)
@@ -1023,7 +1041,9 @@ mod tests {
                 &target,
                 ts(12)
             ),
-            Err(DomainError::Conflict("verification still running"))
+            Err(DomainError::Conflict(
+                "Wait for the running check to finish."
+            ))
         );
         review
             .finish_verification(
@@ -1201,7 +1221,9 @@ mod tests {
             .expect("re-approve");
         assert_eq!(
             review.check_integration(&objective, approval_id(1), &target),
-            Err(DomainError::Conflict("approval is no longer valid"))
+            Err(DomainError::Conflict(
+                "The approval is no longer valid. Approve again."
+            ))
         );
         assert!(
             review
@@ -1239,7 +1261,9 @@ mod tests {
                 RefreshOutcome::Rebuilt(new_candidate(2, &target)),
                 ts(22)
             ),
-            Err(DomainError::Conflict("target has not moved"))
+            Err(DomainError::Conflict(
+                "The Integration Target hasn't moved, so there is nothing to refresh."
+            ))
         );
         assert_eq!(
             review.refresh(
@@ -1411,7 +1435,9 @@ mod tests {
         let mut review = Review::new(defined.id());
         assert_eq!(
             review.complete_without_changes(&mut defined, false, ts(2)),
-            Err(DomainError::Conflict("change set is not empty"))
+            Err(DomainError::Conflict(
+                "There are changes. Freeze them for review, or discard the Objective."
+            ))
         );
         review
             .complete_without_changes(&mut defined, true, ts(2))

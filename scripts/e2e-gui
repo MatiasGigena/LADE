@@ -41,11 +41,11 @@ find_button() {
   case $1 in
     black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
   esac
 }
 start_button() {
-  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
+  import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 270 1100 150 750
 }
 reveal() {
   x mousemove 1280 600; i=0; while [ $i -lt 20 ]; do x click 4; i=$((i + 1)); done; sleep 1
@@ -100,10 +100,13 @@ shot 01-workspace-open
 
 step "create an Objective"
 key ctrl+n
-click 280 106 0.3; typ "Greeting file"
-click 280 195 0.3; typ "hello.txt says hi"
+typ "Greeting file"
+key Tab
+typ "hello.txt says hi"
 shot 02-new-objective
-click 469 625 2
+key Tab Tab Tab Tab Tab Tab
+key Return
+sleep 1
 
 step "start the agent with the fixture model (sandboxed worker)"
 key ctrl+2
@@ -130,20 +133,20 @@ wait_for 60 "hello.txt written by the agent" wt_file_is hi
 sleep 3
 shot 04-activity
 
-step "Activity: Model, Agent Session and profile (opened, then closed again)"
-click 380 180 2
+step "Activity: Agent settings (opened, then closed again)"
+click 380 171 2
 shot 04b-agent-tools
-click 380 180 1
+click 380 171 1
 
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
 sleep 1
-click 1057 249 2
-click 330 262 2
+click 1057 265 2
+click 330 277 2
 shot 05-change-set
 
 step "select text, add feedback, wait until Saved"
-x mousemove 622 342 click --repeat 2 --delay 80 1
+x mousemove 622 358 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Please greet more warmly."
@@ -158,18 +161,20 @@ key ctrl+Return
 wait_for 60 "hello.txt rewritten" wt_file_is hello
 sleep 3
 key ctrl+1
-click 1343 78 2
+click 1323 80 2
 shot 07-stale-batch-blocked
 
 step "remove the stale draft (explicit confirmation)"
-click 1201 516 1
+click 1196 519 1
 shot 08-remove-draft-confirm
-click 359 160 2
+key Tab
+key Return
+sleep 1
 
 step "new draft on the current bytes, submitted as steer"
-click 1057 249 2
-click 330 262 2
-x mousemove 625 342 click --repeat 2 --delay 80 1
+click 1057 265 2
+click 330 277 2
+x mousemove 625 358 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
 typ "Greet warmly."
@@ -179,7 +184,8 @@ sleep 3
 reveal black
 click 1280 "$BUTTON_Y" 1
 shot 09-submit-dialog
-click 479 300 1
+key Tab
+key Return
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
 sleep 3
 shot 10-feedback-received
@@ -189,14 +195,16 @@ shot 11-agent-revision
 key ctrl+1
 
 step "edit the intent"
-click 1175 78 1
-click 1200 458 1
+click 1170 80 1
+click 1168 494 1
 key Tab
 typ "Only touch hello.txt"
 key Tab
 typ "test -f hello.txt passes"
 shot 12-edit-intent
-click 487 440 2
+key Tab Tab
+key Return
+sleep 1
 
 step "freeze for review"
 reveal black
@@ -205,22 +213,20 @@ wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
 sleep 3
 d=$(wt)
 [ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
-click 972 176 1
-key Down
-key Return
-sleep 2
-click 330 262 2
+click 972 191 1
+click 963 303 2
+click 330 277 2
 shot 13-frozen
 
 step "Evidence: service-observed check"
-click 1258 78 1
-click 1280 442 0.3
+click 1246 80 1
+click 1280 380 0.3
 typ 'sh -c "test -f hello.txt"'
-click 1280 490 8
+click 1280 428 8
 shot 14-check-passed
 
 step "approve the candidate"
-click 1175 78 1
+click 1170 80 1
 reveal black
 shot 15-approve-ready
 click 1280 "$BUTTON_Y" 3
@@ -234,7 +240,7 @@ key Tab
 key Return
 wait_for 60 "squash commit on main" main_integrated
 sleep 3
-reveal clean-up
+reveal red
 shot 18-integrated
 
 step "verify the integration with Git"
@@ -251,7 +257,7 @@ key Tab
 key Return
 wait_for 60 "branch and worktree removed" cleaned_up
 sleep 2
-x mousemove 120 139 click 1
+x mousemove 110 140 click 1
 sleep 1
 shot 20-cleaned-up
 git -C "$REPO" for-each-ref --format='%(refname)' refs/lade/retain/ | grep -q candidate- ||
@@ -262,7 +268,7 @@ x windowsize "$WID" 1280 800
 sleep 2
 park
 import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
-click 1020 166 1
+click 1020 175 1
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"

@@ -6,6 +6,7 @@ use std::io::Read;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -256,10 +257,114 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
+/// Extra threads of this user, alive until dropped: `RLIMIT_NPROC` counts every thread.
+struct ExtraThreads(Arc<Barrier>);
+
+impl ExtraThreads {
+    fn spawn(count: usize) -> Self {
+        let release = Arc::new(Barrier::new(count + 1));
+        for _ in 0..count {
+            let release = Arc::clone(&release);
+            thread::Builder::new()
+                .stack_size(64 << 10)
+                .spawn(move || {
+                    release.wait();
+                })
+                .unwrap();
+        }
+        Self(release)
+    }
+}
+
+impl Drop for ExtraThreads {
+    fn drop(&mut self) {
+        self.0.wait();
+    }
+}
+
+/// The process limit is not applied to bwrap, where `RLIMIT_NPROC` would count every process of
+/// the user: with more of them than the limit, bwrap could not create the sandbox at all.
 #[test]
-fn probe_succeeds() {
+fn probe_succeeds_while_the_user_runs_more_processes_than_the_limit() {
     let Some(tools) = tools() else { return };
+    let busy = ExtraThreads::spawn(Limits::WORKER.processes as usize + 64);
     sandbox_available(&tools).expect("sandbox available");
+    drop(busy);
+    let spec = SandboxSpec::new(vec!["/bin/true".into()], Path::new("/"), Limits::WORKER).unwrap();
+    let command = spec.command(&tools).unwrap();
+    let args: Vec<_> = command.get_command().get_args().collect();
+    assert!(
+        !args
+            .iter()
+            .any(|a| a.to_string_lossy().starts_with("--nproc")),
+        "{args:?}"
+    );
+}
+
+/// Prints the process limit (soft/hard), forks until refused, then tries to raise the limit.
+const FORKS: &str = r#"
+import errno, os, resource, time
+print("nproc=%d/%d" % resource.getrlimit(resource.RLIMIT_NPROC))
+forked, error = 0, None
+for _ in range(200):
+    try:
+        pid = os.fork()
+    except OSError as e:
+        error = errno.errorcode[e.errno]
+        break
+    if pid == 0:
+        time.sleep(5)
+        os._exit(0)
+    forked += 1
+print("forked=%d error=%s" % (forked, error))
+try:
+    resource.setrlimit(resource.RLIMIT_NPROC, (1000, 1000))
+    print("raised")
+except (OSError, ValueError):
+    print("raise_refused")
+"#;
+
+/// Inside the sandbox the process limit holds as soft and hard limit, counts only the sandbox's
+/// processes (the user has more than the limit outside), stops forks with `EAGAIN` and cannot be
+/// raised again.
+#[test]
+fn process_limit_is_enforced_inside_the_sandbox_and_cannot_be_raised() {
+    let Some(tools) = tools() else { return };
+    if !Path::new("/usr/bin/python3").is_file() {
+        eprintln!("skipping process limit test: /usr/bin/python3 not installed");
+        return;
+    }
+    let tmp = TempDir::new("sbx-nproc");
+    let limits = Limits {
+        processes: 32,
+        ..Limits::VERIFICATION
+    };
+    let mut spec = SandboxSpec::new(
+        vec![
+            "/usr/bin/python3".into(),
+            "-I".into(),
+            "-c".into(),
+            FORKS.into(),
+        ],
+        tmp.path(),
+        limits,
+    )
+    .unwrap();
+    spec.rw_bind(tmp.path()).unwrap();
+    let _busy = ExtraThreads::spawn(64);
+    let outcome = run(&tools, &spec);
+    let out = String::from_utf8_lossy(&outcome.output_tail);
+    assert_eq!(outcome.exit_code, Some(0), "{out}");
+    assert!(out.contains("nproc=32/32\n"), "{out}");
+    let forked: u32 = out
+        .split("forked=")
+        .nth(1)
+        .and_then(|s| s.split(' ').next()?.parse().ok())
+        .unwrap_or(u32::MAX);
+    // The program itself and the PID-namespace init also count.
+    assert!((24..32).contains(&forked), "{out}");
+    assert!(out.contains("error=EAGAIN\n"), "{out}");
+    assert!(out.contains("raise_refused\n"), "{out}");
 }
 
 #[test]

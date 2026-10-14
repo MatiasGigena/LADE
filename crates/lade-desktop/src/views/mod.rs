@@ -49,6 +49,9 @@ pub fn load_css() {
         );
     }
     if let Some(settings) = gtk::Settings::default() {
+        settings.set_gtk_theme_name(Some("Adwaita"));
+        settings.set_gtk_icon_theme_name(Some("Adwaita"));
+        settings.set_gtk_application_prefer_dark_theme(false);
         settings.set_gtk_label_select_on_focus(false);
     }
 }
@@ -154,6 +157,8 @@ impl App {
         centre.add_named(&terminal.root, Some("terminal"));
         centre.set_hexpand(true);
         centre.set_vexpand(true);
+        centre.set_vhomogeneous(false);
+        centre.set_hhomogeneous(false);
         centre.add_css_class("centre-stack");
         let centre_region = widgets::region_scroll(&centre);
         centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
@@ -350,17 +355,17 @@ impl App {
             }
         }));
         let weak = Rc::downgrade(self);
-        self.header.shortcuts_button.connect_clicked(move |b| {
+        self.header.set_on_shortcuts(Rc::new(move |opener| {
             if let Some(app) = weak.upgrade() {
-                dialogs::shortcuts(b, &app.controller, app.keys_path.clone());
+                dialogs::shortcuts(opener, &app.controller, app.keys_path.clone());
             }
-        });
+        }));
         let weak = Rc::downgrade(self);
-        self.header.exit_button.connect_clicked(move |_| {
+        self.header.set_on_exit(Rc::new(move |opener| {
             if let Some(app) = weak.upgrade() {
-                app.confirm_exit();
+                app.confirm_exit(opener);
             }
-        });
+        }));
         self.install_shortcuts();
     }
 
@@ -429,7 +434,7 @@ impl App {
             AppAction::LeaveTerminal => self.leave_terminal(),
             AppAction::TerminalCopy => self.terminal.copy(),
             AppAction::TerminalPaste => self.terminal.paste(),
-            AppAction::Exit => self.confirm_exit(),
+            AppAction::Exit => self.header.request_exit(),
             AppAction::NextRegion => self.cycle_regions(true),
             AppAction::PreviousRegion => self.cycle_regions(false),
             AppAction::ShowWorkbench => self.controller.set_view(MainView::Workbench),
@@ -445,11 +450,7 @@ impl App {
                 dialogs::open_workspace(self.window.upcast_ref(), &self.controller);
             }
             AppAction::ToggleViewerMode => self.controller.toggle_viewer_mode(),
-            AppAction::ShowShortcuts => dialogs::shortcuts(
-                &self.header.shortcuts_button,
-                &self.controller,
-                self.keys_path.clone(),
-            ),
+            AppAction::ShowShortcuts => self.header.show_shortcuts(),
             AppAction::SendMessage => {
                 if !self.activity.composer_has_focus() {
                     return glib::Propagation::Proceed;
@@ -489,7 +490,7 @@ impl App {
         }
     }
 
-    fn confirm_exit(self: &Rc<Self>) {
+    fn confirm_exit(self: &Rc<Self>, opener: &gtk::Widget) {
         let controls = self.store.state().connection.is_connected();
         let body = if controls {
             "Exit stops the LADE service: running agents are stopped and recorded as interrupted, terminals end, and nothing resumes on its own when LADE starts again. To keep agents working in the background, close the window instead."
@@ -497,21 +498,14 @@ impl App {
             "This window does not control the LADE service, so Exit only closes the window. The service and its agents are not affected."
         };
         let weak = Rc::downgrade(self);
-        dialogs::confirm(
-            &self.header.exit_button,
-            "Exit LADE?",
-            body,
-            "Exit",
-            controls,
-            move || {
-                if let Some(app) = weak.upgrade()
-                    && app.guard_unsaved(CloseAfter::Exit)
-                {
-                    app.finish_close(CloseAfter::Exit);
-                }
-                Ok(())
-            },
-        );
+        dialogs::confirm(opener, "Exit LADE?", body, "Exit", controls, move || {
+            if let Some(app) = weak.upgrade()
+                && app.guard_unsaved(CloseAfter::Exit)
+            {
+                app.finish_close(CloseAfter::Exit);
+            }
+            Ok(())
+        });
     }
 
     pub fn logout(&self) {
@@ -1016,7 +1010,7 @@ impl App {
         self.inspector.root.set_visible(c.inspector);
         self.right.set_visible(c.centre || c.inspector);
         self.region_bar.set_visible(c.region_switches);
-        self.header.set_compact(class == LayoutClass::Compact);
+        self.header.set_compact(c.compact_header);
         self.workbench
             .set_objective_details(c.objective_details, c.details_toggle);
         self.updating_layout.set(true);

@@ -73,6 +73,31 @@ fn cloud(id: &str) -> Option<&'static str> {
     })
 }
 
+fn missing_key(facts: &ProviderFacts, auth: &[AuthKind]) -> String {
+    let name = if facts.name.trim().is_empty() {
+        &facts.id
+    } else {
+        &facts.name
+    };
+    let key = if auth.contains(&AuthKind::SubscriptionToken) {
+        "an API key or subscription token"
+    } else {
+        "an API key"
+    };
+    format!("Add {key} for {name} to use it.")
+}
+
+const KEYRING_AT_START: &str = "LADE looks for its key in your keyring when the agent starts.";
+
+fn without_plain_key(credentials: &CredentialSource, missing: String) -> (AccessStatus, String) {
+    let keyring = credentials.secret_service();
+    if keyring.is_enabled() && keyring.unavailable_reason().is_none() {
+        (AccessStatus::Available, KEYRING_AT_START.to_owned())
+    } else {
+        (AccessStatus::MissingCredentials, missing)
+    }
+}
+
 pub fn classify(
     facts: &ProviderFacts,
     policies: &BTreeMap<String, EgressPolicy>,
@@ -95,24 +120,21 @@ pub fn classify(
             provider.port,
             if provider.local { " (local)" } else { "" }
         );
+        let (status, reason) = if available {
+            (AccessStatus::Available, endpoint)
+        } else {
+            without_plain_key(
+                credentials,
+                format!(
+                    "Add the key for the custom provider {} to use it.",
+                    provider.id
+                ),
+            )
+        };
         return ProviderAccess {
             auth: vec![AuthKind::Custom],
-            status: if available {
-                AccessStatus::Available
-            } else {
-                AccessStatus::MissingCredentials
-            },
-            reason: Some(if available {
-                endpoint
-            } else {
-                format!(
-                    "{endpoint}; set {} in the laded environment, the Secret Service (laded \
-                     credentials set {} --variable NAME; read only when execution starts) or \
-                     ~/.config/lade/credentials.env",
-                    provider.vars.join(" and "),
-                    provider.id
-                )
-            }),
+            status,
+            reason: Some(reason),
             variables: provider.vars.clone(),
         };
     }
@@ -158,30 +180,15 @@ pub fn classify(
             },
         );
     };
-    let available = credentials.is_available(&facts.id);
-    let mut reason = if available {
-        None
+    let (status, reason) = if credentials.is_available(&facts.id) {
+        (AccessStatus::Available, None)
     } else {
-        Some(format!(
-            "set {} in the laded environment, the Secret Service (laded credentials set {}; read \
-             only when execution starts) or ~/.config/lade/credentials.env",
-            vars.join(" or "),
-            facts.id
-        ))
+        let (status, reason) = without_plain_key(credentials, missing_key(facts, &auth));
+        (status, Some(reason))
     };
-    if let Some(note) = oauth_note {
-        reason = Some(match reason {
-            Some(missing) => format!("{missing}; {note}"),
-            None => note,
-        });
-    }
     ProviderAccess {
         auth,
-        status: if available {
-            AccessStatus::Available
-        } else {
-            AccessStatus::MissingCredentials
-        },
+        status,
         reason,
         variables: vars.iter().map(|v| (*v).to_string()).collect(),
     }
@@ -226,7 +233,15 @@ mod tests {
                 AuthKind::OauthLogin
             ]
         );
-        assert!(anthropic.reason.as_deref().unwrap().contains("OAuth login"));
+        assert_eq!(
+            anthropic.reason.as_deref(),
+            Some("Add an API key or subscription token for anthropic to use it.")
+        );
+        let groq = classify(&facts("groq", true, None), &policies, &empty, &[]);
+        assert_eq!(
+            groq.reason.as_deref(),
+            Some("Add an API key for groq to use it.")
+        );
         assert!(
             anthropic
                 .variables
@@ -244,6 +259,7 @@ mod tests {
             &[],
         );
         assert_eq!(subscribed.status, AccessStatus::Available);
+        assert_eq!(subscribed.reason, None);
 
         let codex = classify(
             &facts("openai-codex", false, Some("OpenAI (ChatGPT Plus/Pro)")),
@@ -278,6 +294,41 @@ mod tests {
         let local = classify(&facts("local", true, None), &policies, &empty, &[custom]);
         assert_eq!(local.status, AccessStatus::Available);
         assert_eq!(local.auth, [AuthKind::Custom]);
+    }
+
+    #[test]
+    fn a_usable_keyring_keeps_a_keyless_provider_startable() {
+        use crate::supervision::secret_service::SecretService;
+        let policies = default_policies();
+        let groq = facts("groq", true, None);
+        let unusable =
+            CredentialSource::empty().with_secret_service(SecretService::detect(None, |_| None));
+        let access = classify(&groq, &policies, &unusable, &[]);
+        assert_eq!(access.status, AccessStatus::MissingCredentials);
+        assert_eq!(
+            access.reason.as_deref(),
+            Some("Add an API key for groq to use it.")
+        );
+        let keyring = CredentialSource::empty().with_secret_service(SecretService::new(
+            "/usr/bin/secret-tool".into(),
+            Vec::new(),
+        ));
+        let access = classify(&groq, &policies, &keyring, &[]);
+        assert_eq!(access.status, AccessStatus::Available);
+        assert_eq!(access.reason.as_deref(), Some(KEYRING_AT_START));
+        assert_eq!(access.variables, ["GROQ_API_KEY"]);
+        let custom = CustomProvider {
+            id: "remote".into(),
+            host: "llm.example".into(),
+            port: 443,
+            local: false,
+            vars: vec!["LADE_PROVIDER_REMOTE".into()],
+        };
+        let remote = facts("remote", true, None);
+        let access = classify(&remote, &policies, &unusable, std::slice::from_ref(&custom));
+        assert_eq!(access.status, AccessStatus::MissingCredentials);
+        let access = classify(&remote, &policies, &keyring, &[custom]);
+        assert_eq!(access.status, AccessStatus::Available);
     }
 
     #[test]

@@ -48,10 +48,14 @@ label:disabled { color: @ink_metadata; }
 row:focus:focus-visible, textview:focus:focus-visible, label:focus:focus-visible {
   outline-offset: -2px;
 }
-entry:focus-within, scrolledwindow.text-input:focus-within {
-  outline: 2px solid @focus_ring;
-  outline-offset: 1px;
+label.objective-heading:focus:focus-visible { outline-offset: 4px; border-radius: 4px; }
+entry:focus-within, spinbutton:focus-within, scrolledwindow.text-input:focus-within {
+  outline: none;
+  border-color: @focus_ring;
+  box-shadow: inset 0 0 0 1px @focus_ring;
 }
+entry > text:focus:focus-visible, spinbutton > text:focus:focus-visible,
+scrolledwindow.text-input textview:focus:focus-visible { outline: none; }
 
 selection, text selection, textview > text > selection, label > selection,
 entry > text > selection {
@@ -66,8 +70,8 @@ entry > text > selection:focus-within {
 
 
 .wordmark { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
-.objective-heading, .empty-title { font-size: 20px; font-weight: 600; }
-.section-title, .empty-heading, .popover-heading { font-size: 15px; font-weight: 600; }
+.objective-heading, .empty-title { font-size: 24px; font-weight: 600; }
+.section-title, .empty-heading, .popover-heading { font-size: 16px; font-weight: 600; }
 .group-heading { font-size: 13px; font-weight: 600; color: @ink_metadata; }
 .meta { font-size: 13px; color: @ink_metadata; }
 .secondary { color: @ink_secondary; }
@@ -132,6 +136,15 @@ button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
 button.destructive-quiet:hover { background-color: @del_fill; }
 button.destructive-quiet:disabled, button.destructive-quiet:disabled label { color: @ink_metadata; }
 button.icon-button { min-width: 32px; min-height: 32px; padding: 0; }
+menubutton.icon-button > button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: transparent;
+  background-color: transparent;
+}
+menubutton.icon-button > button:hover { background-color: @fill_hover; }
+menubutton.icon-button > button:checked { background-color: @fill_selected; }
 
 entry, scrolledwindow.text-input, spinbutton {
   min-height: 34px;
@@ -146,17 +159,20 @@ entry, scrolledwindow.text-input, spinbutton {
 }
 scrolledwindow.text-input { padding: 0; }
 scrolledwindow.text-input textview, scrolledwindow.text-input textview > text {
-  background-color: @surface;
+  background-color: transparent;
   color: @ink_primary;
 }
-scrolledwindow.text-input textview:focus:focus-visible { outline: none; }
 entry > image { color: @ink_metadata; }
+entry > text > placeholder { color: @ink_metadata; }
 
 dropdown > button, dropdown > .dropdown, menubutton > button {
   border: 1px solid @border_control;
   border-radius: 6px;
   background-color: @surface;
 }
+columnview > header > button { border-color: transparent; border-radius: 0; background-color: transparent; }
+columnview > header > button:hover { background-color: @fill_hover; }
+dropdown > button stack { background-color: transparent; }
 
 checkbutton check {
   border: 1px solid @border_control;
@@ -217,9 +233,23 @@ paned.horizontal > separator {
 separator.region-divider { background-color: @border_separator; min-width: 1px; }
 
 
+.empty-block { padding: 32px; }
+
+.inline-message { border-radius: 6px; padding: 8px 12px; }
+.inline-message.message-info { background-color: @fill_band; color: @ink_primary; }
+.inline-message.message-warning { background-color: @warn_fill; color: @warn_ink; }
+.inline-message.message-error { background-color: @del_fill; color: @del_ink; }
+.inline-message .message-sign { font-weight: 700; }
+.inline-message button.disclosure-toggle label, .inline-message .message-details { color: inherit; }
+.inline-message button.disclosure-toggle:hover,
+.inline-message button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
+
+label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
+
+
 .lade-header {
   min-height: 56px;
-  padding: 0 16px;
+  padding: 0 20px;
   border-bottom: 1px solid @border_separator;
   background-color: @surface;
 }
@@ -229,7 +259,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
   border: none;
   border-radius: 0;
   background-color: transparent;
-  padding: 0 2px;
+  padding: 0 4px;
   min-height: 54px;
   color: @ink_secondary;
   font-weight: 500;
@@ -243,15 +273,34 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 }
 .nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
 .connection { font-size: 13px; }
-.search entry { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.search dropdown > button {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-left-width: 0;
-  min-height: 26px;
+.search {
+  border: 1px solid @border_control;
+  border-radius: 6px;
+  background-color: @surface;
 }
+.search:focus-within { border-color: @focus_ring; box-shadow: inset 0 0 0 1px @focus_ring; }
+.search entry, .search entry:focus-within {
+  min-height: 34px;
+  border: none;
+  border-radius: 6px 0 0 6px;
+  background-color: transparent;
+  box-shadow: none;
+}
+.search entry, .search dropdown > button { background-image: none; outline: none; }
+.search dropdown > button {
+  min-height: 34px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 0 6px 6px 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+.search dropdown > button:hover { background-color: @fill_hover; }
+.search dropdown > button:focus:focus-visible { outline: none; background-color: @fill_selected; }
 .search-results > contents { padding: 12px; }
+.search-popover > contents { padding: 8px; }
 .result-row { padding: 4px 8px; }
+.header-menu button.menu-item { padding: 8px 12px; border-radius: 6px; }
 .avatar {
   min-width: 32px;
   min-height: 32px;
@@ -263,7 +312,7 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 .profile-name { font-weight: 500; }
 
 .notice-bar {
-  padding: 8px 16px;
+  padding: 8px 20px;
   background-color: @fill_band;
   border-bottom: 1px solid @border_separator;
 }
@@ -275,19 +324,24 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
   border-bottom: 1px solid @border_separator;
   background-color: @surface;
 }
-.region-bar .segmented button { min-height: 28px; padding: 2px 12px; }
+.region-bar .segmented button { min-height: 26px; padding: 4px 12px; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 
 
 .rail { padding: 16px 12px; }
+.rail button.icon-button:focus:focus-visible {
+  outline: none;
+  border-color: @focus_ring;
+  box-shadow: inset 0 0 0 1px @focus_ring;
+}
 list.objective-list, list.file-list, list.plain-list, list.transcript {
   background-color: transparent;
 }
 .objective-list > row {
   border-radius: 6px;
   padding: 8px 12px;
-  margin: 1px 0;
+  margin: 0;
   background-color: transparent;
   box-shadow: none;
   border: none;
@@ -301,17 +355,17 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 
 
 .centre-page { padding: 24px; }
-.centre-empty { padding: 32px; }
-.empty-state { padding: 64px 32px 32px 64px; }
+.empty-state { padding: 32px; }
 .breadcrumb-current { font-size: 13px; font-weight: 500; }
 
 .journey { padding-top: 4px; }
 .journey-dot {
-  min-width: 12px;
-  min-height: 12px;
+  min-width: 16px;
+  min-height: 16px;
   border-radius: 9999px;
   border: 2px solid @ink_secondary;
-  font-size: 8px;
+  font-size: 13px;
+  line-height: 1;
   font-weight: 700;
   padding: 0;
 }
@@ -325,11 +379,10 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .basis-selector > button { min-width: 220px; }
 .version-line { padding: 0; }
 
-.file-scroll { border-right: 1px solid @border_separator; }
 .file-list > row {
   border-radius: 6px;
-  padding: 8px 10px;
-  margin: 1px 8px 1px 0;
+  padding: 8px 12px;
+  margin: 0 0 4px 0;
   min-height: 32px;
 }
 .file-list > row:hover { background-color: @fill_hover; }
@@ -340,12 +393,13 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .viewer { border: 1px solid @border_separator; border-radius: 6px; }
 .viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
 .viewer-path { font-weight: 500; }
-.selection-line { padding: 4px 12px 0 12px; min-height: 18px; }
+.selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
-.segmented button { border-radius: 0; min-height: 22px; padding: 2px 10px; }
+.segmented button { border-radius: 0; min-height: 24px; padding: 4px 12px; }
 .segmented button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
-.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; border-left-width: 0; }
+.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.segmented button:not(:first-child) { border-left-width: 0; }
 .segmented button:checked { background-color: @fill_selected; font-weight: 600; }
 
 textview.code-view, textview.code-view > text {
@@ -391,6 +445,7 @@ notebook.inspector > header > tabs > tab:checked {
 notebook.inspector > stack { background-color: @surface; }
 .inspector-page { padding: 16px 16px 24px 16px; }
 .field-key { min-width: 88px; }
+image.info-sign { color: @ink_metadata; }
 .evidence-row { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .output {
   background-color: @fill_inset;
@@ -404,7 +459,7 @@ notebook.inspector > stack { background-color: @surface; }
 .excerpt {
   background-color: @fill_inset;
   border-radius: 6px;
-  padding: 6px 8px;
+  padding: 8px;
   color: @ink_secondary;
 }
 .save-state.save-failed { color: @del_ink; font-weight: 600; }
@@ -426,6 +481,11 @@ notebook.inspector > stack { background-color: @surface; }
 
 
 .activity { padding: 24px; }
+.agent-setup {
+  border: 1px solid @border_separator;
+  border-radius: 8px;
+  padding: 16px;
+}
 .transcript > row.activity-item {
   padding: 12px 4px;
   border-bottom: 1px solid @border_separator;
@@ -441,7 +501,7 @@ notebook.inspector > stack { background-color: @surface; }
 window.lade-dialog { background-color: @surface; border-radius: 8px; }
 .dialog-content { padding: 24px; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
-.limited-error > .error-box { margin-top: 6px; }
+.limited-error > .error-box { margin-top: 4px; }
 
 
 .terminal-pane { padding: 24px; }

@@ -15,6 +15,7 @@ use super::convert::{
     conflict, counter, invalid, new_uuid, not_found, parse_uuid, rejection, wire_id,
 };
 use super::handlers::Pending;
+use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Flow, JobOutput, ReqCtx, Service};
 
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
@@ -79,31 +80,18 @@ pub(crate) fn decode_chunk(tail: &mut Vec<u8>, bytes: &[u8], last: bool) -> Stri
 impl Service {
     fn terminal_scope(&self, oid: ObjectiveId) -> Result<bool, Rejection> {
         let st = self.obj(oid)?;
-        let record = st.objective().record();
-        let lifecycle_error =
-            |detail: &str| rejection(ErrorCode::InvalidLifecycle, SafeAction::Refresh, detail);
-        if record.cleaned_up {
-            return Err(lifecycle_error(
-                "the Objective was cleaned up; it has no worktree",
+        // A precondition, not stale state: refreshing does not help (the projection says why).
+        if let Some(why) = terminal_blocker(st) {
+            return Err(rejection(
+                ErrorCode::InvalidLifecycle,
+                SafeAction::None,
+                why,
             ));
         }
-        let writable = match st.objective().lifecycle() {
-            Lifecycle::Defined | Lifecycle::Active => {
-                self.runtime.get(&oid).and_then(|r| r.busy) != Some("freeze")
-            }
+        Ok(match st.objective().lifecycle() {
             Lifecycle::Frozen | Lifecycle::Approved => false,
-            _ => {
-                return Err(lifecycle_error(
-                    "a terminal opens only for an Objective in progress or under review",
-                ));
-            }
-        };
-        if !st.row.worktree.as_ref().is_some_and(|w| w.is_dir()) {
-            return Err(lifecycle_error(
-                "the Objective has no worktree yet; start the agent once to create it",
-            ));
-        }
-        Ok(writable)
+            _ => self.runtime.get(&oid).and_then(|r| r.busy) != Some("freeze"),
+        })
     }
 
     pub(crate) fn terminal_open(&mut self, ctx: ReqCtx, cmd: &TerminalOpenCommand) -> Flow {
@@ -125,7 +113,7 @@ impl Service {
                     ErrorCode::LimitReached,
                     SafeAction::None,
                     &format!(
-                        "{open} of {MAX_PER_OBJECTIVE} terminals of this Objective and {total} of {max} in total are open (laded --max-terminals {max}); close one first"
+                        "Too many terminals are open ({open} of {MAX_PER_OBJECTIVE} for this Objective, {total} of {max} in total). Close one first."
                     ),
                 ));
             }
@@ -134,7 +122,7 @@ impl Service {
             }
             let tools = self
                 .sandbox_tools()
-                .ok_or_else(|| unavailable("terminal sandbox unavailable (bubblewrap/prlimit)"))?;
+                .ok_or_else(|| unavailable(TERMINAL_SANDBOX_UNAVAILABLE))?;
             let st = self.obj(oid)?;
             let ws = self.ws_of(st)?;
             let terminal_id = new_uuid();
@@ -172,7 +160,7 @@ impl Service {
             move || {
                 JobOutput::Terminal(Terminal::open(&tools, &request).map_err(|e| {
                     eprintln!("laded: terminal could not start: {}", e.kind());
-                    unavailable("the terminal sandbox could not start")
+                    unavailable("The terminal could not start. Try again.")
                 }))
             },
         );
@@ -193,7 +181,9 @@ impl Service {
             let scope = self.terminal_scope(oid);
             let admitted = match scope {
                 Ok(now_writable) if still_controller && (now_writable || !writable) => Ok(()),
-                Ok(_) => Err(conflict("a review freeze started; open the terminal again")),
+                Ok(_) => Err(conflict(
+                    "The work was frozen for review while the terminal started. Open it again for a read-only terminal.",
+                )),
                 Err(rejection) => Err(rejection),
             };
             match admitted {
@@ -250,7 +240,7 @@ impl Service {
                 std::io::ErrorKind::WouldBlock => rejection(
                     ErrorCode::LimitReached,
                     SafeAction::None,
-                    "the terminal is not reading input; wait or close it",
+                    "The terminal isn't reading input. Wait, or close it.",
                 ),
                 _ => not_found("terminal"),
             })

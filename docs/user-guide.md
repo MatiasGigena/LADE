@@ -121,13 +121,20 @@ a notice and the defaults apply; delete the file to return to them.
   - the intent, with *Edit intent*;
   - **Details**: lifecycle, last update, branch and start commit.
 - **Activity** is the Agent Session's place:
-  - its state line: model, execution state, session and generation;
-  - **Start agent**, **Cancel agent** and **Resume agent**;
+  - its state line: one sentence on what the agent is doing (the session and generation are in its tooltip);
+  - before the Objective's first start, **Set up the agent** in place of the transcript: provider, model, thinking
+    and **Start agent** (the LADE profile resources collapsed below);
+  - once it has an Agent Session, the one agent action that applies now beside the title — **Cancel agent** while
+    it runs, **Resume agent** once it stopped — and **Agent settings** (collapsed): the model and thinking, the
+    session tools and the LADE profile resources;
   - **Accepted inputs and delivery**. An uncertain or blocked delivery is stated above it;
-  - the transcript and the composer;
-  - under **Model, Agent Session and profile**: the model and thinking, the session tools and the LADE profile resources.
+  - the transcript and, with an Agent Session, the composer.
 
 When the Objective waits for the agent to be started or resumed, the Overview says so in one line, with **Open Activity**.
+
+When the service refuses an action, the reason is shown next to the control you used (for example under *Start
+agent*, under the composer, or beside *Run check*), with the error code under **Details**; it goes away once that
+action succeeds or the Objective changes.
 
 Below about 1100 pixels of window width (for example 800 × 550, or a 1600 × 1100 screen at 200 % scaling) the
 window shows one region at a time: switch between **Objectives**, **Work area** and **Overview · Evidence ·
@@ -163,8 +170,9 @@ specific commit). The intent stays editable until approval. Nothing runs yet: th
 
 ## 5. Choose a model and provide credentials
 
-Pick a model when starting execution: in Activity, while *Start agent* is available, the state line names the
-model and thinking level it will use; change them under *Model, Agent Session and profile*.
+Pick a model when starting execution: in Activity, **Set up the agent** shows the provider, model and thinking
+level *Start agent* will use (the first usable ones are chosen for you). Once the agent has run, change them under
+**Agent settings** and apply them with *Apply model and thinking*.
 
 Most providers need an API key. The recommended place is your **keyring** (GNOME Keyring, through the Secret
 Service; needs `sudo apt install libsecret-tools`):
@@ -186,8 +194,11 @@ comments, optional `export `.
 
 For each variable LADE uses the first of: `laded`'s environment, the keyring, `credentials.env`. They are read at
 each start of execution, and only the selected provider's variables reach the sandbox. The keyring is read only
-when execution starts, so the model picker shows a provider whose key is only in the keyring as *needs
-credentials*; starting works. LADE never copies a key from the keyring into a file.
+when execution starts: with a usable keyring the model picker shows a provider whose key is in neither of the other
+places as available, noting that LADE looks for its key in your keyring when the agent starts (a missing key is
+then the start's refusal). Without a usable keyring such a provider *needs credentials*: the picker says what to
+add (where it can go is under *Details*), *Start agent* stays disabled until you add it and press *Check again*,
+and you can choose another provider meanwhile. LADE never copies a key from the keyring into a file.
 
 | Provider | Variables |
 | --- | --- |
@@ -226,13 +237,15 @@ processes; started by hand, LADE logs `cgroup limits unavailable (…)` and uses
   before it is delivered; its state (queued, dispatched, received, uncertain, blocked) is listed under **Accepted
   inputs and delivery**, and an uncertain or blocked one is stated above that list. An *uncertain* message is never
   resent automatically.
-- **Start agent**, **Cancel** (stops the agent and keeps its work and session) and **Resume** (continues the same
-  session) are at the top of Activity; an unavailable one names its reason in its tooltip, and the state line next
-  to them says why.
-- **Model, Agent Session and profile** (collapsed, at the top of Activity) holds the model and thinking pickers,
-  the Agent Session tools — *Show session tree* (go to, fork or clone an entry), *Apply model and thinking*,
-  *Compact context*, *Reload session resources*, *Export session*, *Import session…* — and the LADE profile
-  resources with the approval of executable extensions.
+- **Start agent** is in the *Set up the agent* card until the first start; it is disabled, with the reason in its
+  tooltip and the state line, while the chosen provider needs credentials or is restricted. Afterwards the top of Activity shows only
+  the agent action that applies: **Cancel agent** (stops the agent and keeps its work and session) while it runs,
+  **Resume agent** (continues the same session) once it stopped. An unavailable one names its reason in its
+  tooltip, and the state line next to it says why.
+- **Agent settings** (collapsed, at the top of Activity once the agent has a session) holds the model and
+  thinking pickers, the Agent Session tools — *Show session tree* (go to, fork or clone an entry), *Apply model and
+  thinking*, *Compact context*, *Reload session resources*, *Export session*, *Import session…* — and the LADE
+  profile resources with the approval of executable extensions.
 
 ### Terminal
 
@@ -244,7 +257,8 @@ commits and branch changes are LADE's (freeze and integrate). The prompt starts 
 - While the Objective is in progress the terminal can change the worktree, and those changes show up in the Change
   Set like the agent's. **Freeze for review** first closes every such terminal. While a candidate is frozen or
   approved, a terminal opens **read-only** (`[lade read-only]`) for inspection.
-- An Objective needs a worktree first: start its agent once.
+- An Objective needs a worktree first: start its agent once (the Terminal says so, with **Open Activity**). Whether
+  a terminal can open, and why not, comes from the service.
 - Keys go to the shell (Tab, Ctrl+C, Ctrl+D, arrows…). Leave the terminal with **Ctrl+Shift+E** (focus returns to
   where it was) or F6; come back with Ctrl+3. Ctrl+Shift+C / Ctrl+Shift+V copy and paste (pastes up to 256 KiB).
   All of these can be remapped in the shortcuts dialog (function keys).
@@ -319,8 +333,10 @@ other project data; its history is kept until you delete it. Retention refs in y
   supported mechanism; LADE does not change host security settings. Inspection and review keep working without the
   sandbox, but agents and checks do not run.
 - **"cgroup limits unavailable (…)" in the journal.** The per-Objective memory/process limits need the systemd unit
-  (`Delegate=memory pids cpu`) on a cgroup v2 system; the reason names what is missing. LADE keeps working with
-  per-process limits; `LADE_CGROUPS=off` disables the cgroup limits explicitly.
+  (`Delegate=memory pids cpu`) on a cgroup v2 system; LADE asks the systemd user manager whether its unit is
+  delegated (`systemctl --user show -p Delegate lade.service` must say `yes`) and checks that the limits take
+  effect. The reason names what is missing. LADE keeps working with per-process limits; `LADE_CGROUPS=off` disables
+  the cgroup limits explicitly.
 - **"Worker package not found" / "node runtime not found" in the journal.** The unit sets `LADE_WORKER_DIR` and a
   `PATH` containing the Node 22 recorded at install time. If you moved or upgraded Node, re-run the installer
   (optionally with `--node /path/to/node`). The launchers `~/.local/bin/laded` and `~/.local/bin/lade-desktop`
