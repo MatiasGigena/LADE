@@ -1,7 +1,7 @@
 # Execution safety: worker sandbox, egress gateway, credentials, sweep (WP-F2)
 
 Status: implementation record for `crates/lade-system/src/supervision/{launcher,gateway,credentials,secret_service,sweep,terminal}.rs`.
-It instantiates [delivery plan §1, §5, §7](delivery-plan.md) and [architecture §5](../../architecture.md#5-host-authority-and-protected-git).
+It implements the execution boundary in [architecture §5](../../architecture.md#5-host-authority-and-protected-git).
 The service (`laded`) consumes it through the `supervision` contract (`WorkerLauncher`, `WorkerControl`,
 `SupervisorEvent`); it never runs a worker outside this path. The "Not enforced" list at the end feeds
 `limitations.md`.
@@ -98,7 +98,7 @@ Two minimal changes to the WP-C sandbox adapter were needed:
 ## Limits (§7)
 
 All values are constants in `crates/lade-system/src/adapters/sandbox/limits.rs`, the single place to change them;
-they are the delivery-plan proposals and their approval is Matias's decision (#14).
+they are proposed implementation defaults and their approval is Matias's decision (#14).
 
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |

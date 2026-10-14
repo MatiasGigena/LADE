@@ -1,6 +1,6 @@
-# Build and test IMP-001
+# Build and test
 
-The implemented boundary is [IMP-001 / #22](https://github.com/MatiasGigena/LADE/issues/22), not a running Agent Session or complete workbench. Read the [wire/admission contract](imp-001-contract.md) and [evidence](evidence/imp-001/README.md) before extending it.
+Build and verification instructions for the service, native workbench and pi worker. Read the [wire contract](protocol-v1.md), [service admission](service.md#admission-transport) and [remaining release gates](limitations.md) before extending them.
 
 ## Supported development inputs
 
@@ -111,7 +111,8 @@ Inspect the resulting PNG; do not infer native rendering from source/CSS. Captur
 Scripted native runs under Xvfb (development host): `scripts/e2e-gui` drives the whole review loop and
 `scripts/e2e-terminal` the IMP-012 terminal, single-instance, client-close, Exit and restart flows (it runs inside its
 own `dbus-run-session`). Both need a debug build, Xvfb, xdotool, ImageMagick and bubblewrap and are not part of
-`scripts/verify`.
+`scripts/verify`. Native, resilience, performance and load scripts write captures and reports under the ignored
+`evidence-local/` directory by default; pass an output directory to retain them elsewhere.
 
 The contained terminal (IMP-012) adds no dependency: the PTY comes from rustix (`pty`, `termios` features of the
 already-reviewed `rustix =1.1.4`) and the client renders it with its own minimal VT parser
@@ -122,7 +123,7 @@ escape routes.
 
 ## Pi preservation and next gate
 
-The first-release SDK worker (`node packages/pi-worker/src/worker.ts`, delivery plan WP-D) installs the unpatched 0.85.1 npm distribution recorded under `npm_distribution` in the manifest; see [worker.md](worker.md). `vendor/pi-coding-agent/manifest.json` retains the approved pi 0.85.1 source commit, archive digest, shrinkwrap, MIT notice and currently empty patch inventory. With an empty patch inventory the narrow fork's runnable form is that registry tarball: `packages/pi-worker/test/worker-deps.test.ts` checks that the installed `package.json` and `npm-shrinkwrap.json` are the pinned upstream bytes, that the lockfile's nested tree is exactly the upstream shrinkwrap (versions and integrity), and that the worker loads only the SDK's own pi-ai. Not done: a reproducible build of the coding-agent from the pinned source archive (needs the archive, upstream's build tooling and a byte comparison against the registry tarball); it becomes necessary once a patch is recorded. Provider conformance is IMP-011. Independent wire/security sign-off on admission is still required to accept IMP-001; no codec test proves a worker cannot reach host control material.
+The first-release SDK worker (`node packages/pi-worker/src/worker.ts`) installs the unpatched 0.85.1 npm distribution recorded under `npm_distribution` in the manifest; see [worker.md](worker.md). `vendor/pi-coding-agent/manifest.json` retains the approved pi 0.85.1 source commit, archive digest, shrinkwrap, MIT notice and currently empty patch inventory. With an empty patch inventory the narrow fork's runnable form is that registry tarball: `packages/pi-worker/test/worker-deps.test.ts` checks that the installed `package.json` and `npm-shrinkwrap.json` are the pinned upstream bytes, that the lockfile's nested tree is exactly the upstream shrinkwrap (versions and integrity), and that the worker loads only the SDK's own pi-ai. Not done: a reproducible build of the coding-agent from the pinned source archive (needs the archive, upstream's build tooling and a byte comparison against the registry tarball); it becomes necessary once a patch is recorded. Provider conformance is IMP-011. Independent wire/security sign-off on admission is still required to accept IMP-001; no codec test proves a worker cannot reach host control material.
 
 ### Worker dependencies and install scripts
 

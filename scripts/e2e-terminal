@@ -5,7 +5,7 @@ if [ -z "${LADE_E2E_BUS:-}" ]; then
   LADE_E2E_BUS=1 exec dbus-run-session -- "$0" "$@"
 fi
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-OUT=${1:-$ROOT/docs/implementation/evidence/imp-012}
+OUT=${1:-$ROOT/evidence-local/imp-012}
 DPY=:${E2E_DISPLAY:-78}
 BIN=$ROOT/target/debug
 W=1440

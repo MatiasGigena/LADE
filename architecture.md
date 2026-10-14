@@ -93,7 +93,7 @@ This is a target layout, not a requirement to create empty directories. Start wi
 
 **Proposed implementation choices:** Rust/gtk4-rs for the client; TypeScript for the Node adapter; GtkSourceView 5 as the first read-only text-control candidate; VTE's GTK4 variant only as a terminal presentation candidate. No Libadwaita requirement, web engine or custom-drawn whole UI. Pin runtime, bindings and native libraries in IMP-001; validate rich controls in IMP-002 and terminal ownership in IMP-012. These were not selected by #13's C benchmark.
 
-IMP-001 establishes this four-crate boundary with Rust/gtk4-rs, locked build inputs and effect-free protocol fixtures. See its [concrete wire/admission contract](docs/implementation/imp-001-contract.md) and [evidence limits](docs/implementation/evidence/imp-001/README.md); live transport authority and the rich workbench remain later increments.
+The four-crate boundary uses Rust/gtk4-rs, locked build inputs and protocol fixtures. See the [wire contract](docs/implementation/protocol-v1.md), [service admission](docs/implementation/service.md#admission-transport) and [remaining release gates](docs/implementation/limitations.md).
 
 The narrow coding-agent product fork required by #6 is retained. Do not replace it with floating upstream packages or fork the agent/provider layers without demonstrated need. Record upstream commit, runtime/dependency lockfiles, notices and each necessary patch; do not copy historical prototypes into production.
 
@@ -156,7 +156,7 @@ Use an expected-old-value reference update as part of the proposed Git adapter: 
 | Explicit dependency injection | Construct ports at service startup; controllable clock/faults in tests | Constructors, not a global service locator or DI framework |
 | Unidirectional presentation | User action to request to service state to GTK projection | Optimistic visuals cannot claim Saved, approved or integrated before authority confirms |
 
-Keep pi SDK types and differences inside the adapter. Preserve the recorded findings: clear queued input before abort when that is the intended action; distinguish live context from persisted history; checkpoint/reconcile a selected tree leaf explicitly; implement host-side semantic-UI cancellation before a blocking replacement; unsupported required UI must be rejected before activation, not handled by assuming exceptions veto operations. Use the [published seam reports](docs/planning/implementation-readiness.md#evidence-inventory) as input, not proof of production conformance.
+Keep pi SDK types and differences inside the adapter. Preserve the recorded findings: clear queued input before abort when that is the intended action; distinguish live context from persisted history; checkpoint/reconcile a selected tree leaf explicitly; implement host-side semantic-UI cancellation before a blocking replacement; unsupported required UI must be rejected before activation, not handled by assuming exceptions veto operations. Use the [compatibility inventory](docs/implementation/pi-compatibility.md) and its remaining conformance gaps.
 
 ## 7. Enforceable architecture rules
 

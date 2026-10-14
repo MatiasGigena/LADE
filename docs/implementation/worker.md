@@ -1,9 +1,8 @@
 # pi worker (WP-D)
 
-`packages/pi-worker/src/worker.ts` is the per-Objective Agent Session process of
-[delivery plan §6](delivery-plan.md#6-worker-wp-d). It drives a real pi `AgentSession` through the
-pinned `@earendil-works/pi-coding-agent@0.85.1` SDK (root exports only, no patches) and speaks the
-§4.2 worker protocol as LF-delimited JSON on stdin/stdout.
+`packages/pi-worker/src/worker.ts` is the per-Objective Agent Session process. It drives a real pi `AgentSession`
+through the pinned `@earendil-works/pi-coding-agent@0.85.1` SDK (root exports only, no patches) and speaks the
+[worker protocol](protocol-v1.md#service--worker-worker-schemajson-jsonl) as LF-delimited JSON on stdin/stdout.
 
 ## Launch
 

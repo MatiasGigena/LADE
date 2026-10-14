@@ -37,16 +37,15 @@ Then read the [user guide](docs/user-guide.md) (install, credentials, the Object
 
 ## Build and contracts
 
-See [build and test instructions](docs/implementation/build.md), the [wire protocol v1](docs/implementation/protocol-v1.md), the [service](docs/implementation/service.md), [execution safety](docs/implementation/execution-safety.md), the [pi worker](docs/implementation/worker.md), the [delivery plan](docs/implementation/delivery-plan.md), the historical [IMP-001 wire/admission contract](docs/implementation/imp-001-contract.md) and its [retained evidence and remaining gates](docs/implementation/evidence/imp-001/README.md).
+See [build and test instructions](docs/implementation/build.md), the [wire protocol v1](docs/implementation/protocol-v1.md), the [service](docs/implementation/service.md), [execution safety](docs/implementation/execution-safety.md), the [pi worker](docs/implementation/worker.md) and the [remaining release gates](docs/implementation/limitations.md).
 
 ## Implementation blueprint
 
 - [System architecture](architecture.md) — modular Rust core, layers, adapters, ownership and design patterns.
 - [Visual specification](design.md) — workbench appearance and proposed native visual tokens only.
 - [Implementation spec and backlog](docs/implementation/spec.md) — concrete first-boundary proposals, 16 issue-ready increments, dependencies and A01–A24 coverage.
-- [Agent handoff](docs/implementation/agent-handoff.md) — separate prompts for authorized issue publication and authorized implementation.
 
-The architectural direction and backlog are approved/published. IMP-001 is separately authorized; later increments and their technical/token gates remain bounded by the spec. Documentation alone does not authorize additional production work or change accepted product policies.
+The architectural direction and backlog are approved/published. Current implementation coverage and outstanding release requirements are tracked in [acceptance status](docs/implementation/acceptance-status.md). Documentation alone does not authorize additional production work or change accepted product policies.
 
 The first release has no embedded editor or TODE dependency. Historical editor research/prototypes remain evidence of earlier exploration, not current gates. Rust remains the authoritative System Layer, pi the Intelligence Layer, and the graphical client presentation only. [GTK4 native is the selected graphical client](docs/planning/client-architecture.md), preserving the approved visual direction. [Provisional performance targets and the validation handoff](docs/planning/performance-budgets.md) are accepted. Production measurements, complete native/accessibility validation and production authorization remain open; accepted targets are not runtime guarantees.
 

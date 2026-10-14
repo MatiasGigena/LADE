@@ -1,6 +1,6 @@
 # Wire protocol v1 (bundle 0.2.0)
 
-Concrete application protocol for the first release, instantiating [delivery-plan §4](delivery-plan.md#4-wire-protocol-wp-a-owns-the-schema-all-other-wps-code-against-these-shapes). It supersedes the IMP-001 fixture command set ([imp-001-contract.md](imp-001-contract.md) stays as history); every IMP-001 safety property is retained unchanged.
+Concrete application protocol for the first release. It supersedes the IMP-001 fixture command set; its framing, bounds, duplicate-operation and admission safety properties remain in force. Admission is documented in [service.md](service.md#admission-transport).
 
 ## Sources of truth
 
@@ -20,6 +20,24 @@ Concrete application protocol for the first release, instantiating [delivery-pla
 `{"protocol":1,"bundle":"0.2.0","body":{"kind":…}}` for both contracts. Decoding is always: bounded JSON parse (1 MiB body, depth 32, 16,384 values, 1,024 members, 256 KiB per string, duplicate keys/lone surrogates/non-integer numbers reject) → exact protocol **and** bundle (`version_mismatch` first) → closed schema → typed DTO. Unknown fields, missing required fields, `null` for an optional field and wrong JSON types reject without coercion. Client framing is a u32 big-endian length + body; worker framing is body + LF (JSONL). A framing error poisons the link; the decoders retain one body and deliver one frame at a time. Encoding serializes inside the 1 MiB cap and re-decodes the bytes before they leave, so a sender can never emit what the peer must reject (callers truncate long text with `truncate_utf8`/`truncate_chars` or `Rejection::new`).
 
 Budget note: one frame holds at most 16,384 JSON values. Lists (objectives, files, hunks, diff lines, activity items) carry schema `maxItems`, and services must page or set `truncated` before reaching the value budget; `encode` returning `frame_size`/`limit_reached` is a service bug, not a peer error.
+
+### Chunk ownership and queue budgets
+
+Chunk transfers use an opaque UUID, connection-bound owner scope and execution generation, a declared decimal
+total length and lowercase SHA-256 digest. Data is canonical lowercase hex, at most 64 KiB decoded per chunk.
+Indices must be consecutive from zero, data non-empty, and the total and digest exact on completion; no data is
+accepted after completion or cancellation. At most two transfers and 8 MiB per transfer per link (16 MiB reassembly)
+are allowed within component memory budgets. Start validates before allocation; data grows incrementally. An
+invalid transfer clears the reassembler; cancellation, disconnect or authority loss frees incomplete content.
+Completed bytes transfer to the caller under its own bounded queue. Transport lifecycle must cancel abandoned
+transfers. These are staging bounds, not pi logical-content limits; larger content uses service-owned artifacts
+and paging, never an automatic unbounded disk spill.
+
+Outbound budgets are 8 MiB/256 frames per direction and 32 MiB service-wide; replay is bounded to 16 MiB/10,000
+events. Reserve 1 MiB and 16 slots per outbound link for cancellation/control, and 4 MiB service-wide. Producers
+obtain capacity before serialization. Overflow causes explicit backpressure, resync or failure, not semantic loss;
+control cannot preempt bytes already in an ordered frame. See [performance budgets](../planning/performance-budgets.md)
+and the [service implementation](service.md) for targets and enforcement.
 
 ### Schema subset
 

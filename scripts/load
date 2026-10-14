@@ -9,7 +9,7 @@ if [ "${1:-}" = --soak ]; then
   test=soak
   shift
 fi
-OUT=${1:-$ROOT/docs/implementation/evidence/imp-013}
+OUT=${1:-$ROOT/evidence-local/imp-013}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 command -v bwrap >/dev/null || { echo "load: bubblewrap is required" >&2; exit 2; }

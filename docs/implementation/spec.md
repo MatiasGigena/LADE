@@ -31,7 +31,7 @@ The implementation driver produces evidence; Matias approves consequential defau
 
 These decisions make the first increment concrete. They are **implementation proposals for review**, not assertions about existing code. IMP-001 ratifies the wire envelope and toolchain; each storage/security/Git increment ratifies its bounded protocol before effects.
 
-The separately authorized IMP-001 now concretizes the foundational DTO/schema, framing, identities, decoded/chunk bounds, toolchain and admission direction in its [owning contract](imp-001-contract.md), with [build commands](build.md) and [scoped evidence](evidence/imp-001/README.md). Matias approved that implementation direction; independent wire/security sign-off remains pending. The examples below remain illustrative; `contracts/v1/schema.json` specifies the actual envelope. No live IPC authority or later increment is enabled by these foundations.
+The foundational DTO/schema, framing, identities and decoded/chunk bounds are defined in the [wire contract](protocol-v1.md), with [build commands](build.md) and [service admission](service.md#admission-transport). Independent wire/security sign-off remains pending. The examples below remain illustrative; `contracts/v1/schema.json` specifies the actual envelope. Current implementation coverage and remaining gates are recorded in [acceptance status](acceptance-status.md).
 
 ### 3.1 Identity and command envelope
 
@@ -355,7 +355,7 @@ Execution map #21 holds the real issue mapping and native dependency links. Keep
 
 ## 8. Handoff and next authorized action
 
-This spec, the architecture and the proposed visual tokens have been reviewed, and the execution backlog is published in #21. The [agent handoff](agent-handoff.md) preserves the boundary between backlog publication and authorization of an implementation increment. Publishing or updating the backlog does not start production work.
+This spec, the architecture and the proposed visual tokens have been reviewed, and the execution backlog is published in #21. Publishing or updating the backlog does not start production work.
 
 Once production implementation is separately authorized, assign a driver to IMP-001 and then IMP-002/003 as their prerequisites permit. No extra broad decision-stage prototype, pi-internals certification project or microservice design phase is required. The hard-limit and containment gates still precede any untrusted execution.
 

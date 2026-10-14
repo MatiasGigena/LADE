@@ -1,7 +1,7 @@
 # pi compatibility inventory (IMP-011)
 
 What of the pinned pi workflow (`@earendil-works/pi-coding-agent@0.85.1`) is usable through LADE, mapped from the
-[#6 compatibility inventory](../research/pi-headless-integration.md#3-compatibility-inventory-for-6) and the
+[#6 compatibility decision](https://github.com/MatiasGigena/LADE/issues/6#issuecomment-5669021069) and the
 IMP-011 scope ([spec §5](spec.md#imp-011)). Every promise is in exactly one class:
 
 - **Supported** — works through LADE and is covered by the named test (evidence level in brackets, as defined in
@@ -18,8 +18,7 @@ equal what this build's egress and credential tables decide).
 
 Test locations: **W** = `packages/pi-worker/test/worker-compat.test.ts`, **S** =
 `crates/lade-system/tests/service_compat.rs`, **D** = `crates/lade-desktop` unit tests
-(`presentation/compat.rs`, `presentation/controller_compat.rs`, `transport/requests/tests.rs`). Recorded outputs and
-captures are in [`evidence/imp-011/`](evidence/imp-011/).
+(`presentation/compat.rs`, `presentation/controller_compat.rs`, `transport/requests/tests.rs`).
 
 ## Profile separation
 
@@ -56,7 +55,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (40 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/worker/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D; `evidence/first-release/e2e-04b-agent-tools.png` [integrated] |
+| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (40 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/worker/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D |
 | Model and thinking selection | Supported | Picker with the model's supported thinking levels (pi-ai `getSupportedThinkingLevels`). `execution.start` takes an optional `thinking`; `session.configure` changes model and thinking of an idle live session (pi `setModel`, `setThinkingLevel`, clamped by pi) or, when stopped, persists them for the next start/resume. Persisted per Objective (model on the Objective, thinking in `session_preferences`) | W "manual compaction, model/thinking configuration …"; S `model_and_thinking_selection_is_persisted_per_objective` [integrated] |
 | Changing the **provider** of a live session | Restricted | A launch releases one provider's credentials and egress policy; changing provider needs stop → configure → resume (explicit error otherwise) | S [integrated] |
 | Model cycling shortcuts | Restricted | Replaced by the explicit picker (no TUI cycling keys) | — |

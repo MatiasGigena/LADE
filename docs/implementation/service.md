@@ -1,8 +1,7 @@
 # The `laded` service (WP-F1)
 
 `laded` is the authoritative System Layer process: it owns product identities, the product store, Objective
-lifecycles, Git mutations, worker supervision and client admission. It instantiates [delivery-plan §1–§4](delivery-plan.md)
-over the domain rules in `lade-core`, the wire contract in [protocol-v1.md](protocol-v1.md), the adapters in
+lifecycles, Git mutations, worker supervision and client admission. It implements the domain rules in `lade-core`, the wire contract in [protocol-v1.md](protocol-v1.md), the adapters in
 `lade-system::adapters` and the launcher contract in `lade-system::supervision` (see [execution-safety.md](execution-safety.md)).
 Source: `crates/lade-system/src/{bin/laded.rs,service,storage,transport}`.
 
@@ -568,8 +567,8 @@ three changes and a clean checkout. Aggregate worker quota (five live, the sixth
 reason, a cancel frees a slot), aggregate terminal total across Objectives, storage warning and reserve with the
 refusals and the records that keep working, a client crash with four terminals (their `setsid` daemons die,
 four agents keep running), the slow client above. `tests/service_crash.rs` — the crash-window matrix and the
-service kill. `tests/load.rs` (ignored; `scripts/load`) — the canonical load, launch and soak procedures; results
-in [evidence/imp-013](evidence/imp-013/README.md).
+service kill. `tests/load.rs` (ignored; `scripts/load`) — the canonical load, launch and soak procedures; reports
+go to the ignored `evidence-local/imp-013/` directory by default.
 
 ## Known gaps
 

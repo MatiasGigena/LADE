@@ -86,7 +86,7 @@ A historical-context dispatch option is **deferred**, not a v1 escape hatch. The
 
 ## 5. Agent revision and comparison
 
-Preserve pi steering, follow-up and abort semantics; do not redesign its loop. Steering is delivered at the pinned pi boundary after current-turn tools finish, not an instantaneous cancellation. Follow-up waits for tools/steering to finish. A stop/abort control is separate; queue clearing and abort ordering must match pinned pi behavior. The [research](../research/pi-headless-integration.md) documents these distinctions but its RPC probe does not validate the selected SDK adapter under active execution.
+Preserve pi steering, follow-up and abort semantics; do not redesign its loop. Steering is delivered at the pinned pi boundary after current-turn tools finish, not an instantaneous cancellation. Follow-up waits for tools/steering to finish. A stop/abort control is separate; queue clearing and abort ordering must match pinned pi behavior. The [worker contract](../implementation/worker.md#protocol-mapping) documents these distinctions; remaining conformance gaps are tracked in the [compatibility inventory](../implementation/pi-compatibility.md).
 
 For frozen work, **Return for revision** is an explicit developer action enforced by Rust before any mutating continuation. It invalidates prior approval/override, preserves the old candidate and evidence as historical, then permits an explicitly requested revision under valid execution authority. A feedback submission cannot mutate the frozen candidate in place. Propose a confirmed combined UI action (return plus submit) only if its two effects and failure phases are visible; separate controls are sufficient for v1.
 
