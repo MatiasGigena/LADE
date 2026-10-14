@@ -539,8 +539,21 @@ fn tree_fork_export_import_and_routing_follow_the_session() {
 
 #[test]
 fn model_and_thinking_selection_is_persisted_per_objective() {
+    check_model_and_thinking_selection(false);
+}
+
+#[test]
+fn model_and_thinking_selection_with_the_test_launcher() {
+    check_model_and_thinking_selection(true);
+}
+
+fn check_model_and_thinking_selection(use_test_launcher: bool) {
     let env = Env::new("svc-configure");
-    let (launcher, _) = best_launcher(&env);
+    let launcher = if use_test_launcher {
+        NodeLauncher::shared()
+    } else {
+        best_launcher(&env).0
+    };
     let _service = env.start(launcher);
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);

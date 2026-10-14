@@ -22,7 +22,7 @@ use lade_protocol::types::{Capability, Id};
 use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 use lade_system::service::{self, RunningService, ServiceConfig};
-use lade_system::supervision::credentials::FIXTURE_SWITCH;
+use lade_system::supervision::credentials::{CredentialSource, FIXTURE_SWITCH};
 use lade_system::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,
 };
@@ -307,6 +307,12 @@ impl Drop for NodeControl {
 }
 
 impl WorkerLauncher for NodeLauncher {
+    fn preflight(&self, provider: &str) -> Result<(), LaunchError> {
+        CredentialSource::empty()
+            .check(provider)
+            .map_err(|error| LaunchError::ProviderUnavailable(error.to_string()))
+    }
+
     fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
         let script = self.entry.with_file_name("worker").join("catalog.ts");
         let output = scratch.join("catalog.json");
@@ -336,6 +342,7 @@ impl WorkerLauncher for NodeLauncher {
         request: LaunchRequest,
         events: SyncSender<SupervisorEvent>,
     ) -> Result<Box<dyn WorkerControl>, LaunchError> {
+        self.preflight(&request.provider)?;
         let mut child = Command::new("node")
             .arg(&self.entry)
             .env_clear()
@@ -421,6 +428,7 @@ pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>,
         .and_then(|config| {
             default_launcher(LauncherConfig {
                 test_fixture_provider: fixture,
+                credentials: CredentialSource::empty(),
                 ..config
             })
         })

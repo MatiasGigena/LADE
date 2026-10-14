@@ -210,7 +210,11 @@ fn full_loop_with_the_real_worker() {
         "{}",
         git(&objective_wt, &["status", "--porcelain"])
     );
-    assert!(action_enabled(&frozen, ActionName::ReviewVerify));
+    let can_verify = sandbox_works();
+    assert_eq!(
+        action_enabled(&frozen, ActionName::ReviewVerify),
+        can_verify
+    );
     let candidate_basis = Basis::Candidate {
         candidate_id: candidate.candidate_id.clone(),
     };
@@ -228,15 +232,13 @@ fn full_loop_with_the_real_worker() {
         other => panic!("{other:?}"),
     }
 
-    let approval = if sandbox_works() {
-        let started = match client
-            .call(Request::ReviewVerify(ReviewVerifyCommand {
-                objective_id: objective.clone(),
-                candidate_id: candidate.candidate_id.clone(),
-                command: vec!["sh".into(), "-c".into(), "test -f hello.txt".into()],
-            }))
-            .unwrap()
-        {
+    let verify = Request::ReviewVerify(ReviewVerifyCommand {
+        objective_id: objective.clone(),
+        candidate_id: candidate.candidate_id.clone(),
+        command: vec!["sh".into(), "-c".into(), "test -f hello.txt".into()],
+    });
+    let approval = if can_verify {
+        let started = match client.call(verify).unwrap() {
             ReplyData::ReviewVerify(v) => v,
             other => panic!("{other:?}"),
         };
@@ -266,6 +268,10 @@ fn full_loop_with_the_real_worker() {
         approval_id(approve(&mut client, &current, &candidate.candidate_id, None).unwrap())
     } else {
         eprintln!("note: bubblewrap unavailable; approving with an override reason");
+        assert_eq!(
+            client.call(verify).unwrap_err().code,
+            ErrorCode::ExecutionUnavailable
+        );
         let current = detail(&mut client, &objective);
         assert!(approve(&mut client, &current, &candidate.candidate_id, None).is_err());
         approval_id(
