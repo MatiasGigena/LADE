@@ -352,6 +352,73 @@ fn writes_outside_the_writable_bind_fail() {
 }
 
 #[test]
+fn process_limit_is_applied_inside_the_user_namespace_and_enforced() {
+    let Some(tools) = tools() else { return };
+    if !Path::new("/usr/bin/python3").is_file() {
+        eprintln!("skipping process limit test: /usr/bin/python3 not installed");
+        return;
+    }
+    for limit in [1, 16] {
+        let script = r#"
+import errno, os, resource, sys
+limit = int(sys.argv[1])
+assert resource.getrlimit(resource.RLIMIT_NPROC) == (limit, limit)
+if os.getuid() == 0:
+    print("root is exempt from RLIMIT_NPROC")
+    sys.exit(0)
+reader, writer = os.pipe()
+children = []
+denied = False
+try:
+    for _ in range(32):
+        try:
+            pid = os.fork()
+        except OSError as error:
+            assert error.errno == errno.EAGAIN, error
+            denied = True
+            break
+        if pid == 0:
+            os.close(writer)
+            os.read(reader, 1)
+            os._exit(0)
+        children.append(pid)
+finally:
+    os.close(writer)
+    os.close(reader)
+    for pid in children:
+        os.waitpid(pid, 0)
+assert denied, "process limit was not enforced"
+assert len(children) < limit, children
+if limit > 1:
+    assert children, "host processes consumed the sandbox process budget"
+print("process limit enforced")
+"#;
+        let spec = SandboxSpec::new(
+            vec![
+                "/usr/bin/python3".into(),
+                "-I".into(),
+                "-c".into(),
+                script.into(),
+                limit.to_string().into(),
+            ],
+            Path::new("/"),
+            Limits {
+                processes: limit,
+                ..Limits::VERIFICATION
+            },
+        )
+        .unwrap();
+        let outcome = run(&tools, &spec);
+        assert_eq!(
+            outcome.exit_code,
+            Some(0),
+            "limit {limit}: {}",
+            String::from_utf8_lossy(&outcome.output_tail)
+        );
+    }
+}
+
+#[test]
 fn file_size_limit_is_enforced() {
     let Some(tools) = tools() else { return };
     let tmp = TempDir::new("sbx-fsize");

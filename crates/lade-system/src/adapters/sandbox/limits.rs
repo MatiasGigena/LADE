@@ -30,7 +30,6 @@ impl Limits {
     pub(super) fn prlimit_args(&self) -> Vec<OsString> {
         let mut args = vec![
             format!("--as={}", self.address_space_bytes),
-            format!("--nproc={}", self.processes),
             format!("--nofile={}", self.open_files),
             format!("--fsize={}", self.file_size_bytes),
         ];

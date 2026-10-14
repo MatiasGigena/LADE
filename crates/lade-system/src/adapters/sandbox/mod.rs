@@ -110,7 +110,7 @@ const ENV_PROGRAMS: &[&str] = &["/usr/bin/env", "/bin/env"];
 const SHELL_PROGRAMS: &[&str] = &["/usr/bin/bash", "/bin/bash"];
 const RM_PROGRAMS: &[&str] = &["/usr/bin/rm", "/bin/rm"];
 const GATE_FILE: &str = "/tmp/.lade-gate";
-const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; exec "$@""#;
+const GATE_SCRIPT: &str = r#"IFS= read -r gate < /tmp/.lade-gate; "$1" -f /tmp/.lade-gate; shift; [ "$gate" = go ] || exit 125; for fd in /proc/$$/fd/*; do fd=${fd##*/}; [ "$fd" -gt 2 ] 2>/dev/null && eval "exec $fd>&-"; done; ulimit -S -H -u "$1" || exit 125; shift; exec "$@""#;
 
 static SPAWN: Mutex<()> = Mutex::new(());
 
@@ -305,6 +305,7 @@ impl SandboxSpec {
         for (key, value) in &self.env {
             push(&["--setenv".as_ref(), key.as_os_str(), value.as_os_str()]);
         }
+        let processes = OsString::from(self.limits.processes.to_string());
         push(&[
             "--".as_ref(),
             self.shell_program.as_os_str(),
@@ -312,6 +313,7 @@ impl SandboxSpec {
             GATE_SCRIPT.as_ref(),
             "lade-gate".as_ref(),
             self.rm_program.as_os_str(),
+            &processes,
             self.env_program.as_os_str(),
             "-u".as_ref(),
             "PWD".as_ref(),
