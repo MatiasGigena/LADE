@@ -1,5 +1,3 @@
-// Worker wire shapes: the generated §4.2 DTOs (src/dto.ts, scripts/generate-dtos.py) validated
-// against the checked-in closed worker schema (contracts/v1/worker-schema.json) in both directions.
 import { boundedJson, MAX_FRAME, WireError } from "../json.ts";
 import type { ServiceToWorker, WorkerBody, WorkerToService } from "../dto.ts";
 import { BUNDLE, isServiceToWorker, isWorkerToService, VERSION } from "../schema.ts";
@@ -31,7 +29,6 @@ export type LoadedResource = Extract<OutboundBody, { kind: "resources.loaded" }>
 
 export type TurnState = Extract<OutboundBody, { kind: "turn.state" }>["state"];
 
-/** Transport seam: worker logic never sees unvalidated frames. */
 export interface WorkerChannel {
   send(body: OutboundBody): Promise<void>;
   incoming(): AsyncIterable<InboundBody>;
@@ -39,7 +36,6 @@ export interface WorkerChannel {
 
 export const MAX_ERROR_MESSAGE = 512;
 
-/** Bounded parse (IMP-001 JSON limits), exact versions, the closed worker schema and the service direction. */
 export function parseInbound(bytes: Uint8Array): InboundBody {
   const value = boundedJson(bytes);
   validateWorker(value);
@@ -50,14 +46,12 @@ export function parseInbound(bytes: Uint8Array): InboundBody {
   return body;
 }
 
-/** One LF-terminated worker frame; schema-checked and bounded before anything is written. */
 export function encodeOutbound(body: OutboundBody): Buffer {
   const envelope = { protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body };
   const text = JSON.stringify(envelope);
 
   if (Buffer.byteLength(text) > MAX_FRAME) throw new WireError("frame_size");
   const bytes = Buffer.from(text);
-  // Re-decode exactly what leaves: a sender never emits what the peer must reject.
   const decoded = boundedJson(bytes);
   validateWorker(decoded);
 
@@ -66,10 +60,6 @@ export function encodeOutbound(body: OutboundBody): Buffer {
   return Buffer.concat([bytes, Buffer.from("\n")]);
 }
 
-/**
- * Worker LF framing with the IMP-001 semantics of `Decoder("worker")` in ../framing.ts: split only
- * on byte LF, bound the pending line before allocating, poison the decoder after the first error.
- */
 export class LineDecoder {
   private body = Buffer.alloc(0);
   private size = 0;

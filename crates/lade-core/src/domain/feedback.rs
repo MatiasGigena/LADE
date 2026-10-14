@@ -1,5 +1,3 @@
-//! Contextual Feedback: drafts (CAS-saved), batch submission into immutable accepted input, and delivery state.
-
 use crate::domain::execution::{ExecutionGeneration, ExecutionState};
 use crate::domain::ids::{
     DraftId, InputId, ObjectiveId, OperationId, Revision, SessionId, Timestamp,
@@ -8,8 +6,6 @@ use crate::domain::inspection::{CurrentContent, MAX_TEXT_BYTES, Reference, Side}
 use crate::domain::objectives::{Lifecycle, Objective};
 use crate::error::DomainError;
 
-/// Maximum number of drafts in one submitted batch; equals the wire bound of `feedback.submit`
-/// (`FeedbackSubmitCommand.drafts`, `maxItems` 256), so every batch the protocol admits is submittable.
 pub const MAX_BATCH_ITEMS: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -35,12 +31,10 @@ pub enum DraftState {
     Submitted { input_id: InputId },
 }
 
-/// Plain stored form of a draft. Use [`Draft::restore`] to obtain a validated entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DraftRecord {
     pub id: DraftId,
     pub objective_id: ObjectiveId,
-    /// Original destination; never silently redirected.
     pub destination_session_id: SessionId,
     pub reference: Reference,
     pub body: String,
@@ -55,7 +49,6 @@ pub struct Draft {
     record: DraftRecord,
 }
 
-/// `draft.save` request; `expected_revision` 0 means create.
 #[derive(Clone, Debug)]
 pub struct SaveDraft {
     pub draft_id: DraftId,
@@ -72,8 +65,6 @@ fn check_body(body: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
-/// CAS save. Creating (`expected_revision == 0`) binds the destination to the Objective's current session.
-/// Updating succeeds only when `expected_revision` equals the stored revision; returns the saved draft.
 pub fn save_draft(
     existing: Option<Draft>,
     objective: &Objective,
@@ -168,7 +159,6 @@ impl Draft {
         Ok(())
     }
 
-    /// CAS update of reference and body; returns the new revision.
     pub fn update(
         &mut self,
         expected_revision: Revision,
@@ -186,7 +176,6 @@ impl Draft {
         Ok(revision)
     }
 
-    /// Explicit re-targeting to a confirmed new destination (records a new revision).
     pub fn retarget(
         &mut self,
         expected_revision: Revision,
@@ -201,7 +190,6 @@ impl Draft {
         Ok(revision)
     }
 
-    /// Validates `draft.delete`; the caller removes the record.
     pub fn check_delete(&self, expected_revision: Revision) -> Result<(), DomainError> {
         self.check_editable(expected_revision)
     }
@@ -211,7 +199,6 @@ impl Draft {
     }
 }
 
-/// Frozen copy of one submitted draft revision.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeedbackItem {
     pub draft_id: DraftId,
@@ -239,23 +226,13 @@ impl BlockedReason {
     }
 }
 
-/// Delivery is tracked separately from acceptance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeliveryState {
     Queued,
-    Dispatched {
-        generation: ExecutionGeneration,
-    },
-    Received {
-        generation: ExecutionGeneration,
-    },
-    /// The worker was lost after dispatch; never redispatched automatically.
-    Uncertain {
-        generation: ExecutionGeneration,
-    },
-    Blocked {
-        reason: BlockedReason,
-    },
+    Dispatched { generation: ExecutionGeneration },
+    Received { generation: ExecutionGeneration },
+    Uncertain { generation: ExecutionGeneration },
+    Blocked { reason: BlockedReason },
 }
 
 impl DeliveryState {
@@ -270,18 +247,13 @@ impl DeliveryState {
     }
 }
 
-/// Outcome of a dispatch attempt for a queued input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DispatchDecision {
-    /// Hand the input to the worker of this generation (state is now `Dispatched`).
     Dispatch { generation: ExecutionGeneration },
-    /// The worker is still starting; stay queued.
     Wait,
-    /// Preconditions failed; state is now `Blocked` until an explicit continuation re-queues it.
     Blocked { reason: BlockedReason },
 }
 
-/// Durably accepted input. Content is immutable history; only `delivery` evolves, through its methods.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptedInput {
     pub id: InputId,
@@ -290,7 +262,6 @@ pub struct AcceptedInput {
     pub session_id: SessionId,
     pub association_revision: Revision,
     pub mode: InputMode,
-    /// Empty for a direct message.
     pub items: Vec<FeedbackItem>,
     pub note: Option<String>,
     pub rendered_text: String,
@@ -298,7 +269,6 @@ pub struct AcceptedInput {
     pub delivery: DeliveryState,
 }
 
-/// Identity and routing of an acceptance request.
 #[derive(Clone, Copy, Debug)]
 pub struct Acceptance {
     pub input_id: InputId,
@@ -308,7 +278,6 @@ pub struct Acceptance {
     pub mode: InputMode,
 }
 
-/// One draft of a submitted batch with the revision the developer reviewed and its current content.
 #[derive(Debug)]
 pub struct BatchEntry<'a> {
     pub draft: &'a mut Draft,
@@ -340,7 +309,6 @@ fn initial_delivery(state: &ExecutionState) -> DeliveryState {
     }
 }
 
-/// Direct instruction (`message.send`).
 pub fn accept_message(
     objective: &Objective,
     acceptance: Acceptance,
@@ -369,9 +337,6 @@ pub fn accept_message(
     })
 }
 
-/// Validates a whole feedback batch and, only if every check passes, creates the immutable accepted input and
-/// marks each draft `Submitted`. Any stale item blocks the entire batch (`StaleReference` lists every stale
-/// draft) and nothing is mutated. The caller persists the input and drafts in one transaction.
 pub fn accept_feedback(
     objective: &Objective,
     acceptance: Acceptance,
@@ -465,8 +430,6 @@ pub fn accept_feedback(
     })
 }
 
-/// Agent-facing text: optional note, then one block per item:
-/// `file <path> (<version label>[, old side], bytes a–b, line ~N):`, the quoted selection, the comment.
 pub fn render_feedback(items: &[FeedbackItem], note: Option<&str>) -> String {
     let mut blocks: Vec<String> = Vec::with_capacity(items.len() + 1);
     if let Some(note) = note.filter(|text| !text.trim().is_empty()) {
@@ -500,8 +463,6 @@ pub fn render_feedback(items: &[FeedbackItem], note: Option<&str>) -> String {
 }
 
 impl AcceptedInput {
-    /// Revalidates routing, lifecycle, context and execution authority before handing input to the worker.
-    /// `references_stale` is the caller's re-evaluation of every item against the current basis.
     pub fn dispatch(
         &mut self,
         objective: &Objective,
@@ -539,7 +500,6 @@ impl AcceptedInput {
         Ok(DispatchDecision::Dispatch { generation })
     }
 
-    /// Worker acknowledged receipt (also accepted as reconciliation evidence for an uncertain delivery).
     pub fn mark_received(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         match self.delivery {
             DeliveryState::Dispatched { generation: sent }
@@ -555,8 +515,6 @@ impl AcceptedInput {
         }
     }
 
-    /// The worker of the dispatch generation was lost: a dispatched input becomes uncertain. Returns whether
-    /// anything changed.
     pub fn mark_worker_lost(&mut self) -> bool {
         if let DeliveryState::Dispatched { generation } = self.delivery {
             self.delivery = DeliveryState::Uncertain { generation };
@@ -565,7 +523,6 @@ impl AcceptedInput {
         false
     }
 
-    /// Explicit continuation: a blocked input is queued again (and revalidated at the next dispatch).
     pub fn requeue(&mut self) -> Result<(), DomainError> {
         if !matches!(self.delivery, DeliveryState::Blocked { .. }) {
             return Err(DomainError::Conflict("only blocked input can be re-queued"));
@@ -782,7 +739,6 @@ mod tests {
         let mut d2 = save_new(&objective, 2, "\tlet é", "b");
         let mut d3 = save_new(&objective, 3, "}\r\n", "c");
         let other = digest(5);
-        // Replacing "é" (2 bytes) with "e" (1 byte) shifts every later offset by one byte.
         let shifted = FILE.replacen("é", "e", 1);
         let before = (d1.clone(), d2.clone(), d3.clone());
         let mut batch = [
@@ -856,7 +812,6 @@ mod tests {
 
     #[test]
     fn batch_size_matches_the_wire_contract() {
-        // `FeedbackSubmitCommand.drafts` admits 1..=256 drafts; every one of them must be submittable.
         fn entries<'a>(drafts: &'a mut [Draft], same: &'a ArtifactDigest) -> Vec<BatchEntry<'a>> {
             drafts
                 .iter_mut()
@@ -914,7 +869,6 @@ mod tests {
             accept_feedback(&objective, old, &mut batch, None, ts(5)),
             Err(DomainError::StaleAssociation)
         );
-        // Addressing the new association still fails: the draft's original destination is preserved.
         let new = acceptance(&objective);
         assert_eq!(
             accept_feedback(&objective, new, &mut batch, None, ts(5)),

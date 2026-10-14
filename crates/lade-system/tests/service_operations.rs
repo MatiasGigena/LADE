@@ -1,5 +1,3 @@
-//! Durable operations, restart recovery and Contextual Feedback rules over the real service.
-
 mod service_support;
 
 use std::fs;
@@ -84,7 +82,6 @@ fn duplicate_operations_replay_the_recorded_outcome() {
         Ok(ReplyData::OperationGet(status)) => assert_eq!(status.state, OperationState::Unknown),
         other => panic!("{other:?}"),
     }
-    // A recorded rejection is replayed too (not re-evaluated).
     let bad = new_id();
     let missing = Request::ExecutionCancel(ObjectiveSelector {
         objective_id: new_id(),
@@ -121,7 +118,6 @@ fn objectives_and_journal_survive_restart() {
     let after = detail(&mut client, &created.objective_id);
     assert_eq!(after.title, "Durable");
     assert_eq!(after.intent, created.intent);
-    // The journal still answers the earlier operation after restart.
     let replay = client
         .call_op(operation, create_command(&ws.workspace_id, "Durable"))
         .unwrap();
@@ -139,9 +135,6 @@ fn objectives_and_journal_survive_restart() {
     service.shutdown();
 }
 
-/// A Workspace whose repository was unavailable at start (moved, unmounted) is not loaded; opening
-/// it again once it is back reattaches the recorded Workspace and its Objectives instead of
-/// failing on the stored path.
 #[test]
 fn reopening_a_workspace_unavailable_at_start_reattaches_it() {
     let env = Env::new("svc-reattach");
@@ -160,8 +153,6 @@ fn reopening_a_workspace_unavailable_at_start_reattaches_it() {
         Ok(ReplyData::Snapshot(s)) => assert!(s.workspaces.is_empty()),
         other => panic!("{other:?}"),
     }
-    // Without its repository the Objective's execution cannot start: refused, not left
-    // `starting` with no worker ever launched.
     let start = client
         .call(Request::ExecutionStart(
             lade_protocol::client::ExecutionStartCommand {
@@ -192,7 +183,6 @@ fn reopening_a_workspace_unavailable_at_start_reattaches_it() {
     drop(client);
     service.shutdown();
 
-    // The reattached Workspace is the recorded one: nothing was duplicated.
     let service = env.start(FakeLauncher::shared());
     let mut client = env.connect();
     match client.call(Request::Snapshot(Empty {})) {
@@ -228,7 +218,6 @@ fn restart_marks_live_execution_interrupted() {
         lade_protocol::client::Attention::NeedsAttention
     );
     assert!(action_enabled(&after, ActionName::ExecutionResume));
-    // Explicit continuation starts a new generation.
     match client.call(Request::ExecutionResume(ObjectiveSelector {
         objective_id: objective.clone(),
     })) {
@@ -275,7 +264,6 @@ fn restart_makes_unacknowledged_dispatch_uncertain() {
     assert_eq!(inputs(&mut client)[0].delivery, DeliveryState::Uncertain);
     let after = detail(&mut client, &objective);
     assert!(after.badges.contains(&Badge::DeliveryUncertain));
-    // Resuming never resends an uncertain input.
     client
         .call(Request::ExecutionResume(ObjectiveSelector {
             objective_id: objective.clone(),
@@ -342,7 +330,6 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     let d2 = new_id();
     let ref_a = reference(&capture, &a.artifact_digest, "a.txt", 0, "hello");
     let ref_b = reference(&capture, &b.artifact_digest, "b.txt", 0, "second");
-    // Selected text must match the retained bytes.
     let wrong = reference(&capture, &a.artifact_digest, "a.txt", 0, "HELLO");
     assert_eq!(
         save(&mut client, &objective, &d1, 0, wrong, "x")
@@ -360,7 +347,6 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     )
     .unwrap();
     assert!(matches!(&saved, ReplyData::DraftSave(d) if d.revision.value() == 1));
-    // CAS: creating again or updating with a stale revision is rejected.
     assert_eq!(
         save(&mut client, &objective, &d1, 0, ref_a.clone(), "dup")
             .unwrap_err()
@@ -391,7 +377,6 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     );
     save(&mut client, &objective, &d2, 0, ref_b, "rename this").unwrap();
 
-    // b.txt changes under the selection: the whole batch is blocked.
     fs::write(wt.join("b.txt"), "changed file\n").unwrap();
     let session = idle.session.expect("session");
     let submit = |drafts: Vec<DraftRevision>| {
@@ -438,7 +423,6 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
         other => panic!("{other:?}"),
     }
 
-    // Removing the stale item explicitly unblocks the rest.
     client
         .call(Request::DraftDelete(DraftDeleteCommand {
             draft_id: d2,

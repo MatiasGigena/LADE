@@ -1,8 +1,3 @@
-//! IMP-011 over the real service and the real pi worker (`lade-fixture` model; bubblewrap when the
-//! host supports it): the SDK model catalogue with explicit provider access, LADE-profile resources
-//! approved by content hash, copy-only profile import, extension dialogs bound to generations,
-//! session tree/navigate/fork/export/import with association routing, and model/thinking selection.
-
 mod service_support;
 
 use std::collections::BTreeMap;
@@ -71,7 +66,6 @@ fn activity(client: &mut Client, objective: &Id) -> Vec<(String, String)> {
     }
 }
 
-/// Waits until some activity item's text contains `needle` (newest last).
 fn wait_activity(client: &mut Client, objective: &Id, needle: &str) -> String {
     eventually(&format!("activity containing {needle:?}"), || {
         activity(client, objective)
@@ -119,8 +113,6 @@ fn provider_ids(client: &mut Client, provider: Option<&str>) -> (Vec<String>, us
     }
 }
 
-/// Without the service's test switch the offline fixture model is neither listed nor startable,
-/// whichever launcher (sandboxed with its own switch off, or the unsandboxed test launcher) runs.
 #[test]
 fn the_fixture_provider_is_absent_and_refused_without_the_test_switch() {
     for (tag, launcher) in [
@@ -162,7 +154,6 @@ fn the_fixture_provider_is_absent_and_refused_without_the_test_switch() {
     }
 }
 
-/// With the switch the fallback catalogue (no SDK catalogue) still offers the fixture model.
 #[test]
 fn the_fixture_provider_is_listed_with_the_test_switch() {
     let env = Env::new("svc-fixture-fallback");
@@ -365,7 +356,6 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
     let second = wait_activity(&mut client, &objective, "Generation 2.");
     assert!(second.contains("Extensions: ask.js"), "{second}");
 
-    // A dialog of generation 2: stale generation refused, answer delivered once.
     send(&mut client, &objective, "/ask now");
     let request = match client.wait_event("ui.request", |e| matches!(e, Event::UiRequest(_))) {
         Event::UiRequest(request) => request,
@@ -395,7 +385,6 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
         ErrorCode::NotFound
     );
 
-    // Changed content is a new, unapproved version: the next reload does not load it.
     write(
         &profile(&env).join("extensions/ask.js"),
         &format!("{EXTENSION}// edited\n"),
@@ -482,7 +471,6 @@ fn tree_fork_export_import_and_routing_follow_the_session() {
         old.association_revision.value() + 1
     );
     assert_eq!(forked.session_id.as_ref(), Some(&new.session_id));
-    // Feedback addressed to the replaced session is refused, never delivered to the fork.
     let stale = client
         .call(Request::FeedbackSubmit(FeedbackSubmitCommand {
             objective_id: objective.clone(),
@@ -629,7 +617,6 @@ fn model_and_thinking_selection_is_persisted_per_objective() {
     );
 }
 
-/// `laded serve` started with the test switch says so in its log.
 #[test]
 fn laded_warns_when_the_test_fixture_provider_is_enabled() {
     let env = Env::new("svc-fixture-warning");

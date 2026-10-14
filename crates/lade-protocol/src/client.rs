@@ -1,7 +1,3 @@
-//! Client <-> service DTOs mirroring `contracts/v1/schema.json` one-to-one.
-//!
-//! Construction is not validation: `encode` re-validates against the schema before bytes leave,
-//! and `decode` validates before any DTO is built.
 use crate::{
     WireError,
     types::{
@@ -15,7 +11,6 @@ use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 
 fn to_value(value: &impl Serialize) -> Value {
-    // Every DTO here has string keys and no fallible custom serializer.
     serde_json::to_value(value).expect("wire DTOs serialize to JSON")
 }
 fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, WireError> {
@@ -30,7 +25,6 @@ pub struct ClientEnvelope {
     pub body: ClientBody,
 }
 impl ClientEnvelope {
-    /// Wraps a body with this build's exact protocol and bundle identity.
     pub fn new(body: ClientBody) -> Self {
         Self {
             protocol: crate::VERSION,
@@ -40,7 +34,6 @@ impl ClientEnvelope {
     }
 }
 
-/// Which peer may send a body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
     Both,
@@ -51,7 +44,6 @@ pub enum Direction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", deny_unknown_fields)]
 pub enum ClientBody {
-    /// Version declaration only; never authentication.
     #[serde(rename = "hello")]
     Hello,
     #[serde(rename = "auth")]
@@ -97,7 +89,6 @@ impl ClientBody {
     }
 }
 
-/// Chunk-transfer owner binding (retained from IMP-001).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
@@ -107,12 +98,8 @@ pub struct Scope {
     pub association_revision: Counter,
 }
 
-// ---------------------------------------------------------------------------------------------
-// Requests, replies and their name-indexed payloads.
-
 macro_rules! requests {
     ($($variant:ident = $wire:literal, $mutating:literal, $payload:ty => $data:ty;)*) => {
-        /// Every request name in the v1 catalog.
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
         pub enum RequestName { $($variant),* }
         impl RequestName {
@@ -123,13 +110,11 @@ macro_rules! requests {
             pub fn parse(name: &str) -> Option<Self> {
                 match name { $($wire => Some(RequestName::$variant),)* _ => None }
             }
-            /// Mutating names carry a stable `operation_id`; queries never do.
             pub const fn is_mutating(self) -> bool {
                 match self { $(RequestName::$variant => $mutating),* }
             }
         }
 
-        /// A request's typed payload, discriminated by its wire `name`.
         #[derive(Clone, Debug, PartialEq)]
         pub enum Request { $($variant($payload)),* }
         impl Request {
@@ -144,7 +129,6 @@ macro_rules! requests {
             }
         }
 
-        /// Successful reply data, typed per request name.
         #[derive(Clone, Debug, PartialEq)]
         pub enum ReplyData { $($variant($data)),* }
         impl ReplyData {
@@ -192,7 +176,6 @@ requests! {
     ObjectiveDiscard = "objective.discard", true, ObjectiveSelector => Box<ObjectiveDetail>;
     ObjectiveCleanup = "objective.cleanup", true, ObjectiveCleanupCommand => Box<ObjectiveDetail>;
     SettingsUpdate = "settings.update", true, SettingsUpdateCommand => Settings;
-    // IMP-011 pi compatibility.
     ModelsList = "models.list", false, ModelsListQuery => ModelCatalog;
     SessionTree = "session.tree", false, ObjectiveSelector => SessionTree;
     ResourcesList = "resources.list", false, Empty => ResourceInventory;
@@ -226,12 +209,10 @@ impl<'de> Deserialize<'de> for RequestName {
     }
 }
 
-/// `{kind:"request", request_id, operation_id?, name, payload}`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawRequest", into = "RawRequest")]
 pub struct RequestFrame {
     pub request_id: Id,
-    /// Present exactly when `request.name().is_mutating()`.
     pub operation_id: Option<Id>,
     pub request: Request,
 }
@@ -245,7 +226,6 @@ struct RawRequest {
     payload: Value,
 }
 impl RequestFrame {
-    /// Rejects an `operation_id` on a query or its absence on a mutating request.
     pub fn new(
         request_id: Id,
         operation_id: Option<Id>,
@@ -260,16 +240,12 @@ impl RequestFrame {
             request,
         })
     }
-    /// SHA-256 of the canonical semantic content (`operation_id`, `name`, `payload`; object keys
-    /// sorted, arrays preserved, exact strings), excluding `request_id`. Equal digests mean a
-    /// duplicate operation; differing digests under one `operation_id` are `duplicate_conflict`.
     pub fn canonical_digest(&self) -> [u8; 32] {
         let mut content = to_value(self);
         content
             .as_object_mut()
             .expect("request serializes as an object")
             .remove("request_id");
-        // serde_json's default map is a BTreeMap: keys sort recursively, arrays keep order.
         Sha256::digest(serde_json::to_vec(&content).expect("JSON value serializes")).into()
     }
 }
@@ -296,7 +272,6 @@ impl From<RequestFrame> for RawRequest {
 
 pub const MAX_DETAIL_CHARS: usize = 512;
 
-/// `{status:"rejected", code, action, detail}`. `detail` never carries source or secrets.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Rejection {
     pub code: ErrorCode,
@@ -304,7 +279,6 @@ pub struct Rejection {
     pub detail: String,
 }
 impl Rejection {
-    /// Truncates `detail` to the 512-code-point schema bound.
     pub fn new(code: ErrorCode, action: SafeAction, detail: &str) -> Self {
         Self {
             code,
@@ -359,7 +333,6 @@ fn typed_result(
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReplyResult {
     Ok(Box<ReplyData>),
-    /// `name` is absent only when the request's name could not be read (`invalid_request`).
     Rejected {
         name: Option<RequestName>,
         rejection: Rejection,
@@ -374,8 +347,6 @@ impl ReplyResult {
     }
 }
 
-/// `{kind:"reply", request_id, name?, result}`. The name echoes the request so `data` is
-/// schema-checked against its name.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawReply", into = "RawReply")]
 pub struct Reply {
@@ -403,7 +374,6 @@ impl Reply {
             result: ReplyResult::Rejected { name, rejection },
         }
     }
-    /// The durable outcome of a mutating reply (`None` for queries and unnamed rejections).
     pub fn outcome(&self) -> Option<Outcome> {
         match &self.result {
             ReplyResult::Ok(data) if data.name().is_mutating() => Some(Outcome::Ok(data.clone())),
@@ -466,7 +436,6 @@ impl From<Reply> for RawReply {
     }
 }
 
-/// The recorded outcome of a mutating operation, as returned by `operation.get`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawOutcome", into = "RawOutcome")]
 pub enum Outcome {
@@ -511,8 +480,6 @@ impl From<Outcome> for RawOutcome {
         }
     }
 }
-// ---------------------------------------------------------------------------------------------
-// Events.
 
 macro_rules! events {
     ($($variant:ident = $wire:literal, $payload:ty;)*) => {
@@ -573,8 +540,6 @@ impl<'de> Deserialize<'de> for EventName {
     }
 }
 
-/// `{kind:"event", service_epoch, sequence, name, payload}`. A gap in `sequence` means the
-/// client must re-query `snapshot`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawEvent", into = "RawEvent")]
 pub struct EventFrame {
@@ -610,9 +575,6 @@ impl From<EventFrame> for RawEvent {
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Enumerations.
 
 macro_rules! wire_enum {
     ($(#[$meta:meta])* $name:ident { $($variant:ident),* $(,)? }) => {
@@ -762,7 +724,6 @@ wire_enum!(NoticeLevel {
     Error,
 });
 
-/// Objective commands named in `available_actions` (the service's authority projection).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ActionName {
     #[serde(rename = "objective.update_intent")]
@@ -821,9 +782,6 @@ impl From<ActionName> for RequestName {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Shapes. Field names, optionality and order mirror the schema `$defs` of the same name.
-
 macro_rules! wire_struct {
     ($(#[$meta:meta])* $name:ident { $($(#[$fmeta:meta])* $field:ident : $ty:ty),* $(,)? }) => {
         $(#[$meta])*
@@ -833,10 +791,7 @@ macro_rules! wire_struct {
     };
 }
 
-wire_struct!(
-    /// `{}`.
-    Empty {}
-);
+wire_struct!(Empty {});
 wire_struct!(Intent {
     outcome: String,
     constraints: String,
@@ -922,10 +877,7 @@ wire_struct!(VerificationSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     ended_at: Option<Timestamp>,
 });
-wire_enum!(
-    /// Verification evidence is only ever recorded as observed by the service.
-    Provenance { ServiceObserved }
-);
+wire_enum!(Provenance { ServiceObserved });
 wire_struct!(ApprovalSummary {
     approval_id: Id,
     candidate_id: Id,
@@ -959,7 +911,6 @@ wire_struct!(ObjectiveDetail {
     session: Option<SessionInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval: Option<ApprovalSummary>,
-    /// The Objective's Git history (retention refs, branch) was deleted on explicit request.
     #[serde(skip_serializing_if = "Option::is_none")]
     history_deleted: Option<bool>,
 });
@@ -999,7 +950,6 @@ wire_struct!(ChangedFile {
     binary: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     old_path: Option<WirePath>,
-    /// The path's `filter` attribute names a filter driver: raw bytes compared (unsupported).
     #[serde(skip_serializing_if = "Option::is_none")]
     filtered: Option<bool>,
 });
@@ -1008,7 +958,6 @@ wire_enum!(ContentNoticeKind {
     FilteredContent,
 });
 wire_struct!(
-    /// Why part of a Change Set is not (fully) represented.
     ContentNotice {
         kind: ContentNoticeKind,
         message: String,
@@ -1017,7 +966,6 @@ wire_struct!(
     }
 );
 
-/// Comparison basis for Change Set queries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Basis {
@@ -1031,18 +979,13 @@ pub enum Basis {
     },
 }
 
-/// Objective starting point.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Start {
-    /// The integration target's current commit.
     Target,
-    Commit {
-        commit: GitId,
-    },
+    Commit { commit: GitId },
 }
 
-/// The inspected version a feedback reference points at.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ReferenceVersion {
@@ -1051,7 +994,6 @@ pub enum ReferenceVersion {
 }
 
 wire_struct!(
-    /// Byte-exact selection `[byte_start, byte_end)` in one side of one inspected file.
     Reference {
         artifact_digest: Digest,
         path: WirePath,
@@ -1119,18 +1061,14 @@ wire_struct!(SearchResult {
     path: Option<WirePath>,
     #[serde(skip_serializing_if = "Option::is_none")]
     line: Option<Counter>,
-    /// Start of the first match in the raw file bytes (content results).
     #[serde(skip_serializing_if = "Option::is_none")]
     byte_start: Option<Counter>,
-    /// 1-based byte column of the first match in its line.
     #[serde(skip_serializing_if = "Option::is_none")]
     column: Option<Counter>,
-    /// End (exclusive) of the first match in the raw file bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     byte_end: Option<Counter>,
 });
 
-// Request payloads.
 wire_struct!(ObjectiveSelector { objective_id: Id });
 wire_struct!(ActivityPageQuery {
     objective_id: Id,
@@ -1193,7 +1131,6 @@ wire_struct!(MessageSendCommand {
 wire_struct!(DraftSaveCommand {
     draft_id: Id,
     objective_id: Id,
-    /// `0` creates the draft.
     expected_revision: Counter,
     reference: Reference,
     body: String,
@@ -1235,13 +1172,10 @@ wire_struct!(ObjectiveCleanupCommand {
     objective_id: Id,
     confirm_data_loss: bool,
 });
-wire_struct!(
-    /// Deliberate deletion of a cleaned-up Objective's retention refs and branch.
-    ObjectiveHistoryDeleteCommand {
-        objective_id: Id,
-        confirm_history_loss: bool,
-    }
-);
+wire_struct!(ObjectiveHistoryDeleteCommand {
+    objective_id: Id,
+    confirm_history_loss: bool,
+});
 wire_struct!(SettingsUpdateCommand {
     #[serde(skip_serializing_if = "Option::is_none")]
     default_model: Option<Model>,
@@ -1249,7 +1183,6 @@ wire_struct!(SettingsUpdateCommand {
     verification_commands: Option<Vec<Vec<String>>>,
 });
 
-// Reply data.
 wire_struct!(SnapshotData {
     service_epoch: Id,
     sequence: Counter,
@@ -1285,7 +1218,6 @@ wire_struct!(FileContent {
     version_label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
-    /// Served in bounded chunks: the file exceeds the whole-file inspection bound.
     #[serde(skip_serializing_if = "Option::is_none")]
     chunked: Option<bool>,
 });
@@ -1315,7 +1247,6 @@ pub struct OperationStatus {
     pub outcome: Option<Outcome>,
 }
 
-// Event payloads.
 wire_struct!(ActivityAppended {
     objective_id: Id,
     items: Vec<ActivityItem>,
@@ -1334,9 +1265,6 @@ wire_struct!(ServiceNotice {
     code: String,
     message: String,
 });
-
-// ---------------------------------------------------------------------------------------------
-// IMP-011: model catalogue, session tree operations, LADE-profile resources, extension UI.
 
 wire_enum!(ProviderAuth {
     None,
@@ -1485,7 +1413,6 @@ wire_struct!(UiRespondCommand {
     generation: Counter,
     answer: UiAnswer,
 });
-// Contained terminal (IMP-012): ephemeral, never journaled.
 wire_struct!(TerminalOpenCommand {
     objective_id: Id,
     cols: Counter,
@@ -1513,7 +1440,6 @@ wire_struct!(TerminalOutput {
     terminal_id: Id,
     seq: Counter,
     data: String,
-    /// Output discarded since the previous event because the bounded buffer overflowed.
     dropped_bytes: Counter,
 });
 wire_struct!(TerminalClosed {

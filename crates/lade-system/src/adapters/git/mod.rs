@@ -1,13 +1,3 @@
-//! Git adapter: every repository read and protected write the service performs.
-//!
-//! All processes are started through the single hardened builder in [`command`]: inherited
-//! `GIT_*` variables and user/system configuration are dropped, hooks, fsmonitor, pagers, editors,
-//! credential helpers, signing programs and network protocols are disabled, and repository-defined
-//! filter drivers, merge drivers and configuration hooks are neutralized for every invocation
-//! (see [`command`]).
-//! Repository configuration is treated as untrusted input; nothing in it executes with the service's
-//! authority. Paths are lossless bytes (`-z` output everywhere).
-
 mod command;
 mod diff;
 mod error;
@@ -40,16 +30,11 @@ pub use worktree::Worktree;
 
 pub type Result<T> = std::result::Result<T, GitError>;
 
-/// Minimum Git for the adapter (`worktree list -z`, `GIT_CONFIG_COUNT`).
 pub const MIN_GIT_VERSION: GitVersion = GitVersion::new(2, 36, 0);
-/// Minimum Git for [`Repository::merge_tree`] (`merge-tree --write-tree`).
 pub const MIN_MERGE_TREE_VERSION: GitVersion = GitVersion::new(2, 38, 0);
-/// Minimum Git for reading attributes from a tree (`check-attr --source`).
 pub const MIN_CHECK_ATTR_SOURCE_VERSION: GitVersion = GitVersion::new(2, 40, 0);
-/// Namespace of service-owned retention references.
 pub const RETENTION_PREFIX: &str = "refs/lade/retain/";
 
-/// Repository object hash algorithm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ObjectFormat {
     Sha1,
@@ -71,7 +56,6 @@ impl ObjectFormat {
         }
     }
 
-    /// The well-known empty tree for this format.
     pub fn empty_tree(self) -> GitId {
         let hex = match self {
             Self::Sha1 => "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
@@ -88,7 +72,6 @@ impl ObjectFormat {
     }
 }
 
-/// A full object id tagged with its algorithm.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GitId {
     format: ObjectFormat,
@@ -96,7 +79,6 @@ pub struct GitId {
 }
 
 impl GitId {
-    /// Parse a full lowercase hexadecimal id of the given format.
     pub fn parse(format: ObjectFormat, hex: &str) -> Result<Self> {
         let valid = hex.len() == format.hex_len()
             && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
@@ -135,8 +117,6 @@ impl fmt::Debug for GitId {
     }
 }
 
-/// A lossless repository-relative path: raw bytes, `/`-separated, no empty, `.` or `..`
-/// components, no leading/trailing `/`, no NUL.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RepoPath(Vec<u8>);
 
@@ -167,7 +147,6 @@ impl RepoPath {
         self.0
     }
 
-    /// Lossy UTF-8 label; never authority.
     pub fn display(&self) -> String {
         String::from_utf8_lossy(&self.0).into_owned()
     }
@@ -183,7 +162,6 @@ impl fmt::Debug for RepoPath {
     }
 }
 
-/// `git version` triple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GitVersion {
     pub major: u32,
@@ -200,7 +178,6 @@ impl GitVersion {
         }
     }
 
-    /// Parse `git version 2.43.0` (vendor suffixes such as `.windows.1` or ` (Apple Git-1)` ignored).
     pub fn parse(output: &[u8]) -> Option<Self> {
         let text = std::str::from_utf8(output).ok()?;
         let version = text.trim().strip_prefix("git version ")?;
@@ -220,7 +197,6 @@ impl fmt::Display for GitVersion {
     }
 }
 
-/// An operation in progress in a worktree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InProgress {
     Merge,
@@ -231,35 +207,27 @@ pub enum InProgress {
     Sequencer,
 }
 
-/// A local branch and the commit it points at.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Branch {
-    /// Short name (without `refs/heads/`) in the lossless text form of
-    /// [`escape_branch_name`]: the name itself when it is UTF-8.
     pub name: String,
-    /// The raw bytes of the short name (authoritative).
     pub raw: Vec<u8>,
     pub commit: GitId,
 }
 
 impl Branch {
-    /// Whether the name is UTF-8 (only such branches can be named in LADE's requests).
     pub fn is_utf8(&self) -> bool {
         std::str::from_utf8(&self.raw).is_ok()
     }
 }
 
-/// Input to [`Repository::commit_tree`]. Author and committer are always the fixed LADE identity.
 #[derive(Clone, Debug)]
 pub struct CommitSpec {
     pub tree: GitId,
     pub parents: Vec<GitId>,
     pub message: String,
-    /// Unix seconds (UTC) for author and committer dates; `None` uses the current time.
     pub timestamp: Option<i64>,
 }
 
-/// An opened, validated, non-bare repository at its top level.
 #[derive(Clone, Debug)]
 pub struct Repository {
     work_tree: PathBuf,
@@ -267,12 +235,10 @@ pub struct Repository {
     common_dir: PathBuf,
     format: ObjectFormat,
     version: GitVersion,
-    /// The user's global excludes file applied to captures (see [`Self::with_excludes_file`]).
     excludes_file: Option<PathBuf>,
 }
 
 impl Repository {
-    /// Open the repository whose top-level working directory is exactly `path`.
     pub fn open(path: &Path) -> Result<Self> {
         let top = path.canonicalize().map_err(|_| GitError::NotRepository)?;
         let version = GitCommand::new("version")
@@ -355,7 +321,6 @@ impl Repository {
         &self.git_dir
     }
 
-    /// The shared Git directory (objects, refs, `worktrees/`).
     pub fn common_dir(&self) -> &Path {
         &self.common_dir
     }
@@ -393,7 +358,6 @@ impl Repository {
         }
     }
 
-    /// Local branches, sorted by name.
     pub fn list_branches(&self) -> Result<Vec<Branch>> {
         let out = self
             .git("for-each-ref")
@@ -426,7 +390,6 @@ impl Repository {
         Ok(branches)
     }
 
-    /// The branch checked out in the opened worktree, if `HEAD` is attached.
     pub fn head_branch(&self) -> Result<Option<String>> {
         let out = self
             .git("symbolic-ref")
@@ -442,7 +405,6 @@ impl Repository {
             .map(str::to_owned))
     }
 
-    /// Resolve a full reference name (`refs/...`) to the object it points at.
     pub fn resolve_ref(&self, refname: &str) -> Result<Option<GitId>> {
         validate_refname(refname)?;
         let out = self
@@ -463,7 +425,6 @@ impl Repository {
         }
     }
 
-    /// Resolve a full hex id or a full reference name to a commit id.
     pub fn resolve_commit(&self, rev: &str) -> Result<GitId> {
         if GitId::parse(self.format, rev).is_err() {
             validate_refname(rev)?;
@@ -481,7 +442,6 @@ impl Repository {
         }
     }
 
-    /// Create a commit object with the fixed LADE identity. Never signs, never runs hooks.
     pub fn commit_tree(&self, spec: &CommitSpec) -> Result<GitId> {
         self.check_id(&spec.tree)?;
         let mut cmd =
@@ -512,8 +472,6 @@ impl Repository {
         self.parse_id("commit-tree", &out)
     }
 
-    /// Compare-and-swap reference update. `old = None` requires that the ref does not exist.
-    /// A rejected expectation is [`GitError::StaleRef`] with the observed current value.
     pub fn update_ref_cas(&self, refname: &str, new: &GitId, old: Option<&GitId>) -> Result<()> {
         validate_refname(refname)?;
         self.check_id(new)?;
@@ -532,7 +490,6 @@ impl Repository {
         self.cas_result(refname, old, out)
     }
 
-    /// Compare-and-swap reference deletion.
     pub fn delete_ref_cas(&self, refname: &str, old: &GitId) -> Result<()> {
         validate_refname(refname)?;
         self.check_id(old)?;
@@ -566,7 +523,6 @@ impl Repository {
         })
     }
 
-    /// The retention reference for a service-owned id (`[A-Za-z0-9_-]{1,128}`).
     pub fn retention_ref(id: &str) -> Result<String> {
         let valid = !id.is_empty()
             && id.len() <= 128
@@ -580,9 +536,6 @@ impl Repository {
         }
     }
 
-    /// Pin `object` (commit, tree or blob) against garbage collection under
-    /// `refs/lade/retain/<id>`. Idempotent for the same object; a different existing object is
-    /// [`GitError::StaleRef`].
     pub fn retain(&self, id: &str, object: &GitId) -> Result<String> {
         let refname = Self::retention_ref(id)?;
         match self.update_ref_cas(&refname, object, None) {
@@ -593,26 +546,10 @@ impl Repository {
         }
     }
 
-    /// Drop a retention reference if it still points at `expected`.
     pub fn release_retention(&self, id: &str, expected: &GitId) -> Result<()> {
         self.delete_ref_cas(&Self::retention_ref(id)?, expected)
     }
 
-    /// Capture the complete working tree content (tracked, untracked-not-ignored, deletions,
-    /// renames, modes, symlinks) of `worktree` as a tree object. Uses a temporary index inside
-    /// `scratch_dir`; the worktree's real index and files are never written.
-    ///
-    /// - Modes and symlinks are recorded exactly (`core.fileMode`/`core.symlinks` forced on, case
-    ///   kept): the capture becomes a candidate commit, and the Linux filesystems LADE supports
-    ///   represent both, so a repository setting meant for filesystems that cannot must not hide
-    ///   a mode or symlink change from review.
-    /// - Ignore rules are the repository's `.gitignore` files and `info/exclude` plus the user's
-    ///   own global excludes file when the service configured one ([`Self::with_excludes_file`]);
-    ///   a `core.excludesFile` set in the (untrusted) repository configuration is not honoured,
-    ///   since it could hide new files from review.
-    /// - An untracked nested repository with a checked-out commit is recorded as a gitlink; one
-    ///   without a commit (which Git cannot record) is left out and reported in
-    ///   [`WorkingCapture::skipped_nested`] instead of failing the capture.
     pub fn capture_working_tree(
         &self,
         worktree: &Worktree,
@@ -652,7 +589,6 @@ impl Repository {
                 .config("advice.addEmbeddedRepo", "false")
                 .args(["add", "--all", "--no-ignore-errors"]);
             if !skipped_nested.is_empty() {
-                // Pathspec magic is needed for exclusions; each path stays literal.
                 add = add.env("GIT_LITERAL_PATHSPECS", "0").arg("--");
                 for path in &skipped_nested {
                     let mut spec = b":(exclude,literal)".to_vec();
@@ -687,18 +623,11 @@ impl Repository {
         })
     }
 
-    /// Use `path` (the user's own global excludes file, see [`user_excludes_file`]) as
-    /// `core.excludesFile` for captures. `None` (the default) applies no global excludes file.
     pub fn with_excludes_file(mut self, path: Option<PathBuf>) -> Self {
         self.excludes_file = path;
         self
     }
 
-    /// The paths among `paths` whose `filter` attribute in `tree` names a filter driver (Git LFS
-    /// or any `clean`/`smudge`/`process` filter). LADE never runs filters, so such paths are
-    /// stored and compared as raw working-tree bytes: their content is unsupported, and a file
-    /// a filter rewrote on checkout shows as modified. Attributes come from `tree` (Git ≥ 2.40)
-    /// or, with older Git, from the opened work tree.
     pub fn filtered_paths(&self, tree: &GitId, paths: &[&RepoPath]) -> Result<Vec<RepoPath>> {
         self.check_id(tree)?;
         if paths.is_empty() {
@@ -732,19 +661,14 @@ impl Repository {
     }
 }
 
-/// The result of [`Repository::capture_working_tree`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkingCapture {
     pub tree: GitId,
-    /// Untracked nested repositories without a checked-out commit, left out of `tree` (at most
-    /// [`MAX_SKIPPED_NESTED`]; more fail the capture).
     pub skipped_nested: Vec<RepoPath>,
 }
 
-/// Most nested commit-less repositories a capture skips before it fails.
 pub const MAX_SKIPPED_NESTED: usize = 64;
 
-/// The path Git names in `error: '<path>/' does not have a commit checked out`.
 fn nested_without_commit(stderr: &Diagnostics) -> Option<RepoPath> {
     const PREFIX: &[u8] = b"error: '";
     const SUFFIX: &[u8] = b"' does not have a commit checked out";
@@ -754,10 +678,6 @@ fn nested_without_commit(stderr: &Diagnostics) -> Option<RepoPath> {
     })
 }
 
-/// The user's own global Git excludes file, resolved like Git does (`core.excludesFile` in
-/// `$XDG_CONFIG_HOME/git/config` or `~/.gitconfig`, else `$XDG_CONFIG_HOME/git/ignore`), when it
-/// is an existing regular file. Only this one value is read from the user's global
-/// configuration; nothing else in it applies to LADE's Git calls.
 pub fn user_excludes_file() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -789,9 +709,6 @@ pub fn user_excludes_file() -> Option<PathBuf> {
     (path.is_absolute() && path.is_file()).then_some(path)
 }
 
-/// Lossless text form of a branch name: the name itself when it is UTF-8, otherwise each byte
-/// outside valid UTF-8 written as `\xHH`. Git forbids `\` in reference names, so the form is
-/// unambiguous and [`unescape_branch_name`] restores the bytes.
 pub fn escape_branch_name(raw: &[u8]) -> String {
     let mut out = String::new();
     for chunk in raw.utf8_chunks() {
@@ -803,7 +720,6 @@ pub fn escape_branch_name(raw: &[u8]) -> String {
     out
 }
 
-/// Inverse of [`escape_branch_name`]; `None` for a malformed escape.
 pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
     let bytes = name.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -822,7 +738,6 @@ pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Validate a full reference name with a conservative subset of `git check-ref-format`.
 pub fn validate_refname(name: &str) -> Result<()> {
     let valid = name.starts_with("refs/")
         && name.len() <= 1024
@@ -841,7 +756,6 @@ pub fn validate_refname(name: &str) -> Result<()> {
     }
 }
 
-/// Validate a short branch name (the part after `refs/heads/`).
 pub fn validate_branch_name(name: &str) -> Result<()> {
     if name.starts_with('-') || name == "HEAD" {
         return Err(GitError::InvalidRefName);

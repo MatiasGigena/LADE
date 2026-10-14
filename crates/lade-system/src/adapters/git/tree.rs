@@ -1,45 +1,33 @@
-//! Bounded reads of tree entries, blobs and content search.
-
 use std::ffi::OsStr;
 use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::ffi::OsStrExt;
 
 use super::{GitError, GitId, RepoPath, Repository, Result};
 
-/// Largest page [`Repository::read_blob`] returns; larger requests are clamped.
 pub const MAX_BLOB_PAGE: usize = 1 << 20;
-/// Upper bound on grep results regardless of the requested limit.
 pub const MAX_GREP_RESULTS: usize = 1000;
 const MAX_GREP_PREVIEW: usize = 512;
 const MAX_GREP_OUTPUT: u64 = 16 << 20;
 const MAX_GREP_QUERY: usize = 1024;
-/// Matched blobs larger than this get no byte offsets (line and column only).
 pub const MAX_GREP_OFFSET_BLOB: u64 = 16 << 20;
-/// Total matched-blob bytes read per search to compute byte offsets.
 const MAX_GREP_OFFSET_TOTAL: u64 = 64 << 20;
 
-/// Kind of a tree entry's object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
     Blob,
     Tree,
-    /// A submodule gitlink.
     Commit,
 }
 
-/// One entry of a tree listing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeEntry {
-    /// Octal mode as stored by Git (`100644`, `100755`, `120000`, `040000`, `160000`).
     pub mode: u32,
     pub kind: ObjectKind,
     pub id: GitId,
-    /// Blob size in bytes; `None` for trees and gitlinks.
     pub size: Option<u64>,
     pub path: RepoPath,
 }
 
-/// One bounded page of blob content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlobPage {
     pub blob: GitId,
@@ -50,31 +38,20 @@ pub struct BlobPage {
     pub eof: bool,
 }
 
-/// A fixed-string content search.
 #[derive(Clone, Debug)]
 pub struct GrepQuery {
-    /// Literal text (1..=1024 bytes, no newline or NUL).
     pub text: String,
     pub ignore_case: bool,
-    /// Clamped to [`MAX_GREP_RESULTS`].
     pub max_results: usize,
 }
 
-/// One matching line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrepMatch {
     pub path: RepoPath,
-    /// 1-based line number.
     pub line: u64,
-    /// 1-based byte column of the first match in the line.
     pub column: u64,
-    /// Byte range `[byte_start, byte_end)` of the first match within the blob (the exact raw
-    /// bytes `file.read` retains), confirmed against those bytes. Both `None` when the blob
-    /// exceeds [`MAX_GREP_OFFSET_BLOB`], the per-search offset budget was spent or the match
-    /// could not be confirmed.
     pub byte_start: Option<u64>,
     pub byte_end: Option<u64>,
-    /// Line bytes, at most 512.
     pub preview: Vec<u8>,
     pub preview_truncated: bool,
 }
@@ -82,12 +59,10 @@ pub struct GrepMatch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GrepResults {
     pub matches: Vec<GrepMatch>,
-    /// More matches existed than were returned (result cap or output bound reached).
     pub truncated: bool,
 }
 
 impl Repository {
-    /// List a tree (`tree` may be a commit). `dir` restricts to that directory's contents.
     pub fn ls_tree(
         &self,
         tree: &GitId,
@@ -116,7 +91,6 @@ impl Repository {
             .collect()
     }
 
-    /// The entry at exactly `path` in `tree`, if any.
     pub fn tree_entry(&self, tree: &GitId, path: &RepoPath) -> Result<Option<TreeEntry>> {
         let out = self
             .git("ls-tree")
@@ -173,8 +147,6 @@ impl Repository {
         })
     }
 
-    /// Read `limit` bytes (clamped to [`MAX_BLOB_PAGE`]) at `offset` of the blob at `path` in
-    /// `tree`. Content is raw object bytes: no filters, no textconv.
     pub fn read_blob(
         &self,
         tree: &GitId,
@@ -228,9 +200,6 @@ impl Repository {
         })
     }
 
-    /// Stream the raw bytes of blob `id` (no filters) to `consume`, which may read as much as it
-    /// needs; the process is reaped afterwards. A Git failure after `consume` returned is an
-    /// error, so a consumer that read to the end saw the complete blob.
     pub fn with_blob_reader<R>(
         &self,
         id: &GitId,
@@ -256,7 +225,6 @@ impl Repository {
         }
     }
 
-    /// Whole blob by id if it is at most `cap` bytes (`Ok(None)` when larger).
     pub(crate) fn read_blob_capped(&self, id: &GitId, cap: u64) -> Result<Option<Vec<u8>>> {
         let size = self
             .git("cat-file")
@@ -282,7 +250,6 @@ impl Repository {
         Ok(Some(data))
     }
 
-    /// Bounded fixed-string search over the text blobs of `tree` (binary files skipped).
     pub fn grep(&self, tree: &GitId, query: &GrepQuery) -> Result<GrepResults> {
         let text = query.text.as_bytes();
         if text.is_empty() || text.len() > MAX_GREP_QUERY || text.contains(&b'\n') {
@@ -379,8 +346,6 @@ impl Repository {
         Ok(GrepResults { matches, truncated })
     }
 
-    /// Fill in exact byte offsets: the start of line `line` plus `column - 1`, and the match end
-    /// once the matched bytes are confirmed against the query (case-insensitively when asked).
     fn grep_offsets(
         &self,
         tree: &GitId,
@@ -434,7 +399,6 @@ impl Repository {
     }
 }
 
-/// Byte start of every line of `bytes` (line `n` starts at `starts[n - 1]`).
 fn line_starts(bytes: &[u8]) -> Vec<usize> {
     std::iter::once(0)
         .chain(
@@ -447,16 +411,12 @@ fn line_starts(bytes: &[u8]) -> Vec<usize> {
         .collect()
 }
 
-/// Length in bytes of `needle` matched at the start of `hay`. Git runs with `LC_ALL=C`, so a
-/// case-insensitive match folds ASCII only and always has the needle's byte length.
 fn match_end(hay: &[u8], needle: &str, ignore_case: bool) -> Option<usize> {
     let exact = needle.as_bytes();
     let head = hay.get(..exact.len())?;
     (head == exact || (ignore_case && head.eq_ignore_ascii_case(exact))).then_some(exact.len())
 }
 
-/// Read through `delim` (consumed, not stored), keeping at most `keep` bytes in `out`.
-/// Returns total bytes consumed and whether the delimiter was found.
 fn read_until_bounded(
     reader: &mut impl BufRead,
     delim: u8,

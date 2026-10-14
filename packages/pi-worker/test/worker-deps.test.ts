@@ -1,6 +1,3 @@
-// IMP-008 dependency seam: the worker runs the pinned SDK distribution with exactly one pi-ai, the
-// copy nested under the shrinkwrapped pi-coding-agent, and the fixture provider streams through that
-// same module instance. No network, no package scripts; disposable directories only.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -39,10 +36,8 @@ test("the worker installs exactly one pi-ai: the copy the shrinkwrapped SDK reso
   assert.equal(existsSync(join(PACKAGE, "node_modules", "@earendil-works", "pi-ai")), false, "no hoisted second copy is installed");
 
   const nested = join(NESTED, "pi-ai", "package.json");
-  // Bare-specifier resolution from the SDK's own modules (pi-coding-agent and pi-agent-core).
   assert.equal(findPackageJSON("@earendil-works/pi-ai", pathToFileURL(join(SDK, "dist", "index.js"))), nested);
   assert.equal(findPackageJSON("@earendil-works/pi-ai", pathToFileURL(join(NESTED, "pi-agent-core", "dist", "index.js"))), nested);
-  // The worker's re-export module points at that package's "." export target.
   const shim = readFileSync(join(PACKAGE, "src", "worker", "pi-ai.ts"), "utf8");
   const targets = [...new Set([...shim.matchAll(/from "([^"]+)"/g)].map(match => match[1] ?? ""))];
   assert.equal(targets.length, 1);
@@ -69,8 +64,6 @@ test("the fixture provider registers on the SDK runtime and streams through the 
     assert.ok(model, "the fixture model is in the SDK registry");
     const context: Context = { messages: [{ role: "user", content: "hello", timestamp: Date.now() }] };
 
-    // The SDK wraps every provider stream in pi-ai's lazyStream; a class from another pi-ai copy
-    // would be a different constructor. The fixture's own stream must be the same class.
     const outer = runtime.streamSimple(model, context);
     const ours = createAssistantMessageEventStream();
     assert.equal(outer.constructor, ours.constructor, "the worker's pi-ai is the instance the SDK uses");

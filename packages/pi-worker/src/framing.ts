@@ -4,7 +4,6 @@ import { BUNDLE, decode, decodeWorkerFrame, validate, validateWorker, VERSION } 
 
 export type Framing = "client" | "worker";
 
-/** Incremental strict decoder: one body retained, one callback at a time; every error poisons it. */
 export class Decoder<Frame> {
   private readonly framing: Framing;
   private readonly decodeBody: (bytes: Uint8Array) => Frame;
@@ -37,7 +36,7 @@ export class Decoder<Frame> {
 
             if (size === 0 || size > MAX_FRAME) throw new WireError("frame_size");
             this.expected = size;
-            this.body = Buffer.alloc(size); // Only after validating the declared length.
+            this.body = Buffer.alloc(size);
           }
 
           const n = Math.min(this.expected - this.size, input.length - pos);
@@ -92,7 +91,6 @@ function framed(body: Buffer, framing: Framing): Buffer {
   return Buffer.concat([header, body]);
 }
 
-/** Client-contract frame: validated before JSON.stringify allocates, re-decoded as the peer would. */
 export function encode(frame: Envelope, framing: Framing): Buffer {
   validate(frame);
   const body = Buffer.from(JSON.stringify(frame));
@@ -101,7 +99,6 @@ export function encode(frame: Envelope, framing: Framing): Buffer {
   return framed(body, framing);
 }
 
-/** Worker-contract frame in either framing. */
 export function encodeWorker(frame: WorkerEnvelope, framing: Framing): Buffer {
   validateWorker(frame);
   const body = Buffer.from(JSON.stringify(frame));
@@ -110,12 +107,10 @@ export function encodeWorker(frame: WorkerEnvelope, framing: Framing): Buffer {
   return framed(body, framing);
 }
 
-/** One JSONL line (envelope + LF) for a worker-contract body. */
 export function encodeWorkerBody(body: WorkerBody): Buffer {
   return encodeWorker({ protocol: VERSION, bundle: BUNDLE, body }, "worker");
 }
 
-/** Strict JSONL decoder for worker-contract frames. */
 export function createWorkerDecoder(): Decoder<WorkerEnvelope> {
   return new Decoder("worker", decodeWorkerFrame);
 }

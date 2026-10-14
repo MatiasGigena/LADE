@@ -1,9 +1,3 @@
-// Model catalogue of the pinned SDK registry, run by laded in a network-less sandbox:
-// `node src/worker/catalog.ts <output.json> [<profile models.json>]`. It writes the providers and
-// models pi itself knows (built-ins, the LADE profile's custom providers and, only with the
-// test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, the offline fixture provider) as JSON for the
-// service, which decides availability from its own credential and egress policy. Nothing is
-// fetched: model-catalogue network refresh is disabled.
 import "./stdio.ts";
 import { writeFileSync } from "node:fs";
 import { getSupportedThinkingLevels } from "./pi-ai.ts";

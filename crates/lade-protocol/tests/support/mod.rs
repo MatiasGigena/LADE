@@ -64,7 +64,6 @@ fn framed(bytes: &[u8], framing: Framing) -> Vec<u8> {
     }
 }
 
-/// A frame of the contract that is always valid, used to prove poisoning.
 pub fn valid_frame<M: Message>() -> Vec<u8> {
     let body = match M::CONTRACT {
         lade_protocol::Contract::Client => json!({"kind":"hello"}),
@@ -84,7 +83,6 @@ fn stream<M: Message + PartialEq + Debug>(
     for part in bytes.chunks(stride) {
         if let Err(error) = decoder.push(part, |message| {
             count += 1;
-            // Typed round trip catches schema/DTO drift, not just success flags.
             let encoded = encode(&message, framing)?;
             let mut other = Decoder::<M>::new(framing);
             other.push(&encoded, |decoded| {
@@ -117,7 +115,6 @@ fn stream<M: Message + PartialEq + Debug>(
 
 fn frame_case<M: Message + PartialEq + Debug>(bytes: &[u8]) -> Result<(), WireError> {
     let mut outcome = M::decode(bytes).map(|message| {
-        // DTOs reproduce the exact wire tree: no dropped, defaulted or coerced field.
         assert_eq!(
             serde_json::to_value(message).unwrap(),
             bounded_json(bytes).unwrap()
@@ -125,7 +122,6 @@ fn frame_case<M: Message + PartialEq + Debug>(bytes: &[u8]) -> Result<(), WireEr
     });
     for framing in [Framing::Client, Framing::Worker] {
         let mut wire = framed(bytes, framing);
-        // More than one frame in a read must not lose or concatenate commands.
         wire.extend(framed(bytes, framing));
         wire.extend(framed(&valid_frame::<M>(), framing));
         for stride in [1, 2, 3, 7, 65537, wire.len()] {
@@ -211,7 +207,6 @@ pub fn run(case: &Value) -> Result<(), WireError> {
                 } else {
                     ErrorCode::DurabilityFailure
                 });
-                // A duplicate returns the original uncertain fact, not the new claimed outcome.
                 assert_eq!(
                     history.observe(&request, outcome)?,
                     rejected(ErrorCode::Interrupted)

@@ -1,8 +1,3 @@
-//! Inspection and repository-handling edges over the real service (fake worker, real Git, real
-//! SQLite, real socket): content notices for nested repositories and filtered files, exact
-//! search byte ranges, chunked reading of large files, the untracked-collision preflight and the
-//! explicit, confirmed deletion of an Objective's Git history.
-
 mod service_support;
 
 use std::fs;
@@ -92,7 +87,6 @@ fn working_change_set_names_nested_repositories_and_filtered_content() {
     );
     assert!(notices[1].path.is_none());
 
-    // The frozen candidate keeps the per-file flag and the repository-level notice.
     let candidate = freeze(&mut client, &objective);
     let frozen = changes(
         &mut client,
@@ -148,7 +142,6 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
     let column = start - text.find("with").unwrap() as u64 + 1;
     assert_eq!(hit.column.as_ref().map(Counter::value), Some(column));
 
-    // The range addresses the very bytes `file.read` retains, so it is an exact reference.
     let file = read_file(&mut client, &objective, Basis::Working, "notes.txt");
     let retained = file.text.unwrap().into_bytes();
     assert_eq!(&retained[start as usize..start as usize + 6], b"Needle");
@@ -159,7 +152,6 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
 #[test]
 fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     let env = Env::new("svc-large");
-    // 64 MiB + a few lines of UTF-8 text, committed on main (the Objective's start commit).
     let line = "0123456789 abcdefghij ÄÖÜ ünïcödé text line for the large file test\n";
     let mut content = String::with_capacity((64 << 20) + 4096);
     while content.len() <= 64 << 20 {
@@ -190,14 +182,12 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     let text = first.text.unwrap();
     assert_eq!(text.len() as u64, length);
     assert_eq!(text.as_bytes(), &content.as_bytes()[..length as usize]);
-    // The artifact holds the whole file, so references keep exact whole-file offsets.
     let digest: String = Sha256::digest(content.as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(first.artifact_digest.as_str(), digest);
 
-    // A later chunk continues exactly; the last one reaches eof.
     let next = match read_at(&mut client, &objective, "large.txt", length) {
         ReplyData::FileRead(page) => page,
         other => panic!("{other:?}"),
@@ -216,7 +206,6 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     };
     assert!(last.eof);
     assert_eq!(last.text.as_deref(), Some(line));
-    // An offset inside a multi-byte character is refused rather than split.
     let inside = content.find('Ä').unwrap() as u64 + 1;
     let refused = client
         .call(Request::FileRead(FileReadQuery {
@@ -230,8 +219,6 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidRequest);
 
-    // Feedback on a chunk is an exact whole-file reference, judged fresh or stale without
-    // loading the whole file.
     let session = detail(&mut client, &objective).session.unwrap();
     let save = |client: &mut Client, draft: &Id| {
         client
@@ -347,7 +334,6 @@ fn untracked_collision_refuses_before_the_target_moves() {
     assert_eq!(after.lifecycle, Lifecycle::Approved);
     assert_eq!(after.approval.unwrap().state, ApprovalState::Valid);
 
-    // Moving the file away makes the same approval integrate.
     fs::remove_file(env.repo.join("feature.txt")).unwrap();
     integrate(&mut client).unwrap();
     assert_eq!(
@@ -384,7 +370,6 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
         ))
     };
 
-    // Not before the Objective is closed and cleaned up.
     let early = delete(&mut client, true).unwrap_err();
     assert_eq!(early.code, ErrorCode::InvalidLifecycle);
     assert!(!action_enabled(
@@ -412,7 +397,6 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
     assert!(action_enabled(&cleaned, ActionName::ObjectiveDeleteHistory));
     assert_eq!(cleaned.history_deleted, None);
 
-    // Never without the explicit confirmation flag.
     let unconfirmed = delete(&mut client, false).unwrap_err();
     assert_eq!(unconfirmed.code, ErrorCode::InvalidRequest);
     assert_eq!(retained_refs(&env), before);
@@ -437,7 +421,6 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
         ErrorCode::InvalidLifecycle
     );
 
-    // The fact is durable across a restart (schema v3), and the record itself stays.
     drop(client);
     service.shutdown();
     let service = env.start(FakeLauncher::shared());

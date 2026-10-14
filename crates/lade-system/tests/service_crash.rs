@@ -1,11 +1,3 @@
-//! Crash windows and authority loss over the real `laded` binary (IMP-013, A09/A10/A13).
-//!
-//! Each run arms one `LADE_FAULT_POINT` (debug builds only, see `lade_system::fault`): the
-//! service aborts between two journaled steps, then a fresh `laded` recovers and the test checks
-//! the recovered state and that the flow can continue. The chains reuse one state directory so
-//! every restart also proves the previous recovery left a usable store. They need the real
-//! bubblewrap sandbox (the binary never runs workers unsandboxed); without it they are skipped.
-
 mod service_support;
 
 use std::fs;
@@ -24,14 +16,12 @@ use lade_protocol::client::{
 use lade_protocol::types::{Counter, DeliveryMode, Id};
 use service_support::*;
 
-/// Sends a mutating request under a fresh operation id without waiting for the reply.
 fn send_op(client: &mut Client, request: Request) -> Id {
     let operation = new_id();
     client.send_frame(RequestFrame::new(new_id(), Some(operation.clone()), request).unwrap());
     operation
 }
 
-/// The armed fault aborted the service (SIGABRT), and the client saw the link end.
 fn crashed(daemon: &mut Daemon, mut client: Client, point: &str) {
     let status = daemon.wait_exit();
     assert_eq!(
@@ -40,8 +30,6 @@ fn crashed(daemon: &mut Daemon, mut client: Client, point: &str) {
         "{point}: {status} {}",
         daemon.log_text()
     );
-    // The "aborting at" line itself may be lost: `laded` relays stderr through its redacting
-    // diagnostics capture, which an abort does not flush. SIGABRT is the fault's signature.
     assert!(client.closed(), "{point}: link still open");
 }
 
@@ -130,7 +118,6 @@ fn review_path_recovers_at_every_crash_window() {
     let env = Env::new("crash-review");
     let main_before = git(&env.repo, &["rev-parse", "main"]);
 
-    // capture.retained: the retention ref exists, the capture row does not.
     let mut daemon = env.spawn_laded(Some("capture.retained"), &[]);
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
@@ -145,7 +132,6 @@ fn review_path_recovers_at_every_crash_window() {
     let orphans = refs(&env.repo, "refs/lade/retain/");
     assert_eq!(orphans.len(), 1, "{orphans:?}");
 
-    // freeze.branch_moved: the Objective branch holds an unrecorded candidate commit.
     let mut daemon = env.spawn_laded(Some("freeze.branch_moved"), &[]);
     let mut client = env.connect();
     let recovered = detail(&mut client, &objective);
@@ -181,7 +167,6 @@ fn review_path_recovers_at_every_crash_window() {
     let moved = git(&env.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
     assert_ne!(moved, recovered.start_commit.hex());
 
-    // freeze.recorded: the candidate is durable with its outcome; only the reply was lost.
     let mut daemon = env.spawn_laded(Some("freeze.recorded"), &[]);
     let mut client = env.connect();
     let status = operation(&mut client, &freeze_op);
@@ -197,7 +182,6 @@ fn review_path_recovers_at_every_crash_window() {
     );
     crashed(&mut daemon, client, "freeze.recorded");
 
-    // verify.copy: the verification copy and branch exist, the check never ran.
     let mut daemon = env.spawn_laded(Some("verify.copy"), &[]);
     let mut client = env.connect();
     let status = operation(&mut client, &freeze_op);
@@ -229,7 +213,6 @@ fn review_path_recovers_at_every_crash_window() {
     crashed(&mut daemon, client, "verify.copy");
     assert_eq!(refs(&env.repo, "refs/heads/lade/verify/").len(), 1);
 
-    // integrate.intent: intent journaled, target untouched.
     let mut daemon = env.spawn_laded(Some("integrate.intent"), &[]);
     let mut client = env.connect();
     let verified = detail(&mut client, &objective);
@@ -249,7 +232,6 @@ fn review_path_recovers_at_every_crash_window() {
     crashed(&mut daemon, client, "integrate.intent");
     assert_eq!(git(&env.repo, &["rev-parse", "main"]), main_before);
 
-    // integrate.ref_moved: the target ref moved, the checked-out files did not.
     let mut daemon = env.spawn_laded(Some("integrate.ref_moved"), &[]);
     let mut client = env.connect();
     assert_eq!(
@@ -277,7 +259,6 @@ fn review_path_recovers_at_every_crash_window() {
         "the crash left the checkout behind its ref"
     );
 
-    // cleanup.removed: recovery finished the checkout; then the worktree and branch go.
     let mut daemon = env.spawn_laded(Some("cleanup.removed"), &[]);
     let mut client = env.connect();
     let integrated = detail(&mut client, &objective);
@@ -299,7 +280,6 @@ fn review_path_recovers_at_every_crash_window() {
     crashed(&mut daemon, client, "cleanup.removed");
     assert!(!wt.exists());
 
-    // No fault: cleanup is repeatable and completes; history stays.
     let _daemon = env.spawn_laded(None, &[]);
     let mut client = env.connect();
     let before = detail(&mut client, &objective);
@@ -323,7 +303,6 @@ fn input_and_launch_windows_recover_without_replay() {
     }
     let env = Env::new("crash-input");
 
-    // launch.provisioned: the worktree exists but is not recorded.
     let mut daemon = env.spawn_laded(Some("launch.provisioned"), &[]);
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
@@ -343,7 +322,6 @@ fn input_and_launch_windows_recover_without_replay() {
     let wt = worktree(&env, &objective);
     assert!(wt.is_dir());
 
-    // dispatch.recorded: `dispatched` is durable, the frame never reached the worker.
     let mut daemon = env.spawn_laded(Some("dispatch.recorded"), &[]);
     let mut client = env.connect();
     let recovered = detail(&mut client, &objective);
@@ -363,7 +341,6 @@ fn input_and_launch_windows_recover_without_replay() {
     );
     crashed(&mut daemon, client, "dispatch.recorded");
 
-    // input.accepted: acceptance and outcome are one transaction; nothing was dispatched.
     let mut daemon = env.spawn_laded(Some("input.accepted"), &[]);
     let mut client = env.connect();
     assert_eq!(
@@ -385,8 +362,6 @@ fn input_and_launch_windows_recover_without_replay() {
     );
     crashed(&mut daemon, client, "input.accepted");
 
-    // integrate.applied: the accepted input survives, is never resent, and the uncertain one
-    // stays uncertain.
     let mut daemon = env.spawn_laded(Some("integrate.applied"), &[]);
     let mut client = env.connect();
     let status = operation(&mut client, &accepted_op);
@@ -403,7 +378,6 @@ fn input_and_launch_windows_recover_without_replay() {
         listed[1]
     );
     assert!(!wt.join("c.txt").exists());
-    // The explicit Resume delivers the accepted, never-dispatched input exactly once.
     resume(&mut client, &objective);
     wait_path(&wt.join("c.txt"));
     wait_state(&mut client, &objective, ExecutionState::Idle);
@@ -426,7 +400,6 @@ fn input_and_launch_windows_recover_without_replay() {
     let integrate_op = send_op(&mut client, integrate_request(&objective, approval));
     crashed(&mut daemon, client, "integrate.applied");
 
-    // The journal reconciles the completed integration; the checkout is clean.
     let _daemon = env.spawn_laded(None, &[]);
     let mut client = env.connect();
     let done = detail(&mut client, &objective);
@@ -509,7 +482,6 @@ fn killing_the_service_ends_four_executions_and_their_terminals() {
         "no worker or terminal sandbox survives the service"
     );
 
-    // Nothing resumes: every execution is interrupted, no terminal exists.
     let daemon = env.spawn_laded(None, &[]);
     let mut client = env.connect();
     for objective in &objectives {

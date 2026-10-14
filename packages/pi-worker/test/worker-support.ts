@@ -17,7 +17,6 @@ export const TIMEOUT_MS = 20_000;
 
 export interface Sandbox { root: string; home: string; sessionDir: string; cwd: string }
 
-/** Disposable HOME, session dir and worktree; never the developer's real profile. */
 export function sandbox(): Sandbox {
   const root = mkdtempSync(join(tmpdir(), "lade-worker-"));
   const box = { root, home: join(root, "home"), sessionDir: join(root, "session"), cwd: join(root, "worktree") };
@@ -66,7 +65,6 @@ export function deliverBody(mode: "prompt" | "steer" | "follow_up", body: string
   return { kind: "input.deliver", input_id: inputId, mode, text: body };
 }
 
-/** A worker child process over real JSONL pipes; every stdout line must be a protocol frame. */
 export class Worker {
   readonly child: ChildProcessWithoutNullStreams;
   readonly frames: JsonObject[] = [];
@@ -75,7 +73,6 @@ export class Worker {
   stderr = "";
   private pending = "";
   private wake: () => void = () => {};
-  /** The test-only fixture provider is switched on unless `env` overrides the switch. */
   constructor(box: Sandbox, env: Record<string, string> = {}) {
     this.child = spawn(process.execPath, [WORKER], {
       cwd: box.cwd,
@@ -114,7 +111,6 @@ export class Worker {
     return this.frames.filter(frame => frame.kind === kind);
   }
 
-  /** Wait until `predicate` holds for some frame at index >= `from`; returns that frame. */
   async waitFor(predicate: (frame: JsonObject) => boolean, from = 0): Promise<JsonObject> {
     const deadline = Date.now() + TIMEOUT_MS;
 
@@ -133,7 +129,6 @@ export class Worker {
     }
   }
 
-  /** Wait for the next `turn.state idle` after frame index `from`. */
   idle(from: number): Promise<JsonObject> {
     return this.waitFor(frame => frame.kind === "turn.state" && frame.state === "idle", from);
   }
@@ -141,7 +136,6 @@ export class Worker {
   async start(box: Sandbox, resume = false): Promise<JsonObject> {
     this.send(startBody(box, resume));
     const ready = await this.waitFor(frame => frame.kind === "worker.ready");
-    // Startup ends with the first generation's session.changed and resources.loaded reports.
     await this.waitFor(frame => frame.kind === "resources.loaded");
 
     return ready;
@@ -153,7 +147,6 @@ export class Worker {
     return this.exited;
   }
 
-  /** Final activity.item per item_id, in first-appearance order. */
   items(from = 0): JsonObject[] {
     const latest = new Map<string, JsonObject>();
 

@@ -1,8 +1,3 @@
-//! Plain view models mirroring the delivery-plan §4.1 data shapes.
-//!
-//! These are presentation copies of service state, never authority. WP-G maps the protocol DTOs onto
-//! them; nothing here performs I/O or depends on GTK.
-
 macro_rules! id_type {
     ($($name:ident),* $(,)?) => {$(
         #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -17,7 +12,6 @@ macro_rules! id_type {
                 &self.0
             }
 
-            /// First eight characters, for compact labels only (never as an identity).
             pub fn short(&self) -> &str {
                 self.0.get(..8).unwrap_or(&self.0)
             }
@@ -40,7 +34,6 @@ id_type!(
     ArtifactDigest,
 );
 
-/// Unix milliseconds. WP-G converts the RFC 3339 wire timestamps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(pub i64);
 
@@ -69,7 +62,6 @@ impl GitId {
     }
 }
 
-/// Lossless repository path: raw bytes are the identity, `display` is a lossy label only.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RepoPath {
     pub bytes: Vec<u8>,
@@ -127,7 +119,6 @@ pub enum Lifecycle {
 }
 
 impl ObjectiveSummary {
-    /// Archived on the board: terminal lifecycle or the service's `archived` attention.
     pub fn is_archived(&self) -> bool {
         self.attention == Attention::Archived || self.lifecycle.is_archived()
     }
@@ -165,7 +156,6 @@ pub enum ExecutionState {
 pub struct Execution {
     pub state: ExecutionState,
     pub generation: u64,
-    /// Failure or interruption reason, when the service gives one.
     pub reason: Option<String>,
 }
 
@@ -179,7 +169,6 @@ impl Execution {
     }
 }
 
-/// Service-derived board category; ordering is the board order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[allow(
     clippy::enum_variant_names,
@@ -193,7 +182,6 @@ pub enum Attention {
     Archived,
 }
 
-/// Secondary, service-derived Objective badges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Badge {
     Interrupted,
@@ -273,7 +261,6 @@ pub struct SessionInfo {
     pub association_revision: u64,
     pub execution_generation: u64,
     pub model: ModelRef,
-    /// The Objective's persisted thinking selection, when one was made.
     pub thinking: Option<super::compat::ThinkingLevel>,
 }
 
@@ -306,7 +293,6 @@ pub enum VerificationState {
     Error,
 }
 
-/// Only service-observed provenance exists on the wire; agent claims live in the activity transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Provenance {
     ServiceObserved,
@@ -350,7 +336,6 @@ pub struct ChangeCounts {
     pub removed: u64,
 }
 
-/// Actions the service may project in `available_actions`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ActionName {
     ObjectiveUpdateIntent,
@@ -378,7 +363,6 @@ pub struct AvailableAction {
     pub reason: Option<String>,
 }
 
-/// What the client may show for an action. Absence from `available_actions` is "not offered".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActionAvailability {
     Enabled,
@@ -401,12 +385,10 @@ pub struct ObjectiveDetail {
     pub change_counts: ChangeCounts,
     pub unsent_drafts: u64,
     pub available_actions: Vec<AvailableAction>,
-    /// The Objective's Git history (retention refs, branch) was deleted on explicit request.
     pub history_deleted: bool,
 }
 
 impl ObjectiveDetail {
-    /// Authority projection lookup. The client never derives availability itself.
     pub fn availability(&self, action: ActionName) -> ActionAvailability {
         match self.available_actions.iter().find(|a| a.action == action) {
             None => ActionAvailability::NotOffered,
@@ -456,7 +438,6 @@ pub struct ChangedFile {
     pub added: u64,
     pub removed: u64,
     pub binary: bool,
-    /// Content goes through a filter driver (LFS etc.): raw bytes compared, unsupported.
     pub filtered: bool,
 }
 
@@ -466,7 +447,6 @@ pub enum ContentNoticeKind {
     FilteredContent,
 }
 
-/// Why part of a Change Set is not fully represented (service text).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ContentNotice {
     pub kind: ContentNoticeKind,
@@ -483,7 +463,6 @@ pub struct ChangeList {
     pub capture_id: Option<CaptureId>,
     pub candidate_id: Option<CandidateId>,
     pub files: Vec<ChangedFile>,
-    /// The service listed only part of the Change Set.
     pub truncated: bool,
     pub total_added: u64,
     pub total_removed: u64,
@@ -502,7 +481,6 @@ pub struct DiffLine {
     pub kind: DiffLineKind,
     pub old_no: Option<u64>,
     pub new_no: Option<u64>,
-    /// Line content without its terminating `\n` (a CR of a CRLF terminator is retained).
     pub text: String,
     pub new_byte_start: Option<u64>,
     pub old_byte_start: Option<u64>,
@@ -541,7 +519,6 @@ pub enum FileEncoding {
     Binary,
 }
 
-/// One `file.read` reply.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FilePage {
     pub objective_id: ObjectiveId,
@@ -551,18 +528,14 @@ pub struct FilePage {
     pub artifact_digest: ArtifactDigest,
     pub total_bytes: u64,
     pub offset: u64,
-    /// Bytes this page covers (the service's `length`); the next page starts at
-    /// `offset + length`, also for binary content that carries no text.
     pub length: u64,
     pub encoding: FileEncoding,
     pub text: Option<String>,
     pub eof: bool,
     pub version_label: String,
-    /// The file exceeds the service's whole-file bound and is served in bounded chunks.
     pub chunked: bool,
 }
 
-/// Accumulated, contiguous pages of one file version.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileContent {
     pub objective_id: ObjectiveId,
@@ -573,11 +546,9 @@ pub struct FileContent {
     pub total_bytes: u64,
     pub encoding: FileEncoding,
     pub text: String,
-    /// Bytes represented by `text` starting at offset 0.
     pub loaded_bytes: u64,
     pub eof: bool,
     pub version_label: String,
-    /// Served in bounded chunks (a file above the whole-file bound).
     pub chunked: bool,
 }
 
@@ -609,7 +580,6 @@ pub enum ReferenceVersion {
     Candidate { candidate_id: CandidateId },
 }
 
-/// Versioned reference to exactly inspected bytes: `[start, end)` within the side's content.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
     pub artifact_digest: ArtifactDigest,
@@ -690,7 +660,6 @@ pub struct SearchResult {
     pub path: Option<RepoPath>,
     pub line: Option<u64>,
     pub preview: String,
-    /// Exact byte range of the first match in the raw file bytes, when the service located it.
     pub byte_start: Option<u64>,
     pub byte_end: Option<u64>,
 }
@@ -699,9 +668,7 @@ pub struct SearchResult {
 pub struct SearchResults {
     pub scope: SearchScope,
     pub query: String,
-    /// Service label of the searched version/scope, e.g. "Content in Candidate 2 of Make retries safe".
     pub scope_label: String,
-    /// The basis the search ran against, so following a result never silently switches revision.
     pub basis: Option<Basis>,
     pub objective_id: Option<ObjectiveId>,
     pub results: Vec<SearchResult>,
@@ -712,17 +679,9 @@ pub struct SearchResults {
 pub enum ConnectionState {
     Connecting,
     Connected,
-    Reconnecting {
-        attempt: u32,
-    },
-    Disconnected {
-        reason: String,
-    },
-    /// The service could not be reached at all.
-    Unavailable {
-        reason: String,
-    },
-    /// The service is running but another LADE window holds its single controlling lease.
+    Reconnecting { attempt: u32 },
+    Disconnected { reason: String },
+    Unavailable { reason: String },
     LeaseHeld,
 }
 
@@ -752,7 +711,6 @@ pub struct Settings {
     pub verification_commands: Vec<Vec<String>>,
 }
 
-/// Loading state of a queried projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Load<T> {
     NotLoaded,

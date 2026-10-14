@@ -74,7 +74,6 @@ target/release/lade-desktop --version | grep -q "^LADE $bundle_version protocol 
     || die "target/release/lade-desktop does not report bundle $bundle_version protocol $protocol"
 smoke=$(mktemp -d)
 trap 'rm -rf "$smoke"' EXIT
-# The schema this laded creates: the installer compares it on --rollback (pre-migration backups).
 schema=$(target/release/laded store info --state-dir "$smoke/no-state" | sed -n 's/^supported_schema=//p')
 [ -n "$schema" ] || die "target/release/laded does not report its supported schema"
 
@@ -85,14 +84,11 @@ mkdir -p "$out/bin" "$out/lib/lade/pi-worker" \
     "$out/share/systemd/user" "$out/share/doc/lade"
 
 install -m 0755 target/release/laded target/release/lade-desktop "$out/bin/"
-# The installer travels with the bundle: <bundle>/install, <installed>/install --rollback, uninstall.
 install -m 0755 scripts/install scripts/uninstall "$out/"
 
 worker="$out/lib/lade/pi-worker"
 cp packages/pi-worker/package.json packages/pi-worker/package-lock.json "$worker/"
 cp -R packages/pi-worker/src "$worker/src"
-# Production dependencies only (TypeScript and the linters are dev-only: Node strips types).
-# No install scripts (as in development) and no .bin symlinks, so the bundle holds regular files only.
 npm --prefix "$worker" ci --omit=dev --ignore-scripts --no-bin-links --no-audit --no-fund >&2
 
 install -m 0644 packaging/desktop/dev.lade.Lade.desktop "$out/share/applications/"
@@ -112,8 +108,6 @@ if [ -n "$with_node" ]; then
     node_bundled=yes
 fi
 
-# The worker must load with production dependencies only: stdin EOF before worker.start exits 0
-# after every module (pi SDK, undici, the protocol code) has been imported.
 if ! HOME="$smoke" "$node" "$worker/src/worker.ts" </dev/null >"$smoke/out" 2>"$smoke/err"; then
     cat "$smoke/err" >&2
     die "the bundled worker does not start with production dependencies"
@@ -123,7 +117,6 @@ fi
 links=$(find "$out" -type l | head -5)
 [ -z "$links" ] || die "bundle contains symlinks: $links"
 
-# Licence inventory of what actually ships (fails when a dependency has no licence information).
 python3 scripts/license-inventory.py --bundle "$out" >&2
 
 cat >"$out/VERSION" <<EOF

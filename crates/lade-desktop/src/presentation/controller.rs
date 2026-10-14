@@ -1,8 +1,3 @@
-//! Turns user gestures into transient-state changes and [`Intent`]s. GTK-free and testable.
-//!
-//! Commands are emitted only when the service's `available_actions` projection enables them; the
-//! controller never derives authority, it only refuses to send what the service already refused.
-
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -34,29 +29,22 @@ pub struct BatchItem {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeedbackBatch {
-    /// At most [`MAX_FEEDBACK_BATCH`] drafts: one `feedback.submit` takes no more.
     pub items: Vec<BatchItem>,
-    /// Unsent drafts left for a later batch because the batch is full.
     pub deferred: usize,
     pub destination: Option<SessionInfo>,
     pub mode: DeliveryMode,
-    /// Reasons the batch cannot be submitted now; empty means the request may be sent.
     pub blockers: Vec<String>,
 }
 
-/// A draft that closing now would lose, as listed by the close/Exit guard.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnsavedDraft {
     pub draft_id: DraftId,
     pub objective: String,
     pub reference_label: String,
     pub status: String,
-    /// A save may still be acknowledged (unsaved or saving while connected); `false` for failed,
-    /// disconnected or conflicting drafts, which need the developer.
     pub pending: bool,
 }
 
-/// `feedback.submit` `drafts` `maxItems` (`contracts/v1/schema.json`; the core's batch bound).
 pub const MAX_FEEDBACK_BATCH: usize = 256;
 
 pub struct Controller {
@@ -73,7 +61,6 @@ impl Controller {
         self.sink.submit(intent);
     }
 
-    /// The intent sink, for the IMP-011 gestures in `controller_compat`.
     pub(super) fn submit_intent(&self, intent: Intent) {
         self.emit(intent);
     }
@@ -97,7 +84,6 @@ impl Controller {
                 s.ui.view = view;
                 changes.push(Change::View);
             }
-            // Choosing Workbench or Activity shows the work area in the compact composition.
             if s.ui.layout == LayoutClass::Compact && s.ui.compact_region != Region::Main {
                 s.ui.compact_region = Region::Main;
                 changes.push(Change::Layout);
@@ -126,7 +112,6 @@ impl Controller {
         });
     }
 
-    /// Installs a validated keymap (see `keys::Keymap::propose`).
     pub fn set_keymap(&self, keymap: Keymap) {
         self.store.update(|s| {
             if s.ui.keymap == keymap {
@@ -137,7 +122,6 @@ impl Controller {
         });
     }
 
-    /// Records the allocated window width; switches between the wide and compact compositions.
     pub fn set_layout_width(&self, width: i32) {
         let class = LayoutClass::for_width(width);
         self.store.update(|s| {
@@ -149,8 +133,6 @@ impl Controller {
         });
     }
 
-    /// Shows `region` in the compact composition (explicit region switch or F6). The wide
-    /// composition shows every region, so this only remembers the choice there.
     pub fn show_region(&self, region: Region) {
         self.store.update(|s| {
             if s.ui.compact_region == region {
@@ -237,7 +219,6 @@ impl Controller {
         if view == MainView::Activity {
             self.ensure_activity(id);
         }
-        // Restore the previously inspected file for this Objective.
         let file = self
             .store
             .state()
@@ -268,7 +249,6 @@ impl Controller {
         self.reload_viewer();
     }
 
-    /// Re-requests the file shown for the selected Objective.
     pub fn reload_viewer(&self) {
         let Some(id) = self.selected() else { return };
         let file = self
@@ -390,7 +370,6 @@ impl Controller {
         });
     }
 
-    /// Requests the next page of the file shown in full-file mode.
     pub fn load_more(&self) {
         let request = {
             let state = self.store.state();
@@ -412,7 +391,6 @@ impl Controller {
         }
     }
 
-    /// Records the viewer selection as a versioned reference (or why it cannot be one).
     pub fn set_viewer_selection(&self, mapped: Option<Result<MappedSelection, SelectionError>>) {
         let Some(id) = self.selected() else { return };
         let selection = mapped.map(|m| {
@@ -482,7 +460,6 @@ impl Controller {
         })
     }
 
-    /// Creates a local draft for the current selection; returns its id. Nothing is sent.
     pub fn add_feedback(&self, draft_id: DraftId) -> Result<DraftId, String> {
         let id = self.selected().ok_or("Select an Objective first")?;
         let (reference, session) = {
@@ -505,8 +482,6 @@ impl Controller {
             );
             s.ui.inspector_tab = InspectorTab::Feedback;
             let mut changes = vec![Change::Drafts(id.clone()), Change::InspectorTab];
-            // Explicit opening moves to the requested task: the compact composition shows the
-            // feedback panel holding the new draft.
             if s.ui.layout == LayoutClass::Compact && s.ui.compact_region != Region::Inspector {
                 s.ui.compact_region = Region::Inspector;
                 changes.push(Change::Layout);
@@ -526,7 +501,6 @@ impl Controller {
         });
     }
 
-    /// Emits due draft saves; returns the next time `poll_drafts` should run.
     pub fn poll_drafts(&self, now: Millis) -> Option<Millis> {
         let (requests, next) = self.store.update(|s| {
             let connected = s.connection.is_connected();
@@ -556,7 +530,6 @@ impl Controller {
         next
     }
 
-    /// Drafts whose latest text the service has not acknowledged, for the close/Exit guard.
     pub fn unsaved_drafts(&self) -> Vec<UnsavedDraft> {
         let state = self.store.state();
         let connected = state.connection.is_connected();
@@ -585,8 +558,6 @@ impl Controller {
         unsaved
     }
 
-    /// Closing: sends every pending draft save now instead of after the quiet period. Returns the
-    /// next scheduler deadline like [`Controller::poll_drafts`].
     pub fn flush_drafts(&self, now: Millis) -> Option<Millis> {
         self.store.update(|s| {
             for editor in s.drafts.values_mut().flatten() {
@@ -626,7 +597,6 @@ impl Controller {
             let revision = s.draft_mut(draft_id).map(|e| e.durable_revision());
             match revision {
                 Some(0) => {
-                    // Never saved: discard the local text only.
                     let mut changes = Vec::new();
                     for (objective, editors) in &mut s.drafts {
                         let before = editors.len();
@@ -677,7 +647,6 @@ impl Controller {
                 stale: d.stale,
             })
             .collect();
-        // A larger set is submitted in several batches; the rest stay unsent drafts.
         let deferred = items.len().saturating_sub(MAX_FEEDBACK_BATCH);
         items.truncate(MAX_FEEDBACK_BATCH);
         let mut blockers = Vec::new();
@@ -728,7 +697,6 @@ impl Controller {
         })
     }
 
-    /// Sends the confirmed batch. The service still validates staleness and destination.
     pub fn submit_feedback(&self, batch: &FeedbackBatch) -> Result<(), String> {
         if let Some(blocker) = batch.blockers.first() {
             return Err(blocker.clone());
@@ -760,7 +728,6 @@ impl Controller {
         self.store.state().selected_detail().map(f)
     }
 
-    /// Emits `intent` only if the service projection enables `action`.
     fn command(&self, action: ActionName, intent: Intent) -> Result<(), String> {
         let availability = self
             .with_detail(|d| d.availability(action))
@@ -786,8 +753,6 @@ impl Controller {
             .ok_or_else(|| "There is no current candidate".to_owned())
     }
 
-    /// Requests an intent change bound to the intent revision the developer edited; the service
-    /// refuses it when the intent changed meanwhile.
     pub fn update_intent(
         &self,
         expected_intent_revision: u64,
@@ -828,7 +793,6 @@ impl Controller {
                 thinking,
             },
         )?;
-        // Picking a model makes it the default for the next execution.
         if !is_default {
             self.emit(Intent::UpdateSettings {
                 default_model: model,
@@ -903,8 +867,6 @@ impl Controller {
         )
     }
 
-    /// Whether approval would rely on a recorded override (missing or not-all-passed checks).
-    /// Presentation hint for showing the reason dialog; the service decides.
     pub fn approval_needs_override(&self) -> bool {
         self.with_detail(|d| {
             let Some(candidate) = d.current_candidate() else {
@@ -1009,8 +971,6 @@ impl Controller {
         )
     }
 
-    /// Deletes the selected (cleaned-up) Objective's Git history. Call only from the
-    /// confirmation dialog.
     pub fn delete_history(&self) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         self.command(
@@ -1093,7 +1053,6 @@ impl Controller {
         }
     }
 
-    /// Follows a search result in the version it was found in (that version stays labelled).
     pub fn open_search_result(&self, result: &SearchResult) {
         let searched_basis = self
             .store
@@ -1117,8 +1076,6 @@ impl Controller {
         if let Some(path) = &result.path {
             self.select_file(path);
         }
-        // A located content match becomes the viewer selection (and so the feedback anchor)
-        // once the file shows those bytes.
         if let (SearchResultKind::Content, Some(start), Some(end)) =
             (result.kind, result.byte_start, result.byte_end)
         {
@@ -1133,8 +1090,6 @@ impl Controller {
         self.set_view(MainView::Workbench);
     }
 
-    /// Takes the pending search-result range for the file shown under `key` once its loaded
-    /// text covers the range (`loaded_bytes`); a range for another file is dropped.
     pub fn take_reveal(&self, key: &ViewerKey, loaded_bytes: u64) -> Option<(u64, u64)> {
         self.store.update(|s| {
             let taken = match &s.viewer.reveal {
@@ -1167,11 +1122,6 @@ impl Controller {
         });
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Contained terminal (IMP-012).
-
-    /// Opens a terminal for the selected Objective unless one is open or opening. The service
-    /// decides the scope (read-write, read-only under review, or refused).
     pub fn open_terminal(&self, cols: u16, rows: u16) -> Result<(), String> {
         let id = self.selected_or_err()?;
         let opened = self.store.update(|s| {
@@ -1197,7 +1147,6 @@ impl Controller {
         Ok(())
     }
 
-    /// The open terminal of the selected Objective: `(objective, terminal id)`.
     fn open_terminal_id(&self) -> Option<(ObjectiveId, String)> {
         let state = self.store.state();
         let id = state.ui.selected.clone()?;
@@ -1205,8 +1154,6 @@ impl Controller {
         Some((id, session.terminal_id.clone()?))
     }
 
-    /// Sends typed or pasted text to the selected Objective's open terminal (in bounded chunks).
-    /// Returns `false` when no terminal is open.
     pub fn terminal_input(&self, text: &str) -> bool {
         let Some((objective_id, terminal_id)) = self.open_terminal_id() else {
             return false;
@@ -1221,7 +1168,6 @@ impl Controller {
         true
     }
 
-    /// Applies a new grid size locally and tells the service (only when it changed).
     pub fn resize_terminal(&self, cols: u16, rows: u16) {
         let send = self.store.update(|s| {
             let Some(id) = s.ui.selected.clone() else {
@@ -1269,9 +1215,6 @@ impl Controller {
         }
     }
 
-    /// Contextual navigation from attention (a desktop notification or a board item): selects the
-    /// Objective and shows its review context. Only projections are requested; nothing is
-    /// approved, sent or changed in the service.
     pub fn navigate_to(&self, id: &ObjectiveId, review: bool) {
         self.select_objective(id);
         self.set_view(MainView::Workbench);
@@ -1282,10 +1225,6 @@ impl Controller {
         });
     }
 
-    /// Explicit Exit (or session logout). With control of the service, asks it to stop its agents
-    /// and terminals and exit (nothing resumes on the next start) and returns `true`; the window
-    /// closes once the service confirms. Without control (disconnected, another window holds the
-    /// lease) the window cannot stop the service and only closes: returns `false`.
     pub fn exit(&self, reason: StopReason) -> bool {
         let connected = self.store.state().connection.is_connected();
         if connected {
@@ -1294,8 +1233,6 @@ impl Controller {
         connected
     }
 
-    /// Activity's status line — the one home of the agent's model, execution state and Agent
-    /// Session identity — and its full statement (tooltip and accessible description).
     pub fn execution_line(&self) -> Option<(String, String)> {
         self.with_detail(|d| {
             let execution = format::execution_label_for(d);
@@ -1360,7 +1297,6 @@ mod tests {
         controller.show_region(Region::Objectives);
         controller.set_view(MainView::Activity);
         assert_eq!(controller.store.state().ui.compact_region, Region::Main);
-        // Add feedback opens the feedback panel holding the new draft.
         controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         controller.set_view(MainView::Workbench);
         let reference = controller
@@ -1420,7 +1356,6 @@ mod tests {
         );
         assert_eq!(controller.take_reveal(&key, 15), Some((10, 15)));
         assert_eq!(controller.take_reveal(&key, 15), None, "taken once");
-        // A result without a located range selects nothing.
         controller.open_search_result(&SearchResult {
             kind: SearchResultKind::Content,
             objective_id: Some(id),
@@ -1518,7 +1453,6 @@ mod tests {
             !controller.terminal_input("x"),
             "an ended terminal takes no input"
         );
-        // A lost connection ends terminals locally too (the service ended them with the lease).
         controller.open_terminal(80, 24).unwrap();
         controller.store.apply(StoreUpdate::Connection(
             super::super::model::ConnectionState::Reconnecting { attempt: 1 },

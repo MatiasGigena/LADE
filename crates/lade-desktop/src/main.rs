@@ -103,20 +103,13 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
-    // The window is single-instance: a second launch activates the running window (GApplication
-    // on the session bus) instead of opening another approval authority; the service's single
-    // controlling lease refuses any other client anyway. Without a session bus GApplication runs
-    // non-unique and the lease is the only guard.
     let app = Application::builder()
         .application_id("dev.lade.Desktop")
         .flags(gio::ApplicationFlags::FLAGS_NONE)
-        // Logout: the session manager asks before ending the session (`query-end`).
         .register_session(true)
         .build();
     app.connect_startup(|_| views::load_css());
-    // The views are owned here for the lifetime of the application.
     let windows: Rc<std::cell::RefCell<Vec<Rc<views::App>>>> = Rc::default();
-    // Notification clicks navigate in the existing window; they never approve or send.
     let action = gio::SimpleAction::new(
         views::notify::OPEN_OBJECTIVE_ACTION,
         Some(glib::VariantTy::STRING),
@@ -129,7 +122,6 @@ fn main() -> glib::ExitCode {
         }
     });
     app.add_action(&action);
-    // Logout stops the service according to policy: no lingering work, nothing resumes.
     let ending = windows.clone();
     app.connect_query_end(move |_| {
         for window in ending.borrow().iter() {
@@ -137,7 +129,6 @@ fn main() -> glib::ExitCode {
         }
     });
     app.connect_activate(move |app| {
-        // A second activation (another launch, or a notification) focuses the existing window.
         if let Some(existing) = windows.borrow().first() {
             existing.present();
             return;
@@ -156,7 +147,6 @@ fn main() -> glib::ExitCode {
         window.present();
         windows.borrow_mut().push(window);
     });
-    // GTK must not interpret LADE's own flags.
     app.run_with_args::<&str>(&[])
 }
 

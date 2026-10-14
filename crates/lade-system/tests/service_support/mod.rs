@@ -1,5 +1,3 @@
-//! Shared helpers for service integration tests: a real socket client, disposable repositories,
-//! an unsandboxed real-worker launcher (tests only) and a pure fake launcher.
 #![allow(dead_code, unused_imports)]
 
 #[path = "../adapters_support/mod.rs"]
@@ -39,7 +37,6 @@ pub fn new_id() -> Id {
     Id::from_random_bytes(bytes)
 }
 
-/// A disposable service environment: state, runtime dir and a repository with `main`.
 pub struct Env {
     pub root: TempDir,
     pub repo: PathBuf,
@@ -52,7 +49,6 @@ impl Env {
         Self { root, repo }
     }
 
-    /// The test service configuration; the offline fixture model is switched on.
     pub fn config(&self) -> ServiceConfig {
         ServiceConfig {
             state_dir: self.root.path().join("state"),
@@ -68,7 +64,6 @@ impl Env {
         service::start(self.config(), launcher).expect("service starts")
     }
 
-    /// Starts with explicit aggregate limits.
     pub fn start_limited(
         &self,
         launcher: Arc<dyn WorkerLauncher>,
@@ -92,19 +87,14 @@ impl Env {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Client.
-
 pub struct Client {
     writer: FrameWriter<UnixStream>,
     frames: Receiver<ClientBody>,
     pub events: VecDeque<EventFrame>,
-    /// Replies that arrived while another reply was awaited.
     replies: Vec<Reply>,
     pub service_epoch: Id,
 }
 
-/// Performs `hello` then `auth`; returns the frames receiver after the handshake writes.
 pub fn raw_connect(socket: &Path) -> (FrameWriter<UnixStream>, Receiver<ClientBody>) {
     let stream = UnixStream::connect(socket).expect("connect");
     let read = stream.try_clone().unwrap();
@@ -191,7 +181,6 @@ impl Client {
         }
     }
 
-    /// Sends and waits; `Ok(data)` or `Err(rejection)`.
     pub fn call(&mut self, request: Request) -> Result<ReplyData, Rejection> {
         let mutating = request.name().is_mutating();
         let id = self.send(request, mutating);
@@ -204,7 +193,6 @@ impl Client {
         result(self.wait_reply(&request_id))
     }
 
-    /// Waits for an event matching `predicate` (buffered events first).
     pub fn wait_event(&mut self, what: &str, predicate: impl Fn(&Event) -> bool) -> Event {
         if let Some(index) = self.events.iter().position(|e| predicate(&e.event)) {
             return self.events.remove(index).unwrap().event;
@@ -220,7 +208,6 @@ impl Client {
         }
     }
 
-    /// True when the service closed the link.
     pub fn closed(&mut self) -> bool {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -250,7 +237,6 @@ pub fn result(reply: Reply) -> Result<ReplyData, Rejection> {
     }
 }
 
-/// Polls `check` until it returns `Some`.
 pub fn eventually<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
     let deadline = Instant::now() + TIMEOUT;
     loop {
@@ -261,10 +247,6 @@ pub fn eventually<T>(what: &str, mut check: impl FnMut() -> Option<T>) -> T {
         thread::sleep(Duration::from_millis(100));
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Unsandboxed real worker (tests only, disposable directories, fixture model). The fixture
-// provider's test switch is always on here; the service's own switch still gates it.
 
 pub struct NodeLauncher {
     pub entry: PathBuf,
@@ -325,7 +307,6 @@ impl Drop for NodeControl {
 }
 
 impl WorkerLauncher for NodeLauncher {
-    /// The SDK catalogue, unsandboxed (tests only; the release launcher runs it in bubblewrap).
     fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
         let script = self.entry.with_file_name("worker").join("catalog.ts");
         let output = scratch.join("catalog.json");
@@ -421,19 +402,15 @@ impl WorkerLauncher for NodeLauncher {
     }
 }
 
-/// Whether bubblewrap/prlimit sandboxes work on this host.
 pub fn sandbox_works() -> bool {
     use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
     SandboxTools::locate().is_ok_and(|tools| sandbox_available(&tools).is_ok())
 }
 
-/// The real sandboxed launcher when the host supports it, else the unsandboxed test launcher;
-/// the offline fixture model is switched on.
 pub fn best_launcher(env: &Env) -> (Arc<dyn WorkerLauncher>, bool) {
     best_launcher_with(env, true)
 }
 
-/// [`best_launcher`] with the sandboxed launcher's fixture switch set to `fixture`.
 pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>, bool) {
     use lade_system::supervision::{LauncherConfig, default_launcher};
     if sandbox_works()
@@ -454,9 +431,6 @@ pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>,
     (NodeLauncher::shared(), false)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Pure fake worker: ready at once, acknowledges inputs and settles idle.
-
 pub struct FakeLauncher {
     ack: bool,
 }
@@ -466,7 +440,6 @@ impl FakeLauncher {
         Arc::new(Self { ack: true })
     }
 
-    /// A worker that never acknowledges delivered input (delivery stays dispatched).
     pub fn silent() -> Arc<dyn WorkerLauncher> {
         Arc::new(Self { ack: false })
     }
@@ -537,15 +510,11 @@ impl WorkerLauncher for FakeLauncher {
     }
 }
 
-/// Writes `bytes` to a raw socket (for malformed-input tests).
 pub fn raw_write(socket: &Path, bytes: &[u8]) -> UnixStream {
     let mut stream = UnixStream::connect(socket).unwrap();
     stream.write_all(bytes).unwrap();
     stream
 }
-
-// ---------------------------------------------------------------------------------------------
-// Domain flow helpers.
 
 use lade_protocol::client::{
     Basis, ChangeList, ExecutionStartCommand, ExecutionState, FileContent, FileReadQuery, Intent,
@@ -652,7 +621,6 @@ pub fn action_enabled(detail: &ObjectiveDetail, action: lade_protocol::client::A
         .any(|a| a.action == action && a.enabled)
 }
 
-/// The Objective worktree the service provisioned.
 pub fn worktree(env: &Env, objective: &Id) -> PathBuf {
     env.root
         .path()
@@ -660,10 +628,6 @@ pub fn worktree(env: &Env, objective: &Id) -> PathBuf {
         .join(objective.as_str())
 }
 
-// ---------------------------------------------------------------------------------------------
-// The real `laded` binary as a child process (crash windows, service kill).
-
-/// A `laded serve` child process of an [`Env`], with its stderr in a log file.
 pub struct Daemon {
     child: Child,
     pub log: PathBuf,
@@ -672,8 +636,6 @@ pub struct Daemon {
 static DAEMON_RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl Env {
-    /// Starts `laded serve` for this environment (debug build: `fault` arms
-    /// `LADE_FAULT_POINT`) and waits until it serves.
     pub fn spawn_laded(&self, fault: Option<&str>, extra: &[&str]) -> Daemon {
         let run = DAEMON_RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = self.root.path().join(format!("laded-{run}.log"));
@@ -722,7 +684,6 @@ impl Daemon {
         fs::read_to_string(&self.log).unwrap_or_default()
     }
 
-    /// Waits for the process to end by itself (an injected fault aborts it).
     pub fn wait_exit(&mut self) -> std::process::ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
@@ -738,7 +699,6 @@ impl Daemon {
         }
     }
 
-    /// `SIGKILL`, then reap.
     pub fn kill(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -751,7 +711,6 @@ impl Drop for Daemon {
     }
 }
 
-/// Live (non-zombie) processes other than this one whose command line mentions `needle`.
 pub fn processes_mentioning(needle: &str) -> Vec<u32> {
     let me = std::process::id();
     fs::read_dir("/proc")

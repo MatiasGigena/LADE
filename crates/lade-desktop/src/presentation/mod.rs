@@ -1,5 +1,3 @@
-//! GTK-free presentation layer: view models, the store, intents and their scheduling logic.
-
 pub mod attention;
 pub mod compat;
 pub mod controller;

@@ -1,7 +1,3 @@
-//! IMP-011 presentation types: the service's model catalogue with provider access, the Agent
-//! Session's pi state and tree, LADE-profile resources and semantic extension dialogs. Pure data
-//! and labels; the service decides availability, approval and routing.
-
 use super::model::{ModelRef, ObjectiveId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -61,18 +57,14 @@ impl ProviderStatus {
 pub struct ProviderView {
     pub id: String,
     pub name: String,
-    /// Authentication kinds as labels ("API key", "subscription token", ...).
     pub auth: Vec<String>,
     pub status: ProviderStatus,
-    /// Why it is unavailable or restricted, or which endpoint a custom provider uses.
     pub reason: Option<String>,
-    /// Credential variable names (never values).
     pub variables: Vec<String>,
     pub models: u64,
 }
 
 impl ProviderView {
-    /// Picker entry: name, id and status.
     pub fn picker_label(&self) -> String {
         format!("{} ({}) — {}", self.name, self.id, self.status.label())
     }
@@ -93,12 +85,10 @@ impl ModelView {
     }
 }
 
-/// The pinned SDK catalogue as the service reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub sdk_version: String,
     pub providers: Vec<ProviderView>,
-    /// Why the catalogue is partial (for example: the sandbox is unavailable).
     pub error: Option<String>,
 }
 
@@ -108,7 +98,6 @@ impl Catalog {
     }
 }
 
-/// What the developer picked before starting or reconfiguring the agent (transient UI state).
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct ModelChoice {
     pub provider: Option<String>,
@@ -116,7 +105,6 @@ pub struct ModelChoice {
     pub thinking: ThinkingLevel,
 }
 
-/// The live worker's session runtime as last reported (`session.changed`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionView {
     pub generation: u64,
@@ -132,12 +120,10 @@ pub struct SessionView {
 pub struct TreeNode {
     pub entry_id: String,
     pub parent_id: Option<String>,
-    /// Entry kind as a label ("You", "Agent", "Tool result", ...).
     pub kind: String,
     pub user: bool,
     pub label: String,
     pub bookmark: Option<String>,
-    /// Depth in the tree (0 for roots), for indentation.
     pub depth: usize,
 }
 
@@ -149,8 +135,6 @@ pub struct SessionTree {
 }
 
 impl SessionTree {
-    /// Orders `entries` depth-first from their roots (siblings in file order) and sets depths;
-    /// entries whose parent is missing (truncated history) become roots.
     pub fn ordered(entries: Vec<TreeNode>, leaf_id: Option<String>, truncated: bool) -> Self {
         let known: std::collections::HashSet<String> =
             entries.iter().map(|e| e.entry_id.clone()).collect();
@@ -183,9 +167,7 @@ impl SessionTree {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForkPosition {
-    /// A new session from the start up to (not including) the selected user message.
     Before,
-    /// A copy of the session up to and including the selected entry (clone).
     At,
 }
 
@@ -273,7 +255,6 @@ impl UiPromptView {
     }
 }
 
-/// An open extension dialog of one session generation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiDialog {
     pub objective_id: ObjectiveId,
@@ -282,7 +263,6 @@ pub struct UiDialog {
     pub prompt: UiPromptView,
 }
 
-/// The developer's explicit answer. There is no default answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiAnswerView {
     Confirm(bool),
@@ -290,19 +270,15 @@ pub enum UiAnswerView {
     Cancel,
 }
 
-/// IMP-011 service projections and transient choices held by the presentation store.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct CompatState {
     pub catalog: Option<Catalog>,
-    /// Models per provider id, loaded on demand.
     pub models: std::collections::HashMap<String, Vec<ModelView>>,
     pub sessions: std::collections::HashMap<ObjectiveId, SessionView>,
     pub trees: std::collections::HashMap<ObjectiveId, SessionTree>,
     pub inventory: Option<Inventory>,
-    /// Open extension dialogs, oldest first.
     pub dialogs: Vec<UiDialog>,
     pub exports: std::collections::HashMap<ObjectiveId, String>,
-    /// The model picker's current choice (shared by start and configure).
     pub choice: ModelChoice,
 }
 
@@ -333,7 +309,6 @@ pub enum CompatUpdate {
     Choice(ModelChoice),
 }
 
-/// What an IMP-011 update changed (mirrored by `store::Change`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompatChange {
     Catalog,
@@ -357,7 +332,6 @@ impl CompatState {
                 objective_id,
                 session,
             } => {
-                // A late report of an older generation never replaces a newer one.
                 if self
                     .sessions
                     .get(&objective_id)
@@ -406,7 +380,6 @@ impl CompatState {
         }
     }
 
-    /// The selectable models for the chosen provider (empty until they are loaded).
     pub fn chosen_models(&self) -> &[ModelView] {
         self.choice
             .provider
@@ -415,8 +388,6 @@ impl CompatState {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// The model the picker resolves to, if the provider's models are loaded: the chosen id, or
-    /// the provider's first model when none (or one the catalogue no longer lists) was chosen.
     pub fn chosen_model(&self) -> Option<&ModelView> {
         let models = self.chosen_models();
         self.choice

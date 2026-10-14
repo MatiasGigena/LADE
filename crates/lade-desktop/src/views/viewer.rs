@@ -1,9 +1,3 @@
-//! Read-only diff / full-file viewer (GtkSourceView). Old/new line gutters and a sign column are
-//! custom gutter renderers; added/deleted lines get semantic paragraph fills. Selections map to
-//! exact source bytes through `presentation::text_map`. Syntax is highlighted with the language
-//! GtkSourceView detects from the file name and the token-based `assets/code-scheme.xml`, except
-//! for large text (`presentation::syntax`); highlighting never changes the buffer text.
-
 use std::cell::{Cell, RefCell};
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
@@ -27,9 +21,6 @@ const CODE_SCHEME: &str = include_str!("../assets/code-scheme.xml");
 const SELECTION_HINT: &str = "Select text in the viewer to add feedback on exact bytes.";
 const CODE_SCHEME_ID: &str = "lade-code";
 
-/// The LADE code scheme. GtkSourceView reads schemes only from files, so the embedded scheme is
-/// written to a private directory under the user's runtime directory and read by a scheme manager
-/// that searches only there. `None` (plain text) if that fails.
 fn code_scheme() -> Option<sourceview5::StyleScheme> {
     let dir = glib::user_runtime_dir().join("lade-desktop").join("styles");
     DirBuilder::new()
@@ -68,9 +59,7 @@ pub struct Viewer {
     lines: Rc<RefCell<Vec<ViewLine>>>,
     updating: Rc<Cell<bool>>,
     on_add_feedback: RefCell<Option<Rc<dyn Fn()>>>,
-    /// Whether the last shown text is highlighted, plain, or plain because it is too large.
     highlight: Cell<Highlight>,
-    /// A selection was made in this window: the how-to hint is no longer shown.
     hint_seen: Cell<bool>,
 }
 
@@ -163,8 +152,6 @@ impl Viewer {
             }
             table.add(&tag);
         }
-        // Highlighting tags are created lazily and take priority over earlier tags: keep the
-        // hunk separator's own ink on top.
         buffer.connect_highlight_updated(|buffer, _, _| {
             let table = buffer.tag_table();
             if let Some(sep) = table.lookup("sep")
@@ -198,8 +185,6 @@ impl Viewer {
         new_numbers.set_width_request(digits + 12);
         signs.set_width_request(GutterRendererTextExt::measure(&signs, "−").0 + 12);
 
-        // A usable minimum: when the window is short the work area scrolls as a whole rather
-        // than squeezing the code to a few lines.
         let scroll = gtk::ScrolledWindow::builder()
             .child(&view)
             .vexpand(true)
@@ -341,7 +326,6 @@ impl Viewer {
             .map(|l| l.display.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // Decide before the text goes in, so large text is never highlighted even briefly.
         let language = sourceview5::LanguageManager::default()
             .guess_language(Some(syntax::file_name(path)), None);
         let highlight = Highlight::decide(language.is_some(), text.len(), lines.len());
@@ -533,8 +517,6 @@ impl Viewer {
                     ) {
                         glib::idle_add_local_once(move || scroll.vadjustment().set_value(value));
                     }
-                    // A followed content search result: select its exact bytes (queued after
-                    // the scroll restore) so the selection maps to a feedback reference.
                     if let Some((start, end)) =
                         self.controller.take_reveal(&key, content.loaded_bytes)
                     {
@@ -561,7 +543,6 @@ impl Viewer {
         }
     }
 
-    /// States in the footer that large text is shown without highlighting.
     fn show_highlight_note(&self) {
         if let Some(note) = self.highlight.get().note() {
             self.footer.append(&label(&note, &["meta"]));
@@ -591,9 +572,6 @@ impl Viewer {
         let detail = state.selected_detail();
         let has_session = detail.is_some_and(|d| d.session.is_some());
         let selection = state.selected_ui().and_then(|u| u.selection.clone());
-        // The how-to hint shows until the first selection in this window; afterwards the line
-        // appears only for a selection or a reason it cannot be used. Add feedback always keeps
-        // the hint as its tooltip and accessible description.
         if matches!(selection, Some(Ok(_))) {
             self.hint_seen.set(true);
         }
@@ -605,7 +583,6 @@ impl Viewer {
                 has_session,
             ),
         };
-        // The line keeps its height (style.css) so the code never moves under the pointer.
         let shown = if text == SELECTION_HINT && self.hint_seen.get() {
             ""
         } else {

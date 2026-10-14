@@ -1,19 +1,3 @@
-//! Aggregate accounting across Objectives (IMP-013): live agent executions, contained terminals
-//! and free space on the state filesystem.
-//!
-//! Every limit is configurable (`laded serve --max-workers …`), printed at startup and named in
-//! the refusal and in `available_actions`, so a limit is never a hidden cap. The defaults are
-//! proposals awaiting approval (#14 policy); four workers is a measurement point of the
-//! performance budgets, not a limit. Accounting lives in the service layer only: sandbox resource
-//! limits (prlimit, cgroups) are the launcher's.
-//!
-//! Storage pressure is checked on the filesystem holding the state directory (store, artifacts,
-//! worktrees, session files). Below the warning level a `service.notice {code: storage_low}`
-//! is shown; below the reserve, work that starts new writers (agent start/resume, writable
-//! terminals, verification copies) is refused with `limit_reached` and the reason, while
-//! decisions, drafts, inputs and the activity history keep being recorded inside the reserve.
-//! Nothing is deleted to make room and running executions are not stopped.
-
 use std::path::Path;
 
 use lade_core::domain::ids::ObjectiveId;
@@ -24,16 +8,11 @@ use super::convert::rejection;
 
 const MIB: u64 = 1 << 20;
 
-/// Configurable aggregate limits of one service instance.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResourceLimits {
-    /// Live agent executions (one sandboxed worker each) across every Objective.
     pub max_workers: usize,
-    /// Contained terminals across every Objective (at most 4 per Objective).
     pub max_terminals: usize,
-    /// Free bytes on the state filesystem below which a warning is shown.
     pub storage_warn_bytes: u64,
-    /// Free bytes kept in reserve: below this, new writers are refused.
     pub storage_reserve_bytes: u64,
 }
 
@@ -61,7 +40,6 @@ impl std::fmt::Display for ResourceLimits {
     }
 }
 
-/// Pressure level of the state filesystem.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Pressure {
     #[default]
@@ -70,14 +48,12 @@ pub(crate) enum Pressure {
     Critical,
 }
 
-/// Last observation of the state filesystem.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Storage {
     pub level: Pressure,
     pub free: Option<u64>,
 }
 
-/// Bytes available to the service's user on the filesystem holding `path`.
 pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     rustix::fs::statvfs(path)
         .ok()
@@ -89,7 +65,6 @@ fn mib(bytes: u64) -> u64 {
 }
 
 impl Service {
-    /// Number of Objectives other than `except` whose execution is live (one worker each).
     fn live_workers(&self, except: ObjectiveId) -> usize {
         self.objectives
             .iter()
@@ -97,7 +72,6 @@ impl Service {
             .count()
     }
 
-    /// Why a new worker for `oid` may not start now (aggregate quota or storage pressure).
     pub(crate) fn worker_blocker(&self, oid: ObjectiveId) -> Option<String> {
         let live = self.live_workers(oid);
         let max = self.limits.max_workers;
@@ -109,7 +83,6 @@ impl Service {
         self.storage_blocker()
     }
 
-    /// Why work that adds writers on the state filesystem is refused now.
     pub(crate) fn storage_blocker(&self) -> Option<String> {
         (self.free_space.level == Pressure::Critical).then(|| {
             format!(
@@ -124,13 +97,11 @@ impl Service {
         rejection(ErrorCode::LimitReached, SafeAction::Refresh, &detail)
     }
 
-    /// Re-reads free space (every second from the tick) and announces level changes.
     pub(crate) fn check_free_space(&mut self) {
         let free = free_bytes(&self.paths.state);
         let level = match free {
             Some(free) if free < self.limits.storage_reserve_bytes => Pressure::Critical,
             Some(free) if free < self.limits.storage_warn_bytes => Pressure::Low,
-            // An unreadable filesystem state is not invented pressure; IO errors still surface.
             _ => Pressure::Normal,
         };
         let changed = level != self.free_space.level;
@@ -144,7 +115,6 @@ impl Service {
         }
     }
 
-    /// Sends the current storage notice (also re-sent to a newly attached client).
     pub(crate) fn announce_storage(&mut self, transition: bool) {
         let free = self.free_space.free.map_or(0, mib);
         match self.free_space.level {

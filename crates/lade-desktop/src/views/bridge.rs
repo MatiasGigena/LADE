@@ -1,9 +1,3 @@
-//! Moves work onto the GTK main context without blocking it.
-//!
-//! [`UpdateSender`] is the handle a network thread (WP-G) uses to deliver [`StoreUpdate`]s: a
-//! bounded channel plus an idle wake-up on the default main context. Bursts are drained in batches
-//! (and activity deltas coalesced) so the views refresh once per batch, never per byte.
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -15,13 +9,11 @@ use gtk4::glib;
 
 use crate::presentation::store::{Store, StoreUpdate};
 
-/// Maximum updates applied per main-loop iteration before yielding.
 const DRAIN_BATCH: usize = 512;
 
 static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
 
 thread_local! {
-    // Main-thread registry: the idle callback carries only a key, never the `Rc` store.
     static TARGETS: RefCell<HashMap<u64, Weak<Store>>> = RefCell::new(HashMap::new());
 }
 
@@ -31,7 +23,6 @@ struct Shared {
     key: u64,
 }
 
-/// Cloneable, `Send` handle for delivering updates from any thread.
 #[derive(Clone)]
 pub struct UpdateSender {
     sender: SyncSender<StoreUpdate>,
@@ -40,13 +31,10 @@ pub struct UpdateSender {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SendError {
-    /// The store (and window) are gone.
     Closed,
 }
 
 impl UpdateSender {
-    /// Delivers an update; blocks the *calling* thread while the bounded queue is full
-    /// (backpressure), never the GTK main context.
     pub fn send(&self, update: StoreUpdate) -> Result<(), SendError> {
         match self.sender.try_send(update) {
             Ok(()) => {}
@@ -91,7 +79,6 @@ fn drain(shared: &Arc<Shared>) {
     }
 }
 
-/// Connects a store (on the main thread) and returns the sender for other threads.
 pub fn connect(store: &Rc<Store>, capacity: usize) -> UpdateSender {
     let (sender, receiver) = sync_channel(capacity.max(1));
     let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);

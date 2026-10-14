@@ -1,13 +1,8 @@
-//! Mechanical conversions between protocol DTOs (`lade_protocol::client`) and presentation view
-//! models. Wire → view is total (decoded DTOs are already valid); view → wire validates and fails
-//! with a short reason when a presentation value is not a valid wire value.
-
 use lade_protocol::client as wire;
 use lade_protocol::types::{self, Counter, Id, WirePath};
 
 use crate::presentation::model as view;
 
-/// A presentation value that cannot be expressed on the wire.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Invalid(pub String);
 
@@ -16,9 +11,6 @@ impl Invalid {
         Self(format!("invalid {what}"))
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Primitives.
 
 pub fn timestamp(t: &types::Timestamp) -> view::Timestamp {
     view::Timestamp(t.unix_ms())
@@ -126,9 +118,6 @@ pub fn to_basis(b: &view::Basis) -> Result<wire::Basis, Invalid> {
     })
 }
 
-// ---------------------------------------------------------------------------------------------
-// Enumerations.
-
 fn lifecycle(l: wire::Lifecycle) -> view::Lifecycle {
     match l {
         wire::Lifecycle::Defined => view::Lifecycle::Defined,
@@ -221,7 +210,6 @@ pub fn notice_level(l: wire::NoticeLevel) -> view::NoticeLevel {
     }
 }
 
-/// Stable wire spelling of an error code (shown to the developer with the rejection).
 pub fn error_code(code: wire::ErrorCode) -> &'static str {
     use wire::ErrorCode as E;
     match code {
@@ -249,7 +237,6 @@ pub fn error_code(code: wire::ErrorCode) -> &'static str {
     }
 }
 
-/// What the developer can safely do next, in words.
 pub fn safe_action(action: wire::SafeAction) -> Option<&'static str> {
     match action {
         wire::SafeAction::Refresh => Some("Refresh and try again."),
@@ -260,9 +247,6 @@ pub fn safe_action(action: wire::SafeAction) -> Option<&'static str> {
         wire::SafeAction::None => None,
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Shapes.
 
 pub fn settings(s: &wire::Settings) -> view::Settings {
     view::Settings {

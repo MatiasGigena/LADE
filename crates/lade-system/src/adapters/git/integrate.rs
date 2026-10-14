@@ -1,11 +1,3 @@
-//! Merge preview and protected squash integration into the Integration Target.
-//!
-//! Integration never uses `reset --hard`, `stash` or `checkout`: the target ref moves by
-//! compare-and-swap and a checked-out target worktree is brought along with a two-tree
-//! `read-tree -m -u`, which refuses to overwrite local modifications or untracked files. That
-//! step is dry-run first, before the ref moves, so a colliding untracked file refuses cleanly;
-//! if the real step still fails, the ref is moved back by compare-and-swap.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -14,34 +6,22 @@ use super::{
     Repository, Result, TargetBusyReason, Worktree, validate_branch_name,
 };
 
-/// Result of a merge preview.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
-    Clean {
-        tree: GitId,
-    },
-    /// `tree` contains conflict markers; `paths` lists conflicted paths once each.
-    Conflict {
-        tree: GitId,
-        paths: Vec<RepoPath>,
-    },
+    Clean { tree: GitId },
+    Conflict { tree: GitId, paths: Vec<RepoPath> },
 }
 
-/// One worktree that has the target branch checked out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckoutInfo {
     pub path: PathBuf,
-    /// `None` when the worktree directory is missing (prunable).
     pub worktree: Option<Worktree>,
-    /// Tracked changes (staged or unstaged) relative to `HEAD`.
     pub dirty: bool,
-    /// Untracked, non-ignored files exist (not a refusal: `read-tree -u` never overwrites them).
     pub untracked: bool,
     pub in_progress: Vec<InProgress>,
     pub index_locked: bool,
 }
 
-/// Where and how the Integration Target is checked out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetCheckout {
     pub branch: String,
@@ -49,13 +29,10 @@ pub struct TargetCheckout {
     pub checkouts: Vec<CheckoutInfo>,
 }
 
-/// Input to [`Repository::integrate_squash`].
 #[derive(Clone, Debug)]
 pub struct SquashRequest {
     pub target_branch: String,
-    /// The target commit the approval was bound to.
     pub expected_target: GitId,
-    /// The approved candidate tree (already merged onto `expected_target`).
     pub candidate_tree: GitId,
     pub message: String,
     pub timestamp: Option<i64>,
@@ -64,12 +41,10 @@ pub struct SquashRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SquashOutcome {
     pub commit: GitId,
-    /// The worktree whose files and index were updated, when the target was checked out.
     pub updated_worktree: Option<PathBuf>,
 }
 
 impl Repository {
-    /// Three-way merge preview of two commits without touching any ref, index or worktree.
     pub fn merge_tree(&self, target: &GitId, candidate: &GitId) -> Result<MergeOutcome> {
         if self.git_version() < MIN_MERGE_TREE_VERSION {
             return Err(GitError::UnsupportedVersion {
@@ -112,7 +87,6 @@ impl Repository {
         Ok(MergeOutcome::Conflict { tree, paths })
     }
 
-    /// Which worktrees have `branch` checked out, and whether each is clean and idle.
     pub fn target_checkout_state(&self, branch: &str) -> Result<TargetCheckout> {
         validate_branch_name(branch)?;
         let refname = format!("refs/heads/{branch}");
@@ -184,18 +158,6 @@ impl Repository {
         Ok((dirty, untracked))
     }
 
-    /// Squash-integrate an approved candidate tree onto the target branch.
-    ///
-    /// 1. The target ref must equal `expected_target` ([`GitError::TargetMoved`] otherwise).
-    /// 2. If the target is checked out, that worktree must exist, be clean (tracked content), hold
-    ///    no `index.lock` and have no merge/rebase/cherry-pick/revert/bisect in progress; otherwise
-    ///    a typed refusal is returned and nothing is changed.
-    /// 3. A checked-out target's checkout step is dry-run; an untracked file the candidate would
-    ///    overwrite is [`GitError::TargetUntracked`] and nothing is changed.
-    /// 4. A commit with the fixed LADE identity is created (`candidate_tree`, parent
-    ///    `expected_target`) and the ref is moved by compare-and-swap.
-    /// 5. A checked-out worktree is updated with `read-tree -m -u <old> <new>`; on failure the ref
-    ///    is moved back by compare-and-swap and [`GitError::CheckoutFailed`] is returned.
     pub fn integrate_squash(&self, request: &SquashRequest) -> Result<SquashOutcome> {
         let state = self.target_checkout_state(&request.target_branch)?;
         let refname = format!("refs/heads/{}", request.target_branch);
@@ -266,13 +228,6 @@ impl Repository {
         }
     }
 
-    /// Completes the checkout step of a squash integration whose ref move survived a crash of
-    /// the integrating process (IMP-013 recovery): when `branch` holds `commit` and is checked
-    /// out in exactly one idle worktree, runs `read-tree -m -u <expected_target> <commit>` there.
-    /// The two-tree merge keeps index entries that already match `commit` and refuses to
-    /// overwrite local modifications, so a completed or locally edited checkout is never
-    /// damaged; calling it again is harmless. Returns the updated worktree, or `None` when the
-    /// target is not checked out. The ref is never moved back here.
     pub fn finish_integration_checkout(
         &self,
         branch: &str,
@@ -328,11 +283,6 @@ impl Repository {
 }
 
 impl Repository {
-    /// Before any ref moves: a dry run of the checkout step (`read-tree -m -u -n`, which writes
-    /// neither index nor files) in the target worktree. A refusal — in practice an untracked
-    /// file where the candidate adds one — is [`GitError::TargetUntracked`] naming the colliding
-    /// paths, and nothing has been changed. The real step can still fail if the worktree
-    /// changes in between; then the compare-and-swap revert of [`Self::integrate_squash`] applies.
     fn preflight_checkout(&self, worktree: &Worktree, request: &SquashRequest) -> Result<()> {
         let out = worktree
             .git("read-tree-preflight")
@@ -367,7 +317,6 @@ impl Repository {
     }
 }
 
-/// Most colliding paths a [`GitError::TargetUntracked`] names.
 const MAX_REPORTED_PATHS: usize = 32;
 
 fn checked_out_worktree(info: &CheckoutInfo) -> Result<Worktree> {

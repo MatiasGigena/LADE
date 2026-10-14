@@ -55,7 +55,7 @@ def main():
     event.xclient.message_type = xlib.XInternAtom(display, b'WM_PROTOCOLS', 0)
     event.xclient.format = 32
     event.xclient.data[0] = xlib.XInternAtom(display, b'WM_DELETE_WINDOW', 0)
-    event.xclient.data[1] = 0  # CurrentTime
+    event.xclient.data[1] = 0
     if not xlib.XSendEvent(display, window, 0, NO_EVENT_MASK, ctypes.byref(event)):
         sys.exit('x11-close-window: XSendEvent failed')
     xlib.XFlush(display)

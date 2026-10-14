@@ -1,6 +1,3 @@
-//! Sandbox integration tests. They require bubblewrap and prlimit; when `bwrap` is missing each
-//! test prints a skip notice and returns.
-
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -50,7 +47,6 @@ fn run(tools: &SandboxTools, spec: &SandboxSpec) -> RunOutcome {
     .unwrap()
 }
 
-/// System calls through Python's `ctypes` (errno, 0 on success), for the seccomp tests.
 const SYSCALLS: &str = r#"
 import ctypes, platform
 libc = ctypes.CDLL(None, use_errno=True)
@@ -85,8 +81,6 @@ fn seccomp_denies_the_reviewed_system_calls_with_eperm() {
         eprintln!("skipping seccomp test: /usr/bin/python3 not installed");
         return;
     }
-    // Outside the sandbox, disabling ASLR through personality() is allowed for anyone: the
-    // refusal inside comes from the filter, not from missing privileges.
     let host = Command::new("/usr/bin/python3")
         .args(["-I", "-c", SYSCALLS])
         .output()
@@ -150,8 +144,6 @@ fn sandbox_tmp_is_size_limited() {
     assert!(size <= 1 << 20, "{out}");
 }
 
-/// The program's own descriptors: `ls -l /proc/<shell>/fd` run by the shell without a pipeline
-/// (a pipeline would show the shell's transient pipe ends), as fd numbers.
 const LIST_FDS: &str = "ls -l /proc/$$/fd";
 
 fn open_fds(listing: &str) -> Vec<u32> {
@@ -167,7 +159,6 @@ fn open_fds(listing: &str) -> Vec<u32> {
 fn only_stdio_reaches_the_sandboxed_program() {
     let Some(tools) = tools() else { return };
     let tmp = TempDir::new("sbx-fds");
-    // The seccomp and gate pipes are consumed and closed by bwrap and the gate.
     let outcome = run(
         &tools,
         &sh_spec(
@@ -183,10 +174,6 @@ fn only_stdio_reaches_the_sandboxed_program() {
     assert_eq!(open_fds(&out), [0, 1, 2], "only stdio is open: {out}");
 }
 
-/// Many sandboxes spawned at once (as by concurrent Objectives, terminals and checks), while
-/// this process also holds a descriptor without close-on-exec (as a careless parent of `laded`
-/// could leave): every sandboxed program still sees exactly stdin, stdout and stderr — no other
-/// sandbox's seccomp or gate pipe, no inherited host descriptor.
 #[test]
 fn concurrent_sandboxes_get_only_their_own_stdio() {
     let Some(tools) = tools() else { return };
@@ -229,8 +216,6 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
     assert_eq!(child.wait().unwrap().code(), Some(0));
     assert!(started.exists());
 
-    // A supervisor that never opens the gate (it died or gave up) leaves an empty gate: the
-    // sandbox ends with status 125 without running the program.
     fs::remove_file(&started).unwrap();
     let mut cmd = sh_spec(&script, tmp.path()).command(&tools).unwrap();
     cmd.command_mut()
@@ -242,8 +227,6 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
     assert!(!started.exists(), "the program ran without the gate");
 }
 
-/// Live host processes running exactly `sleep <marker>` (not shells or bwrap whose argv merely
-/// mentions it). Zombies are excluded: they have exited and hold no resources but a pid.
 fn processes_with(marker: &str) -> Vec<u32> {
     let expected = format!("sleep\0{marker}\0").into_bytes();
     fs::read_dir("/proc")
@@ -310,7 +293,6 @@ fn environment_is_cleared_to_the_allowlist() {
     assert!(spec.env("BAD-NAME", "x").is_err());
     let outcome = run(&tools, &spec);
     assert_eq!(outcome.exit_code, Some(0));
-    // Nothing is inherited, not even the PWD bwrap exports for --chdir (`env -u PWD`).
     assert_eq!(
         String::from_utf8_lossy(&outcome.output_tail),
         "ONLY_THIS=1\n"
@@ -333,7 +315,6 @@ fn network_is_unreachable() {
     let out = String::from_utf8_lossy(&outcome.output_tail);
     assert!(!outcome.timed_out);
     assert!(!out.contains("CONNECTED"), "{out}");
-    // Only the header line: no routes in the private network namespace.
     assert!(out.trim_end().ends_with('1'), "{out}");
 }
 
@@ -441,7 +422,6 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
         "descendants survived bwrap kill"
     );
 
-    // Supervisor loss: the sandbox's parent dies without cleaning up (--die-with-parent).
     let marker = "4444.0723";
     let script = format!("setsid nohup sleep {marker} >/dev/null 2>&1 & sleep 1000");
     let cmd = sh_spec(&script, tmp.path()).command(&tools).unwrap();
@@ -466,7 +446,6 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
     );
 }
 
-/// The sandbox command as one shell command line.
 fn shell_line(cmd: &SandboxCommand) -> String {
     let cmd = cmd.get_command();
     let mut line = shell_quote(cmd.get_program().as_encoded_bytes());

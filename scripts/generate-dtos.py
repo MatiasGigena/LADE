@@ -33,7 +33,6 @@ def render(s):
 
 definitions = dict(client['$defs'])
 for name, definition in worker['$defs'].items():
-    # Shared names must denote the same wire shape in both contracts.
     assert definitions.setdefault(name, definition) == definition, name
 declarations = []
 for name, definition in definitions.items():

@@ -237,7 +237,7 @@ fn oversized_outbound_content_is_rejected() {
         encode(&frame, Framing::Client).unwrap_err().0,
         "invalid_schema"
     );
-    let text = "\u{1}".repeat(lade_protocol::MAX_STRING); // 6 escaped bytes each.
+    let text = "\u{1}".repeat(lade_protocol::MAX_STRING);
     let item = WorkerEnvelope::new(WorkerBody::ActivityDelta {
         item_id: typed_id(4),
         append_text: text,
@@ -245,7 +245,6 @@ fn oversized_outbound_content_is_rejected() {
     assert_eq!(encode(&item, Framing::Worker).unwrap_err().0, "frame_size");
 }
 
-/// Delivers input in tiny reads to prove frames are reassembled across read boundaries.
 struct Trickle<'a>(&'a [u8], usize);
 impl std::io::Read for Trickle<'_> {
     fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {

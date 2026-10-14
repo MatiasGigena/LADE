@@ -1,13 +1,3 @@
-//! Contained terminals of the controlling client (IMP-012).
-//!
-//! A terminal is ephemeral interaction, not product state: it is bound to the controlling
-//! lease that opened it and to one Objective, never journaled, never recorded in the store and
-//! never resumed. Scope: the Objective's worktree is writable only while the Objective is
-//! `defined`/`active` and no freeze holds it; a frozen or approved candidate (review writer
-//! exclusion) gets a read-only terminal, and writable terminals are killed before a freeze
-//! captures. Every terminal dies on lease loss (client closes or is dropped), on a lifecycle
-//! that no longer admits it, on `service.stop` and on service shutdown.
-
 use lade_core::domain::ids::ObjectiveId;
 use lade_core::domain::objectives::Lifecycle;
 use lade_protocol::client::{
@@ -27,20 +17,16 @@ use super::convert::{
 use super::handlers::Pending;
 use super::{Flow, JobOutput, ReqCtx, Service};
 
-/// Terminals per Objective (bounded load; the total is `ResourceLimits::max_terminals`).
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
-/// Output bytes per `terminal.output` event, and events per terminal per 100 ms tick.
 const EVENT_BYTES: usize = 32 << 10;
 const EVENTS_PER_TICK: usize = 2;
 
-/// A live terminal of the controlling client.
 pub(crate) struct TermState {
     pub oid: ObjectiveId,
     pub conn: u64,
     pub writable: bool,
     pub handle: Terminal,
     pub seq: u64,
-    /// An incomplete UTF-8 sequence at the end of the previous chunk.
     pub tail: Vec<u8>,
 }
 
@@ -55,8 +41,6 @@ fn unavailable(detail: &str) -> Rejection {
     rejection(ErrorCode::ExecutionUnavailable, SafeAction::None, detail)
 }
 
-/// Decodes `bytes` (after a carried incomplete sequence) as UTF-8, replacing invalid bytes and
-/// keeping a trailing incomplete sequence for the next chunk. NUL bytes are dropped.
 pub(crate) fn decode_chunk(tail: &mut Vec<u8>, bytes: &[u8], last: bool) -> String {
     let mut data = std::mem::take(tail);
     data.extend_from_slice(bytes);
@@ -93,7 +77,6 @@ pub(crate) fn decode_chunk(tail: &mut Vec<u8>, bytes: &[u8], last: bool) -> Stri
 }
 
 impl Service {
-    /// Whether a terminal may be opened for `oid` now, and whether it may write the worktree.
     fn terminal_scope(&self, oid: ObjectiveId) -> Result<bool, Rejection> {
         let st = self.obj(oid)?;
         let record = st.objective().record();
@@ -129,7 +112,6 @@ impl Service {
             let cols = size(&cmd.cols, MAX_COLS, "columns")?;
             let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
             let writable = self.terminal_scope(oid)?;
-            // Terminals still starting count too, so concurrent opens cannot exceed the bound.
             let starting = self
                 .pending
                 .values()
@@ -208,8 +190,6 @@ impl Service {
         let (terminal_id, writable, (cols, rows)) = opened;
         let still_controller = self.controller.as_ref().is_some_and(|c| c.conn == ctx.conn);
         let outcome = result.and_then(|handle| {
-            // Revalidate: the lease, the lifecycle and writer exclusion may have changed while the
-            // sandbox started.
             let scope = self.terminal_scope(oid);
             let admitted = match scope {
                 Ok(now_writable) if still_controller && (now_writable || !writable) => Ok(()),
@@ -298,13 +278,10 @@ impl Service {
         Ok(ReplyData::TerminalClose(Empty {}))
     }
 
-    /// Kills a terminal off the service thread.
     fn kill_detached(&mut self, mut handle: Terminal) {
         self.reap(move || handle.kill());
     }
 
-    /// Removes and kills one terminal and reports it closed. `wait` kills on the service thread
-    /// (writer exclusion before a freeze captures); otherwise the kill runs on the pool.
     fn close_terminal(&mut self, id: &str, reason: TerminalCloseReason, wait: bool) {
         let Some(mut term) = self.terminals.remove(id) else {
             return;
@@ -338,8 +315,6 @@ impl Service {
         }));
     }
 
-    /// Writer exclusion: kills (and waits for) every writable terminal of `oid` before a freeze
-    /// captures the worktree.
     pub(crate) fn exclude_terminal_writers(&mut self, oid: ObjectiveId) {
         let writers: Vec<String> = self
             .terminals
@@ -352,8 +327,6 @@ impl Service {
         }
     }
 
-    /// Closes terminals whose Objective no longer admits them (lifecycle, cleanup, writer
-    /// exclusion). Called after every Objective change.
     pub(crate) fn enforce_terminal_scope(&mut self, oid: ObjectiveId) {
         let scope = self.terminal_scope(oid);
         let stale: Vec<String> = self
@@ -368,8 +341,6 @@ impl Service {
         }
     }
 
-    /// Lease loss or shutdown: every terminal of `conn` (or all) dies, without events (there is no
-    /// client to receive them).
     pub(crate) fn drop_terminals(&mut self, conn: Option<u64>, wait: bool) {
         let ids: Vec<String> = self
             .terminals
@@ -388,7 +359,6 @@ impl Service {
         }
     }
 
-    /// Tick: forwards bounded output and reports terminals that ended.
     pub(crate) fn pump_terminals(&mut self) {
         let ids: Vec<String> = self.terminals.keys().cloned().collect();
         for id in ids {

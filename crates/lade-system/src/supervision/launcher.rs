@@ -1,12 +1,3 @@
-//! The real worker launcher: one bwrap sandbox, one gateway and one set of pipes per launch.
-//!
-//! `launch` checks the sandbox, resolves the provider's egress policy and credentials, starts
-//! the per-launch gateway, spawns `prlimit … bwrap … node <entry>` with piped stdio, records a
-//! pidfile for the startup sweep, and sends `worker.start`. Threads per launch: a writer (bounded
-//! queue of service→worker frames), a monitor (reads and validates worker frames, observes the
-//! exit, then stops the gateway and removes the pidfile) and a stderr forwarder (bounded,
-//! rate-limited diagnostic lines).
-
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt;
@@ -43,36 +34,21 @@ use crate::adapters::sandbox::{
     find_program, run_bounded, sandbox_available, worker_spec,
 };
 
-/// Node options for the worker. `--disable-wasm-trap-handler` makes V8 bounds-check
-/// WebAssembly memory instead of reserving ~10 GiB guard regions per instance (Node's type
-/// stripping and undici's HTTP parser are WebAssembly), which is what lets an address-space
-/// limit work at all.
 pub const NODE_ARGS: &[&str] = &["--disable-wasm-trap-handler"];
 
-/// Queued service→worker frames per launch.
 pub const WRITE_QUEUE_FRAMES: usize = 256;
-/// Queued service→worker bytes per launch.
 pub const WRITE_QUEUE_BYTES: usize = 8 << 20;
-/// Grace period after `worker.shutdown` (or stdout EOF) before `SIGKILL`.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
-/// Forwarded stderr line bound and rate.
 pub const STDERR_LINE_BYTES: usize = 512;
 pub const STDERR_LINES_PER_SECOND: u32 = 100;
 const KILL_WAIT: Duration = Duration::from_secs(10);
-/// Wall-clock bound and largest accepted output of one model-catalogue run.
 pub const CATALOG_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_CATALOG_BYTES: u64 = 4 << 20;
 const POLL: Duration = Duration::from_millis(10);
-/// `sockaddr_un.sun_path` holds 108 bytes including the terminating NUL.
 pub const MAX_SOCKET_PATH: usize = 107;
-/// Subdirectory of the runtime directory holding gateway sockets (`$RUNTIME/g`).
 pub const GATEWAY_SOCKET_DIR: &str = "g";
-/// Largest execution generation the startup path-length check reserves room for.
 pub const RESERVED_GENERATION: u64 = 9_999_999;
 
-/// Gateway socket for one launch: `<dir>/<12 hex of the objective id>-<generation>.sock`. The name
-/// is short so the path stays inside `sun_path` for any reasonable runtime directory, independent
-/// of how long the state directory is.
 pub fn gateway_socket_path(dir: &Path, objective_id: &str, generation: u64) -> PathBuf {
     let short: String = objective_id
         .chars()
@@ -82,49 +58,28 @@ pub fn gateway_socket_path(dir: &Path, objective_id: &str, generation: u64) -> P
     dir.join(format!("{short}-{generation}.sock"))
 }
 
-/// Whether `path` can be bound as a Unix socket (`sun_path` limit).
 pub fn socket_path_fits(path: &Path) -> bool {
     path.as_os_str().len() <= MAX_SOCKET_PATH
 }
 
-/// Everything the launcher needs besides the per-launch request.
 #[derive(Clone, Debug)]
 pub struct LauncherConfig {
-    /// Node executable (canonicalized; its installation prefix is bound read-only).
     pub node: PathBuf,
-    /// LADE worker package (bound read-only, includes its `node_modules`).
     pub worker_dir: PathBuf,
-    /// Worker entry script; `<worker_dir>/src/worker.ts` by default. Tests may point it at
-    /// another script inside `worker_dir`.
     pub entry: PathBuf,
-    /// Node options before the entry; [`NODE_ARGS`] by default.
     pub node_args: Vec<OsString>,
-    /// Private (0700) directory for pidfiles (`$STATE/run`).
     pub run_dir: PathBuf,
-    /// Private (0700) directory for gateway sockets (`$RUNTIME/g`); kept separate from
-    /// `run_dir` so socket paths stay short whatever the state directory is.
     pub socket_dir: PathBuf,
     pub limits: Limits,
-    /// Egress policy per provider id; a provider without an entry cannot launch.
     pub policies: BTreeMap<String, EgressPolicy>,
     pub credentials: CredentialSource,
-    /// Upstream proxy that gateway tunnels are chained through (`HTTPS_PROXY`).
     pub upstream_proxy: Option<UpstreamProxy>,
-    /// Further read-only binds inside the sandbox.
     pub extra_ro: Vec<PathBuf>,
-    /// Delegated cgroup subtree: each sandbox then runs in a leaf of its Objective's limited
-    /// cgroup. `None` (no delegation): the `prlimit` limits only.
     pub cgroups: Option<Arc<SandboxCgroups>>,
-    /// Test-only: register and launch the offline `lade-fixture` model (`FIXTURE_SWITCH` is then
-    /// passed to the worker and the catalogue). Off by default; the provider is then refused.
     pub test_fixture_provider: bool,
 }
 
 impl LauncherConfig {
-    /// Defaults: `node` from `PATH`, the worker package from `LADE_WORKER_DIR` or this
-    /// repository's `packages/pi-worker`, [`WORKER_LIMITS`], the default provider policies,
-    /// credentials from the process environment, the Secret Service and the credentials file, and
-    /// `HTTPS_PROXY`.
     pub fn new(run_dir: PathBuf, socket_dir: PathBuf) -> Result<Self, LaunchError> {
         let worker_dir = default_worker_dir()?;
         Ok(Self {
@@ -145,8 +100,6 @@ impl LauncherConfig {
     }
 }
 
-/// The real path of `explicit`, else of `LADE_NODE` (an absolute path), else of `node` found on
-/// `PATH`.
 pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
     let from_env = std::env::var_os("LADE_NODE").map(PathBuf::from);
     if let Some(path) = &from_env
@@ -169,10 +122,6 @@ pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
         .map_err(|_| LaunchError::SandboxUnavailable("node runtime path unresolvable".into()))
 }
 
-/// The worker package, canonical. Resolution order: `LADE_WORKER_DIR`; the bundle layout
-/// `<dir of the running executable>/../lib/lade/pi-worker` (see `scripts/bundle`); and only in
-/// debug builds (development and tests) this repository's `packages/pi-worker`. Release builds
-/// never fall back to the compiled-in source tree.
 pub fn default_worker_dir() -> Result<PathBuf, LaunchError> {
     let exe = std::env::current_exe().ok();
     worker_dir_from(
@@ -181,7 +130,6 @@ pub fn default_worker_dir() -> Result<PathBuf, LaunchError> {
     )
 }
 
-/// [`default_worker_dir`] with explicit inputs (testable without changing the environment).
 pub fn worker_dir_from(
     env_dir: Option<PathBuf>,
     current_exe: Option<&Path>,
@@ -215,19 +163,14 @@ pub fn worker_dir_from(
     ))
 }
 
-/// Locate the sandbox helpers and return the launcher (the sandbox itself is probed on every
-/// launch).
 pub fn default_launcher(config: LauncherConfig) -> Result<Box<dyn WorkerLauncher>, LaunchError> {
     Ok(Box::new(SandboxLauncher::new(config)?))
 }
 
-/// [`WorkerLauncher`] running every worker in a bwrap sandbox. There is no unsandboxed path.
 #[derive(Debug)]
 pub struct SandboxLauncher {
     config: LauncherConfig,
     tools: SandboxTools,
-    /// A sandbox probe succeeded once; [`WorkerLauncher::preflight`] then skips re-probing
-    /// (every launch still probes).
     sandbox_ok: AtomicBool,
 }
 
@@ -266,7 +209,6 @@ fn safe_id(id: &str) -> bool {
 }
 
 impl SandboxLauncher {
-    /// The LADE profile next to the run directory (`$STATE/profile`).
     fn profile_dir(&self) -> Option<PathBuf> {
         self.config
             .run_dir
@@ -274,17 +216,12 @@ impl SandboxLauncher {
             .map(|state| state.join("profile"))
     }
 
-    /// Custom providers of the LADE profile's `models.json` (none when it is absent or invalid).
     fn custom_providers(&self) -> Vec<CustomProvider> {
         self.profile_dir()
             .and_then(|dir| profile::profile_providers(&dir).ok())
             .unwrap_or_default()
     }
 
-    /// The reviewed egress policy and the released credentials for `provider`: a built-in policy,
-    /// or the exact endpoint of a custom provider defined in the LADE profile. Without `release`
-    /// only the availability of the credentials is checked (no values are returned, and the
-    /// Secret Service is asked only when the environment and the file do not suffice).
     fn resolve_provider(
         &self,
         provider: &str,
@@ -499,7 +436,6 @@ impl WorkerLauncher for SandboxLauncher {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        // Spawning consumes the command, which holds the credential environment.
         let (mut child, mut gate) = cmd.spawn().map_err(LaunchError::Io)?;
         let (Some(stdin), Some(stdout), Some(stderr)) =
             (child.stdin.take(), child.stdout.take(), child.stderr.take())
@@ -519,7 +455,6 @@ impl WorkerLauncher for SandboxLauncher {
             leaf: Mutex::new(None),
             pidfile,
         });
-        // The program starts only once the sandbox is recorded and placed.
         let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
             shared.poll_exit().is_some()
         })
@@ -571,7 +506,6 @@ impl WorkerLauncher for SandboxLauncher {
     }
 }
 
-/// Reads at most [`MAX_CATALOG_BYTES`] of a catalogue output file.
 pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
     let meta = std::fs::symlink_metadata(path).map_err(LaunchError::Io)?;
     if !meta.is_file() || meta.len() > MAX_CATALOG_BYTES {
@@ -580,15 +514,12 @@ pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
     std::fs::read(path).map_err(LaunchError::Io)
 }
 
-/// State shared by the control handle and the per-launch threads.
 struct Shared {
     child: Mutex<Child>,
     status: Mutex<Option<ExitStatus>>,
     exited: Condvar,
-    /// The sandbox's PID-namespace init (child of bwrap), once discovered.
     init: Mutex<Option<PidRecord>>,
     gateway: Mutex<Option<Gateway>>,
-    /// The sandbox's cgroup leaf under a delegated subtree (removed after the exit).
     leaf: Mutex<Option<CgroupLeaf>>,
     pidfile: PathBuf,
 }
@@ -626,8 +557,6 @@ impl Shared {
         }
     }
 
-    /// `SIGKILL` the namespace init (ending every sandboxed process) and bwrap. The child lock
-    /// is held, so the outer pid cannot have been reaped and reused meanwhile.
     fn kill(&self) {
         let mut child = lock(&self.child);
         if matches!(child.try_wait(), Ok(Some(_))) {
@@ -639,8 +568,6 @@ impl Shared {
         let _ = child.kill();
     }
 
-    /// Revoke network access, drop the pidfile and remove the cgroup leaf (killing anything left
-    /// in it). Only after the process has exited.
     fn finish(&self) {
         if let Some(mut gateway) = lock(&self.gateway).take() {
             gateway.stop();
@@ -764,8 +691,6 @@ fn monitor(
     }));
 }
 
-/// Forward worker stderr lines to `out`, prefixed, each cut to [`STDERR_LINE_BYTES`], control
-/// characters replaced, at most [`STDERR_LINES_PER_SECOND`] lines per second (excess counted).
 pub(crate) fn forward_stderr(mut from: impl Read, label: &str, out: &mut impl Write) {
     let mut line: Vec<u8> = Vec::with_capacity(STDERR_LINE_BYTES);
     let mut cut = false;
@@ -824,7 +749,6 @@ pub(crate) fn forward_stderr(mut from: impl Read, label: &str, out: &mut impl Wr
     }
 }
 
-/// Control handle for one launched sandbox. Dropping it terminates the sandbox.
 pub struct SandboxWorker {
     shared: Arc<Shared>,
     tx: Option<SyncSender<Vec<u8>>>,
@@ -888,7 +812,6 @@ impl WorkerControl for SandboxWorker {
             let _ = self.send(WorkerBody::Shutdown);
         }
         self.terminated = true;
-        // Closing the queue closes stdin after the shutdown frame: the worker also exits on EOF.
         self.tx = None;
         if self.shared.wait_exit(SHUTDOWN_GRACE).is_none() {
             self.shared.kill();

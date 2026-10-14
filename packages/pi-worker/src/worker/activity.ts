@@ -4,10 +4,8 @@ import type { Id } from "../dto.ts";
 import type { ActivityItemBody, ActivityRole, OutboundBody, TurnState } from "./wire.ts";
 import { MAX_ERROR_MESSAGE } from "./wire.ts";
 
-/** Per-item text bound from delivery plan §4.2/§7. */
 export const MAX_ITEM_BYTES = 192 * 1024;
 
-/** JSON escaping can grow text up to 6x; keep every encoded item well below the 1 MiB frame. */
 const MAX_ENCODED_TEXT = 900 * 1024;
 
 const MAX_TITLE = 200;
@@ -20,7 +18,6 @@ type ToolOutput = Pick<AgentToolResult<void>, "content">;
 
 interface Bounded { text: string; truncated: boolean; bytes: number }
 
-/** UTF-8 prefix of at most MAX_ITEM_BYTES (lone surrogates normalised) whose JSON fits a frame. */
 export function boundText(text: string): Bounded {
   const bytes = Buffer.from(text, "utf8");
   let limit = MAX_ITEM_BYTES;
@@ -36,17 +33,12 @@ export function boundText(text: string): Bounded {
   }
 }
 
-/**
- * At most `max` UTF-16 code units of `text`, never ending in the high half of a surrogate pair: a
- * lone surrogate cannot be encoded on the wire, so the frame would be rejected.
- */
 export function prefix(text: string, max: number): string {
   if (text.length <= max) return text;
 
   return text.slice(0, isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max);
 }
 
-/** Diagnostic text for worker.error: one line, likely credentials masked, never longer than the wire cap. */
 export function safeMessage(text: string): string {
   const line = text.replace(/\p{Cc}+/gu, " ").replace(/[A-Za-z0-9_\-+/=.]{32,}/g, "[redacted]").trim();
 
@@ -75,11 +67,6 @@ interface Block { itemId: Id; role: ActivityRole; title: string; sent: number; c
 
 interface Tool { itemId: Id; name: string; title: string; args: string }
 
-/**
- * Projects SDK session events onto §4.2 activity bodies. Streaming text/thinking is announced as an
- * empty item, extended by deltas keyed by content index, and replaced by the authoritative
- * `message_end` content under the same item_id. Tool executions are one `tool` item each.
- */
 export class ActivityMapper {
   private readonly send: (body: OutboundBody) => void;
   private readonly blocks = new Map<number, Block>();
@@ -127,7 +114,6 @@ export class ActivityMapper {
     }
   }
 
-  /** A worker-originated transcript note (never contains prompt or source text). */
   system(title: string, text: string, isError: boolean): void {
     this.item(newId(), "system", title, text, isError, undefined);
   }
@@ -186,13 +172,11 @@ export class ActivityMapper {
     let text = block.carry + delta;
     block.carry = "";
 
-    // Never split a surrogate pair across deltas; hold the high half for the next chunk.
     if (text.length > 0 && isHighSurrogate(text.charCodeAt(text.length - 1))) { block.carry = text.slice(-1); text = text.slice(0, -1); }
 
     if (block.capped || text.length === 0) return;
     const size = Buffer.byteLength(text);
 
-    // The final message_end item carries the truncated flag; stop streaming at the item bound.
     if (block.sent + size > MAX_ITEM_BYTES) { block.capped = true;
 
  return; }

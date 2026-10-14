@@ -1,12 +1,3 @@
-//! `available_actions` is the client's only authority source: for every action it projects, the
-//! matching request must agree. For each Objective state below, every action is tried on a fresh
-//! Objective in that state: an enabled action's request must be accepted and a disabled action's
-//! request must be rejected.
-//!
-//! `feedback.submit` is excluded here (it needs inspected drafts; the flow tests cover it), and an
-//! enabled `review.approve` is sent with an override reason, which the projection announces as
-//! required when evidence is missing.
-
 mod service_support;
 
 use std::fs;
@@ -69,7 +60,6 @@ fn ok(result: Result<ReplyData, lade_protocol::client::Rejection>, what: &str) -
     result.unwrap_or_else(|r| panic!("{what}: {:?} {}", r.code, r.detail))
 }
 
-/// Writes a unique file into the Objective worktree and registers a working capture.
 fn write_change(env: &Env, client: &mut Client, objective: &Id) {
     let n = FILES.fetch_add(1, Ordering::SeqCst);
     fs::write(
@@ -176,7 +166,6 @@ fn build(env: &Env, client: &mut Client, workspace: &Id, state: State) -> Id {
     objective
 }
 
-/// The request a client would send for `action` on `d`.
 fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
     let objective = d.objective_id.clone();
     let candidate = d
@@ -256,7 +245,6 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
 #[test]
 fn every_projected_action_agrees_with_its_request() {
     let env = Env::new("svc-actions");
-    // Many live Objectives at once: the aggregate worker quota is not under test here.
     let service = env.start_limited(
         FakeLauncher::shared(),
         lade_system::service::ResourceLimits {
@@ -273,7 +261,6 @@ fn every_projected_action_agrees_with_its_request() {
         let actions = detail(&mut client, &probe).available_actions;
         assert_eq!(actions.len(), 16, "one entry per action");
         for available in actions {
-            // A fresh Objective per action: requests mutate state.
             let objective = build(&env, &mut client, &ws.workspace_id, state);
             let d = detail(&mut client, &objective);
             let projected = d
@@ -337,7 +324,6 @@ fn empty_change_set_disables_freeze_with_the_same_reason_as_the_rejection() {
         reason,
         "No changes to freeze — complete without changes instead"
     );
-    // The request agrees, without stopping the live execution first.
     let rejected = client
         .call(Request::ReviewFreeze(selector(&objective)))
         .unwrap_err();
@@ -401,7 +387,6 @@ fn start_without_credentials_is_refused_synchronously_naming_the_variable() {
     assert_eq!(unchanged.execution.state, ExecutionState::None);
     let refused = start_with(&mut client, &objective, "no-such-provider", "m").unwrap_err();
     assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
-    // The offline fixture provider needs no credentials.
     ok(
         start_with(&mut client, &objective, "lade-fixture", "scripted"),
         "fixture start",
@@ -410,7 +395,6 @@ fn start_without_credentials_is_refused_synchronously_naming_the_variable() {
     service.shutdown();
 }
 
-/// A launcher whose sandbox is unavailable.
 struct NoSandbox;
 
 impl WorkerLauncher for NoSandbox {

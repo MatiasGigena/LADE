@@ -1,8 +1,3 @@
-//! IMP-011 views: the model and thinking picker over the service's catalogue (provider status
-//! and restriction reasons are always shown), the Agent Session section (pi generation, tree with
-//! go-to/fork/clone, compaction, reload, export/import), the LADE-profile resources with explicit
-//! approval of executable extensions, and extension dialogs answered only by the developer.
-
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -19,7 +14,6 @@ use crate::presentation::compat::{
 use crate::presentation::controller::Controller;
 use crate::presentation::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
 
-/// Tree entries shown inline (newest last); the full tree stays in pi.
 const TREE_ROWS: usize = 60;
 
 fn section(title: &str) -> gtk::Box {
@@ -28,7 +22,6 @@ fn section(title: &str) -> gtk::Box {
     section
 }
 
-/// Provider, model and thinking drop-downs bound to the controller's picker choice.
 pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     controller.picker_defaults();
     let block = vbox(space::ITEM);
@@ -177,7 +170,6 @@ fn availability(detail: &ObjectiveDetail, allow_running: bool) -> ActionAvailabi
     }
 }
 
-/// The Agent Session section: pi session facts and operations. `report` shows a local error.
 pub fn session_section(
     controller: &Rc<Controller>,
     detail: &ObjectiveDetail,
@@ -195,7 +187,6 @@ pub fn session_section(
     };
     match &session {
         Some(view) => {
-            // Model and generation are on Activity's state line; here only what it lacks.
             s.append(&label(
                 &format!(
                     "Thinking {} · this generation: {}",
@@ -347,7 +338,6 @@ pub fn session_section(
     s
 }
 
-/// The LADE-profile resources (workspace-wide) with explicit decisions for extensions.
 pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     let s = section("LADE profile resources");
     let Some(inventory) = controller.store.state().compat.inventory.clone() else {
@@ -453,8 +443,6 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     s
 }
 
-/// Open extension-dialog windows by dialog id. A window closed by the developer answers
-/// `Cancel`; a dialog closed by the service closes its window without answering.
 #[derive(Default)]
 pub struct DialogHost {
     open: RefCell<HashMap<String, gtk::Window>>,
@@ -565,7 +553,6 @@ fn present(
     let (controller, ui_id) = (controller.clone(), dialog.ui_id.clone());
     shell.window.connect_close_request(move |_| {
         if !answered.replace(true) {
-            // Closing the window is the developer's explicit dismissal: answered as cancelled.
             let _ = controller.answer_dialog(&ui_id, UiAnswerView::Cancel);
         }
         gtk::glib::Propagation::Proceed

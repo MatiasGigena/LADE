@@ -1,7 +1,3 @@
-//! Test-only presentation data: a Workspace with Objectives in every lifecycle, a frozen main
-//! Objective with Candidates, verifications, drafts (one stale) and inputs, as the ordinary store
-//! updates the transport produces from the service. Compiled only for unit tests.
-
 use super::model::{
     ActionName, ApprovalId, ArtifactDigest, Attention, AvailableAction, Badge, CandidateId,
     CandidateStatus, CandidateSummary, ChangeCounts, DeliveryMode, DeliveryState, Draft, DraftId,
@@ -48,7 +44,6 @@ fn action(action: ActionName, reason: Option<&str>) -> AvailableAction {
 }
 
 fn digest(side: &str, path: &str) -> ArtifactDigest {
-    // Test identities only; not content hashes.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in side.bytes().chain(path.bytes()) {
         h = (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3);
@@ -553,7 +548,6 @@ fn workspace() -> Workspace {
     }
 }
 
-/// The data as a sequence of ordinary store updates.
 pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
     let objectives = summaries(now);
     let mut updates = vec![StoreUpdate::Snapshot {
@@ -582,8 +576,6 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
     updates
 }
 
-/// IMP-011 data: a catalogue with every provider status, one provider's models, a pi session
-/// state and a profile with an extension waiting for approval.
 fn compat_fixture() -> Vec<StoreUpdate> {
     use super::compat::{
         Catalog, CompatUpdate, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,

@@ -44,7 +44,6 @@ fn reference() -> Reference {
     }
 }
 
-/// One instance of every intent, paired with the request name it must produce.
 fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
     use Intent as I;
     use RequestName as N;
@@ -405,7 +404,6 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             Some(N::ObjectiveDeleteHistory),
         ),
     ];
-    // Compile-time reminder: a new intent variant must be added above.
     for (intent, _) in &all {
         match intent {
             I::RetryConnection
@@ -493,7 +491,6 @@ fn every_intent_maps_to_its_request_and_encodes_against_the_schema() {
     let catalog: BTreeSet<RequestName> = RequestName::ALL
         .iter()
         .copied()
-        // snapshot/operation.get are issued by the connection itself.
         .filter(|n| !matches!(n, RequestName::Snapshot | RequestName::OperationGet))
         .collect();
     assert_eq!(
@@ -532,7 +529,6 @@ fn payload_fields_follow_the_intent() {
     let Request::ObjectiveCreate(command) = request(&create).unwrap().unwrap().0 else {
         panic!("objective.create")
     };
-    // Typed hex is normalised; length selects the object format.
     assert_eq!(
         command.start,
         wire::Start::Commit {

@@ -1,9 +1,3 @@
-//! The single client presentation store: service projections (rebuilt from snapshot + events) plus
-//! transient UI state (selection, viewer, unsaved composer and draft text). No widget owns state.
-//!
-//! The store is main-thread only (`Rc`). Other threads send [`StoreUpdate`]s through
-//! `views::bridge::UpdateSender`, which marshals them onto the GTK main context.
-
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -20,9 +14,7 @@ use super::model::{
 };
 use super::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
-/// Maximum retained notices (older ones are dropped from presentation only).
 const MAX_NOTICES: usize = 20;
-/// Terminal sessions kept for display (ended ones are dropped oldest first).
 pub const MAX_TERMINAL_SESSIONS: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,17 +88,12 @@ pub enum StoreUpdate {
         message: String,
     },
     Notice(ServiceNotice),
-    /// Settings changed (`settings.update` reply).
     Settings(Settings),
-    /// The service created an Objective at this window's request: select it.
     Select(ObjectiveId),
-    /// Outcome status of the latest command for an Objective, shown beside its actions
-    /// (`None` clears it).
     CommandStatus {
         objective_id: ObjectiveId,
         status: Option<ServiceNotice>,
     },
-    /// IMP-011 projections (catalogue, session, resources, dialogs).
     Compat(CompatUpdate),
     TerminalOpened {
         objective_id: ObjectiveId,
@@ -125,14 +112,11 @@ pub enum StoreUpdate {
         terminal_id: String,
         end: TerminalEnd,
     },
-    /// A terminal request was refused or could not be sent; shown in the terminal pane.
     TerminalProblem {
         objective_id: ObjectiveId,
         message: String,
     },
-    /// The service accepted `service.stop`: the window ends without reconnecting.
     ServiceStopped,
-    /// Desktop notifications cannot be shown (the board remains the source of attention).
     NotificationsUnavailable {
         reason: String,
     },
@@ -145,7 +129,6 @@ pub enum ActivityChange {
     Delta { index: usize },
 }
 
-/// What changed, so views refresh only the affected parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Change {
     Connection,
@@ -166,18 +149,12 @@ pub enum Change {
     InspectorTab,
     Keymap,
     Layout,
-    /// The model catalogue or the picker's choice changed.
     Catalog,
-    /// An Objective's pi session state, tree or export changed.
     Session(ObjectiveId),
-    /// The LADE-profile resource inventory changed.
     Resources,
-    /// Extension dialogs opened or closed.
     Dialogs,
     Terminal(ObjectiveId),
-    /// The service was stopped on request (Exit/logout).
     Lifetime,
-    /// Availability of the desktop notification channel.
     DesktopAttention,
 }
 
@@ -212,7 +189,6 @@ pub struct ObjectiveUi {
     pub composer_text: String,
     pub composer_mode: DeliveryMode,
     pub feedback_mode: DeliveryMode,
-    /// The current viewer selection mapped to a versioned reference, or why it cannot be.
     pub selection: Option<Result<Reference, String>>,
 }
 
@@ -236,10 +212,7 @@ pub struct UiState {
     pub inspector_tab: InspectorTab,
     pub selected: Option<ObjectiveId>,
     pub archive_expanded: bool,
-    /// Current keyboard shortcuts (a client preference; see `keys`).
     pub keymap: Keymap,
-    /// Responsive composition (see `layout`): class from the allocated width, the region shown in
-    /// the compact composition and whether its Objective details are expanded.
     pub layout: LayoutClass,
     pub compact_region: Region,
     pub compact_details: bool,
@@ -268,8 +241,6 @@ pub enum ViewerContent {
 pub struct Viewer {
     pub key: Option<ViewerKey>,
     pub content: ViewerContent,
-    /// A byte range to select once the file shown under `key` has loaded it (a followed
-    /// content search result), so it becomes the feedback anchor.
     pub reveal: Option<Reveal>,
 }
 
@@ -287,7 +258,6 @@ pub struct ActivityLog {
     pub loaded: bool,
 }
 
-/// Board grouping derived from service attention; archived lifecycles are listed separately.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Board<'a> {
     pub groups: Vec<(Attention, Vec<&'a ObjectiveSummary>)>,
@@ -304,26 +274,18 @@ pub struct PresentationState {
     pub details: HashMap<ObjectiveId, Load<ObjectiveDetail>>,
     pub activity: HashMap<ObjectiveId, ActivityLog>,
     pub changes: HashMap<ObjectiveId, Load<ChangeList>>,
-    /// Objectives whose working capture changed after the shown Change Set was loaded.
     pub working_updated: HashSet<ObjectiveId>,
     pub drafts: HashMap<ObjectiveId, Vec<DraftEditor>>,
     pub inputs: HashMap<ObjectiveId, Vec<InputSummary>>,
     pub viewer: Viewer,
     pub search: Load<SearchResults>,
     pub notices: Vec<ServiceNotice>,
-    /// Notices ever received; keeps growing after `notices` is capped, so "new since dismissed"
-    /// stays decidable.
     pub notices_received: usize,
-    /// Latest command outcome per Objective (rejection, or "Checking outcome…").
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
     pub ui: UiState,
-    /// IMP-011 projections and the model picker's choice.
     pub compat: CompatState,
-    /// Contained terminals of this window, newest last.
     pub terminals: Vec<TerminalSession>,
-    /// `service.stop` was accepted.
     pub service_stopped: bool,
-    /// Why desktop notifications are unavailable, once known.
     pub notifications_unavailable: Option<String>,
 }
 
@@ -401,8 +363,6 @@ impl PresentationState {
         })
     }
 
-    /// Needs attention > Ready for review > Working > Idle, most recently updated first within a
-    /// group; Integrated / Completed / Discarded in the archive.
     pub fn board(&self) -> Board<'_> {
         let mut groups: Vec<(Attention, Vec<&ObjectiveSummary>)> = Attention::BOARD_ORDER
             .iter()
@@ -446,7 +406,6 @@ impl PresentationState {
             .find(|d| &d.draft_id == draft_id)
     }
 
-    /// The latest terminal session of an Objective.
     pub fn terminal_for(&self, id: &ObjectiveId) -> Option<&TerminalSession> {
         self.terminals.iter().rev().find(|t| &t.objective_id == id)
     }
@@ -464,7 +423,6 @@ impl PresentationState {
             .find(|t| t.terminal_id.as_deref() == Some(terminal_id))
     }
 
-    /// Adds a session, dropping the oldest ended ones beyond [`MAX_TERMINAL_SESSIONS`].
     pub fn push_terminal(&mut self, session: TerminalSession) {
         self.terminals.push(session);
         while self.terminals.len() > MAX_TERMINAL_SESSIONS {
@@ -489,7 +447,6 @@ impl PresentationState {
         }
     }
 
-    /// Applies one service-derived update, returning what changed.
     pub fn apply(&mut self, update: StoreUpdate) -> Vec<Change> {
         match update {
             StoreUpdate::Connection(connection) => {
@@ -501,15 +458,12 @@ impl PresentationState {
                         editor.connection_lost();
                         changes.push(Change::DraftStatus(editor.draft_id.clone()));
                     }
-                    // The service ends terminals with the lease.
                     for session in &mut self.terminals {
                         if !matches!(session.status, TerminalStatus::Ended(_)) {
                             session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
                             changes.push(Change::Terminal(session.objective_id.clone()));
                         }
                     }
-                    // Dialogs closed while away would never be reported; the service re-announces
-                    // the ones still open to the next controlling client.
                     if !self.compat.dialogs.is_empty() {
                         self.compat.dialogs.clear();
                         changes.push(Change::Dialogs);
@@ -584,16 +538,12 @@ impl PresentationState {
                 has_more,
             } => {
                 let log = self.activity.entry(objective_id.clone()).or_default();
-                // `has_more` speaks about history older than the page: it decides only when the
-                // page reaches at least as far back as what is already known (or is empty).
                 let known_oldest = log.items.first().map(|i| i.seq);
                 let page_oldest = items.iter().map(|i| i.seq).min();
                 let decides = match (known_oldest, page_oldest) {
                     (Some(known), Some(page)) => page <= known,
                     _ => true,
                 };
-                // A page is authoritative for the items it carries: upsert by item id (a resync
-                // after missed deltas replaces their stale text), then keep one ascending list.
                 let index: HashMap<ActivityItemId, usize> = log
                     .items
                     .iter()
@@ -625,7 +575,7 @@ impl PresentationState {
                 for item in items {
                     if let Some(existing) = log.items.iter_mut().find(|i| i.item_id == item.item_id)
                     {
-                        *existing = item; // authoritative replacement (e.g. message end)
+                        *existing = item;
                         out_of_order = true;
                     } else {
                         out_of_order |= log.items.last().is_some_and(|last| last.seq > item.seq);
@@ -654,7 +604,6 @@ impl PresentationState {
                             ActivityChange::Delta { index },
                         )]
                     }
-                    // A delta for an unknown item means we missed its start; re-query instead.
                     None => Vec::new(),
                 }
             }
@@ -662,7 +611,7 @@ impl PresentationState {
                 let id = list.objective_id.clone();
                 let current_basis = self.objective_ui_mut(&id).basis.clone();
                 if list.basis != current_basis {
-                    return Vec::new(); // reply for a basis the developer already left
+                    return Vec::new();
                 }
                 self.working_updated.remove(&id);
                 let ui = self.objective_ui_mut(&id);
@@ -689,7 +638,6 @@ impl PresentationState {
                 vec![Change::Changes(objective_id)]
             }
             StoreUpdate::WorktreeChanged { objective_id } => {
-                // Never replace the inspected capture invisibly: flag it and let the developer refresh.
                 self.working_updated.insert(objective_id.clone());
                 vec![Change::Changes(objective_id)]
             }
@@ -739,8 +687,6 @@ impl PresentationState {
                         None => editors.push(DraftEditor::from_durable(draft)),
                     }
                 }
-                // A never-saved local draft the service does not list: its first save (if one
-                // was in flight when the link dropped) did not land, so it may be sent again.
                 for editor in editors.iter_mut() {
                     if editor.durable_revision() == 0
                         && !drafts.iter().any(|d| d.draft_id == editor.draft_id)
@@ -748,7 +694,6 @@ impl PresentationState {
                         editor.reconciled();
                     }
                 }
-                // Keep only local drafts never saved (revision 0) besides the durable ones.
                 editors.retain(|e| {
                     e.durable_revision() == 0 || drafts.iter().any(|d| d.draft_id == e.draft_id)
                 });
@@ -1002,7 +947,7 @@ impl PresentationState {
                 content.eof = page.eof;
             }
             ViewerContent::File(content) if content.artifact_digest == page.artifact_digest => {
-                return Vec::new(); // duplicate or non-contiguous page
+                return Vec::new();
             }
             content => {
                 if page.offset != 0 {
@@ -1028,7 +973,6 @@ impl PresentationState {
     }
 }
 
-/// Merges adjacent deltas for the same activity item so bursts cost one view update.
 pub fn coalesce(updates: Vec<StoreUpdate>) -> Vec<StoreUpdate> {
     let mut out: Vec<StoreUpdate> = Vec::with_capacity(updates.len());
     for update in updates {
@@ -1057,7 +1001,6 @@ pub fn coalesce(updates: Vec<StoreUpdate>) -> Vec<StoreUpdate> {
 
 type Listener = Rc<dyn Fn(&[Change])>;
 
-/// Main-thread store handle with change notification.
 pub struct Store {
     state: RefCell<PresentationState>,
     listeners: RefCell<Vec<Listener>>,
@@ -1094,7 +1037,6 @@ impl Store {
         self.notify(changes);
     }
 
-    /// Mutates transient state; the closure returns what changed.
     pub fn update<R>(&self, f: impl FnOnce(&mut PresentationState) -> (R, Vec<Change>)) -> R {
         let (result, changes) = f(&mut self.state.borrow_mut());
         self.notify(changes);
@@ -1249,8 +1191,6 @@ mod tests {
             items: vec![item("a", 1, "hi"), item("b", 2, "par")],
             has_more: false,
         });
-        // Deltas for "b" were missed while disconnected; the re-fetched page carries the full
-        // text and a new item.
         state.apply(StoreUpdate::ActivityPage {
             objective_id: o.clone(),
             items: vec![item("b", 2, "partial text"), item("c", 3, "new")],
@@ -1260,7 +1200,6 @@ mod tests {
         let texts: Vec<&str> = log.items.iter().map(|i| i.text.as_str()).collect();
         assert_eq!(texts, ["hi", "partial text", "new"]);
         assert!(!log.has_more, "a newer page does not reopen older history");
-        // An older page that reaches back further decides `has_more`.
         state.apply(StoreUpdate::ActivityPage {
             objective_id: o.clone(),
             items: vec![item("z", 0, "first")],
@@ -1303,7 +1242,6 @@ mod tests {
             )]
         );
         assert_eq!(state.activity[&o].items[1].text, "partial");
-        // Unknown item deltas are ignored rather than inventing an item.
         assert!(
             state
                 .apply(StoreUpdate::ActivityDelta {
@@ -1426,7 +1364,6 @@ mod tests {
         assert!(changes.contains(&Change::Dialogs));
         assert!(state.compat.dialogs.is_empty());
         state.apply(StoreUpdate::Connection(ConnectionState::Connected));
-        // The service re-announces only the dialogs that are still open.
         assert_eq!(state.apply(dialog("still-open")), vec![Change::Dialogs]);
         let open: Vec<&str> = state
             .compat
@@ -1473,7 +1410,6 @@ mod tests {
             draft.poll(10_000, true).is_none(),
             "outcome unknown until drafts are listed"
         );
-        // The service lists no such draft: the first save never landed.
         state.apply(StoreUpdate::Drafts {
             objective_id: o.clone(),
             drafts: Vec::new(),

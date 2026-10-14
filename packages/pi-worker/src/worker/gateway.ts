@@ -19,7 +19,6 @@ export class GatewayError extends Error {
   constructor(code: string, message: string) { super(message); this.code = code; }
 }
 
-/** Open `socketPath`, send `CONNECT authority`, and resolve with the tunnelled stream after a 2xx reply. */
 export function tunnel(socketPath: string, authority: string): Promise<Socket> {
   if (!AUTHORITY.test(authority)) return Promise.reject(new GatewayError("gateway_target", "invalid tunnel target"));
 
@@ -34,10 +33,8 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
 
     function onTimeout(): void { fail(new GatewayError("gateway_timeout", "gateway CONNECT timed out")); }
 
-    // The gateway closed the connection before a complete CONNECT reply.
     function onEnd(): void { fail(new GatewayError("gateway_protocol", "gateway closed the connection before replying")); }
 
-    /** The handshake's listeners and timer; the established tunnel belongs to its user. */
     function detach(): void {
       socket.removeListener("data", onData); socket.removeListener("error", fail); socket.removeListener("end", onEnd);
       socket.removeListener("timeout", onTimeout); socket.setTimeout(0);
@@ -82,7 +79,6 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
 
 type Connected = (error: Error | null, stream?: Duplex) => void;
 
-/** `host:port` for CONNECT, bracketing IPv6 literals. */
 function authorityOf(host: string, port: number | string): string {
   return host.includes(":") && !host.startsWith("[") ? `[${host}]:${port}` : `${host}:${port}`;
 }
@@ -91,10 +87,6 @@ function hostOf(options: ClientRequestArgs): string {
   return options.hostname ?? options.host ?? "localhost";
 }
 
-/**
- * `node:http` global agent: each connection is a gateway tunnel (the gateway allows only its
- * policy's destinations, so plain HTTP works only where a rule names the port).
- */
 class GatewayHttpAgent extends http.Agent {
   readonly socketPath: string;
 
@@ -111,10 +103,6 @@ class GatewayHttpAgent extends http.Agent {
   }
 }
 
-/**
- * `node:https` global agent: TLS (with the request's own TLS options and SNI) runs end-to-end with
- * the origin over a gateway tunnel, exactly like the undici connector.
- */
 class GatewayHttpsAgent extends https.Agent {
   readonly socketPath: string;
 
@@ -128,10 +116,7 @@ class GatewayHttpsAgent extends https.Agent {
     const servername = options.servername ?? (isIP(host) === 0 ? host : undefined);
 
     tunnel(this.socketPath, authorityOf(host, options.port ?? 443)).then(socket => {
-      // The request's TLS options (ca, client certificates, verification), not its address; a
-      // custom checkServerIdentity is replaced by Node's default (stricter) check.
       const { host: _host, hostname: _hostname, port: _port, path: _path, checkServerIdentity: _check, ...request } = options;
-      // `host` names the identity the certificate is checked against (IP literals have no SNI).
       const tlsOptions: ConnectionOptions = { ...request, socket, host };
 
       if (servername !== undefined) tlsOptions.servername = servername;
@@ -145,7 +130,6 @@ class GatewayHttpsAgent extends https.Agent {
   }
 }
 
-/** Global agents that refuse every connection: the sandbox has no other network. */
 class NoNetworkHttpAgent extends http.Agent {
   override createConnection(_options: ClientRequestArgs, callback: Connected): undefined {
     queueMicrotask(() => callback(new GatewayError("network_unavailable", "network disabled: no LADE gateway socket")));
@@ -158,13 +142,6 @@ class NoNetworkHttpsAgent extends https.Agent {
   }
 }
 
-/**
- * Route every undici connection (and therefore global fetch and the global `WebSocket`, whose
- * `ws:`/`wss:` handshakes use the global dispatcher) and the `node:http`/`node:https` global agents
- * through the LADE gateway. TLS is negotiated end-to-end with the origin over the tunnel; the
- * gateway only sees the authority. Clients that bring their own agent (or `agent: false`) or their
- * own sockets (the `ws` package) bypass the global agents and have no network at all.
- */
 export function installGateway(socketPath: string): void {
   const tls = buildConnector({ timeout: CONNECT_TIMEOUT_MS });
 
@@ -178,13 +155,11 @@ export function installGateway(socketPath: string): void {
   };
 
   setGlobalDispatcher(new Agent({ allowH2: false, connect: connector }));
-  // Node's bundled fetch and npm undici keep separate implementations; use one for both.
   install();
   http.globalAgent = new GatewayHttpAgent(socketPath);
   https.globalAgent = new GatewayHttpsAgent(socketPath);
 }
 
-/** Without a gateway socket the worker has no network: fail every connection with a clear reason. */
 export function installNoNetwork(): void {
   const connector: buildConnector.connector = (_options, callback) => {
     callback(new GatewayError("network_unavailable", "network disabled: no LADE gateway socket"), null);

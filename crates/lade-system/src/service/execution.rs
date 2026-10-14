@@ -1,6 +1,3 @@
-//! Execution lifecycle (start/cancel/resume), supervisor events, ordered input dispatch and
-//! activity persistence/broadcast.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -29,10 +26,8 @@ use super::{JobOutput, ReqCtx, Service};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_ITEM_RETENTION: Duration = Duration::from_secs(60);
-/// Prefix of a failure reason caused by an enforced limit; the summary shows `limit_reached`.
 pub(crate) const LIMIT_REACHED: &str = "limit_reached";
 
-/// `1.5 GiB`, `12.0 MiB`, `256 KiB`.
 fn human_bytes(bytes: u64) -> String {
     const KIB: u64 = 1 << 10;
     const MIB: u64 = 1 << 20;
@@ -45,18 +40,15 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// One writable-storage measurement of a live execution.
 pub(crate) struct StorageUsage {
     oid: ObjectiveId,
     generation: u64,
     bytes: u64,
 }
 
-/// Streaming activity held in memory between periodic flushes.
 #[derive(Default)]
 pub(crate) struct LiveActivity {
     items: HashMap<String, LiveItem>,
-    /// Pending coalesced deltas in arrival order: (objective, item, text).
     deltas: Vec<(ObjectiveId, String, String)>,
 }
 
@@ -106,9 +98,6 @@ pub(crate) fn wire_activity(row: &ActivityRow) -> Option<ActivityItem> {
 }
 
 impl Service {
-    // -----------------------------------------------------------------------------------------
-    // Commands.
-
     pub(crate) fn execution_start(
         &mut self,
         ctx: &mut ReqCtx,
@@ -119,7 +108,6 @@ impl Service {
         let model =
             ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(|e| domain_rejection(&e))?;
         let mut st = self.obj(oid)?.clone();
-        // No worker can launch without the repository (a Workspace unavailable at start).
         self.ws_of(&st)?;
         let session = SessionId::new(new_uuid());
         let generation = st
@@ -149,9 +137,6 @@ impl Service {
         Ok(data)
     }
 
-    /// Refuses synchronously when the launcher can already tell a worker for `provider` could
-    /// not start (sandbox, egress policy, missing credentials — names only, never values), and
-    /// refuses the test-only fixture provider unless the service was started with its switch.
     pub(crate) fn preflight(&self, provider: &str) -> Result<(), Rejection> {
         if provider == FIXTURE_PROVIDER && !self.test_fixture_provider {
             return Err(rejection(
@@ -205,7 +190,6 @@ impl Service {
         if let Some(session) = st.objective().execution().session() {
             self.preflight(session.model.provider())?;
         }
-        // Resume is the explicit continuation for input blocked only by the stopped execution.
         let association = st.objective().execution().session().cloned();
         let mut requeued = Vec::new();
         for (_, input) in &mut st.inputs {
@@ -244,7 +228,6 @@ impl Service {
         Ok(data)
     }
 
-    /// Provisions (lazily) and launches the worker of the current generation on the pool.
     fn launch(&mut self, oid: ObjectiveId, resume: bool) {
         let Some(st) = self.objectives.get(&oid) else {
             return;
@@ -285,7 +268,6 @@ impl Service {
                 preview(record.title.as_str(), 200)
             ),
             thinking,
-            // Filled in by the launch job once the profile snapshot is materialised.
             resources: None,
             session_file: if resume { session_file } else { None },
         };
@@ -372,8 +354,6 @@ impl Service {
         self.emit_objective(oid);
     }
 
-    /// Sends `session.abort` then terminates the worker off the service thread; the exit is
-    /// observed through the supervisor. Without a worker or launch, the stop completes at once.
     pub(crate) fn stop_worker(&mut self, oid: ObjectiveId) {
         let rt = self.rt(oid);
         if let Some(mut control) = rt.control.take() {
@@ -401,9 +381,6 @@ impl Service {
             self.continue_freeze(oid);
         }
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Supervisor events.
 
     pub(crate) fn on_supervisor(&mut self, event: SupervisorEvent) {
         let Ok(oid) = lade_core::domain::ids::ObjectiveId::parse(&event.binding.objective_id)
@@ -612,11 +589,6 @@ impl Service {
         self.continue_freeze(oid);
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Dispatch.
-
-    /// Dispatches queued inputs strictly in acceptance order. Feedback inputs are revalidated
-    /// against current content first unless `checked` names an input validated a moment ago.
     pub(crate) fn dispatch_queued(&mut self, oid: ObjectiveId, checked: Option<InputId>) {
         if self.rt(oid).dispatching || self.command_pending(oid) {
             return;
@@ -679,7 +651,6 @@ impl Service {
         }
     }
 
-    /// One dispatch decision; returns whether later inputs may proceed.
     fn dispatch_one(&mut self, oid: ObjectiveId, id: InputId, stale: bool) -> bool {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return false;
@@ -717,7 +688,6 @@ impl Service {
                 .as_mut()
                 .map(|control| control.send(body));
             if !matches!(sent, Some(Ok(()))) {
-                // Never resent automatically: the input is now uncertain.
                 input.mark_worker_lost();
                 let _ = self.commit(None, None, |tx| {
                     storage::save_delivery(tx, id, &input.delivery, now)
@@ -732,9 +702,6 @@ impl Service {
         self.emit_objective(oid);
         true
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Activity.
 
     fn next_activity_seq(&mut self, oid: ObjectiveId) -> u64 {
         let seq = self.activity_seq.entry(oid).or_insert(0);
@@ -858,7 +825,6 @@ impl Service {
         }
     }
 
-    /// Persists streamed text and forgets items that stopped changing.
     pub(crate) fn flush_activity(&mut self) {
         for live in self.live.items.values_mut().filter(|l| l.dirty) {
             if storage::upsert_activity(self.store.conn(), live.objective, &live.row).is_ok() {
@@ -870,7 +836,6 @@ impl Service {
             .retain(|_, l| l.dirty || l.touched.elapsed() < LIVE_ITEM_RETENTION);
     }
 
-    /// Current text of a live item (newer than the store between flushes).
     pub(crate) fn live_text(&self, item_id: &str) -> Option<(&str, bool)> {
         self.live
             .items
@@ -878,11 +843,6 @@ impl Service {
             .map(|l| (l.row.text.as_str(), l.row.truncated))
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Writable-storage monitor (§7).
-
-    /// Measures the worktree and session directory of every live execution on the pool (one job
-    /// at a time); [`Self::storage_measured`] enforces the limit.
     pub(crate) fn check_storage(&mut self) {
         if self.storage_check {
             return;
@@ -928,9 +888,6 @@ impl Service {
         }
     }
 
-    /// Stops the agent of the measured generation with a `limit_reached` failure, a notice and
-    /// an activity item. Nothing restarts or raises the limit automatically; resuming is the
-    /// developer's explicit decision (and is stopped again while the usage stays above it).
     fn storage_exceeded(&mut self, measured: StorageUsage) {
         let StorageUsage {
             oid,

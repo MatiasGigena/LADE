@@ -1,6 +1,3 @@
-// LADE pi worker: one process per running Objective, launched by laded inside bwrap as
-// `node packages/pi-worker/src/worker.ts`. Speaks delivery-plan §4.2 JSONL on stdin/stdout.
-// The stdio guard must stay the first import so SDK console output can never reach stdout.
 import { writeFrame } from "./worker/stdio.ts";
 import { WireError } from "./json.ts";
 import type { WorkerErrorCode } from "./dto.ts";
@@ -10,7 +7,6 @@ import { installGateway, installNoNetwork } from "./worker/gateway.ts";
 import { abort, deliver, SessionHost, StartError } from "./worker/session.ts";
 import { UiBridge } from "./worker/ui.ts";
 
-/** Exit statuses: clean shutdown/EOF, start failure, protocol violation, internal failure. */
 export const EXIT_OK = 0;
 
 export const EXIT_START = 1;
@@ -19,7 +15,6 @@ export const EXIT_PROTOCOL = 2;
 
 export const EXIT_INTERNAL = 70;
 
-// SDK startup paths (version checks, telemetry, package updates) stay offline in the worker.
 process.env.PI_OFFLINE = "1";
 
 process.env.PI_SKIP_VERSION_CHECK = "1";
@@ -33,7 +28,6 @@ else installNoNetwork();
 
 const channel = new StdioChannel(process.stdin, writeFrame, process.stdout);
 
-// A closed stdout means the supervising service is gone; nothing more can be reported.
 process.stdout.on("error", () => process.exit(EXIT_INTERNAL));
 
 function report(code: WorkerErrorCode, message: string): void {
@@ -47,7 +41,6 @@ async function exit(status: number, host: SessionHost | undefined): Promise<void
 }
 
 function failed(error: Error): void {
-  // Diagnostics carry error class names only: provider/tool errors may quote prompt or source text.
   process.stderr.write(`lade-worker: internal failure (${error.name})\n`);
   report("internal", "the worker failed unexpectedly");
   void exit(EXIT_INTERNAL, undefined);
@@ -115,7 +108,6 @@ async function serve(): Promise<void> {
 
           break;
         case "session.command":
-          // Not awaited: a long command (compaction) must not block abort or dialog answers.
           void host.command(body).then(result => channel.send(result));
 
           break;
@@ -134,13 +126,11 @@ async function serve(): Promise<void> {
       }
     }
 
-    // stdin EOF: the service closed the link; stop the run and leave cleanly.
     if (host?.session.isStreaming) await abort(host.session, cleared(mapper));
 
     return exit(EXIT_OK, host);
   } catch (error) {
     if (!(error instanceof WireError)) throw error;
-    // Framing errors poison the link. The rejected bytes are never echoed.
     report("protocol_violation", `rejected inbound frame (${error.code})`);
 
     return exit(EXIT_PROTOCOL, host);

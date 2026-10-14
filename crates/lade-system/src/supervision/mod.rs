@@ -1,9 +1,3 @@
-//! Worker supervision contract shared by the service (WP-F1) and the launcher (WP-F2).
-//!
-//! The service owns product authority; the supervisor owns the sandboxed worker process, its
-//! JSONL pipes and its lifetime. Every event is tagged with the immutable launch binding so the
-//! service can reject stale generations.
-
 pub mod credentials;
 pub mod gateway;
 pub mod launcher;
@@ -27,38 +21,27 @@ pub use providers::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
 pub use sweep::{SweepReport, sweep_sockets, sweep_stale};
 pub use terminal::{Terminal, TerminalExit, TerminalRequest};
 
-/// Immutable server-side binding for one launched worker.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchBinding {
     pub objective_id: String,
     pub execution_generation: u64,
 }
 
-/// Everything needed to start one sandboxed worker for an Objective.
 #[derive(Clone, Debug)]
 pub struct LaunchRequest {
     pub binding: LaunchBinding,
     pub worktree: PathBuf,
-    /// Main repository Git common directory (bound read-only).
     pub repo_common_dir: PathBuf,
-    /// Objective session directory (read-write, worker HOME and pi agent dir).
     pub session_dir: PathBuf,
-    /// Provider id of the selected model; selects credentials and egress policy.
     pub provider: String,
-    /// The `worker.start` body sent once the process is running.
     pub start: WorkerBody,
 }
 
-/// Something observed about a launched worker. Transient channel messages: boxing the frame buys
-/// nothing.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum WorkerEvent {
-    /// A validated frame from the worker.
     Body(WorkerBody),
-    /// The worker violated framing/schema; the link was closed and the process terminated.
     ProtocolViolation(&'static str),
-    /// The process (and its sandbox) ended.
     Exited {
         code: Option<i32>,
         signal: Option<i32>,
@@ -73,9 +56,7 @@ pub struct SupervisorEvent {
 
 #[derive(Debug)]
 pub enum LaunchError {
-    /// Sandbox prerequisites missing: execution is blocked, never run unsandboxed.
     SandboxUnavailable(String),
-    /// No credentials or egress policy for the provider.
     ProviderUnavailable(String),
     Io(std::io::Error),
 }
@@ -92,15 +73,11 @@ impl std::fmt::Display for LaunchError {
 
 impl std::error::Error for LaunchError {}
 
-/// Control of one running worker. Dropping it must terminate the worker and its descendants.
 pub trait WorkerControl: Send {
-    /// Write one service-to-worker body; an error means the link is gone (delivery uncertain).
     fn send(&mut self, body: WorkerBody) -> std::io::Result<()>;
-    /// Terminate the sandbox (graceful `worker.shutdown` first if possible, then kill).
     fn terminate(&mut self);
 }
 
-/// Launches sandboxed workers. Events are delivered on the bounded `events` channel.
 pub trait WorkerLauncher: Send + Sync {
     fn launch(
         &self,
@@ -108,23 +85,16 @@ pub trait WorkerLauncher: Send + Sync {
         events: SyncSender<SupervisorEvent>,
     ) -> Result<Box<dyn WorkerControl>, LaunchError>;
 
-    /// Checks, without launching, whether a worker for `provider` could start now (sandbox,
-    /// egress policy, credentials), so a request can be refused synchronously. Errors name
-    /// missing credential variables, never values. `launch` re-checks everything.
     fn preflight(&self, _provider: &str) -> Result<(), LaunchError> {
         Ok(())
     }
 
-    /// Runs the pinned SDK's model catalogue (`src/worker/catalog.ts`) without network and returns
-    /// its JSON output. `scratch` is a private, disposable directory; `models` the validated LADE
-    /// profile `models.json`, if any. Launchers without a sandbox refuse.
     fn catalog(&self, _scratch: &Path, _models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
         Err(LaunchError::SandboxUnavailable(
             "the model catalogue runs only in the worker sandbox".into(),
         ))
     }
 
-    /// How LADE can authenticate `facts.id` now (credential names only, never values).
     fn provider_access(&self, facts: &ProviderFacts) -> ProviderAccess {
         providers::classify(
             facts,
@@ -136,7 +106,6 @@ pub trait WorkerLauncher: Send + Sync {
 }
 
 impl LaunchError {
-    /// Human-readable explanation without secrets (variable names only).
     pub fn detail(&self) -> String {
         match self {
             Self::SandboxUnavailable(why) => format!("worker sandbox unavailable: {why}"),

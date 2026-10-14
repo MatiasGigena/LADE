@@ -1,7 +1,3 @@
-//! cgroup v2 placement: detection and fallback reasons, the files written into a delegated
-//! subtree (on a directory standing in for cgroupfs), and — only where a delegated cgroup exists
-//! and `LADE_TEST_DELEGATED_CGROUP=1` is set — real placement and enforcement.
-
 mod adapters_support;
 
 use std::fs;
@@ -16,7 +12,6 @@ use lade_system::adapters::sandbox::{
 
 const OBJECTIVE: &str = "0b8a4c1e-7a1f-4f7e-9d7a-0d6c8f2a9b11";
 
-/// A directory laid out like a cgroup v2 mount with the service cgroup `/lade.service`.
 fn fake_mount(controllers: &str) -> (TempDir, std::path::PathBuf) {
     let tmp = TempDir::new("cgroup");
     let own = tmp.path().join("lade.service");
@@ -39,7 +34,6 @@ fn without_delegation_detection_explains_the_fallback() {
     };
     assert!(reason("4:memory:/x\n1:cpu:/\n", tmp.path()).contains("cgroup v1 or hybrid"));
     assert!(reason("0::/lade.service\n", &tmp.path().join("missing")).contains("not mounted"));
-    // No `user.delegate` attribute: systemd did not delegate this cgroup; nothing is written.
     let not_delegated = reason("0::/lade.service\n", tmp.path());
     assert!(not_delegated.contains("not delegated"), "{not_delegated}");
     assert!(!tmp.path().join("lade.service/service").exists());
@@ -100,9 +94,6 @@ fn missing_controllers_fall_back_with_their_names() {
     assert!(!own.join("service").exists());
 }
 
-/// Real placement: run with `LADE_TEST_DELEGATED_CGROUP=1` inside a delegated cgroup, for
-/// example `systemd-run --user --scope -p Delegate=yes ./scripts/cargo test -p lade-system
-/// --test adapters_cgroup`. It moves the test process into `<scope>/service`.
 #[test]
 fn delegated_cgroup_contains_and_limits_a_sandbox() {
     if std::env::var_os("LADE_TEST_DELEGATED_CGROUP").is_none_or(|v| v != "1") {

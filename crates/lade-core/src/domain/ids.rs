@@ -1,12 +1,7 @@
-//! Typed identities and small scalar values shared by the domain modules.
-//!
-//! Identity generation is an adapter concern: the core only validates and parses canonical forms.
-
 use core::fmt;
 
 use crate::error::DomainError;
 
-/// A canonical lowercase UUIDv4 (`xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Uuid(u128);
 
@@ -14,7 +9,6 @@ const VERSION_SHIFT: u32 = 76;
 const VARIANT_SHIFT: u32 = 62;
 
 impl Uuid {
-    /// Parses exactly 36 characters of canonical lowercase UUIDv4 text.
     pub fn parse(text: &str) -> Result<Self, DomainError> {
         const INVALID: DomainError =
             DomainError::InvalidRequest("identifier is not a lowercase UUIDv4");
@@ -43,7 +37,6 @@ impl Uuid {
         Ok(Self(value))
     }
 
-    /// Shapes 16 random bytes (supplied by an adapter) into a UUIDv4 by fixing the version and variant bits.
     pub const fn from_random_bytes(bytes: [u8; 16]) -> Self {
         let mut value = u128::from_be_bytes(bytes);
         value = (value & !(0xf << VERSION_SHIFT)) | (0x4 << VERSION_SHIFT);
@@ -51,7 +44,6 @@ impl Uuid {
         Self(value)
     }
 
-    /// The first eight hexadecimal digits, used for compact labels such as `lade/<short-id>`.
     pub fn short(self) -> String {
         let mut text = self.to_string();
         text.truncate(8);
@@ -104,21 +96,16 @@ macro_rules! uuid_ids {
 uuid_ids!(
     ObjectiveId,
     WorkspaceId,
-    /// Agent Session identity (LADE-owned; distinct from pi's own session id).
     SessionId,
     DraftId,
-    /// Accepted input identity.
     InputId,
     CandidateId,
     VerificationId,
     ApprovalId,
-    /// Client-chosen idempotency key of a mutating request.
     OperationId,
-    /// Working-tree capture identity.
     CaptureId,
 );
 
-/// Git object-format of a repository.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GitAlgorithm {
     Sha1,
@@ -141,7 +128,6 @@ impl GitAlgorithm {
     }
 }
 
-/// A full, lowercase Git object id. The all-zero (null) id is rejected.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GitId {
     algorithm: GitAlgorithm,
@@ -183,7 +169,6 @@ pub(crate) fn is_lower_hex(text: &str, len: usize) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Unix time in milliseconds, always supplied by the caller (the domain never reads a clock).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(i64);
 
@@ -197,12 +182,10 @@ impl Timestamp {
     }
 }
 
-/// Optimistic revision. Domain revisions are distinct from their decimal-string wire representation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 pub struct Revision(u64);
 
 impl Revision {
-    /// The revision of a newly created record.
     pub const INITIAL: Self = Self(1);
 
     pub const fn new(value: u64) -> Self {
@@ -213,12 +196,10 @@ impl Revision {
         self.0
     }
 
-    /// Exhaustion must reject a transition, never wrap to an earlier revision.
     pub fn next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
 
-    /// `next` as a domain rejection.
     pub(crate) fn advance(self) -> Result<Self, DomainError> {
         self.next()
             .ok_or(DomainError::LimitReached("revision exhausted"))

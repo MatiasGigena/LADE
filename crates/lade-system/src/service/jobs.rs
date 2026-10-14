@@ -1,7 +1,3 @@
-//! Bounded background pool and the blocking Git/filesystem work it runs. Jobs never touch the
-//! product store or service state: they receive owned inputs and post a result back to the service
-//! queue, where generations and revisions are revalidated before anything is committed.
-
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
@@ -34,17 +30,12 @@ use crate::supervision::{
 
 use super::convert::{adapter_git, conflict, core_git, git_rejection, hex, not_found};
 
-/// Files larger than this are not loaded whole (staleness, artifacts, reads).
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
-/// Hard upper bound for inspection: files above [`MAX_WHOLE_FILE`] and up to this size are
-/// streamed into the artifact store and served in bounded chunks; larger ones are refused.
 pub const MAX_CHUNKED_FILE: u64 = 1 << 30;
-/// How many large-blob artifact digests are remembered (so paging does not re-stream).
 const LARGE_BLOB_MEMORY: usize = 8;
 
 pub(crate) type Task = Box<dyn FnOnce() + Send>;
 
-/// A small fixed set of worker threads.
 pub struct Pool {
     tx: Option<Sender<Task>>,
     threads: Vec<JoinHandle<()>>,
@@ -83,7 +74,6 @@ impl Pool {
         }
     }
 
-    /// Lets queued tasks finish and joins the threads.
     pub fn shutdown(mut self) {
         self.tx = None;
         for thread in self.threads.drain(..) {
@@ -96,8 +86,6 @@ fn git_err(error: &GitError) -> Rejection {
     git_rejection(error)
 }
 
-/// Opens a Workspace repository with the user's own global excludes file applied to captures
-/// (see [`git::user_excludes_file`]).
 pub fn open_repository(path: &Path) -> Result<Repository, GitError> {
     Repository::open(path).map(|repo| repo.with_excludes_file(git::user_excludes_file()))
 }
@@ -117,7 +105,6 @@ pub fn counts(files: &[ChangedFile]) -> ChangeCounts {
     }
 }
 
-/// Whole content of `path` in `tree`, if present and at most [`MAX_WHOLE_FILE`] bytes.
 pub fn read_whole(
     repo: &Repository,
     tree: &GitId,
@@ -155,15 +142,11 @@ fn unsupported(detail: &str) -> Rejection {
     )
 }
 
-/// The content of one file version: whole bytes up to [`MAX_WHOLE_FILE`], otherwise the blob to
-/// stream (up to [`MAX_CHUNKED_FILE`]).
 pub enum FileBytes {
     Whole(Vec<u8>),
     Large { blob: git::GitId },
 }
 
-/// Like [`read_whole`], but a file above the whole-file bound (up to [`MAX_CHUNKED_FILE`]) is
-/// returned as its blob for streaming instead of being refused.
 pub fn read_file_bytes(
     repo: &Repository,
     tree: &GitId,
@@ -186,13 +169,10 @@ pub fn read_file_bytes(
     }
 }
 
-/// Remembers which artifact holds a large blob, so chunked reads stream it into the store once.
 #[derive(Default)]
 pub struct LargeBlobs(Mutex<VecDeque<(git::GitId, ArtifactDigest)>>);
 
 impl LargeBlobs {
-    /// The artifact holding the whole blob `id`, streamed into the store (never held in memory)
-    /// unless a remembered artifact still exists.
     pub fn retain(
         &self,
         repo: &Repository,
@@ -227,8 +207,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// The stale rule of one reference against the current basis (`old` = comparison side, `new` =
-/// current content). Unreadable content is treated as stale (never silently fresh).
 pub fn reference_stale(repo: &Repository, old: &GitId, new: &GitId, reference: &Reference) -> bool {
     let Ok(path) = git::RepoPath::new(reference.path().as_bytes().to_vec()) else {
         return true;
@@ -239,8 +217,6 @@ pub fn reference_stale(repo: &Repository, old: &GitId, new: &GitId, reference: &
     };
     match read_file_bytes(repo, tree, &path) {
         Ok(None) => reference.staleness(CurrentContent::Missing).is_stale(),
-        // The same rule as `Reference::staleness`, without loading the whole file: fresh when
-        // the content digest is unchanged or the selected bytes are still at the same range.
         Ok(Some(FileBytes::Large { blob })) => {
             let digest = repo.with_blob_reader(&blob, |reader| {
                 let mut hasher = Sha256::new();
@@ -284,7 +260,6 @@ pub fn reference_stale(repo: &Repository, old: &GitId, new: &GitId, reference: &
     }
 }
 
-/// Deterministic manifest of a candidate's Change Set, stored as an immutable artifact.
 pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> {
     let mut out = format!(
         "lade-manifest 1\ntarget {}\ntree {}\n",
@@ -319,9 +294,6 @@ pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> 
     out.into_bytes()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Working captures.
-
 pub struct CaptureInput {
     pub repo: Repository,
     pub worktree: PathBuf,
@@ -340,9 +312,7 @@ pub struct CaptureOut {
     pub target: GitId,
     pub files: Vec<ChangedFile>,
     pub stale: Vec<(DraftId, bool)>,
-    /// Untracked nested repositories without a commit, left out of the capture.
     pub skipped_nested: Vec<git::RepoPath>,
-    /// Changed paths whose content goes through a filter driver (LFS etc.), stored raw.
     pub filtered: Vec<git::RepoPath>,
 }
 
@@ -389,8 +359,6 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
     })
 }
 
-/// Changed paths of `files` (new side in `tree`, old side for deletions) that a filter driver
-/// would convert; see [`Repository::filtered_paths`].
 pub fn filtered_paths(
     repo: &Repository,
     tree: &git::GitId,
@@ -399,9 +367,6 @@ pub fn filtered_paths(
     let paths: Vec<&git::RepoPath> = files.iter().map(|f| &f.path).collect();
     repo.filtered_paths(tree, &paths).map_err(|e| git_err(&e))
 }
-
-// ---------------------------------------------------------------------------------------------
-// Freeze.
 
 pub struct FreezeInput {
     pub repo: Repository,
@@ -422,7 +387,6 @@ pub struct FreezeOut {
     pub target: GitId,
     pub counts: ChangeCounts,
     pub manifest_digest: String,
-    /// A re-capture after freezing differed: an unexpected writer changed the worktree.
     pub changed: bool,
 }
 
@@ -478,8 +442,6 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     crate::fault::point("freeze.branch_moved");
     repo.retain(&input.candidate_ref, &commit)
         .map_err(|e| git_err(&e))?;
-    // The worktree's own index (and HEAD) follow the candidate commit, so `git status` inside
-    // the worktree shows it committed. Best effort: captures judge content, not this index.
     if let Err(e) = repo.sync_worktree_index(&worktree, &input.git_branch, &commit) {
         eprintln!(
             "laded: worktree index not refreshed after freeze: {}",
@@ -503,9 +465,6 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
         changed: again != captured,
     })
 }
-
-// ---------------------------------------------------------------------------------------------
-// Refresh.
 
 pub struct RefreshInput {
     pub repo: Repository,
@@ -561,9 +520,6 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
     }
 }
 
-/// Disk space used below `roots` (allocated blocks, symbolic links not followed, hard links
-/// counted per name, so the result never under-counts what the sandbox can reach). Unreadable
-/// entries count as zero.
 pub fn disk_usage(roots: &[PathBuf]) -> u64 {
     let mut total = 0u64;
     let mut pending: Vec<PathBuf> = roots.to_vec();
@@ -581,9 +537,6 @@ pub fn disk_usage(roots: &[PathBuf]) -> u64 {
     total
 }
 
-// ---------------------------------------------------------------------------------------------
-// Verification.
-
 pub struct VerifyInput {
     pub repo: Repository,
     pub artifacts: Arc<ArtifactStore>,
@@ -594,7 +547,6 @@ pub struct VerifyInput {
     pub base_target: GitId,
     pub argv: Vec<String>,
     pub objective: String,
-    /// Sweep marker of the service's sandboxes.
     pub marker: String,
     pub cgroups: Option<Arc<SandboxCgroups>>,
 }
@@ -617,7 +569,6 @@ fn tail_text(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// Resolves `argv[0]` to an absolute program path visible inside the sandbox (`/usr/bin`, `/bin`).
 pub fn resolve_program(program: &str) -> Option<PathBuf> {
     if program.contains('/') {
         let path = PathBuf::from(program);
@@ -729,14 +680,10 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
     })
 }
 
-// ---------------------------------------------------------------------------------------------
-// Integration, completion and cleanup.
-
 pub fn integrate(repo: &Repository, request: &SquashRequest) -> Result<SquashOutcome, GitError> {
     repo.integrate_squash(request)
 }
 
-/// Whether the worktree (if any) has no changes relative to the target.
 pub fn change_set_empty(
     repo: &Repository,
     worktree: Option<&Path>,
@@ -760,9 +707,6 @@ pub fn change_set_empty(
     Ok(files.is_empty())
 }
 
-/// Removes the Objective worktree and branch. Without `force`, the worktree content must equal
-/// its branch commit (the latest candidate), judged by a content capture rather than by the
-/// worktree's own index (refreshed at freeze, but never trusted).
 pub fn cleanup(
     repo: &Repository,
     worktree: Option<&Path>,
@@ -815,8 +759,6 @@ pub fn cleanup(
     Ok(())
 }
 
-/// Deletes each of `refs` that exists (compare-and-swap against its current value). Used only by
-/// the explicit, confirmed `objective.delete_history`.
 pub fn delete_refs(repo: &Repository, refs: &[String]) -> Result<(), Rejection> {
     for refname in refs {
         if let Some(current) = repo.resolve_ref(refname).map_err(|e| git_err(&e))? {
@@ -827,23 +769,16 @@ pub fn delete_refs(repo: &Repository, refs: &[String]) -> Result<(), Rejection> 
     Ok(())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Provisioning and launch.
-
 pub struct LaunchInput {
     pub repo: Repository,
     pub launcher: Arc<dyn WorkerLauncher>,
     pub events: mpsc::SyncSender<SupervisorEvent>,
     pub request: LaunchRequest,
-    /// Branch to create when the worktree is not provisioned yet (collisions get a suffix).
     pub provision: Option<(String, GitId)>,
-    /// LADE profile and approved `(name, sha256)` extensions, materialised into the session
-    /// directory before the worker starts.
     pub profile: Option<(PathBuf, Vec<(String, String)>)>,
 }
 
 pub struct LaunchOut {
-    /// The branch created by provisioning, when this launch provisioned the worktree.
     pub provisioned_branch: Option<String>,
     pub result: Result<Box<dyn WorkerControl>, String>,
 }
@@ -918,11 +853,8 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     }
 }
 
-/// Creates the Objective branch and worktree; never falls back to the shared checkout.
 fn provision(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Result<String, String> {
     if path.exists() {
-        // A crash between provisioning and recording it (`launch.provisioned`) leaves this
-        // Objective's own worktree unrecorded; no agent ran in it yet, so adopt it.
         return adopt_provisioned(repo, base, start, path)
             .ok_or_else(|| "worktree_path_occupied".into());
     }
@@ -939,8 +871,6 @@ fn provision(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Resul
     Ok(branch)
 }
 
-/// The branch of an unrecorded worktree at `path` that provisioning created for this Objective:
-/// registered in the repository, on `base` or `base-<n>`, still at the start commit.
 fn adopt_provisioned(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Option<String> {
     let wanted = path.canonicalize().ok()?;
     let entry = repo

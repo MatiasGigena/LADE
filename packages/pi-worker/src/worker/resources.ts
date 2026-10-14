@@ -1,7 +1,3 @@
-// LADE-profile resources for the pi session: the service materialises a snapshot of the LADE profile
-// (never the user's own pi profile) inside the session directory, approves executable extensions by
-// content hash, and the worker loads exactly that set. Repository `.pi/` content, the agent dir's
-// auto-discovery, `SYSTEM.md`/`APPEND_SYSTEM.md`, themes and packages stay disabled.
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
@@ -12,14 +8,12 @@ import type { LoadedResource, WorkerResources } from "./wire.ts";
 
 type ExtensionPaths = Parameters<ResourceLoader["extendResources"]>[0];
 
-/** Directory-extension hashing bounds (mirrored by the service's `profile` module). */
 export const MAX_EXTENSION_FILES = 256;
 
 export const MAX_EXTENSION_BYTES = 8 * 1024 * 1024;
 
 const MAX_DEPTH = 8;
 
-/** Context file names pi looks for in one directory, in pi's order (first match wins). */
 export const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 export class HashError extends Error {}
@@ -42,11 +36,6 @@ function walk(root: string, dir: string, depth: number, files: string[]): void {
   }
 }
 
-/**
- * Content hash of one extension entry. A file hashes as its bytes; a directory as the sha256 of
- * `sha256sum`-style lines (`<hex>  <relative path>\n`) of every regular file, sorted by path bytes.
- * Symbolic links and special files are refused, so a hash always covers exactly what pi can load.
- */
 export function extensionHash(path: string): string {
   const stat = lstatSync(path);
 
@@ -90,7 +79,6 @@ function contextFile(dir: string, names: readonly string[]): ContextFile | undef
   return undefined;
 }
 
-/** Precedence: the LADE profile's AGENTS.md first, then the worktree root's own context file (pi order). */
 export function contextFiles(profileDir: string | undefined, cwd: string): ContextFile[] {
   const found: ContextFile[] = [];
   const profile = profileDir === undefined ? undefined : contextFile(profileDir, ["AGENTS.md"]);
@@ -111,7 +99,6 @@ function within(parent: string, path: string): boolean {
   return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-/** Re-hash every approved extension; only exact matches inside `<profile>/extensions` are loaded. */
 export function verifyExtensions(resources: WorkerResources | undefined): Verified {
   const verified: Verified = { paths: [], report: [] };
 
@@ -148,11 +135,6 @@ export interface LoaderInputs {
   resources: WorkerResources | undefined;
 }
 
-/**
- * A `ResourceLoader` whose inputs can change between reloads (a new approval set). Each reload
- * builds a fresh `DefaultResourceLoader` with discovery disabled and only explicit LADE-profile
- * paths; every getter delegates to the current one.
- */
 export class LadeResourceLoader implements ResourceLoader {
   private inputs: LoaderInputs;
   private inner: DefaultResourceLoader;
@@ -213,7 +195,6 @@ export class LadeResourceLoader implements ResourceLoader {
 
   extendResources(paths: ExtensionPaths): void { this.inner.extendResources(paths); }
 
-  /** What this generation loaded, refused or failed to load (names and hashes only). */
   report(): LoadedResource[] {
     const resources = this.inputs.resources;
     const profile = resources?.profile_dir;

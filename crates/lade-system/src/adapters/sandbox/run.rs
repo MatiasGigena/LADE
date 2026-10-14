@@ -1,5 +1,3 @@
-//! Wall-clock bounded execution with bounded combined output capture.
-
 use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -11,16 +9,13 @@ use std::time::{Duration, Instant};
 use super::{SandboxCommand, find_program};
 
 const POLL: Duration = Duration::from_millis(10);
-/// How long to wait for the output pipe to close after the command exited.
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
-/// Result of [`run_bounded`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunOutcome {
     pub exit_code: Option<i32>,
     pub signal: Option<i32>,
     pub timed_out: bool,
-    /// The last `max_output` bytes of combined stdout+stderr.
     pub output_tail: Vec<u8>,
     pub total_bytes: u64,
     pub truncated: bool,
@@ -43,12 +38,6 @@ impl Tail {
     }
 }
 
-/// Run `cmd` with stdin closed and stdout+stderr captured into one pipe, retaining the last
-/// `max_output` bytes. The command runs in its own process group. On timeout the whole group is
-/// sent `SIGKILL` and the direct child is killed; for a bwrap sandbox, killing bwrap tears down
-/// its PID namespace (`--die-with-parent`), which kills every descendant, including ones that
-/// called `setsid`. If descendants outside a PID namespace keep the output pipe open after the
-/// command exits, their group is killed too and capture stops after a short grace period.
 pub fn run_bounded(
     cmd: impl Into<SandboxCommand>,
     timeout: Duration,
@@ -57,9 +46,6 @@ pub fn run_bounded(
     run_bounded_with(cmd, timeout, max_output, |_| Ok(()))
 }
 
-/// [`run_bounded`], calling `place` with the spawned pid before a sandbox's launch gate opens
-/// (for example to move the sandbox into a cgroup). A `place` error kills the command and is
-/// returned.
 pub fn run_bounded_with(
     cmd: impl Into<SandboxCommand>,
     timeout: Duration,
@@ -75,8 +61,6 @@ pub fn run_bounded_with(
         .stderr(writer_err)
         .process_group(0);
     let start = Instant::now();
-    // Spawning consumes the command, dropping the parent's copies of the write end so EOF
-    // arrives when the children close theirs.
     let (mut child, mut gate) = cmd.spawn()?;
     let pgid = child.id();
     if let Err(e) = place(pgid).and_then(|()| gate.open()) {
@@ -138,7 +122,6 @@ pub fn run_bounded_with(
     })
 }
 
-/// Best-effort `SIGKILL` to a process group through the external `kill` utility (no `unsafe`).
 fn kill_group(pgid: u32) {
     if let Some(kill) = find_program("kill") {
         let _ = Command::new(kill)

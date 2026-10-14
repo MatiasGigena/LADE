@@ -1,33 +1,9 @@
-//! Bounded text inputs with atomic edits (presentation only; the service enforces the limits).
-//!
-//! A paste or other user edit is all-or-nothing. GTK brackets one user edit — including the
-//! deletion of a replaced selection, which happens *before* the insertion — between
-//! `begin-user-action` and `end-user-action`. [`EditGuard`] models that protocol:
-//!
-//! 1. `begin` takes a snapshot of the accepted text and the oriented selection (cursor, anchor).
-//!    The snapshot is bounded because accepted text is always within the limit.
-//! 2. `insert` decides each insertion before it happens. An insertion that would exceed the limit
-//!    is stopped, so an oversized payload is never inserted just to be measured; after one
-//!    rejection the rest of that action is stopped too.
-//! 3. Intermediate changes inside the action are never committed to the model.
-//! 4. `end` either commits the one complete revision or asks the view to restore the snapshot
-//!    (text, cursor and selection), so a rejected paste preserves the draft exactly.
-//!
-//! Limits are the protocol's real bounds, never invented ones: every text field the service
-//! stores (draft body, message, intent fields) is bounded by the domain's `MAX_TEXT_BYTES`
-//! (256 KiB), which equals the wire string bound [`lade_protocol::MAX_STRING`]; the approval
-//! override reason has the schema bound `maxLength: 2048` (code points).
-
-/// Draft bodies, direct messages and intent fields (`lade-core` `MAX_TEXT_BYTES`).
 pub const TEXT_LIMIT: TextLimit = TextLimit::Bytes(lade_protocol::MAX_STRING);
-/// `review.approve` `override_reason` (`contracts/v1/schema.json`: `maxLength: 2048`).
 pub const OVERRIDE_REASON_LIMIT: TextLimit = TextLimit::Chars(2048);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextLimit {
-    /// UTF-8 bytes.
     Bytes(usize),
-    /// Unicode scalar values (JSON Schema `maxLength`).
     Chars(usize),
 }
 
@@ -45,7 +21,6 @@ impl TextLimit {
         }
     }
 
-    /// A size in this limit's unit, e.g. `256 KiB` or `2,048 characters`.
     pub fn describe(self, size: usize) -> String {
         match self {
             Self::Bytes(_) if size >= 1024 && size.is_multiple_of(1024) => {
@@ -61,7 +36,6 @@ impl TextLimit {
     }
 }
 
-/// Accepted text and oriented selection before a user edit (character offsets, as GTK uses).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Snapshot {
     pub text: String,
@@ -72,17 +46,12 @@ pub struct Snapshot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InsertDecision {
     Allow,
-    /// Stop this insertion; `attempted` is the size the text would have had.
-    Reject {
-        attempted: usize,
-    },
+    Reject { attempted: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EndDecision {
-    /// Commit the buffer's text as one revision.
     Commit,
-    /// Restore the snapshot; nothing reaches the model. `attempted` is the rejected size.
     Restore {
         snapshot: Snapshot,
         attempted: usize,
@@ -111,26 +80,20 @@ impl EditGuard {
         self.limit
     }
 
-    /// Outermost `begin-user-action`.
     pub fn begin(&mut self, snapshot: Snapshot) {
         self.generation = self.generation.wrapping_add(1);
         self.rejected = None;
         self.snapshot = Some(snapshot);
     }
 
-    /// Whether a user action is open (changes are not committed until it ends).
     pub fn in_action(&self) -> bool {
         self.snapshot.is_some()
     }
 
-    /// Increments with every user action; a deferred selection restore checks it so it never
-    /// overrides a later edit.
     pub fn generation(&self) -> u64 {
         self.generation
     }
 
-    /// Decides an insertion into `current` (the buffer as it is now, after any deletion made
-    /// earlier in the same action).
     pub fn insert(&mut self, current: &str, inserted: &str) -> InsertDecision {
         let attempted = self
             .limit
@@ -150,7 +113,6 @@ impl EditGuard {
         InsertDecision::Reject { attempted }
     }
 
-    /// Outermost `end-user-action`.
     pub fn end(&mut self) -> EndDecision {
         let snapshot = self.snapshot.take();
         match (self.rejected.take(), snapshot) {
@@ -162,7 +124,6 @@ impl EditGuard {
         }
     }
 
-    /// Visible explanation of a rejected edit to `what` (e.g. "this feedback draft").
     pub fn rejection(&self, what: &str, attempted: usize) -> String {
         format!(
             "Not inserted: {what} would be {}, over the limit of {}. Nothing was changed; shorten the text or split it.",
@@ -176,7 +137,6 @@ impl EditGuard {
 mod tests {
     use super::*;
 
-    /// A minimal model of a GTK buffer driven the way GTK drives it during a paste.
     struct Buffer {
         text: String,
         guard: EditGuard,
@@ -192,7 +152,6 @@ mod tests {
             }
         }
 
-        /// Paste `payload` replacing byte range `selection` (GTK: delete, then insert).
         fn paste(&mut self, selection: std::ops::Range<usize>, payload: &str) -> Option<usize> {
             self.guard.begin(Snapshot {
                 text: self.text.clone(),
@@ -235,7 +194,6 @@ mod tests {
             assert_eq!(buffer.text, "hello world", "{selection:?}");
             assert!(buffer.commits.is_empty(), "no intermediate commit");
         }
-        // Ordinary editing works afterwards.
         let mut buffer = Buffer::new(limit, "hello world");
         assert!(buffer.paste(0..0, &"x".repeat(17)).is_some());
         assert_eq!(buffer.paste(11..11, "!"), None);
@@ -246,7 +204,6 @@ mod tests {
     fn exact_limit_is_accepted_in_one_commit_counting_the_replaced_selection() {
         let limit = TextLimit::Bytes(16);
         let mut buffer = Buffer::new(limit, "hello world");
-        // 11 bytes, replace "hello" (5) with 10 bytes: 16 exactly.
         assert_eq!(buffer.paste(0..5, "0123456789"), None);
         assert_eq!(buffer.text, "0123456789 world");
         assert_eq!(buffer.commits.len(), 1);
@@ -304,7 +261,6 @@ mod tests {
             guard.insert("abcd", "e"),
             InsertDecision::Reject { .. }
         ));
-        // A later, smaller edit is unaffected.
         assert_eq!(guard.insert("abc", "d"), InsertDecision::Allow);
         assert!(
             guard

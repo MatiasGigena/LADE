@@ -1,17 +1,3 @@
-//! The one keybinding table and its remapping policy. Views install shortcuts from the current
-//! [`Keymap`]; no view checks keys itself. Accelerators use GTK's `gtk_accelerator_parse` syntax
-//! (`<Control><Shift>m`, `F8`), parsed and validated here without GTK so the policy is testable.
-//!
-//! Remapping policy (ported from the IMP-002 component checkpoint): each remappable action accepts
-//! its own default or a function key F1–F35 with optional Shift/Control/Alt. Every other
-//! combination stays reserved for native typing, editing, selection, clipboard and undo/redo, so a
-//! remap can never steal a key from a text field. The region escape route (F6 / Shift+F6) and
-//! Escape (close the local dialog) are fixed: remapping can never remove them.
-//!
-//! Remaps are a client presentation preference stored in `$XDG_CONFIG_HOME/lade/keybindings.json`
-//! (never product state; the service is not involved). An unreadable or invalid file is ignored as
-//! a whole and the defaults apply.
-
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -39,11 +25,9 @@ pub enum AppAction {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
     pub action: AppAction,
-    /// Stable name used in the configuration file.
     pub id: &'static str,
     pub default: &'static str,
     pub description: &'static str,
-    /// Fixed bindings keep their default; the dialog shows them read-only with the reason.
     pub fixed: Option<&'static str>,
 }
 
@@ -171,9 +155,6 @@ pub const DEFAULT_APP_KEYBINDINGS: &[KeyBinding] = &[
     },
 ];
 
-/// Actions a focused terminal leaves to the window: its escape routes (F6 / Shift+F6 and
-/// [`AppAction::LeaveTerminal`]), clipboard and Exit. Every other key goes to the shell, so a
-/// window shortcut never steals a key typed into the terminal.
 pub fn reaches_window_from_terminal(action: AppAction) -> bool {
     matches!(
         action,
@@ -193,20 +174,16 @@ pub fn binding(action: AppAction) -> &'static KeyBinding {
         .unwrap_or(&DEFAULT_APP_KEYBINDINGS[0])
 }
 
-/// A parsed accelerator: modifier set plus key name (canonical case for letters and F-keys).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Accel {
     pub shift: bool,
     pub control: bool,
     pub alt: bool,
-    /// Super, Hyper, Meta or Release.
     pub other_modifier: bool,
     pub key: String,
 }
 
 impl Accel {
-    /// Parses GTK accelerator syntax. Modifier names are case-insensitive; `<Ctrl>`/`<Primary>`
-    /// are Control and `<Mod1>` is Alt, as in GTK.
     pub fn parse(text: &str) -> Result<Self, String> {
         let invalid = || {
             format!(
@@ -239,7 +216,6 @@ impl Accel {
         Ok(accel)
     }
 
-    /// The function-key number (F1–F35), if this is one.
     pub fn function_key(&self) -> Option<u8> {
         let digits = self.key.strip_prefix('F')?;
         if digits.starts_with('0') {
@@ -248,7 +224,6 @@ impl Accel {
         digits.parse::<u8>().ok().filter(|n| (1..=35).contains(n))
     }
 
-    /// Canonical GTK accelerator string.
     pub fn to_gtk(&self) -> String {
         let mut out = String::new();
         for (on, name) in [
@@ -264,7 +239,6 @@ impl Accel {
         out
     }
 
-    /// Human-readable label for help text and tooltips, e.g. `Ctrl+Shift+M`.
     pub fn label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         for (on, name) in [
@@ -307,7 +281,6 @@ fn canonical_key(key: &str) -> String {
     }
 }
 
-/// The current bindings: one accelerator per action, in table order. Always valid.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Keymap {
     bindings: Vec<(AppAction, Accel)>,
@@ -325,7 +298,6 @@ impl Default for Keymap {
 }
 
 fn default_accel(binding: &KeyBinding) -> Accel {
-    // The defaults are compile-time constants covered by `defaults_are_valid`.
     Accel::parse(binding.default).unwrap_or(Accel {
         shift: false,
         control: false,
@@ -346,7 +318,6 @@ impl Keymap {
             )
     }
 
-    /// GTK accelerator string for installing a shortcut trigger.
     pub fn gtk(&self, action: AppAction) -> String {
         self.accel(action).to_gtk()
     }
@@ -359,8 +330,6 @@ impl Keymap {
         *self == Self::default()
     }
 
-    /// Validates a complete proposal (one entry per action) and returns the new keymap, or every
-    /// problem found. Nothing is applied unless the whole proposal is valid.
     pub fn propose(entries: &[(AppAction, String)]) -> Result<Self, Vec<String>> {
         let mut errors = Vec::new();
         let mut parsed: Vec<(AppAction, Accel)> = Vec::new();
@@ -398,7 +367,6 @@ impl Keymap {
                     default.label()
                 ));
             }
-            // Report the conflict on the later entry, naming both actions and the combination.
             if let Some((other, _)) = parsed.iter().find(|(_, a)| a.same_combination(&accel)) {
                 errors.push(format!(
                     "{} is assigned to both “{}” and “{}”. Each action needs its own combination.",
@@ -416,24 +384,18 @@ impl Keymap {
         }
     }
 
-    /// Configuration file content: version and every remappable binding.
     pub fn to_config(&self) -> String {
         let mut out = String::from("{\n  \"version\": 1,\n  \"bindings\": {\n");
         let lines: Vec<String> = DEFAULT_APP_KEYBINDINGS
             .iter()
             .filter(|b| b.fixed.is_none())
-            .map(|b| {
-                // Valid accelerators contain only `<>`, letters, digits and `_`: no JSON escaping.
-                format!("    \"{}\": \"{}\"", b.id, self.gtk(b.action))
-            })
+            .map(|b| format!("    \"{}\": \"{}\"", b.id, self.gtk(b.action)))
             .collect();
         out.push_str(&lines.join(",\n"));
         out.push_str("\n  }\n}\n");
         out
     }
 
-    /// Parses a configuration file. Missing actions keep their default; unknown names, wrong
-    /// types or any policy violation reject the whole file.
     pub fn from_config(text: &str) -> Result<Self, String> {
         let value = lade_protocol::bounded_json(text.as_bytes())
             .map_err(|e| format!("not valid JSON ({e})"))?;
@@ -471,11 +433,8 @@ impl Keymap {
     }
 }
 
-/// Upper bound on the configuration file read; a larger file is invalid.
 pub const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
-/// `$XDG_CONFIG_HOME/lade/keybindings.json`, else `$HOME/.config/lade/keybindings.json`.
-/// Relative values are ignored, as the XDG specification requires.
 pub fn config_path(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let absolute = |name: &str| env(name).map(PathBuf::from).filter(|p| p.is_absolute());
     let base =
@@ -483,8 +442,6 @@ pub fn config_path(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     Some(base.join("lade").join("keybindings.json"))
 }
 
-/// Loads the keymap. A missing file means defaults silently; an unreadable or invalid file means
-/// defaults plus a message explaining why it was ignored.
 pub fn load(path: &Path) -> (Keymap, Option<String>) {
     use std::io::Read as _;
     let file = match std::fs::File::open(path) {
@@ -520,7 +477,6 @@ fn ignored(path: &Path, reason: &str) -> String {
     message
 }
 
-/// Writes the keymap atomically (temporary file in the same directory, then rename).
 pub fn save(path: &Path, keymap: &Keymap) -> Result<(), String> {
     let dir = path
         .parent()
@@ -574,9 +530,6 @@ mod tests {
         assert_eq!(keymap.label(AppAction::Exit), "Ctrl+Q");
     }
 
-    /// The calm-UI presentation work moved actions behind disclosures but no shortcut: the table
-    /// (and so the shortcuts dialog and user guide) is unchanged and every non-fixed action stays
-    /// remappable to a function key.
     #[test]
     fn default_table_is_stable_and_remappable() {
         let table: Vec<(&str, &str)> = DEFAULT_APP_KEYBINDINGS
@@ -623,7 +576,6 @@ mod tests {
 
     #[test]
     fn terminal_escape_routes_are_configurable_and_reach_the_window() {
-        // Both directions can be remapped (default or function keys, like every remappable action)…
         let keymap = Keymap::propose(&with(&[
             (AppAction::ShowTerminal, "F7"),
             (AppAction::LeaveTerminal, "<Shift>F7"),
@@ -634,10 +586,7 @@ mod tests {
         let text = keymap.to_config();
         assert!(text.contains("\"leave-terminal\": \"<Shift>F7\""), "{text}");
         assert_eq!(Keymap::from_config(&text), Ok(keymap));
-        // …but cannot take a typing key from the shell.
         assert!(Keymap::propose(&with(&[(AppAction::LeaveTerminal, "<Control>c")])).is_err());
-        // From inside the terminal only the escape routes, clipboard and Exit reach the window;
-        // the fixed F6 route always does.
         for action in [
             AppAction::NextRegion,
             AppAction::PreviousRegion,
@@ -702,7 +651,6 @@ mod tests {
                 Keymap::propose(&with(&[(AppAction::FocusSearch, reserved)])).expect_err(reserved);
             assert!(errors[0].contains("reserved"), "{errors:?}");
         }
-        // Another action's default is not an exception for this one.
         assert!(Keymap::propose(&with(&[(AppAction::FocusSearch, "<Control>n")])).is_err());
     }
 
@@ -716,7 +664,6 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("Ctrl+F8"), "{errors:?}");
         assert!(errors[0].contains("Search") && errors[0].contains("New Objective"));
-        // Remapping onto the fixed region escape is a conflict.
         let errors = Keymap::propose(&with(&[(AppAction::FocusSearch, "F6")])).unwrap_err();
         assert!(
             errors
@@ -753,7 +700,6 @@ mod tests {
         let keymap = Keymap::propose(&with(&[(AppAction::FocusSearch, "<Shift>F3")])).unwrap();
         let text = keymap.to_config();
         assert_eq!(Keymap::from_config(&text), Ok(keymap));
-        // Sparse files only override what they name.
         let sparse =
             Keymap::from_config(r#"{"version":1,"bindings":{"add-feedback":"F9"}}"#).unwrap();
         assert_eq!(sparse.gtk(AppAction::AddFeedback), "F9");

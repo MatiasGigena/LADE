@@ -1,14 +1,3 @@
-//! Right inspector: Overview (approval state, the one next action, More actions, intent and
-//! Details), Evidence (candidates, service-observed checks) and Feedback (drafts with save state
-//! and submission of Contextual Feedback).
-//!
-//! Every action's availability comes from `available_actions`; `presentation::panel::home` gives
-//! each action one surface, and this panel draws only the Overview's, Evidence's and Feedback's.
-//! Disabled actions keep their place and their reason. Agent Session control (state, Start /
-//! Cancel / Resume, the model, accepted inputs and their delivery) is Activity's; the Overview
-//! points there in one line when the Objective waits for it. The Objective's status and
-//! attention reasons are the Objectives list's.
-
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -59,9 +48,7 @@ pub struct Inspector {
     check_entry: gtk::Entry,
     updating: Cell<bool>,
     on_draft_edit: RefCell<Option<Rc<dyn Fn()>>>,
-    /// Extension dialogs of the live sessions (IMP-011), answered only by the developer.
     dialogs: session::DialogHost,
-    /// Disclosure states, kept across rebuilds (presentation only; collapsed by default).
     more_open: Cell<bool>,
     details_open: Cell<bool>,
 }
@@ -69,8 +56,6 @@ pub struct Inspector {
 fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
     let content = vbox(space::PAGE);
     content.add_css_class("inspector-page");
-    // No horizontal scrolling: content is width-constrained to the column (labels wrap, ids
-    // ellipsize with tooltips, drop-downs ellipsize, buttons wrap).
     let scroll = widgets::region_scroll(&content);
     scroll.set_propagate_natural_width(false);
     scroll.set_vexpand(true);
@@ -84,7 +69,6 @@ fn section(title: &str) -> gtk::Box {
     section
 }
 
-/// A quiet separator between groups of one list (the destructive actions).
 fn group_separator() -> gtk::Separator {
     let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
     separator.add_css_class("list-separator");
@@ -244,14 +228,11 @@ impl Inspector {
         };
         let summary = &detail.summary;
 
-        // The status and its reasons live in the Objectives list, the agent's state in Activity;
-        // the Overview starts with what only it has: the approval state and the next step.
         let next_area = vbox(space::ITEM);
         next_area.add_css_class("next-action");
         if let Some(approval) = &detail.approval {
             next_area.append(&label(format::approval_label(approval.state), &["meta"]));
         }
-        // An agent control the Objective waits for is Activity's: one line and a jump there.
         if let Some(pointer) = panel::agent_pointer(&detail) {
             let row = vbox(0);
             row.append(&label(&pointer, &["meta"]));
@@ -293,7 +274,6 @@ impl Inspector {
             self.overview.append(&next_area);
         }
 
-        // Every other offered action, collapsed; destructive ones last and separated.
         let (regular, destructive) = panel::more_actions(&detail, next.as_ref());
         if !regular.is_empty() || !destructive.is_empty() || detail.history_deleted {
             let list = vbox(space::TIGHT);
@@ -327,7 +307,6 @@ impl Inspector {
             ));
         }
 
-        // Intent: what the developer agreed to, editable until approval.
         let intent = section("Intent");
         for (key, value) in [
             ("Outcome", &detail.intent.outcome),
@@ -356,7 +335,6 @@ impl Inspector {
         ));
         self.overview.append(&intent);
 
-        // Details: identities and metadata, collapsed.
         let rows = vbox(space::ITEM);
         for row in panel::details_rows(&detail, Timestamp(widgets::now_ms())) {
             let value = if row.mono {
@@ -383,8 +361,6 @@ impl Inspector {
         ));
     }
 
-    /// One Overview action. `prominent`: the next action (full width, primary only when enabled,
-    /// with its note or reason in one line); otherwise a quiet row of More actions.
     fn action_widget(
         self: &Rc<Self>,
         detail: &ObjectiveDetail,
@@ -400,8 +376,6 @@ impl Inspector {
         };
         let destructive = action.tone == Tone::Destructive;
         let enabled = action.availability == ActionAvailability::Enabled;
-        // The service's caveat on an enabled action; an approval that needs an override reason is
-        // also stated when the service gave no note (the dialog asks for the reason).
         let note = match name {
             ActionName::ReviewApprove if enabled && self.controller.approval_needs_override() => {
                 Some(action.note.clone().unwrap_or_else(|| {
@@ -413,7 +387,6 @@ impl Inspector {
         }
         .filter(|_| enabled);
         let row = if prominent {
-            // Black only for a cleanly available step: never with a caveat.
             let classes: &[&str] = match action.tone {
                 Tone::Primary if note.is_none() => &["primary"],
                 Tone::Destructive => &["destructive"],
@@ -446,8 +419,6 @@ impl Inspector {
         row
     }
 
-    /// Runs an Overview action (`panel::home` is Overview); confirmations open as dialogs that
-    /// return focus to `button`. Agent controls, checks and feedback have their own surfaces.
     fn activate(self: &Rc<Self>, action: ActionName, button: &gtk::Button) {
         let Some(detail) = self.detail() else { return };
         let controller = self.controller.clone();
@@ -510,7 +481,6 @@ impl Inspector {
                 dialogs::delete_history(button, &controller, &detail.summary.title);
             }
             ActionName::ObjectiveUpdateIntent => dialogs::edit_intent(button, &controller),
-            // Drawn on their own surfaces (`panel::home`), never here.
             ActionName::ExecutionStart
             | ActionName::ExecutionCancel
             | ActionName::ExecutionResume
@@ -735,7 +705,6 @@ impl Inspector {
         self.evidence.append(&run);
     }
 
-    /// Creates/updates/removes draft widgets without disturbing the text being typed.
     fn reconcile_drafts(self: &Rc<Self>) {
         let state = self.controller.store.state();
         let Some(id) = state.ui.selected.clone() else {
@@ -758,8 +727,6 @@ impl Inspector {
             &["meta"],
         ));
         if editors.is_empty() {
-            // How to start a draft is the viewer's hint; accepted feedback and its delivery are
-            // Activity's ledger: one line and a jump there.
             let none = vbox(0);
             none.append(&label(
                 "No unsent drafts. Accepted feedback and its delivery are listed in Activity.",
@@ -880,7 +847,6 @@ impl Inspector {
         let status = editor.status(state.connection.is_connected());
         let stale = editor.stale;
         drop(state);
-        // Staleness arrives with draft updates, so it is rendered with the save state.
         let shown = w.stale.first_child().is_some();
         if shown != stale {
             widgets::clear(&w.stale);
@@ -970,7 +936,6 @@ impl Inspector {
 
     fn render_submit(self: &Rc<Self>) {
         widgets::clear(&self.submit_box);
-        // Nothing to submit: the Drafts heading already says how to start one.
         let Some(batch) = self
             .controller
             .feedback_batch()
@@ -991,8 +956,6 @@ impl Inspector {
                 controller.set_feedback_mode(*m);
             }
         });
-        // What the mode means is explained once, in Activity's composer; here it is the
-        // choice's tooltip and accessible description.
         let explanation = format::mode_explanation(batch.mode);
         mode.set_tooltip_text(Some(explanation));
         set_accessible_description(&mode, explanation);
@@ -1039,10 +1002,6 @@ impl Inspector {
         self.submit_box.append(&s);
     }
 
-    /// Focuses a draft's text view (after Add feedback), switching to the Feedback tab, and
-    /// reveals the whole draft (field, error and save state) once it has been allocated. The
-    /// page or compact region may have just been shown, so revealing on idle could use stale
-    /// bounds; a frame callback waits for the first allocated frame instead.
     pub fn focus_draft(&self, draft_id: &DraftId) {
         self.root.set_current_page(Some(2));
         let Some((view, draft)) = self

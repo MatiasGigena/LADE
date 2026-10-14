@@ -1,17 +1,4 @@
 #!/bin/sh
-# IMP-012 under Xvfb against a real `laded serve`: the contained terminal in the Objective
-# sandbox, both keyboard escape directions, a flood, single-instance activation, the client
-# ending (service and agent keep running, terminal dies), no resume of terminals, and explicit
-# Exit (service, agent and terminal stop; nothing lingers).
-#
-#   scripts/e2e-terminal [OUT_DIR]     (default: docs/implementation/evidence/imp-012)
-#
-# Requires: a debug build, Xvfb, xdotool, ImageMagick `import`, git, bubblewrap, dbus-run-session.
-# It runs inside its own `dbus-run-session` bus: there is no notification service and no AT-SPI
-# registry (GTK_A11Y=none), so the run also shows the client working without those desktop
-# facilities. There is no window manager: the client's end is simulated by terminating its
-# process (a window close and a crash both end the link; the service treats them alike).
-# Environment: E2E_DISPLAY (default 78), E2E_KEEP=1 keeps the temporary directory.
 set -eu
 if [ -z "${LADE_E2E_BUS:-}" ]; then
   command -v dbus-run-session >/dev/null || { echo "e2e-terminal: dbus-run-session is required" >&2; exit 2; }
@@ -81,7 +68,7 @@ start_desktop() {
   WID=$(xdotool search --onlyvisible --name '^LADE$' | head -1)
   x windowmove "$WID" 0 0 windowsize "$WID" $W $H
   sleep 2
-  click 700 60 0.5   # give the window keyboard focus (no window manager)
+  click 700 60 0.5
 }
 
 step "repository and service"
@@ -117,8 +104,6 @@ key ctrl+n
 click 280 106 0.3; typ "Terminal check"
 click 280 195 0.3; typ "the terminal stays in scope"
 click 469 625 2
-# Start agent is Activity's (Agent Session control): its filled black button in the Activity
-# header, found by pixels (scripts/e2e-find-button.py box) rather than by a fixed position.
 key ctrl+2
 wait_for 20 "Start agent" start_button
 XY=$(start_button)
@@ -145,8 +130,6 @@ shot 01-terminal-open
 
 step "focus out (Ctrl+Shift+E): typing no longer reaches the shell"
 key ctrl+shift+e
-# No space or Return here: they would activate whatever button now has focus. If these keys
-# reached the shell, the Return typed after coming back would create leaked.txt.
 typ ":>leaked.txt"
 sleep 1
 shot 02-terminal-left
@@ -188,14 +171,14 @@ no_terminal || fail "a terminal was resumed"
 shot 04-reopened-no-terminal
 
 step "explicit Exit (Ctrl+Q): service, agent and terminal stop"
-click 120 167 1    # select the Objective (a new window starts without a selection)
+click 120 167 1
 key ctrl+3
 key Return
 wait_for 20 "terminal sandbox" terminal_open
 key ctrl+shift+e
 key ctrl+q
 shot 05-exit-confirm
-key Tab            # Cancel has focus; Tab reaches Exit
+key Tab
 key Return
 n=0
 while kill -0 "$LADED" 2>/dev/null; do

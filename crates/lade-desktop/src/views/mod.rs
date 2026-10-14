@@ -1,14 +1,3 @@
-//! Native GTK4 workbench views. Views render the presentation store and emit intents through the
-//! controller; they never own domain state or decide authority.
-//!
-//! Composition for WP-G:
-//! ```ignore
-//! let store = Store::new(PresentationState::new(ConnectionState::Connecting));
-//! let app = views::App::new(&application, store.clone(), sink);
-//! let updates = app.update_sender(); // Send + Clone: hand to the network thread
-//! app.present();
-//! ```
-
 mod activity;
 pub mod bridge;
 mod dialogs;
@@ -43,16 +32,12 @@ use crate::presentation::store::{Change, MainView, Store, StoreUpdate, ViewerCon
 
 const CSS: &str = include_str!("../assets/style.css");
 
-/// What happens once no draft text would be lost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CloseAfter {
-    /// The window closes; the service keeps running.
     Window,
-    /// Explicit Exit: the service is asked to stop.
     Exit,
 }
 
-/// Loads the single application stylesheet. Call once after GTK is initialised.
 pub fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(CSS);
@@ -63,7 +48,6 @@ pub fn load_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
-    // Focusing a selectable label (titles, ids) must not select its whole text.
     if let Some(settings) = gtk::Settings::default() {
         settings.set_gtk_label_select_on_focus(false);
     }
@@ -79,16 +63,12 @@ pub struct App {
     activity: Rc<activity::Activity>,
     inspector: Rc<inspector::Inspector>,
     terminal: Rc<terminal::TerminalPane>,
-    /// Where focus was before the terminal took it (restored by Leave terminal).
     before_terminal: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     watcher: RefCell<AttentionWatcher>,
     delivery: RefCell<Delivery>,
-    /// Desktop notifications.
     notifier: RefCell<Option<Rc<dyn Notifier>>>,
     body: gtk::Stack,
     centre: gtk::Stack,
-    /// The work area's region viewport: scrolls vertically when the window is short and bounds
-    /// the work area's minimum width so the window can always narrow into compact.
     centre_region: gtk::ScrolledWindow,
     region_bar: gtk::Box,
     region_switches: Vec<(Region, gtk::ToggleButton)>,
@@ -102,13 +82,9 @@ pub struct App {
     draft_timer: RefCell<Option<glib::SourceId>>,
     scheduling: Cell<bool>,
     updating_layout: Cell<bool>,
-    /// One window-level shortcut per action (Escape excepted: dialogs own it), retargeted in
-    /// place when the keymap changes so there is exactly one dispatch path.
     shortcuts: RefCell<Vec<(AppAction, gtk::Shortcut)>>,
     keys_path: Option<PathBuf>,
-    /// Safe close: the action waiting for flushed drafts to be acknowledged.
     close_pending: Cell<Option<CloseAfter>>,
-    /// The developer chose to close (nothing unsaved, or unsaved text explicitly discarded).
     close_confirmed: Cell<bool>,
     close_timer: RefCell<Option<glib::SourceId>>,
     loss_dialog: RefCell<Option<gtk::Window>>,
@@ -153,7 +129,6 @@ impl App {
         notice.set_visible(false);
         root.append(&notice);
 
-        // Compact composition: explicit region switches instead of side-by-side rails.
         let region_bar = widgets::hbox(0);
         region_bar.add_css_class("region-bar");
         region_bar.set_visible(false);
@@ -184,8 +159,6 @@ impl App {
         centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
         centre_region.set_hexpand(true);
         widgets::set_accessible_label(&centre_region, "Main work area");
-        // Inspector: adjustable 280–360 px; it may shrink transiently so the window can narrow
-        // into the compact composition, where it becomes a region of its own.
         inspector.root.set_hexpand(false);
         widgets::set_accessible_label(&inspector.root, "Inspector");
         let right = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -211,7 +184,6 @@ impl App {
             }
         });
 
-        // A zero-height probe reports the real allocated width for the compact compositions.
         let probe = gtk::DrawingArea::new();
         probe.set_hexpand(true);
         probe.set_content_height(0);
@@ -282,7 +254,6 @@ impl App {
         app
     }
 
-    /// Requests the viewer content for a restored selection.
     pub fn load_initial(&self) {
         self.controller.reload_viewer();
     }
@@ -291,7 +262,6 @@ impl App {
         self.window.present();
     }
 
-    /// Sender for delivering store updates from another thread (WP-G transport).
     pub fn update_sender(&self) -> bridge::UpdateSender {
         bridge::connect(&self.store, 1024)
     }
@@ -319,7 +289,6 @@ impl App {
                 app.schedule_drafts();
             }
         }));
-        // Safe close: unsaved draft text is flushed and acknowledged, or explicitly discarded.
         let weak = Rc::downgrade(self);
         self.window
             .connect_close_request(move |_| match weak.upgrade() {
@@ -338,8 +307,6 @@ impl App {
                 app.apply_width(width);
             }
         });
-        // Keep the inspector width (not the centre width) stable when the window resizes, and
-        // keep a dragged width within 280–360 px. Only the wide composition has a side inspector.
         let weak = Rc::downgrade(self);
         self.right.connect_max_position_notify(move |p| {
             if let Some(app) = weak.upgrade()
@@ -373,8 +340,6 @@ impl App {
                 }
             });
         }
-        // Opening an Objective (Enter, double-click or click) in the compact Objectives region
-        // moves to its work area.
         let weak = Rc::downgrade(self);
         self.rail.set_on_open(Rc::new(move || {
             if let Some(app) = weak.upgrade()
@@ -399,7 +364,6 @@ impl App {
         self.install_shortcuts();
     }
 
-    /// Reads the client keybinding preference; an invalid file is ignored with a visible notice.
     fn load_keymap(&self) {
         let Some(path) = &self.keys_path else { return };
         let (keymap, problem) = keys::load(path);
@@ -413,9 +377,6 @@ impl App {
         }
     }
 
-    /// Installs one capture-phase shortcut per window action on the main window only. Dialogs
-    /// are separate windows, so a remapped window shortcut never captures their field input;
-    /// Escape is installed by each dialog itself.
     fn install_shortcuts(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -444,7 +405,6 @@ impl App {
         self.terminal.set_shortcut_hints(&keymap);
     }
 
-    /// Retargets every window shortcut to the current keymap at once.
     fn apply_keymap(&self) {
         let keymap = self.store.state().ui.keymap.clone();
         for (action, shortcut) in self.shortcuts.borrow().iter() {
@@ -456,7 +416,6 @@ impl App {
 
     fn run_action(self: &Rc<Self>, action: AppAction) -> glib::Propagation {
         let in_terminal = self.terminal.has_focus();
-        // A focused terminal receives every key except its escape routes, clipboard and Exit.
         if in_terminal && !keys::reaches_window_from_terminal(action) {
             return glib::Propagation::Proceed;
         }
@@ -502,7 +461,6 @@ impl App {
         glib::Propagation::Stop
     }
 
-    /// Focus into the terminal: remembers where focus was, shows the terminal and focuses it.
     fn enter_terminal(&self) {
         if !self.terminal.has_focus() {
             let previous = gtk::prelude::GtkWindowExt::focus(&self.window);
@@ -513,8 +471,6 @@ impl App {
         glib::idle_add_local_once(move || pane.focus());
     }
 
-    /// Focus out of the terminal: back to where it was, else the Objectives region. The terminal
-    /// keeps running.
     fn leave_terminal(&self) {
         let previous = self
             .before_terminal
@@ -533,9 +489,6 @@ impl App {
         }
     }
 
-    /// Explicit Exit: confirms, then stops the service (agents and terminals) when this window
-    /// controls it; the window closes once the service confirms. Closing the window instead
-    /// keeps authorized background work running.
     fn confirm_exit(self: &Rc<Self>) {
         let controls = self.store.state().connection.is_connected();
         let body = if controls {
@@ -561,22 +514,17 @@ impl App {
         );
     }
 
-    /// The desktop session is ending: stop the service per policy (no lingering, no resume).
-    /// Pending draft saves are sent first; the service handles them before the stop request.
     pub fn logout(&self) {
         self.controller.flush_drafts(widgets::monotonic_ms());
         self.controller.exit(StopReason::Logout);
     }
 
-    /// Returns `true` when closing now loses no draft text. Otherwise flushes pending saves and
-    /// waits (up to [`CLOSE_WAIT_MS`]) for the service's acknowledgements, then finishes `after`
-    /// on its own; a failed, conflicting or disconnected draft asks the developer instead.
     fn guard_unsaved(self: &Rc<Self>, after: CloseAfter) -> bool {
         if self.controller.unsaved_drafts().is_empty() {
             return true;
         }
         if self.close_pending.replace(Some(after)).is_some() {
-            return false; // Already waiting or asking.
+            return false;
         }
         if self.store.state().connection.is_connected() {
             self.controller.flush_drafts(widgets::monotonic_ms());
@@ -604,7 +552,6 @@ impl App {
         false
     }
 
-    /// Re-evaluates a waiting close after draft or connection changes.
     fn check_pending_close(self: &Rc<Self>) {
         let Some(after) = self.close_pending.get() else {
             return;
@@ -613,12 +560,10 @@ impl App {
         if unsaved.is_empty() {
             self.finish_close(after);
         } else if unsaved.iter().any(|d| !d.pending) && self.loss_dialog.borrow().is_none() {
-            // Failed, conflicting or disconnected: waiting cannot help.
             self.confirm_loss();
         }
     }
 
-    /// Asks whether to keep the window open or discard the unsaved text.
     fn confirm_loss(self: &Rc<Self>) {
         let Some(after) = self.close_pending.get() else {
             return;
@@ -647,7 +592,6 @@ impl App {
                 }
             },
         );
-        // Keep window open (or Escape): the close request is withdrawn.
         let weak = Rc::downgrade(self);
         dialog.connect_close_request(move |_| {
             if let Some(app) = weak.upgrade() {
@@ -659,7 +603,6 @@ impl App {
         *self.loss_dialog.borrow_mut() = Some(dialog);
     }
 
-    /// Closes (or exits) now: nothing is unsaved, or the developer discarded it.
     fn finish_close(&self, after: CloseAfter) {
         self.close_pending.set(None);
         if let Some(timer) = self.close_timer.borrow_mut().take() {
@@ -682,7 +625,6 @@ impl App {
         }
     }
 
-    /// Records the semantic state behind `changes` in the opt-in timing trace.
     fn trace_changes(&self, changes: &[Change]) {
         let Some(trace) = &self.trace else { return };
         let state = self.store.state();
@@ -749,12 +691,10 @@ impl App {
         }
     }
 
-    /// Enables desktop notifications for this (live) window.
     pub fn set_notifier(&self, notifier: Rc<dyn Notifier>) {
         *self.notifier.borrow_mut() = Some(notifier);
     }
 
-    /// A notification was activated: navigate to its Objective (never approve or send).
     pub fn open_from_notification(&self, target: &str) {
         let found = {
             let state = self.store.state();
@@ -772,7 +712,6 @@ impl App {
         self.window.present();
     }
 
-    /// Raises notifications for Objectives that newly need the developer, outside the window.
     fn observe_attention(self: &Rc<Self>, changes: &[Change]) {
         if changes.contains(&Change::Connection) && !self.store.state().connection.is_connected() {
             self.watcher.borrow_mut().reset();
@@ -831,9 +770,6 @@ impl App {
         }
     }
 
-    /// F6 / Shift+F6: header → Objectives → work area → inspector. The wide composition skips
-    /// hidden regions; the compact one switches to the region first, so every region stays
-    /// reachable and the escape route always works.
     fn cycle_regions(&self, forward: bool) {
         let compact = self.store.state().ui.layout == LayoutClass::Compact;
         let mut target = layout::next_region(self.focused_region(), forward);
@@ -864,7 +800,6 @@ impl App {
         }
     }
 
-    /// Runs the draft autosave scheduler and arms a timer for the next due save.
     fn schedule_drafts(self: &Rc<Self>) {
         if self.scheduling.replace(true) {
             return;
@@ -879,7 +814,6 @@ impl App {
             let delay = Duration::from_millis(deadline.saturating_sub(now).max(1));
             let id = glib::timeout_add_local_once(delay, move || {
                 if let Some(app) = weak.upgrade() {
-                    // The source fired and is gone; forget its id without removing it.
                     app.draft_timer.borrow_mut().take();
                     app.schedule_drafts();
                 }
@@ -1003,8 +937,6 @@ impl App {
     fn render_notice(self: &Rc<Self>) {
         widgets::clear(&self.notice);
         let state = self.store.state();
-        // Not `notices.len()`: that stops growing at the retained cap, which would hide every
-        // notice after one dismissed at the cap.
         let total = state.notices_received;
         let latest = state.notices.last().cloned();
         drop(state);
@@ -1047,8 +979,6 @@ impl App {
         );
     }
 
-    /// Records the allocated width; the store decides the layout class (`presentation::layout`).
-    /// Within the wide composition, side widths tighten below 1280 px.
     fn apply_width(&self, width: i32) {
         let sizes = layout::wide_sizes(width);
         if self.sizes.replace(sizes) != sizes {
@@ -1065,15 +995,11 @@ impl App {
         self.paned.set_position(sizes.rail);
         let right = self.right.clone();
         let inspector = sizes.inspector;
-        // The max position is known only after the next allocation.
         glib::idle_add_local_once(move || {
             right.set_position(right.max_position() - inspector);
         });
     }
 
-    /// Applies the composition decided in `presentation::layout`: visible regions, the region
-    /// switches, the header and the Objective details toggle. Nothing is removed in compact; one
-    /// region is shown at a time and the others stay one switch (or F6) away.
     fn render_layout(&self) {
         let (class, region, details) = {
             let state = self.store.state();
@@ -1088,8 +1014,6 @@ impl App {
         self.rail.root.set_visible(c.rail);
         self.centre_region.set_visible(c.centre);
         self.inspector.root.set_visible(c.inspector);
-        // A paned with both children hidden still takes its share: hide it so the shown region
-        // gets the whole width.
         self.right.set_visible(c.centre || c.inspector);
         self.region_bar.set_visible(c.region_switches);
         self.header.set_compact(class == LayoutClass::Compact);
@@ -1110,7 +1034,6 @@ impl App {
             self.window.remove_css_class("compact");
             self.place_wide_panes();
         }
-        // Focus in a region that was just hidden would be lost; keep it in the shown region.
         if let Some(previous) = focus_region
             && previous != Region::Header
             && !self.region_widget(previous).is_visible()

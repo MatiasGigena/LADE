@@ -96,7 +96,6 @@ def edit(value, path, replacement):
 
 DELETE = object()
 
-# Handshake bodies.
 frame('hello', dict(kind='hello'))
 frame('auth', dict(kind='auth', capability=SAMPLES['capability']))
 frame('welcome', dict(kind='welcome', service_epoch=uid(6), lease_id=uid(7)))
@@ -104,7 +103,6 @@ frame('auth-uppercase', dict(kind='auth', capability=SAMPLES['capability'].upper
 frame('auth-short', dict(kind='auth', capability=SAMPLES['capability'][:-1]), 'invalid_schema')
 frame('welcome-missing-lease', dict(kind='welcome', service_epoch=uid(6)), 'invalid_schema')
 
-# Every request name: full and minimal valid forms plus explicit rejections.
 requests = {}
 for variant in variants('client', 'Request'):
     name = const_of(variant, 'name')
@@ -128,7 +126,6 @@ for variant in variants('client', 'Request'):
     if optional:
         frame(f'request-{name}-null-{optional[0]}', edit(full, ['payload', optional[0]], None), 'invalid_schema')
 
-# Every reply name: ok (full and minimal data) and rejected; mismatched data rejects.
 for variant in variants('client', 'Reply'):
     if 'name' not in variant['properties']:
         continue
@@ -167,7 +164,6 @@ frame('operation-outcome-wrong-shape', dict(status, result=dict(status='ok', dat
     state='completed', outcome=dict(name='draft.delete', result=dict(status='ok', data=send_data))))),
       'invalid_schema')
 
-# Every event name.
 for variant in variants('client', 'Event'):
     name = const_of(variant, 'name')
     frame(f'event-{name}-full', sample(variant, 'client', True))
@@ -252,7 +248,6 @@ frame('boolean-as-number', edit(cleanup, ['payload', 'confirm_data_loss'], 1), '
 frame('message-empty-text', edit(requests['message.send'], ['payload', 'text'], ''), 'invalid_schema')
 frame('message-unknown-mode', edit(requests['message.send'], ['payload', 'mode'], 'steering'), 'invalid_schema')
 
-# IMP-001 safety cases, re-expressed on a mutating request.
 command = requests['draft.delete']
 for name, path, replacement, error in [
         ('wrong-protocol', ['protocol'], 2, 'version_mismatch'), ('wrong-bundle', ['bundle'], '0.1.0-imp001',
@@ -295,8 +290,6 @@ for name, recipe, expected in [
         ('nodes-over', dict(nodes=True), 'limit_reached'), ('frame-over', dict(padding=1048577), 'frame_size'),
         ('frame-exact', dict(padding=1048576), 'ok')]:
     case(name, 'json', recipe, expected)
-# Exactly 16,384 values (1 root + 16 arrays + 16,367 zeros): a comma after the last value is malformed JSON, not a
-# 16,385th value, so it rejects as invalid_json rather than limit_reached.
 full_budget = '[' + ','.join('[' + ','.join(['0'] * n) + ']' for n in [1023] * 15 + [1022]) + ']'
 for name, text, expected in [('nodes-exact', full_budget, 'ok'),
                              ('nodes-exact-trailing-comma', full_budget[:-2] + ',]]', 'invalid_json'),
@@ -311,7 +304,6 @@ case('partial-body', 'transport', dict(hex='000000027b'), 'truncated_frame', fra
 case('worker-eof', 'transport', dict(text=json.dumps(abort)), 'truncated_frame', framing='worker', contract='worker')
 case('worker-empty', 'transport', dict(text='\n'), 'frame_size', framing='worker', contract='worker')
 case('worker-over', 'transport', dict(padding=1048577), 'frame_size', framing='worker', contract='worker')
-# Raw Unicode separators in JSON whitespace are invalid, not line delimiters.
 case('worker-unicode-separator', 'transport', dict(text=json.dumps(abort) + ' \n'), 'invalid_json',
      framing='worker', contract='worker')
 case('worker-malformed-then-valid', 'transport', dict(text='broken\n' + json.dumps(abort) + '\n'), 'invalid_json',
@@ -319,7 +311,6 @@ case('worker-malformed-then-valid', 'transport', dict(text='broken\n' + json.dum
 case('worker-client-body-line', 'transport', dict(text=json.dumps(hello) + '\n' + json.dumps(abort) + '\n'),
      'invalid_schema', framing='worker', contract='worker')
 
-# Worker contract: every body, both directions.
 for direction in ('ServiceToWorker', 'WorkerToService'):
     for variant in variants('worker', direction):
         kind = const_of(variant, 'kind')
@@ -352,7 +343,6 @@ end = dict(kind='chunk.end', transfer_id=uid(9))
 cancel = dict(kind='chunk.cancel', transfer_id=uid(9))
 for name, body in [('start', start), ('data', data), ('end', end), ('cancel', cancel)]:
     frame('chunk-dto-' + name, body)
-# Wrong JSON types must reject without coercing null-prototype objects to strings.
 for name, replacement in [('object', {}), ('object-array', [{}]), ('array', []), ('null', None), ('boolean', True),
                           ('number', 7)]:
     frame('transfer-id-' + name, dict(end, transfer_id=replacement), 'invalid_schema')
@@ -370,7 +360,6 @@ for name, original, path in [
     for kind, replacement in [('object', {}), ('object-array', [{}])]:
         case(name + '-' + kind, 'frame', val(edit(original, path, replacement)), 'invalid_schema',
              contract='worker' if name.startswith('worker') else 'client')
-# Version rejection takes precedence, even if the body also has an invalid type.
 for name, replacement in [('string', '0.1.0'), ('object', {}), ('object-array', [{}])]:
     v = envelope(dict(end, transfer_id={}))
     v['bundle'] = replacement
@@ -395,7 +384,6 @@ frame('chunk-at-limit', dict(data, hex='aa' * 65536))
 frame('chunk-invalid-hex', dict(data, hex='AA'), 'invalid_schema')
 frame('chunk-odd-hex', dict(data, hex='a'), 'invalid_schema')
 
-# Duplicate-operation semantics over the canonical request content (request_id excluded).
 original = envelope(requests['message.send'])
 repeat = copy.deepcopy(original)
 new_request = edit(original, ['body', 'request_id'], uid(20))
@@ -412,7 +400,6 @@ for name, steps, expected in [
         ('history-query-rejected', [query], 'invalid_schema')]:
     case(name, 'history', dict(steps=steps), expected)
 
-# One case per line keeps review diffs local.
 output = '[\n' + ',\n'.join(json.dumps(c, ensure_ascii=False) for c in corpus) + '\n]\n'
 path = root / 'contracts/v1/fixtures.json'
 if '--check' in sys.argv:

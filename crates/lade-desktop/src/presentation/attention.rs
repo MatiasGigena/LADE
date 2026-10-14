@@ -1,19 +1,7 @@
-//! Desktop attention (IMP-012), GTK-free.
-//!
-//! The in-app Objective board, driven by the service's attention projection, is the source of
-//! truth. Desktop notifications are an optional second channel: they are raised only when an
-//! Objective *enters* "needs attention" or "ready for review" while the window is not active,
-//! never for state that existed when the window connected. A notification that cannot be shown
-//! (no session bus, no notification service) changes nothing in the board; the window records
-//! once, quietly, that notifications are unavailable (a note under the Objectives list, never a
-//! banner that moves the layout). Activating a notification only navigates: it selects the
-//! Objective and shows its context, and never sends a command.
-
 use std::collections::HashMap;
 
 use super::model::{Attention, ObjectiveId, ObjectiveSummary};
 
-/// One desktop notification to raise.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AttentionRequest {
     pub objective_id: ObjectiveId,
@@ -22,12 +10,10 @@ pub struct AttentionRequest {
     pub body: String,
 }
 
-/// Raises desktop notifications. `Err` explains why one could not be shown.
 pub trait Notifier {
     fn notify(&self, request: &AttentionRequest) -> Result<(), String>;
 }
 
-/// Tracks attention transitions of the Objectives this window shows.
 #[derive(Debug, Default)]
 pub struct AttentionWatcher {
     seen: HashMap<ObjectiveId, Attention>,
@@ -35,13 +21,11 @@ pub struct AttentionWatcher {
 }
 
 impl AttentionWatcher {
-    /// Forgets everything (a new connection or snapshot primes again without notifying).
     pub fn reset(&mut self) {
         self.seen.clear();
         self.primed = false;
     }
 
-    /// Requests for Objectives that newly entered a notable attention since the last call.
     pub fn observe(&mut self, objectives: &[ObjectiveSummary]) -> Vec<AttentionRequest> {
         let mut requests = Vec::new();
         for objective in objectives {
@@ -88,16 +72,12 @@ fn request_for(objective: &ObjectiveSummary) -> AttentionRequest {
     }
 }
 
-/// Delivery state of the desktop channel for this window.
 #[derive(Debug, Default)]
 pub struct Delivery {
     unavailable_reported: bool,
 }
 
 impl Delivery {
-    /// Sends `requests` unless the window is active (the board already shows them). Returns, once,
-    /// why the desktop channel failed (for `StoreUpdate::NotificationsUnavailable`); the board's
-    /// attention is never touched here.
     pub fn deliver(
         &mut self,
         requests: &[AttentionRequest],
@@ -117,7 +97,6 @@ impl Delivery {
     }
 }
 
-/// Validates a notification's target: it must name an Objective this window knows.
 pub fn activation_target(target: &str, objectives: &[ObjectiveSummary]) -> Option<ObjectiveId> {
     objectives
         .iter()

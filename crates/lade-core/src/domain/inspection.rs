@@ -1,14 +1,10 @@
-//! Inspected-version identities, lossless repository paths and versioned references.
-
 use core::fmt;
 
 use crate::domain::ids::{CandidateId, CaptureId, is_lower_hex};
 use crate::error::DomainError;
 
-/// Upper bound for free text held by the domain; equals the protocol's per-string cap (256 KiB).
 pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 
-/// SHA-256 digest of an immutable content artifact (64 lowercase hex digits).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ArtifactDigest(String);
 
@@ -33,15 +29,12 @@ impl fmt::Display for ArtifactDigest {
     }
 }
 
-/// A repository-relative path as raw bytes. The display form is a lossy label and never authority.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RepoPath(Vec<u8>);
 
-/// Bound on a single repository path, matching common `PATH_MAX`.
 pub const MAX_PATH_BYTES: usize = 4096;
 
 impl RepoPath {
-    /// Accepts a non-empty relative path without NUL bytes or empty, `.` or `..` components.
     pub fn new(bytes: Vec<u8>) -> Result<Self, DomainError> {
         let valid = !bytes.is_empty()
             && bytes.len() <= MAX_PATH_BYTES
@@ -61,13 +54,11 @@ impl RepoPath {
         &self.0
     }
 
-    /// Lossy UTF-8 label for presentation.
     pub fn display(&self) -> String {
         String::from_utf8_lossy(&self.0).into_owned()
     }
 }
 
-/// The immutable inspected version a reference points into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum InspectedVersion {
     Working { capture_id: CaptureId },
@@ -87,7 +78,6 @@ impl InspectedVersion {
     }
 }
 
-/// Side of a comparison a selection was made on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {
     Old,
@@ -103,7 +93,6 @@ impl Side {
     }
 }
 
-/// Non-empty half-open byte range `[start, end)` within exact file bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ByteRange {
     start: u64,
@@ -139,7 +128,6 @@ impl ByteRange {
     }
 }
 
-/// A durable, unambiguous reference to inspected bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
     artifact_digest: ArtifactDigest,
@@ -152,8 +140,6 @@ pub struct Reference {
 }
 
 impl Reference {
-    /// `selected_text` must be exactly the bytes of `byte_range` (offsets are bytes, not characters);
-    /// `line_hint` is a 1-based display hint only.
     pub fn new(
         artifact_digest: ArtifactDigest,
         path: RepoPath,
@@ -213,8 +199,6 @@ impl Reference {
         self.line_hint
     }
 
-    /// Stale rule: the reference is fresh when the current file is the same artifact, or when the current bytes
-    /// still contain the selected bytes at the same offsets. A missing path is stale.
     pub fn staleness(&self, current: CurrentContent<'_>) -> Staleness {
         match current {
             CurrentContent::Missing => Staleness::Missing,
@@ -232,7 +216,6 @@ impl Reference {
     }
 }
 
-/// Content of the referenced path and side in the *current* comparison basis, resolved by the caller.
 #[derive(Clone, Copy, Debug)]
 pub enum CurrentContent<'a> {
     Missing,
@@ -296,7 +279,6 @@ mod tests {
     #[test]
     fn selected_text_must_match_range_in_bytes() {
         let text = "héllo";
-        // "é" is two bytes, so a 5-character selection spans 6 bytes.
         assert!(reference_at(1, 0, 6, text).is_ok());
         assert!(reference_at(1, 0, 5, text).is_err());
     }
@@ -329,7 +311,6 @@ mod tests {
             }),
             Staleness::Fresh
         );
-        // Inserting one multi-byte character earlier shifts byte offsets: stale even though the text still exists.
         let shifted = file.replacen("é", "éé", 1);
         assert_eq!(
             reference.staleness(CurrentContent::Present {
@@ -338,7 +319,6 @@ mod tests {
             }),
             Staleness::Changed
         );
-        // CRLF normalised to LF also shifts offsets.
         let lf = file.replace("\r\n", "\n");
         assert_eq!(
             reference.staleness(CurrentContent::Present {
@@ -347,7 +327,6 @@ mod tests {
             }),
             Staleness::Changed
         );
-        // Truncated file and missing path.
         assert_eq!(
             reference.staleness(CurrentContent::Present {
                 digest: &other,

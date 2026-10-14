@@ -1,37 +1,20 @@
-//! Draft editing and autosave scheduling (presentation only; durability is the service's).
-//!
-//! Timing targets: save after 300 ms of quiet, and at least every 2 s while typing continues. Only
-//! one save is in flight per draft because `draft.save` is a compare-and-set on the revision.
-//! "Saved" is shown only when the service acknowledged a revision carrying the latest local text.
-
 use super::model::{Draft, DraftId, DraftState, ObjectiveId, Reference, SessionId};
 
-/// Monotonic milliseconds supplied by the caller (GTK: `glib::monotonic_time() / 1000`).
 pub type Millis = u64;
 
 pub const QUIET_MS: Millis = 300;
 pub const MAX_INTERVAL_MS: Millis = 2_000;
-/// How long closing the window waits for the service to acknowledge flushed drafts before it
-/// asks the developer (the durable acknowledgement target is 1 s after the request).
 pub const CLOSE_WAIT_MS: Millis = 2_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveStatus {
-    /// Created locally; nothing typed yet.
     Empty,
     Unsaved,
     Saving,
-    Saved {
-        revision: u64,
-    },
-    Failed {
-        message: String,
-    },
+    Saved { revision: u64 },
+    Failed { message: String },
     Disconnected,
-    /// The service holds a newer revision with different text; never overwritten silently.
-    Conflict {
-        revision: u64,
-    },
+    Conflict { revision: u64 },
 }
 
 impl SaveStatus {
@@ -80,7 +63,6 @@ pub struct DraftEditor {
     edit_generation: u64,
     saved_generation: u64,
     in_flight: Option<InFlight>,
-    /// A save whose reply was lost with the link: if `drafts.list` shows it landed, it is ours.
     lost: Option<InFlight>,
     first_unsaved_edit: Option<Millis>,
     last_edit: Option<Millis>,
@@ -90,7 +72,6 @@ pub struct DraftEditor {
 }
 
 impl DraftEditor {
-    /// A new local draft anchored to `reference`; nothing is saved until text is typed.
     pub fn new_local(
         draft_id: DraftId,
         objective_id: ObjectiveId,
@@ -119,7 +100,6 @@ impl DraftEditor {
         }
     }
 
-    /// A draft restored from the service's durable state.
     pub fn from_durable(draft: &Draft) -> Self {
         let mut editor = Self::new_local(
             draft.draft_id.clone(),
@@ -144,7 +124,6 @@ impl DraftEditor {
         self.edit_generation > self.saved_generation.max(pending)
     }
 
-    /// Whether the latest local text is durably acknowledged.
     pub fn is_saved(&self) -> bool {
         !self.dirty()
             && self.in_flight.is_none()
@@ -152,17 +131,11 @@ impl DraftEditor {
             && self.durable_revision > 0
     }
 
-    /// Whether closing now would lose text the developer typed: the latest text is not durably
-    /// acknowledged (unsaved, saving, failed, disconnected or in conflict). An untouched new draft
-    /// has nothing to lose.
     pub fn has_unsaved_text(&self) -> bool {
         let untouched = self.durable_revision == 0 && self.body.is_empty();
         !untouched && (self.dirty() || self.in_flight.is_some() || self.conflict.is_some())
     }
 
-    /// Makes a pending save due now (closing the window flushes instead of waiting for the quiet
-    /// period). A failed save stays failed until an explicit Retry; a conflict or an outcome
-    /// awaiting reconciliation is never overwritten.
     pub fn flush(&mut self, now: Millis) {
         if self.dirty() && self.failed.is_none() {
             self.last_edit = Some(now.saturating_sub(QUIET_MS));
@@ -179,7 +152,6 @@ impl DraftEditor {
         self.first_unsaved_edit.get_or_insert(now);
     }
 
-    /// When the next save should be attempted, if one is due.
     pub fn next_deadline(&self) -> Option<Millis> {
         if !self.dirty()
             || self.in_flight.is_some()
@@ -194,7 +166,6 @@ impl DraftEditor {
         Some(quiet.min(max))
     }
 
-    /// Returns a save request when one is due now and the service is reachable.
     pub fn poll(&mut self, now: Millis, connected: bool) -> Option<SaveRequest> {
         if !connected || now < self.next_deadline()? {
             return None;
@@ -214,14 +185,13 @@ impl DraftEditor {
         })
     }
 
-    /// Applies an authoritative draft (save reply, `draft.changed` event or `drafts.list`).
     pub fn acknowledge(&mut self, draft: &Draft) {
         self.stale = draft.stale;
         self.state = draft.state;
         self.reference = draft.reference.clone();
         self.awaiting_reconcile = false;
         if draft.revision <= self.durable_revision {
-            return; // Duplicate or out-of-date acknowledgement.
+            return;
         }
         self.durable_revision = draft.revision;
         self.durable_body = draft.body.clone();
@@ -237,8 +207,6 @@ impl DraftEditor {
             .take_if(|f| ours(f))
             .or_else(|| lost.filter(ours))
         {
-            // Our request landed (possibly before the link dropped); newer local edits remain
-            // dirty and will be scheduled.
             self.saved_generation = flight.generation;
             self.first_unsaved_edit
                 .get_or_insert(self.last_edit.unwrap_or(0));
@@ -256,20 +224,15 @@ impl DraftEditor {
         self.failed = Some(message.to_owned());
     }
 
-    /// The link dropped: an in-flight save's outcome is unknown until drafts are re-queried.
     pub fn connection_lost(&mut self) {
-        // Keep the text dirty; a later acknowledgement with this body clears it. Until drafts are
-        // re-queried, no new save is sent so a landed write is never blindly overwritten.
         if let Some(flight) = self.in_flight.take() {
             self.lost = Some(flight);
             self.awaiting_reconcile = true;
-            // The text is unsaved again: once reconciled it is due without a new keystroke.
             self.first_unsaved_edit
                 .get_or_insert(self.last_edit.unwrap_or(0));
         }
     }
 
-    /// Drafts were re-queried after reconnect and this draft's durable revision is unchanged.
     pub fn reconciled(&mut self) {
         self.awaiting_reconcile = false;
         self.lost = None;
@@ -281,7 +244,6 @@ impl DraftEditor {
         self.first_unsaved_edit = Some(now.saturating_sub(MAX_INTERVAL_MS));
     }
 
-    /// Resolves a conflict: keep local text (save against the newer revision) or adopt the saved one.
     pub fn resolve_conflict(&mut self, keep_local: bool, now: Millis) {
         if self.conflict.take().is_none() {
             return;
@@ -395,7 +357,7 @@ mod tests {
                 let revision = e.durable_revision() + 1;
                 e.acknowledge(&durable(&request.body, revision));
             }
-            now += 100; // typing faster than the quiet period
+            now += 100;
         }
         assert_eq!(saved_at, vec![2_000, 4_100]);
     }
@@ -410,7 +372,6 @@ mod tests {
         assert_eq!(e.status(true), SaveStatus::Unsaved);
         let second = e.poll(650, true).unwrap();
         assert_eq!(second.expected_revision, 1);
-        // A duplicate stale acknowledgement must not mark the newer text saved.
         e.acknowledge(&durable("first", 1));
         assert_eq!(e.status(true), SaveStatus::Saving);
         e.acknowledge(&durable("first and more", 2));
@@ -447,7 +408,6 @@ mod tests {
             e.poll(5_000, true).is_none(),
             "no blind resend before reconciliation"
         );
-        // drafts.list after reconnect shows the save did land.
         e.acknowledge(&durable(&request.body, 1));
         assert_eq!(e.status(true), SaveStatus::Saved { revision: 1 });
     }
@@ -459,12 +419,10 @@ mod tests {
         let request = e.poll(300, true).unwrap();
         e.edit("xy", 350);
         e.connection_lost();
-        // drafts.list after reconnect: the lost save did land, with the older text.
         e.acknowledge(&durable(&request.body, 1));
         assert_eq!(e.status(true), SaveStatus::Unsaved);
         let next = e.poll(10_000, true).expect("the newer text is saved next");
         assert_eq!((next.expected_revision, next.body.as_str()), (1, "xy"));
-        // A foreign revision after that is still a conflict.
         e.acknowledge(&durable("theirs", 2));
         assert_eq!(e.status(true), SaveStatus::Conflict { revision: 2 });
     }
@@ -497,7 +455,6 @@ mod tests {
         assert!(e.has_unsaved_text(), "in flight is not saved");
         e.acknowledge(&durable(&request.body, 1));
         assert!(!e.has_unsaved_text());
-        // A failed save is not retried by a flush; it stays visibly unsaved.
         e.edit("close soon!", 2_000);
         e.flush(2_000);
         e.poll(2_000, true).unwrap();

@@ -1,6 +1,3 @@
-//! Objectives rail: board groups by service-derived attention, then the archive. Rows are flat with
-//! neutral hover/selected fills; there is no lateral accent of any kind.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -14,7 +11,6 @@ use crate::presentation::model::{ObjectiveId, ObjectiveSummary};
 use crate::presentation::panel;
 use crate::presentation::store::Change;
 
-/// Handler invoked with the button that opened a dialog (focus returns there).
 pub type ButtonHandler = Rc<dyn Fn(&gtk::Button)>;
 
 pub struct Rail {
@@ -22,7 +18,6 @@ pub struct Rail {
     controller: Rc<Controller>,
     content: gtk::Box,
     lists: RefCell<Vec<(gtk::ListBox, Vec<ObjectiveId>)>>,
-    /// Quiet note when desktop notifications are unavailable (attention stays here).
     channel_note: gtk::Label,
     pub new_button: gtk::Button,
     on_new: RefCell<Option<ButtonHandler>>,
@@ -80,7 +75,6 @@ impl Rail {
         *self.on_new.borrow_mut() = Some(handler);
     }
 
-    /// Called when a row is activated (Enter, click): an explicit request to open the Objective.
     pub fn set_on_open(&self, handler: Rc<dyn Fn()>) {
         *self.on_open.borrow_mut() = Some(handler);
     }
@@ -94,7 +88,6 @@ impl Rail {
                 .notifications_unavailable
                 .clone();
             if let Some(reason) = reason {
-                // One quiet line; the reason and what still works are its tooltip and name.
                 let full = format!(
                     "Desktop notifications are unavailable ({reason}); Objectives that need you are marked here."
                 );
@@ -124,14 +117,11 @@ impl Rail {
             &row,
             &format!("objective:{}", objective.objective_id.as_str()),
         );
-        // Title plus, when the group heading does not already say it, one line with the sign and
-        // the attention reasons. The outcome is the row's tooltip (its home is the Overview's intent).
         let content = vbox(space::TIGHT);
         let title = label(&objective.title, &["objective-title"]);
         title.set_lines(2);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.append(&title);
-        // Only what the group heading does not say: attention reasons, or a closed lifecycle.
         if let Some(line) = panel::objective_row_line(objective) {
             content.append(&widgets::line_label(
                 &line,

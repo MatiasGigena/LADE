@@ -1,6 +1,3 @@
-//! Request routing, job-completion routing and the synchronous commands (workspace, objective
-//! definition, intent, settings, drafts, direct messages) plus feedback submission.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -39,7 +36,6 @@ use super::state::{ObjState, Runtime, WsState};
 use super::{Flow, JobOutput, ReqCtx, Service};
 use crate::fault::{self, Fault};
 
-/// What a pool job's completion continues.
 pub(crate) enum Pending {
     Launch {
         oid: ObjectiveId,
@@ -105,17 +101,11 @@ pub(crate) enum Pending {
     Ignore,
 }
 
-/// Why a working capture was taken.
 pub(crate) enum CapturePurpose {
-    /// The worker went idle: refresh the working view and draft staleness.
     Idle,
-    /// `changes.list` on the working basis.
     Changes(ReqCtx),
-    /// Re-run a query once a capture exists.
     Retry(ReqCtx, Box<Request>),
-    /// `feedback.submit`: stale check of every batch item against current content.
     Submit(ReqCtx, Box<FeedbackSubmitCommand>),
-    /// Dispatch-time revalidation of a queued feedback input.
     DispatchCheck(InputId),
 }
 
@@ -162,13 +152,11 @@ impl Service {
         }
     }
 
-    /// Writes the Objective row and its review records.
     pub(crate) fn save_tx(tx: &rusqlite::Connection, st: &ObjState) -> rusqlite::Result<()> {
         storage::save_objective(tx, &st.row)?;
         storage::save_review(tx, &st.review)
     }
 
-    /// Commits `st` (objective + review) with the request outcome, then swaps it in.
     pub(crate) fn commit_obj(
         &mut self,
         ctx: Option<&mut ReqCtx>,
@@ -179,9 +167,6 @@ impl Service {
         self.objectives.insert(st.objective().id(), st);
         Ok(())
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Routing.
 
     pub(crate) fn dispatch(&mut self, mut ctx: ReqCtx, request: Request) -> Flow {
         let result = match request {
@@ -259,7 +244,6 @@ impl Service {
             Request::ObjectiveDeleteHistory(cmd) => {
                 return self.objective_delete_history(ctx, &cmd);
             }
-            // IMP-011 pi compatibility (service/compat.rs).
             Request::ModelsList(query) => return self.models_list(ctx, query),
             Request::SessionTree(ObjectiveSelector { objective_id }) => {
                 return self.session_tree(ctx, &objective_id);
@@ -373,9 +357,6 @@ impl Service {
         }
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Queries.
-
     fn snapshot(&self) -> ReplyData {
         let workspaces = self
             .workspaces
@@ -421,9 +402,6 @@ impl Service {
         Ok(ReplyData::OperationGet(status))
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Workspaces and objectives.
-
     fn workspace_open(&mut self, cmd: &WorkspaceOpenCommand) -> Result<ReplyData, Rejection> {
         let path = PathBuf::from(cmd.path.to_os_string());
         if !path.is_absolute() {
@@ -436,8 +414,6 @@ impl Service {
                 self.wire_workspace(existing, REPLY_BRANCHES),
             ));
         }
-        // A recorded Workspace whose repository was unavailable at start is reattached (with its
-        // Objectives) rather than recorded a second time.
         let row = match sql(storage::workspace_by_path(self.store.conn(), &top))? {
             Some(row) => row,
             None => {
@@ -451,7 +427,6 @@ impl Service {
                     default_branch: repo.head_branch().ok().flatten(),
                     opened_at: now_ms(),
                 };
-                // Recorded with the generic outcome journal in `finish`.
                 sql(storage::insert_workspace(self.store.conn(), &row))?;
                 row
             }
@@ -606,9 +581,6 @@ impl Service {
         Ok(data)
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Drafts.
-
     fn draft_save(
         &mut self,
         ctx: &mut ReqCtx,
@@ -679,7 +651,6 @@ impl Service {
         st.draft_stale.insert(draft_id, false);
         let wire = wire_draft(&st, &draft);
         let data = ReplyData::DraftSave(wire.clone());
-        // Test-only (scripts/e2e-resilience): inert unless LADE_TEST_FAULTS_DIR is set.
         match fault::operation("draft.save") {
             Some(Fault::Refuse) => {
                 return Err(durability("injected test fault: the draft was not written"));
@@ -725,9 +696,6 @@ impl Service {
         Ok(data)
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Direct messages and feedback.
-
     fn acceptance(
         st: &ObjState,
         ctx: &ReqCtx,
@@ -756,8 +724,6 @@ impl Service {
         })
     }
 
-    /// Persists a freshly accepted input (and submitted drafts) with the outcome, then replies and
-    /// dispatches. `checked` means references were just validated against current content.
     fn accept_and_dispatch(
         &mut self,
         mut ctx: ReqCtx,
@@ -935,9 +901,6 @@ impl Service {
         }
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Captures.
-
     pub(crate) fn capture_input(
         &self,
         st: &ObjState,
@@ -961,7 +924,6 @@ impl Service {
         })
     }
 
-    /// Unsent drafts whose staleness a capture should recompute.
     pub(crate) fn unsent_references(
         st: &ObjState,
     ) -> Vec<(DraftId, lade_core::domain::inspection::Reference)> {
@@ -972,7 +934,6 @@ impl Service {
             .collect()
     }
 
-    /// Starts an idle capture unless one is already running (then one more follows).
     pub(crate) fn request_capture(&mut self, oid: ObjectiveId) {
         let rt = self.rt(oid);
         if rt.capture_running {
@@ -998,7 +959,6 @@ impl Service {
         );
     }
 
-    /// Records a capture (unless reused), updates draft staleness and announces the change.
     pub(crate) fn register_capture(
         &mut self,
         oid: ObjectiveId,
@@ -1094,7 +1054,6 @@ impl Service {
     }
 }
 
-/// Reply data for an accepted input (`message.send` or `feedback.submit`).
 fn input_reply(
     name: lade_protocol::client::RequestName,
     summary: lade_protocol::client::InputSummary,

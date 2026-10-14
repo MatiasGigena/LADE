@@ -1,9 +1,3 @@
-//! Client wiring to the authoritative `laded` service (WP-G).
-//!
-//! The GTK main context only enqueues intents ([`Transport`] is the views' `IntentSink`); a
-//! dedicated driver thread owns the Unix-socket link, a reader thread decodes frames, and every
-//! result reaches the presentation store as a `StoreUpdate` through the bounded `UpdateSender`.
-
 pub mod compat;
 pub mod connection;
 pub mod convert;
@@ -25,14 +19,12 @@ impl UpdateSink for UpdateSender {
     }
 }
 
-/// Main-context handle: never blocks, only forwards intents to the driver thread.
 pub struct Transport {
     tx: Sender<Input>,
     rx: RefCell<Option<Receiver<Input>>>,
 }
 
 impl Transport {
-    /// Intents submitted before [`Transport::start`] are kept and handled once it runs.
     pub fn new() -> Self {
         let (tx, rx) = channel();
         Self {
@@ -41,7 +33,6 @@ impl Transport {
         }
     }
 
-    /// Starts the driver thread; later calls do nothing.
     pub fn start(&self, config: Config, sink: impl UpdateSink) -> std::io::Result<()> {
         let Some(rx) = self.rx.borrow_mut().take() else {
             return Ok(());
@@ -52,7 +43,6 @@ impl Transport {
 
 impl IntentSink for Transport {
     fn submit(&self, intent: Intent) {
-        // The driver only exits once the window is gone; a failed send has no one to tell.
         let _ = self.tx.send(Input::Intent(intent));
     }
 }

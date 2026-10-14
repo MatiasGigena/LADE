@@ -1,8 +1,3 @@
-//! Contained terminal over the real service (IMP-012): Objective scope, review writer exclusion,
-//! lease-bound lifetime, bounded flood output, explicit stop and no resume after restart.
-//! The terminal itself always needs the real sandbox; without it each test checks the refusal
-//! and returns.
-
 mod service_support;
 
 use std::fs;
@@ -42,7 +37,6 @@ fn input(client: &mut Client, terminal: &Id, line: &str) {
     }
 }
 
-/// Collects `terminal.output` text of `terminal` until it contains `needle`.
 fn output_until(client: &mut Client, terminal: &Id, needle: &str) -> String {
     let mut seen = String::new();
     let mut last_seq = 0;
@@ -97,11 +91,9 @@ fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
-/// An Objective whose worktree exists (the fake worker started once).
 fn started_objective(env: &Env, client: &mut Client, title: &str) -> Id {
     let ws = open_workspace(client, &env.repo);
     let objective = create_objective(client, &ws.workspace_id, title).objective_id;
-    // No worktree yet: nothing to open a terminal in.
     let refused = client.call(open_command(&objective)).unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidLifecycle, "{refused:?}");
     start_execution(client, &objective);
@@ -122,7 +114,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
         eprintln!("note: sandbox unavailable; terminal refused as expected");
         return;
     }
-    // Sizes are bounded.
     let refused = client
         .call(Request::TerminalOpen(TerminalOpenCommand {
             objective_id: objective.clone(),
@@ -142,7 +133,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     output_until(&mut client, &term.terminal_id, "OK_2");
     let file = worktree(&env, &objective).join("from-terminal.txt");
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
-    // The shell sees only the Objective worktree.
     input(
         &mut client,
         &term.terminal_id,
@@ -153,7 +143,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
         out.contains(&format!("D_{}_6", objective.as_str())),
         "{out:?}"
     );
-    // Resize is accepted within bounds.
     assert!(
         client
             .call(Request::TerminalResize(TerminalResizeCommand {
@@ -163,7 +152,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
             }))
             .is_ok()
     );
-    // A long-running writer is still open when the review freeze starts.
     let marker = format!("{}.{}", 8000 + std::process::id() % 1000, 43);
     input(
         &mut client,
@@ -192,7 +180,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
         .unwrap_err();
     assert_eq!(gone.code, ErrorCode::NotFound);
 
-    // Under review the terminal is read-only: inspection works, writes fail.
     let review = open(&mut client, &objective);
     assert_eq!(review.mode, TerminalMode::ReadOnly);
     input(
@@ -203,7 +190,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     let out = output_until(&mut client, &review.terminal_id, "RO_read_only_7");
     assert!(out.contains("hello"), "{out:?}");
     assert_eq!(fs::read_to_string(&file).unwrap(), "hello\n");
-    // Explicit close.
     match client.call(Request::TerminalClose(TerminalSelector {
         terminal_id: review.terminal_id.clone(),
     })) {
@@ -216,7 +202,6 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     );
 }
 
-/// The per-Objective bound holds for opens sent together, before any terminal has started.
 #[test]
 fn concurrent_opens_respect_the_per_objective_bound() {
     let env = Env::new("svc-term-bound");
@@ -265,7 +250,6 @@ fn lease_loss_kills_terminals_and_a_second_client_gets_none() {
     );
     output_until(&mut client, &term.terminal_id, "BG_9");
     assert!(wait_until(|| sleepers(&marker) == 1));
-    // While the lease is held, a second client is refused outright (no second authority).
     assert!(Client::connect(&env.socket(), &env.capability()).is_err());
     drop(client);
     assert!(
@@ -281,7 +265,6 @@ fn lease_loss_kills_terminals_and_a_second_client_gets_none() {
         }))
         .unwrap_err();
     assert_eq!(gone.code, ErrorCode::NotFound);
-    // The reaper removes the pidfile after the sandbox exits, which can lag the lease loss.
     assert!(
         wait_until(|| fs::read_dir(env.root.path().join("state/run"))
             .unwrap()
@@ -306,9 +289,6 @@ fn flood_output_is_bounded_and_rate_limited() {
         &term.terminal_id,
         "stty -echo; tr '\\0' x < /dev/zero",
     );
-    // The service drains at most 2 × 32 KiB per terminal per 100 ms tick and the reader waits
-    // for room before discarding (backpressure), so the client receives a bounded rate however
-    // fast the shell writes, and the service memory stays at the 1 MiB ring.
     let window = Duration::from_secs(2);
     let start = Instant::now();
     let mut total = 0usize;
@@ -333,7 +313,6 @@ fn flood_output_is_bounded_and_rate_limited() {
         (total as f64) <= ceiling,
         "rate is bounded: {total} bytes in {elapsed:.1}s"
     );
-    // The link survived the flood (no overflow): the service still answers.
     match client.call(Request::TerminalClose(TerminalSelector {
         terminal_id: term.terminal_id.clone(),
     })) {
@@ -377,7 +356,6 @@ fn explicit_stop_ends_the_service_and_nothing_resumes() {
     assert_eq!(sleepers(&marker), 0, "no terminal process lingers");
     drop(client);
 
-    // Restart: the execution is interrupted (not resumed) and the terminal is gone.
     let _service = env.start(FakeLauncher::shared());
     let mut client = env.connect();
     let d = detail(&mut client, &objective);

@@ -64,7 +64,6 @@ while [ $# -gt 0 ]; do
 done
 case $prefix in /*) ;; *) die "--prefix must be an absolute path" ;; esac
 prefix=${prefix%/}
-# Paths are written into a unit file, a desktop entry and shell launchers: keep them plain.
 safe_path() { printf '%s' "$1" | grep -Eq '^/[A-Za-z0-9/._+-]*$'; }
 safe_path "$prefix" || die "--prefix may contain only letters, digits and / . _ + -"
 
@@ -81,11 +80,9 @@ if [ -z "$allowed_signers" ] && [ -f "$config_home/lade/allowed_signers" ]; then
 fi
 umask 022
 
-# --- helpers ---------------------------------------------------------------------------------
 
 version_field() { sed -n "s/^$2=//p" "$1/VERSION" | head -1; }
 
-# Verify DIR against its MANIFEST.sha256: every listed file matches and no unlisted file exists.
 verify_manifest() {
     [ -f "$1/MANIFEST.sha256" ] && [ -f "$1/VERSION" ] || { printf 'no MANIFEST.sha256/VERSION in %s\n' "$1" >&2; return 1; }
     (cd "$1" && sha256sum --check --strict --quiet MANIFEST.sha256) >&2 || return 1
@@ -101,9 +98,6 @@ verify_manifest() {
     return 1
 }
 
-# Check DIR's detached signature over MANIFEST.sha256 against the allowed-signers trust root.
-# $2 = install: an unsigned bundle with a trust root is refused (unless --allow-unsigned);
-# $2 = rollback: an unsigned, already installed version is accepted with a note.
 verify_signature() {
     sig="$1/MANIFEST.sha256.sig"
     if [ -z "$allowed_signers" ]; then
@@ -150,10 +144,8 @@ verify_signature() {
     return 1
 }
 
-# Ask for a typed confirmation on the terminal (never from a pipe), unless --yes.
-confirm() { # phrase, what
+confirm() {
     [ "$yes" = 1 ] && return 0
-    # Probe in a subshell: a failed `exec` redirection would end this shell without a message.
     if ! (exec 3</dev/tty) 2>/dev/null; then
         die "$2 needs confirmation: run the installer at a terminal or pass --yes; nothing changed"
     fi
@@ -165,8 +157,6 @@ confirm() { # phrase, what
     [ "$answer" = "$1" ] || die "not confirmed; nothing changed"
 }
 
-# Before rolling back from $1 to $2 (bundle ids): when the database is at a newer schema than $2
-# understands, restore $2's pre-migration backup with $1's laded (which wrote the backup).
 restore_for_rollback() {
     prev_schema=$(version_field "$libdir/$2" schema)
     [ -n "$prev_schema" ] || return 0
@@ -200,7 +190,6 @@ restore_for_rollback() {
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$prev_schema" "$db_schema" "$1" "$2" >>"$libdir/install.log"
 }
 
-# Replace symlink $2 by one pointing at $1 atomically (rename over the old link).
 set_link() {
     ln -s "$1" "$2.new.$$"
     mv -fT "$2.new.$$" "$2"
@@ -210,11 +199,10 @@ systemctl_user() {
     command -v systemctl >/dev/null 2>&1 && systemctl --user "$@"
 }
 
-version_ge() { # version_ge 2.43.0 2.38 -> true
+version_ge() {
     printf '%s\n%s\n' "$2" "$1" | sort -V -C
 }
 
-# --- activation steps shared by install and rollback -------------------------------------------
 
 activate_service() {
     if [ "$enable" = 1 ]; then
@@ -252,7 +240,6 @@ if [ "$rollback" = 1 ]; then
     exit 0
 fi
 
-# --- locate and check the bundle ---------------------------------------------------------------
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 if [ -z "$bundle" ]; then
@@ -275,7 +262,6 @@ node_pin=$(version_field "$bundle" node)
 printf '%s' "$id" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}$' || die "invalid bundle id '$id' in VERSION"
 case $id in current|previous) die "invalid bundle id '$id'" ;; esac
 
-# --- prerequisites (fail closed, all problems reported at once) --------------------------------
 
 problems=
 problem() { problems="$problems
@@ -283,7 +269,7 @@ problem() { problems="$problems
 
 [ "$(uname -sm)" = "Linux x86_64" ] || problem "supported platform is Linux x86_64 (found $(uname -sm))"
 
-find_tool() { # PATH, then /usr/bin and /bin (the order laded uses)
+find_tool() {
     p=$(command -v "$1" 2>/dev/null) && [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
     for d in /usr/bin /bin; do [ -x "$d/$1" ] && { printf '%s\n' "$d/$1"; return 0; }; done
     return 1
@@ -300,7 +286,6 @@ else
     problem "bubblewrap (bwrap) not found: install the 'bubblewrap' package"
 fi
 find_tool prlimit >/dev/null || problem "prlimit not found: install 'util-linux'"
-# The sandbox launch gate runs /usr/bin/bash or /bin/bash inside every sandbox.
 [ -x /usr/bin/bash ] || [ -x /bin/bash ] || problem "bash not found in /usr/bin or /bin: install 'bash' (the sandbox launch gate needs it)"
 if git=$(find_tool git); then
     gv=$("$git" --version | sed -n 's/^git version \([0-9][0-9.]*\).*/\1/p')
@@ -309,7 +294,6 @@ else
     problem "git not found"
 fi
 
-# Node: --node, else the bundle's own runtime (part of the matched set), else node on PATH.
 bundled_node=0
 if [ -z "$node" ] && [ -f "$bundle/lib/lade/node/bin/node" ]; then
     bundled_node=1
@@ -336,8 +320,6 @@ else
     node_dir=/usr/bin
 fi
 
-# GTK 4.14 and GtkSourceView 5.12 runtime libraries: every library resolves and, with immediate
-# binding, every symbol the client uses exists (an older GTK fails here, not at first click).
 missing=$(ldd "$bundle/bin/lade-desktop" 2>/dev/null | sed -n 's/^[[:space:]]*\([^ ]*\) => not found.*/\1/p' | tr '\n' ' ')
 if [ -n "$missing" ]; then
     problem "missing runtime libraries for lade-desktop: $missing(install GTK 4.14+ and GtkSourceView 5.12+: libgtk-4-1, libgtksourceview-5-0)"
@@ -360,7 +342,6 @@ done
 
 [ -z "$problems" ] || die "prerequisites not met:$problems"
 
-# --- stage, verify and activate ----------------------------------------------------------------
 
 mkdir -p "$libdir" "$prefix/bin"
 target="$libdir/$id"
@@ -374,7 +355,6 @@ else
     rm -rf "$staging"
     trap 'rm -rf "$staging"' EXIT
     cp -R "$bundle" "$staging"
-    # Verify the copy that will run, not only the source.
     verify_manifest "$staging" || die "the copied bundle does not match its manifest; nothing activated"
     chmod -R go-w "$staging"
     mv "$staging" "$target"
@@ -387,7 +367,6 @@ set_link "$id" "$libdir/current"
 if [ -n "$old" ] && [ "$old" != "$id" ]; then
     set_link "$old" "$libdir/previous"
 fi
-# Keep only current and previous.
 prev=
 [ -L "$libdir/previous" ] && prev=$(readlink "$libdir/previous")
 for d in "$libdir"/*; do
@@ -398,9 +377,6 @@ done
 printf '%s install %s (previous %s)\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$id" "${prev:-none}" >>"$libdir/install.log"
 
 current="$libdir/current"
-# Launchers rather than bare symlinks: laded finds the bundled worker only through LADE_WORKER_DIR
-# and Node through PATH, and lade-desktop may start laded itself (inheriting this environment) when
-# the user unit is not running.
 for exe in laded lade-desktop; do
     launcher="$prefix/bin/$exe"
     cat >"$launcher.new.$$" <<LAUNCHER

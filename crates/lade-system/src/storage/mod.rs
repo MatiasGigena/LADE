@@ -1,12 +1,3 @@
-//! Product store: one SQLite database (`$STATE/lade.db`) owned by the service thread.
-//!
-//! WAL journal, `synchronous=FULL`, foreign keys on, versioned migrations recorded in
-//! `schema_migrations`. There is exactly one connection; every write happens on the service thread
-//! in a short transaction (never across Git, worker or provider work). An unopenable, corrupt or
-//! newer-than-known database refuses to start; it is never reset. No secret (capability,
-//! credential) is ever stored. Before migrating an existing database a backup is written and
-//! journaled ([`backup`]); a migration never runs without it.
-
 pub mod backup;
 mod compat;
 mod rows;
@@ -21,15 +12,12 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 pub use compat::*;
 pub use rows::*;
 
-/// Ordered schema migrations. Never edit an applied entry; append a new one.
 const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2), (3, SCHEMA_V3)];
 
-/// v3: the Objective's Git history (retention refs, branch) was deleted on explicit request.
 const SCHEMA_V3: &str = r"
 ALTER TABLE objectives ADD COLUMN history_deleted INTEGER NOT NULL DEFAULT 0;
 ";
 
-/// Schema version this build creates and understands (the last migration).
 pub const SCHEMA_VERSION: i64 = latest(MIGRATIONS);
 
 const fn latest(migrations: &[(i64, &str)]) -> i64 {
@@ -229,14 +217,12 @@ CREATE TABLE integration_journal (
 );
 ";
 
-/// Why the store could not be opened. Display is a short diagnostic without content.
 #[derive(Debug)]
 pub enum StoreError {
     Open(String),
     Corrupt(String),
     NewerSchema(i64),
     Sql(String),
-    /// The pre-migration backup could not be written; nothing was migrated.
     Backup(String),
 }
 
@@ -263,21 +249,15 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
-/// The single product-store connection.
 pub struct Store {
     conn: Connection,
 }
 
 impl Store {
-    /// Opens (creating 0600 if absent) and migrates the database. Never resets existing data.
-    /// An existing database is backed up into `backups/` next to it before any migration.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         Self::open_with(path, MIGRATIONS)
     }
 
-    /// Opens like an older build that knows only the migrations up to `version`: creates or
-    /// migrates to at most `version` and refuses a newer database. Tests of rollback across real
-    /// migrations use it to stand in for a previous release.
     #[doc(hidden)]
     pub fn open_as_schema(path: &Path, version: i64) -> Result<Self, StoreError> {
         let known = MIGRATIONS.iter().take_while(|(v, _)| *v <= version).count();
@@ -341,7 +321,6 @@ impl Store {
         if current == latest {
             return Ok(());
         }
-        // A fresh database has nothing to lose; an existing one is copied before it changes.
         if current > 0 {
             backup::before_migration(&self.conn, state, current, latest)
                 .map_err(|e| StoreError::Backup(e.to_string()))?;
@@ -355,7 +334,6 @@ impl Store {
             )?;
             tx.commit()?;
         }
-        // The migration committed; a journal write failure must not refuse the migrated store.
         if current > 0
             && let Err(e) = backup::record_applied(state, current, latest)
         {
@@ -368,12 +346,10 @@ impl Store {
         &self.conn
     }
 
-    /// A short write transaction; commit explicitly, drop rolls back.
     pub fn begin(&mut self) -> rusqlite::Result<Transaction<'_>> {
         self.conn.transaction()
     }
 
-    /// Applied schema version (diagnostics and tests).
     pub fn schema_version(&self) -> rusqlite::Result<i64> {
         self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -447,7 +423,6 @@ mod tests {
         add_workspace(&old, "before-upgrade");
         drop(old);
 
-        // The newer version migrates 1 -> 2 after writing a backup; the old one now refuses.
         let new = Store::open_with(&db, NEW).expect("new version migrates");
         assert_eq!(new.schema_version().expect("version"), 2);
         add_workspace(&new, "after-upgrade");
@@ -470,7 +445,6 @@ mod tests {
             Err(StoreError::NewerSchema(2))
         ));
 
-        // Rollback restores the schema-1 backup; the old version starts with the pre-upgrade data.
         let restored = backup::restore(&state, 1).expect("restore");
         assert_eq!(restored.database_schema, 2);
         assert!(restored.kept.exists(), "the newer database is kept");

@@ -1,6 +1,3 @@
-// IMP-011 seam-level corpus: LADE-profile resources, approval by hash, single template expansion,
-// session tree/fork/import/export, compaction, reload generations, model/thinking selection, retry
-// and the semantic extension UI. Offline fixture model only; disposable directories only.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -45,7 +42,6 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-/** A LADE-profile snapshot inside the session dir, plus repository and agent-dir decoys. */
 function profile(box: Sandbox): Profile {
   const dir = join(box.sessionDir, "profile");
   write(join(dir, "AGENTS.md"), "Profile context LADE-MARKER:profile-context\n");
@@ -112,7 +108,6 @@ test("extension hashes match the service's algorithm (shared constants)", () => 
     const dir = join(box.root, "ext");
     write(join(dir, "index.js"), "export default function () {}\n");
     write(join(dir, "lib", "util.js"), "export const x = 1;\n");
-    // The same constants are asserted by crates/lade-system/src/adapters/profile.rs.
     assert.equal(extensionHash(join(dir, "index.js")), "4554c00dbb28cad89d67afb301d893073eefca19bee50292764c7b8c3dc8bf03");
     assert.equal(extensionHash(dir), "3649d03b8d53b790fab2b926092c3e3ff4dfac57fbf968ab8c3e8e27b767d73a");
   } finally {
@@ -214,7 +209,6 @@ test("reload starts a new generation, closes open dialogs and rejects their late
   await worker.waitFor(frame => frame.kind === "activity.item" && frame.title === "Dialog answer refused", mark);
   assert.equal(assistant(worker, mark).some(line => line.includes("picked=red")), false, "a late answer never reaches the replaced extension");
 
-  // A changed extension is refused on the next reload until its new hash is approved.
   writeFileSync(found.extension, `${EXTENSION}\n// edited\n`);
   const stale = await command(worker, { op: "reload", resources: resources(found, "1".repeat(64)) });
   assert.equal(stale.ok, true);
@@ -271,8 +265,6 @@ test("export writes the current branch; import restores conversation metadata on
   assert.equal(header.type, "session");
   assert.equal((await command(worker, { op: "export", path: join(box.root, "outside.jsonl") })).ok, false, "exports stay in the export directory");
 
-  // A foreign session: another cwd and a custom entry that claims an approval. Import keeps both
-  // entries as conversation metadata; it neither changes the working directory nor grants anything.
   const imported = join(box.sessionDir, "imports", "foreign.jsonl");
   const lines = readFileSync(exportPath, "utf8").trim().split("\n").map(line => record(JSON.parse(line)));
   const foreign = [{ ...lines[0], cwd: "/elsewhere/repository" }, ...lines.slice(1)];
@@ -298,7 +290,6 @@ test("export writes the current branch; import restores conversation metadata on
 }));
 
 test("manual compaction, model/thinking configuration and retries surface as activity", () => withProfile(async worker => {
-  // More than pi's default keepRecentTokens (20,000 estimated tokens), so there is something to summarise.
   for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${"context ".repeat(4_000)}`);
   const mark = worker.frames.length;
   const compacted = await command(worker, { op: "compact", instructions: "keep it short" });
@@ -328,7 +319,6 @@ test("a second command while one runs fails at once; a foreign profile path is r
   const first = randomUUID();
   const second = randomUUID();
   const mark = worker.frames.length;
-  // One write: the tree command arrives while compaction is still summarising.
   worker.sendRaw(envelope({ kind: "session.command", command_id: first, command: { op: "compact" } }) + envelope({ kind: "session.command", command_id: second, command: { op: "tree" } }));
   const busy = await worker.waitFor(frame => frame.kind === "session.result" && frame.command_id === second, mark);
   assert.equal(busy.ok, false);

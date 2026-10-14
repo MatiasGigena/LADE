@@ -1,10 +1,3 @@
-//! The connection's protocol state, without I/O: request/reply correlation, operation identity
-//! retention and recovery, event-sequence tracking and reconnect re-queries.
-//!
-//! Every mutating user action gets one `operation_id` when the intent arrives, kept with the
-//! request until a reply settles it. A reply lost to a disconnect is never answered by sending a
-//! fresh operation: after reconnect the core asks `operation.get` for that same id.
-
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -21,12 +14,9 @@ use crate::presentation::intents::Intent;
 use crate::presentation::model::{ConnectionState, NoticeLevel, ObjectiveId, ServiceNotice};
 use crate::presentation::store::StoreUpdate;
 
-/// Queries remembered while disconnected (re-sent on reconnect; oldest dropped beyond this).
 const MAX_DEFERRED_QUERIES: usize = 64;
-/// How many times a still-running operation is re-checked (one check per [`Core::tick`]).
 const MAX_RECHECKS: u32 = 60;
 
-/// A mutating request with its retained identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Operation {
     pub operation_id: Id,
@@ -42,11 +32,9 @@ enum Pending {
         context: Context,
     },
     Command(Operation),
-    /// `operation.get` for an operation whose reply was lost.
     Recover(Operation),
 }
 
-/// What the connection must do after an input: apply `updates`, write `frames` in order.
 #[derive(Debug, Default)]
 pub struct Step {
     pub updates: Vec<StoreUpdate>,
@@ -73,16 +61,13 @@ pub struct Core {
     connected: bool,
     ever_connected: bool,
     epoch: Option<Id>,
-    /// Last applied event sequence; `None` until the snapshot reply sets the base.
     last_sequence: Option<u64>,
     snapshot_in_flight: bool,
     pending: HashMap<Id, Pending>,
-    /// Operations whose reply was lost; queried with `operation.get` after reconnect.
     uncertain: Vec<Operation>,
     rechecks: Vec<Operation>,
     focused: Option<ObjectiveId>,
     activity_loaded: HashSet<ObjectiveId>,
-    /// Objectives whose drafts were listed on the current connection (saves wait for this).
     drafts_reconciled: HashSet<ObjectiveId>,
     drafts_requested: HashSet<ObjectiveId>,
     deferred_saves: Vec<(ObjectiveId, Operation)>,
@@ -117,7 +102,6 @@ impl Core {
         self.connected
     }
 
-    /// Operations waiting for their outcome to be recovered.
     #[cfg(test)]
     pub fn uncertain(&self) -> &[Operation] {
         &self.uncertain
@@ -180,7 +164,6 @@ impl Core {
         })
     }
 
-    /// Accepts one user intent.
     pub fn submit(&mut self, intent: Intent) -> Step {
         let mut step = Step::default();
         let (request, context) = match requests::request(&intent) {
@@ -206,7 +189,6 @@ impl Core {
         if !self.connected
             && let Some(objective_id) = intent.terminal_objective()
         {
-            // Terminal interaction is never deferred or replayed on reconnect.
             step.updates.push(StoreUpdate::TerminalProblem {
                 objective_id: objective_id.clone(),
                 message: format!(
@@ -264,7 +246,6 @@ impl Core {
         if let Intent::SaveDraft { objective_id, .. } = &intent
             && !self.drafts_reconciled.contains(objective_id)
         {
-            // Never save before this connection has seen the durable drafts.
             if !self.drafts_pending(objective_id) {
                 step.extend(self.submit(Intent::LoadDrafts {
                     objective_id: objective_id.clone(),
@@ -287,7 +268,6 @@ impl Core {
         self.deferred_queries.push(intent.clone());
     }
 
-    /// The link is authenticated with `service_epoch`.
     pub fn on_welcome(&mut self, service_epoch: Id) -> Step {
         let mut step = Step::default();
         let reconnect = self.ever_connected;
@@ -306,7 +286,6 @@ impl Core {
         if reconnect {
             queries.extend(self.focused_queries());
             if let Some(o) = &self.focused {
-                // The inspected capture may have moved while away: flag it, never swap it.
                 step.updates.push(StoreUpdate::WorktreeChanged {
                     objective_id: o.clone(),
                 });
@@ -362,7 +341,6 @@ impl Core {
         queries
     }
 
-    /// The link closed. Lost command replies become uncertain; lost queries are re-sent later.
     pub fn on_link_lost(&mut self) {
         self.connected = false;
         self.snapshot_in_flight = false;
@@ -381,11 +359,9 @@ impl Core {
                 Pending::Query { intent: None, .. } => {}
             }
         }
-        // Deferred saves were never sent: their editors reconcile from drafts.list.
         self.deferred_saves.clear();
     }
 
-    /// Applies one reply.
     pub fn on_reply(&mut self, reply: Reply) -> Step {
         let Some(pending) = self.pending.remove(&reply.request_id) else {
             return Step::default();
@@ -546,7 +522,6 @@ impl Core {
         step
     }
 
-    /// A frame could not be encoded and never left: settle its request as refused locally.
     pub fn unsendable(&mut self, request_id: &Id, rejection: &Rejection) -> Step {
         let context = match self.pending.remove(request_id) {
             Some(Pending::Query { context, .. }) => context,
@@ -559,7 +534,6 @@ impl Core {
         }
     }
 
-    /// Re-queries operations that were still running (call about once per second).
     pub fn tick(&mut self) -> Step {
         let mut step = Step::default();
         if !self.connected {
@@ -571,7 +545,6 @@ impl Core {
         step
     }
 
-    /// Applies one event; a sequence gap or epoch change triggers a re-snapshot.
     pub fn on_event(&mut self, frame: EventFrame) -> Step {
         let mut step = Step::default();
         let sequence = frame.sequence.value();
@@ -579,7 +552,7 @@ impl Core {
         let resync = match self.last_sequence {
             _ if !same_epoch => true,
             None => false,
-            Some(last) if sequence <= last => return step, // already in the snapshot
+            Some(last) if sequence <= last => return step,
             Some(last) => sequence != last + 1,
         };
         if !resync && let Some(last) = self.last_sequence.as_mut() {
@@ -617,7 +590,6 @@ impl Core {
     }
 }
 
-/// Maps one service event onto the store.
 pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
     vec![match event {
         Event::ObjectiveChanged(s) => StoreUpdate::ObjectiveChanged(convert::summary(&s)),

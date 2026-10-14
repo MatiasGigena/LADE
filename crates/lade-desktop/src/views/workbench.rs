@@ -1,6 +1,3 @@
-//! Centre Workbench: Objective heading, journey indicator, basis selector and the Change Set with
-//! its changed-file list and viewer.
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -30,8 +27,6 @@ pub struct Workbench {
     pub viewer: Rc<Viewer>,
     updating: Cell<bool>,
     pub title_label: RefCell<Option<gtk::Label>>,
-    /// Compact composition: collapses the outcome, status details, breadcrumb and journey so
-    /// the Change Set stays dominant. Persistent (not rebuilt) so it keeps focus when toggled.
     details_toggle: gtk::ToggleButton,
     details_widgets: RefCell<Vec<gtk::Widget>>,
     show_details: Cell<bool>,
@@ -200,8 +195,6 @@ impl Workbench {
         self.render_change_set();
     }
 
-    /// Wide: details always shown, no toggle. Compact: the toggle decides, and the work area also
-    /// shows the Objective's status (the Overview is then another region).
     pub fn set_objective_details(&self, shown: bool, toggle_visible: bool) {
         self.show_details.set(shown);
         self.compact.set(toggle_visible);
@@ -245,9 +238,6 @@ impl Workbench {
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
         self.heading.append(&text);
-        // The status and its reasons live in the Objectives list (the outcome in the Overview's
-        // intent). The compact composition shows one
-        // region at a time, so the work area then carries it as one line of its own.
         let (sign, status_text) = panel::status_line(&summary);
         let status = widgets::sign_text(sign, &status_text);
         status.add_css_class("meta");
@@ -282,8 +272,6 @@ impl Workbench {
                 });
                 dot.set_valign(gtk::Align::Center);
                 item.append(&dot);
-                // Non-wrapping: a wrapping label in this row reports inconsistent heights to GTK
-                // (a measure critical, as found in the IMP-002 checkpoint).
                 let text = gtk::Label::new(Some(name));
                 text.add_css_class("journey-label");
                 if step == StepState::Current {
@@ -418,8 +406,6 @@ impl Workbench {
         summary.append(&widgets::counts(list.total_added, list.total_removed));
         self.change_heading.append(&summary);
 
-        // The inspected version once, concise; the service's version label and the exact target
-        // commit are the tooltip and accessible name.
         let status = match &ui.basis {
             Basis::Candidate { candidate_id } => detail
                 .as_ref()
@@ -457,8 +443,6 @@ impl Workbench {
             self.version.append(&row);
         }
 
-        // Content the Change Set cannot fully represent (nested repositories without a commit,
-        // filtered/LFS files) is stated explicitly instead of looking like ordinary changes.
         for notice in &list.notices {
             let text = match &notice.path {
                 Some(path) => format!("{}: {}", path.display, notice.message),

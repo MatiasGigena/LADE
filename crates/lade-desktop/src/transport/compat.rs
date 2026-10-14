@@ -1,5 +1,3 @@
-//! Wire ⇄ presentation mapping for the IMP-011 messages (catalogue, session, resources, dialogs).
-
 use lade_protocol::client as wire;
 use lade_protocol::types as wt;
 

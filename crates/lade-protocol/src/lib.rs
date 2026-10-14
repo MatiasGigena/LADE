@@ -1,7 +1,3 @@
-//! Effect-free wire primitives. Parsing an envelope never authenticates a caller.
-//!
-//! Decoding is always: bounded JSON parse -> exact protocol/bundle check -> closed schema
-//! validation -> typed DTO. Encoding serializes within the frame cap and re-validates.
 mod base64;
 mod chunks;
 pub mod client;
@@ -36,7 +32,6 @@ pub const MAX_CHUNK: usize = 64 * 1024;
 pub const MAX_TRANSFER: usize = 8 * 1024 * 1024;
 pub const MAX_TRANSFERS: usize = 2;
 
-/// Stable, body-free diagnostics. Never include peer bytes in Display or logs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WireError(pub &'static str);
 impl std::fmt::Display for WireError {
@@ -46,11 +41,9 @@ impl std::fmt::Display for WireError {
 }
 impl std::error::Error for WireError {}
 
-/// An envelope of one contract (client or worker schema).
 pub trait Message: Serialize + DeserializeOwned + Sized {
     const CONTRACT: Contract;
     fn identity(&self) -> (u32, &str);
-    /// Cheap pre-serialization checks that reject oversized content before allocation.
     fn precheck(&self) -> Result<(), WireError> {
         Ok(())
     }
@@ -99,10 +92,6 @@ pub fn decode_worker(bytes: &[u8]) -> Result<WorkerEnvelope, WireError> {
     WorkerEnvelope::decode(bytes)
 }
 
-/// Why a client frame did not decode. `request_id` is set only when the frame was well-formed
-/// (bounded JSON, exact versions, an envelope whose body is a `request` with a valid
-/// `request_id`) and failed only the schema: the service then replies `invalid_request` and
-/// keeps the link. Any other failure must close the link.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameRejection {
     pub error: WireError,

@@ -1,6 +1,3 @@
-//! Row mapping between the product tables and domain records. Every loaded record is validated by
-//! the domain's own `restore`; an inconsistent row surfaces as a corruption error, never a reset.
-
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -57,9 +54,6 @@ fn ts(value: i64) -> Timestamp {
     Timestamp::from_unix_ms(value)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Settings.
-
 pub fn load_settings(conn: &Connection) -> Sql<Option<wire::Settings>> {
     let json: Option<String> = conn
         .query_row("SELECT json FROM settings WHERE id = 1", [], |row| {
@@ -79,9 +73,6 @@ pub fn save_settings(conn: &Connection, settings: &wire::Settings) -> Sql<()> {
     )?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------------------------
-// Workspaces.
 
 #[derive(Clone, Debug)]
 pub struct WorkspaceRow {
@@ -126,7 +117,6 @@ pub fn load_workspaces(conn: &Connection) -> Sql<Vec<WorkspaceRow>> {
     rows.collect()
 }
 
-/// The recorded Workspace at `path` (paths are unique), if any.
 pub fn workspace_by_path(conn: &Connection, path: &Path) -> Sql<Option<WorkspaceRow>> {
     conn.query_row(
         "SELECT id, path, name, default_branch, opened_at FROM workspaces WHERE path = ?1",
@@ -136,18 +126,12 @@ pub fn workspace_by_path(conn: &Connection, path: &Path) -> Sql<Option<Workspace
     .optional()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Objectives.
-
-/// The stored Objective plus service-only columns.
 #[derive(Clone, Debug)]
 pub struct ObjectiveRow {
     pub objective: Objective,
-    /// The real Git branch (differs from `lade/<short-id>` after a name collision).
     pub git_branch: Option<String>,
     pub worktree: Option<PathBuf>,
     pub integration_conflict: bool,
-    /// The retention refs and branch were deleted by `objective.delete_history`.
     pub history_deleted: bool,
 }
 
@@ -288,9 +272,6 @@ pub fn load_objectives(conn: &Connection) -> Sql<Vec<ObjectiveRow>> {
     rows.collect()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Sessions.
-
 pub fn save_session(
     conn: &Connection,
     objective: ObjectiveId,
@@ -328,9 +309,6 @@ pub fn record_pi_session(
     )?;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------------------------
-// Captures.
 
 #[derive(Clone, Debug)]
 pub struct CaptureRow {
@@ -391,7 +369,6 @@ pub fn load_capture(conn: &Connection, id: CaptureId) -> Sql<Option<CaptureRow>>
     .optional()
 }
 
-/// Every retention ref recorded for the captures of `objective`.
 pub fn capture_retention_refs(conn: &Connection, objective: ObjectiveId) -> Sql<Vec<String>> {
     let mut stmt =
         conn.prepare("SELECT retention_ref FROM captures WHERE objective_id = ?1 ORDER BY rowid")?;
@@ -409,14 +386,10 @@ pub fn latest_captures(conn: &Connection) -> Sql<Vec<CaptureRow>> {
     rows.collect()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Drafts.
-
 fn reference_json(draft: &DraftRecord) -> Sql<String> {
     serde_json::to_string(&wire_reference(&draft.reference)).map_err(|_| corrupt("reference"))
 }
 
-/// Upserts the current draft row and appends its revision to the history.
 pub fn save_draft(conn: &Connection, draft: &Draft, record_revision: bool) -> Sql<()> {
     let r = draft.record();
     let reference = reference_json(r)?;
@@ -503,9 +476,6 @@ pub fn load_drafts(conn: &Connection) -> Sql<Vec<Draft>> {
     })?;
     rows.collect()
 }
-
-// ---------------------------------------------------------------------------------------------
-// Accepted inputs and delivery.
 
 fn mode_code(mode: InputMode) -> &'static str {
     mode.code()
@@ -639,7 +609,6 @@ fn parse_delivery(
     })
 }
 
-/// All accepted inputs in acceptance order, with their sequence numbers.
 pub fn load_inputs(conn: &Connection) -> Sql<Vec<(u64, AcceptedInput)>> {
     let mut stmt = conn.prepare(
         "SELECT a.id, a.operation_id, a.objective_id, a.session_id, a.association_revision,
@@ -669,14 +638,10 @@ pub fn load_inputs(conn: &Connection) -> Sql<Vec<(u64, AcceptedInput)>> {
     rows.collect()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Operations journal.
-
 #[derive(Clone, Debug)]
 pub struct OperationRow {
     pub digest: String,
     pub name: String,
-    /// `pending` | `completed` | `uncertain`.
     pub state: String,
     pub outcome: Option<Outcome>,
 }
@@ -722,16 +687,12 @@ pub fn record_operation(
     Ok(())
 }
 
-/// Operations left `pending` by a previous service instance.
 pub fn pending_operations(conn: &Connection) -> Sql<Vec<(String, String, String)>> {
     let mut stmt =
         conn.prepare("SELECT operation_id, digest, name FROM operations WHERE state = 'pending'")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
     rows.collect()
 }
-
-// ---------------------------------------------------------------------------------------------
-// Review records.
 
 fn candidate_status(code: &str) -> Sql<CandidateStatus> {
     Ok(match code {
@@ -764,7 +725,6 @@ fn invalidation(code: Option<String>) -> Sql<InvalidationReason> {
     })
 }
 
-/// Upserts every candidate, verification and approval of `review` (small per-Objective sets).
 pub fn save_review(conn: &Connection, review: &Review) -> Sql<()> {
     let objective = review.objective_id().to_string();
     for c in review.candidates() {
@@ -850,7 +810,6 @@ pub fn set_verification_tail(conn: &Connection, id: VerificationId, tail: &str) 
     Ok(())
 }
 
-/// Output tails of every verification (keyed by id).
 pub fn load_verification_tails(conn: &Connection) -> Sql<Vec<(VerificationId, String)>> {
     let mut stmt = conn.prepare("SELECT id, output_tail FROM verifications")?;
     let rows = stmt.query_map([], |row| {
@@ -944,10 +903,6 @@ pub fn load_review(conn: &Connection, objective: ObjectiveId) -> Sql<Review> {
     Review::restore(objective, candidates, verifications, approvals).map_err(|_| corrupt("review"))
 }
 
-// ---------------------------------------------------------------------------------------------
-// Activity.
-
-/// One stored activity item (wire-shaped values, unix-ms time).
 #[derive(Clone, Debug)]
 pub struct ActivityRow {
     pub item_id: String,
@@ -1017,7 +972,6 @@ pub fn load_activity_item(
     .optional()
 }
 
-/// Up to `limit` items with `seq < before` (newest last), and whether older items exist.
 pub fn activity_page(
     conn: &Connection,
     objective: ObjectiveId,
@@ -1053,9 +1007,6 @@ pub fn max_activity_seq(conn: &Connection) -> Sql<Vec<(ObjectiveId, u64)>> {
     rows.collect()
 }
 
-// ---------------------------------------------------------------------------------------------
-// Integration journal.
-
 #[derive(Clone, Debug)]
 pub struct JournalRow {
     pub id: String,
@@ -1065,13 +1016,10 @@ pub struct JournalRow {
     pub target_branch: String,
     pub expected_target: GitId,
     pub candidate_tree: GitId,
-    /// `intent` | `done` | `failed` | `reconciled_done` | `reconciled_aborted`.
     pub state: String,
     pub result_commit: Option<GitId>,
 }
 
-/// The intended squash (message and commit time) is recorded so a restart can recompute the
-/// exact commit and recognise a completed integration.
 pub fn insert_journal(
     conn: &Connection,
     row: &JournalRow,
@@ -1117,7 +1065,6 @@ pub fn update_journal(
     Ok(())
 }
 
-/// Journal entries whose outcome was never recorded, with their message and commit time.
 pub fn open_journal(conn: &Connection) -> Sql<Vec<(JournalRow, String, i64)>> {
     let mut stmt = conn.prepare(
         "SELECT id, objective_id, approval_id, candidate_id, target_branch, expected_target,

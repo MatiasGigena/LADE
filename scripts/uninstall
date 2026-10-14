@@ -83,8 +83,6 @@ if [ -f "$state/lade.lock" ] && command -v flock >/dev/null 2>&1; then
     flock -n "$state/lade.lock" true 2>/dev/null \
         || die "a LADE service is using $state; stop it first (systemctl --user stop lade.service)"
 fi
-# Confirmation must come from a person at the terminal, never from a pipe or a script.
-# Probe in a subshell: a failed `exec` redirection would end this shell without a message.
 if ! (exec 3</dev/tty) 2>/dev/null; then
     die "--purge-data needs an interactive terminal; data in $state was kept"
 fi

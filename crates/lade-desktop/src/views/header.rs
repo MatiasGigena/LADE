@@ -1,6 +1,3 @@
-//! Header band: mark + LADE, Workbench/Activity/Terminal navigation, connection status, global
-//! search, shortcuts, Exit and the profile (circular placeholder avatar + name).
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -14,7 +11,6 @@ use crate::presentation::keys::{AppAction, Keymap};
 use crate::presentation::model::{ConnectionState, Load, SearchResult, SearchScope};
 use crate::presentation::store::{Change, MainView};
 
-/// Short header text and the full statement (tooltip and accessible name).
 pub fn connection_text(connection: &ConnectionState) -> (String, String) {
     match connection {
         ConnectionState::Connecting => (
@@ -52,8 +48,6 @@ const SCOPES: [SearchScope; 3] = [
 
 pub struct Header {
     pub root: gtk::Box,
-    /// Bounds the header's minimum width (no visible scrollbar) so the window can always narrow
-    /// into the compact composition; the compact header then fits without clipping.
     pub viewport: gtk::ScrolledWindow,
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
@@ -70,13 +64,11 @@ pub struct Header {
     nav: gtk::Box,
     profile_name: gtk::Label,
     pub shortcuts_button: gtk::Button,
-    /// Explicit Exit: stops the service and its agents (closing the window does not).
     pub exit_button: gtk::Button,
     updating: Cell<bool>,
 }
 
 fn draw_mark(area: &gtk::DrawingArea) {
-    // The existing LADE triangle mark as a simple symbolic outline (outer and inner triangle).
     area.set_draw_func(|_, cr, width, height| {
         let (w, h) = (f64::from(width), f64::from(height));
         cr.set_source_rgb(0.0, 0.0, 0.0);
@@ -138,7 +130,6 @@ impl Header {
         let status = label("", &["connection", "meta"]);
         status.set_wrap(false);
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        // Keeps "Reconnecting" / "Disconnected" readable even when the header is tight.
         status.set_width_chars(14);
         status.set_valign(gtk::Align::Center);
         root.append(&status);
@@ -295,8 +286,6 @@ impl Header {
         }
     }
 
-    /// Tightens the header for the compact composition. Only the profile name is hidden; the
-    /// avatar keeps its accessible name.
     pub fn set_compact(&self, compact: bool) {
         self.root
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
@@ -310,7 +299,6 @@ impl Header {
         self.profile_name.set_visible(!compact);
     }
 
-    /// Shows the current bindings where the header offers the action.
     pub fn set_shortcut_hints(&self, keymap: &Keymap) {
         self.shortcuts_button.set_tooltip_text(Some(&format!(
             "Keyboard shortcuts ({})",

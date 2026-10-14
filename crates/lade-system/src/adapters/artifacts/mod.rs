@@ -1,11 +1,3 @@
-//! Immutable SHA-256 content-addressed artifact store.
-//!
-//! Layout: `<artifacts>/sha256/<first 2 hex>/<remaining 62 hex>`, files 0600, directories 0700.
-//! Publication protocol: write to a new temporary file in `tmp` (same filesystem), fsync it, then
-//! `link(2)` it into place — which never replaces an existing file — and fsync the shard
-//! directory. A crash or failure before the link leaves no published file; an existing digest is
-//! never rewritten (publication is idempotent).
-
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -15,11 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest as _, Sha256};
 
-/// Largest page returned by [`ArtifactStore::read_page`]; larger requests are clamped.
 pub const MAX_ARTIFACT_PAGE: usize = 1 << 20;
 const CHUNK: usize = 64 << 10;
 
-/// A SHA-256 content digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ArtifactDigest([u8; 32]);
 
@@ -34,7 +24,6 @@ impl ArtifactDigest {
         Self(digest)
     }
 
-    /// Parse 64 lowercase hexadecimal characters.
     pub fn parse(hex: &str) -> Result<Self, ArtifactError> {
         let bytes = hex.as_bytes();
         if bytes.len() != 64 {
@@ -73,7 +62,6 @@ impl fmt::Debug for ArtifactDigest {
     }
 }
 
-/// Typed store failure; `stage` names the publication step for diagnostics.
 #[derive(Debug)]
 pub enum ArtifactError {
     Io {
@@ -82,7 +70,6 @@ pub enum ArtifactError {
     },
     NotFound,
     InvalidDigest,
-    /// Stored bytes no longer hash to their digest.
     Corrupt,
     TooLarge {
         size: u64,
@@ -120,7 +107,6 @@ fn io_err(stage: &'static str) -> impl Fn(io::Error) -> ArtifactError {
     }
 }
 
-/// Filesystem steps of publication, replaceable for fault-injection tests.
 pub trait ArtifactIo: Send + Sync {
     fn write_chunk(&self, file: &mut File, chunk: &[u8]) -> io::Result<()> {
         file.write_all(chunk)
@@ -130,7 +116,6 @@ pub trait ArtifactIo: Send + Sync {
         file.sync_all()
     }
 
-    /// Publish without replacement: must fail with `AlreadyExists` if `dest` exists.
     fn publish(&self, tmp: &Path, dest: &Path) -> io::Result<()> {
         fs::hard_link(tmp, dest)
     }
@@ -140,12 +125,10 @@ pub trait ArtifactIo: Send + Sync {
     }
 }
 
-/// The real filesystem.
 pub struct OsArtifactIo;
 
 impl ArtifactIo for OsArtifactIo {}
 
-/// One page of an artifact.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactPage {
     pub total_bytes: u64,
@@ -161,13 +144,10 @@ pub struct ArtifactStore {
 }
 
 impl ArtifactStore {
-    /// Open (creating as needed, 0700) the store rooted at `artifacts_dir` with temporary files
-    /// in `tmp_dir`, which must be on the same filesystem.
     pub fn open(artifacts_dir: &Path, tmp_dir: &Path) -> Result<Self, ArtifactError> {
         Self::with_io(artifacts_dir, tmp_dir, Box::new(OsArtifactIo))
     }
 
-    /// As [`Self::open`] with substituted filesystem steps (fault injection).
     pub fn with_io(
         artifacts_dir: &Path,
         tmp_dir: &Path,
@@ -184,7 +164,6 @@ impl ArtifactStore {
         })
     }
 
-    /// Path of a (possibly absent) artifact.
     pub fn path_of(&self, digest: &ArtifactDigest) -> PathBuf {
         let hex = digest.to_hex();
         self.objects.join(&hex[..2]).join(&hex[2..])
@@ -198,7 +177,6 @@ impl ArtifactStore {
         self.put_reader(&mut &bytes[..])
     }
 
-    /// Stream `reader` into the store and return its digest.
     pub fn put_reader(&self, reader: &mut dyn Read) -> Result<ArtifactDigest, ArtifactError> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let tmp_path = self.tmp.join(format!(
@@ -264,7 +242,6 @@ impl ArtifactStore {
         Ok((file, len))
     }
 
-    /// Read up to `limit` bytes (clamped to [`MAX_ARTIFACT_PAGE`]) at `offset`.
     pub fn read_page(
         &self,
         digest: &ArtifactDigest,
@@ -286,7 +263,6 @@ impl ArtifactStore {
         })
     }
 
-    /// Read a whole artifact of at most `max_bytes`, optionally verifying its digest.
     pub fn read_all(
         &self,
         digest: &ArtifactDigest,
@@ -310,7 +286,6 @@ impl ArtifactStore {
         Ok(data)
     }
 
-    /// Re-hash a stored artifact; `Ok(false)` if its bytes no longer match.
     pub fn verify(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactError> {
         let (mut file, _) = self.open_artifact(digest)?;
         let mut hasher = Sha256::new();

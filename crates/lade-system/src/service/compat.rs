@@ -1,13 +1,3 @@
-//! IMP-011 pi compatibility in the service: the SDK model catalogue with provider access, the
-//! LADE-profile resource inventory and its hash-keyed approvals, copy-only profile import, session
-//! operations (tree, navigate, fork/clone, import, export, compaction, reload, model/thinking) routed
-//! to the live worker, and semantic extension dialogs bound to session generations.
-//!
-//! Trust rules: approvals and Git state live only in the product store and the repository; nothing
-//! a pi session file or the worker reports can create them. A fork or import replaces the Agent
-//! Session's destination (association revision advances), so input addressed to the previous
-//! session is never delivered to the replacement. Tree navigation is session-only.
-
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write as _;
@@ -48,15 +38,12 @@ use super::convert::{
 use super::handlers::{Pending, sql};
 use super::{Flow, JobOutput, ReqCtx, Service};
 
-/// A session command that has not answered within this bound fails as interrupted.
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
-/// Largest session file accepted for import.
 pub(crate) const MAX_IMPORT_BYTES: u64 = 16 << 20;
 const MAX_PROVIDERS: usize = 128;
 const MAX_REPLY_MODELS: usize = 512;
 const MAX_CATALOG_MODELS: usize = 4096;
 
-/// Trust-rule restrictions shown with the resource inventory (never silent omissions).
 pub(crate) const RESTRICTIONS: &[&str] = &[
     "Repository .pi/ resources, .agents/skills, project settings and packages are never loaded (project trust is \"never\").",
     "Your own ~/.pi profile is never read or changed; only an explicit, copy-only import reads it.",
@@ -68,7 +55,6 @@ pub(crate) const RESTRICTIONS: &[&str] = &[
     "Custom providers (models.json) may not run shell commands and reference credentials only as $LADE_PROVIDER_* variables.",
 ];
 
-/// The SDK catalogue as parsed from the sandboxed catalogue run.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CatalogData {
     pub sdk_version: String,
@@ -96,7 +82,6 @@ pub(crate) struct PendingCommand {
     pub export: Option<PathBuf>,
 }
 
-/// What the worker last reported about its session runtime.
 #[derive(Clone, Debug)]
 pub(crate) struct PiState {
     pub generation: u64,
@@ -112,13 +97,11 @@ pub(crate) struct OpenUi {
     pub prompt: UiPrompt,
 }
 
-/// Non-durable per-Objective session facts of the live worker.
 #[derive(Default)]
 pub(crate) struct LiveSession {
     pub command: Option<PendingCommand>,
     pub pi: Option<PiState>,
     pub ui: BTreeMap<String, OpenUi>,
-    /// The session generation whose loaded resources were last reported as activity.
     pub reported: Option<u64>,
 }
 
@@ -158,8 +141,6 @@ fn text(value: Option<&Value>, max: usize) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// The catalogue when the SDK catalogue cannot run: only the offline test provider when the
-/// service runs with the test switch, otherwise nothing.
 fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
     let fixture = (
         ProviderFacts {
@@ -189,7 +170,6 @@ fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
     }
 }
 
-/// Parses the catalogue output (`src/worker/catalog.ts`), bounding every list and string.
 pub(crate) fn parse_catalog(bytes: &[u8]) -> Result<CatalogData, String> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| "catalogue output is not JSON".to_string())?;
@@ -296,12 +276,10 @@ impl Service {
         self.compat.live.entry(oid).or_default()
     }
 
-    /// The developer's thinking selection for `oid` (shown in the Objective detail).
     pub(crate) fn thinking_of(&self, oid: ObjectiveId) -> Option<ThinkingLevel> {
         self.compat.thinking.get(&oid).copied()
     }
 
-    /// Approved profile extensions, as `(name, sha256)`.
     pub(crate) fn approved_extensions(&self) -> Vec<(String, String)> {
         self.compat
             .approvals
@@ -311,16 +289,12 @@ impl Service {
             .collect()
     }
 
-    /// Whether a session command is outstanding (input dispatch waits for it).
     pub(crate) fn command_pending(&self, oid: ObjectiveId) -> bool {
         self.compat
             .live
             .get(&oid)
             .is_some_and(|l| l.command.is_some())
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Models.
 
     pub(crate) fn models_list(&mut self, ctx: ReqCtx, query: ModelsListQuery) -> Flow {
         if let Some(data) = self.compat.catalog.clone() {
@@ -380,7 +354,6 @@ impl Service {
     }
 
     fn catalog_reply(&self, data: &CatalogData, query: &ModelsListQuery) -> ReplyData {
-        // The test-only fixture provider is never offered without the service's test switch.
         let offered =
             |facts: &ProviderFacts| self.test_fixture_provider || facts.id != FIXTURE_PROVIDER;
         let mut providers: Vec<ProviderInfo> = data
@@ -432,9 +405,6 @@ impl Service {
             error: data.error.clone(),
         })
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Resources.
 
     pub(crate) fn inventory(&self) -> ResourceInventory {
         let profile = self.profile_dir();
@@ -559,7 +529,6 @@ impl Service {
     ) {
         let reply = match result {
             Ok(report) => {
-                // Custom providers may have changed: the catalogue is rebuilt on the next request.
                 self.compat.catalog = None;
                 let inventory = self.inventory();
                 self.emit(Event::ResourcesChanged(inventory.clone()));
@@ -578,10 +547,6 @@ impl Service {
         self.finish(ctx, reply);
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Session commands.
-
-    /// The live, idle (or, for `tree`, running) worker of `oid`, or why it cannot take a command.
     fn command_target(&mut self, oid: ObjectiveId, op: Op) -> Result<(), Rejection> {
         self.check_idle(oid)?;
         if self.command_pending(oid) {
@@ -713,8 +678,6 @@ impl Service {
         }
     }
 
-    /// Copies the chosen JSONL file into the Objective's import directory (the source is only
-    /// read), then asks the worker to import that copy with the worktree as working directory.
     pub(crate) fn session_import(&mut self, ctx: ReqCtx, cmd: &SessionImportCommand) -> Flow {
         let prepared = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;
@@ -741,7 +704,6 @@ impl Service {
         }
     }
 
-    /// Materialises the current profile with the current approvals, then reloads the session.
     pub(crate) fn session_reload(&mut self, ctx: ReqCtx, id: &Id) -> Flow {
         let prepared = self
             .objective_id(id)
@@ -794,9 +756,6 @@ impl Service {
         }
     }
 
-    /// Model and thinking selection, persisted per Objective. With a live idle worker the change
-    /// applies to the running session (same provider only: a provider's egress policy and
-    /// credentials are fixed per launch); otherwise it applies on the next start or resume.
     pub(crate) fn session_configure(
         &mut self,
         mut ctx: ReqCtx,
@@ -850,7 +809,6 @@ impl Service {
         Flow::Done
     }
 
-    /// Records model (Objective row) and thinking (preference) in one transaction.
     fn persist_selection(
         &mut self,
         ctx: Option<&mut ReqCtx>,
@@ -885,7 +843,6 @@ impl Service {
         Ok(data)
     }
 
-    /// The Objective's current session state for replies and `session.changed`.
     pub(crate) fn session_state(
         &self,
         oid: ObjectiveId,
@@ -894,7 +851,6 @@ impl Service {
         let st = self.objectives.get(&oid);
         let session = st.and_then(|st| st.objective().execution().session().cloned());
         let pi = self.compat.live.get(&oid).and_then(|l| l.pi.clone());
-        // Session commands need a bound session; without one the live worker's model (if any).
         let model = session
             .as_ref()
             .map(|s| Model {
@@ -927,9 +883,6 @@ impl Service {
             leaf_id: pi.and_then(|p| p.leaf_id),
         }
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Extension dialogs.
 
     pub(crate) fn ui_respond(
         &mut self,
@@ -980,7 +933,6 @@ impl Service {
         Ok(data)
     }
 
-    /// Re-announces open dialogs to a newly attached controlling client.
     pub(crate) fn announce_dialogs(&mut self) {
         let mut open = Vec::new();
         for (oid, live) in &self.compat.live {
@@ -1026,9 +978,6 @@ impl Service {
             }
         }
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Worker reports.
 
     pub(crate) fn on_compat_body(
         &mut self,
@@ -1085,7 +1034,7 @@ impl Service {
             } => {
                 let current = self.live(oid).pi.as_ref().map(|p| p.generation);
                 if current.is_some_and(|g| g != pi_generation.value()) {
-                    return; // A late request of a replaced generation is never shown.
+                    return;
                 }
                 self.live(oid).ui.insert(
                     ui_id.as_str().to_string(),
@@ -1106,7 +1055,6 @@ impl Service {
         }
     }
 
-    /// The worker closed a dialog (timeout, abort, replacement); unknown ids are ignored.
     fn ui_closed(&mut self, oid: ObjectiveId, ui_id: Id, reason: UiCloseReason) {
         if self.live(oid).ui.remove(ui_id.as_str()).is_some() {
             self.emit(Event::UiClosed(UiClosed {
@@ -1310,7 +1258,6 @@ impl Service {
         self.system_item(oid, "Session resources", &text, problem);
     }
 
-    /// The worker of `oid` is gone: its pending command fails and its dialogs close.
     pub(crate) fn compat_worker_gone(&mut self, oid: ObjectiveId) {
         let pending = self.live(oid).command.take();
         if let Some(pending) = pending {
@@ -1360,7 +1307,6 @@ impl Service {
         }
     }
 
-    /// The `worker.start` extras: thinking selection and the session file of the association.
     pub(crate) fn start_extras(&self, oid: ObjectiveId) -> (Option<ThinkingLevel>, Option<String>) {
         let session = self
             .objectives
@@ -1393,7 +1339,6 @@ impl Service {
     }
 }
 
-/// The worker's view of a materialised profile snapshot.
 pub(crate) fn snapshot(
     source: &Path,
     dest: &Path,
@@ -1416,8 +1361,6 @@ pub(crate) fn snapshot(
     })
 }
 
-/// Bounded copy of an import candidate: a regular pi session JSONL whose first line is a session
-/// header. The source is opened read-only and never modified.
 fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     if !source.is_absolute() {
         return Err(invalid("the session file path must be absolute"));

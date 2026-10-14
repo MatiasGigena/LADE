@@ -1,5 +1,3 @@
-//! Shared helpers for adapter integration tests: disposable directories and a test-only Git
-//! runner isolated from the user's configuration.
 #![allow(dead_code)]
 
 use std::ffi::OsStr;
@@ -9,7 +7,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A temporary directory removed on drop.
 pub struct TempDir(PathBuf);
 
 impl TempDir {
@@ -39,7 +36,6 @@ impl Drop for TempDir {
     }
 }
 
-/// Test-side Git (never the adapter): isolated from global/system configuration.
 pub fn git_cmd(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
     cmd.env_clear()
@@ -70,10 +66,6 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// `git status --porcelain=v1 -z --untracked-files=all` bytes. `--no-optional-locks` keeps the
-/// observation read-only: a plain `git status` refreshes stale stat data (for example after a
-/// `chmod`, which changes only the ctime) and opportunistically rewrites the index, which would
-/// make "capture never touches the real index" checks fail depending on timing.
 pub fn status(dir: &Path) -> Vec<u8> {
     git_os(
         dir,
@@ -87,7 +79,6 @@ pub fn status(dir: &Path) -> Vec<u8> {
     )
 }
 
-/// Create `<root>/repo` with `main` and one commit containing `README`.
 pub fn init_repo(root: &Path, format: &str) -> PathBuf {
     let repo = root.join("repo");
     fs::create_dir(&repo).expect("mkdir repo");

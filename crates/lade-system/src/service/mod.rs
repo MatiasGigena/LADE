@@ -1,12 +1,3 @@
-//! The authoritative `laded` service.
-//!
-//! Threading: one service thread owns the domain state and the single store connection and
-//! processes one queue of client requests, supervisor events, background-job completions and timer
-//! ticks. Long Git/filesystem/verification work runs on a small bounded pool and posts its result
-//! back to that queue, where generations and revisions are revalidated before commit. Admission
-//! (socket, capability, lease) lives in [`crate::transport`]; worker processes behind the
-//! [`WorkerLauncher`] contract.
-
 mod compat;
 pub mod convert;
 mod execution;
@@ -57,28 +48,17 @@ use convert::{durability, hex, new_uuid, now_ms, wire_id};
 use jobs::Pool;
 use state::{ObjState, Runtime, WsState};
 
-/// Where the service keeps its state and admission material.
 #[derive(Clone, Debug)]
 pub struct ServiceConfig {
     pub state_dir: PathBuf,
     pub runtime_dir: PathBuf,
-    /// Aggregate limits across Objectives (configurable; see [`ResourceLimits`]).
     pub limits: ResourceLimits,
-    /// Writable-storage budget of one execution (worktree plus session directory); see
-    /// [`WRITABLE_STORAGE_BYTES`].
     pub storage_limit_bytes: u64,
-    /// Delegated cgroup subtree for terminals and verification runs (the launcher has its own
-    /// handle); `None` without delegation.
     pub cgroups: Option<Arc<SandboxCgroups>>,
-    /// Test-only: offer and start the offline `lade-fixture` model (see
-    /// [`crate::supervision::credentials::FIXTURE_SWITCH`]). Off in a normal install: the provider is
-    /// then absent from the catalogue and refused at start.
     pub test_fixture_provider: bool,
 }
 
 impl ServiceConfig {
-    /// `$XDG_STATE_HOME/lade` (`~/.local/state/lade`) and `$XDG_RUNTIME_DIR/lade` (fallback
-    /// `$STATE/run`), overridable by the caller.
     pub fn from_environment(state: Option<PathBuf>, runtime: Option<PathBuf>) -> Option<Self> {
         let env_dir = |name: &str| {
             std::env::var_os(name)
@@ -104,11 +84,9 @@ impl ServiceConfig {
     }
 }
 
-/// Why the service refused to start. Nothing is reset or partially served on any of these.
 #[derive(Debug)]
 pub enum StartError {
     InvalidPath(&'static str),
-    /// A Unix socket path would exceed `sun_path` (108 bytes).
     SocketPathTooLong(PathBuf),
     StateDir(String),
     AlreadyRunning,
@@ -139,7 +117,6 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
-/// State directory layout (delivery plan §1).
 #[derive(Clone, Debug)]
 pub(crate) struct Paths {
     pub state: PathBuf,
@@ -148,11 +125,9 @@ pub(crate) struct Paths {
     pub verify: PathBuf,
     pub tmp: PathBuf,
     pub run: PathBuf,
-    /// Gateway sockets (`$RUNTIME/g`), short so socket paths fit `sun_path`.
     pub sockets: PathBuf,
 }
 
-/// One message on the service queue.
 pub(crate) enum Msg {
     Link(Inbound),
     Supervisor(SupervisorEvent),
@@ -167,7 +142,6 @@ impl From<Inbound> for Msg {
     }
 }
 
-/// Results posted back by pool jobs (transient queue messages; boxing buys nothing).
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum JobOutput {
     Launch(jobs::LaunchOut),
@@ -187,13 +161,11 @@ pub(crate) enum JobOutput {
     Done,
 }
 
-/// Identity of the request being answered.
 pub(crate) struct ReqCtx {
     pub conn: u64,
     pub request_id: Id,
     pub name: RequestName,
     pub op: Option<OpInfo>,
-    /// The outcome was already journaled inside the handler's own transaction.
     pub recorded: bool,
 }
 
@@ -203,7 +175,6 @@ pub(crate) struct OpInfo {
     pub digest: String,
 }
 
-/// Whether a request was answered or continues in a background job.
 pub(crate) enum Flow {
     Done,
     Deferred,
@@ -217,28 +188,21 @@ struct Controller {
 }
 
 const REQUEST_ID_MEMORY: usize = 4096;
-/// Thread counts of the three job lanes (see [`Service::spawn`], [`Service::spawn_long`],
-/// [`Service::reap`]).
 const GENERAL_THREADS: usize = 3;
 const VERIFY_THREADS: usize = 4;
 const REAPER_THREADS: usize = 4;
 const TICK: Duration = Duration::from_millis(100);
 
-/// The service thread's state.
 pub(crate) struct Service {
     store: Store,
     paths: Paths,
     artifacts: Arc<ArtifactStore>,
-    /// Artifacts of large files read in chunks (see [`jobs::LargeBlobs`]).
     large_blobs: Arc<jobs::LargeBlobs>,
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
-    /// Short Git/filesystem jobs, launches, captures, freezes and integrations.
     pool: Option<Pool>,
-    /// Verifications (up to 900 s each), so they never starve captures or launches.
     long: Option<Pool>,
-    /// Worker terminations and terminal kills: authority loss is never queued behind other work.
     reaper: Option<Pool>,
     epoch: Id,
     sequence: u64,
@@ -256,29 +220,20 @@ pub(crate) struct Service {
     ticks: u64,
     sandbox: OnceLock<Option<SandboxTools>>,
     compat: compat::CompatState,
-    /// Contained terminals of the controlling client, by terminal id (never durable).
     terminals: BTreeMap<String, terminal::TermState>,
     terminals_opening: usize,
-    /// `service.stop` was answered: leave the loop and shut down.
     stopping: bool,
     limits: ResourceLimits,
     free_space: limits::Storage,
-    /// Facts restart recovery wants the next client to see (sent once on attach).
     recovery_notes: Vec<String>,
-    /// Integrations in flight per (Workspace, target branch), with the requests waiting for
-    /// them: same-target integrations run one at a time and each re-checks the moved target.
     integrating: HashMap<(WorkspaceId, String), VecDeque<(ReqCtx, ReviewIntegrateCommand)>>,
-    /// While a request is dispatched: the jobs it started, submitted once it is journaled.
     held: Option<Vec<(bool, jobs::Task)>>,
     storage_limit: u64,
-    /// A writable-storage measurement job is in flight.
     storage_check: bool,
     cgroups: Option<Arc<SandboxCgroups>>,
-    /// See [`ServiceConfig::test_fixture_provider`].
     test_fixture_provider: bool,
 }
 
-/// A running service instance (threads and admission material).
 pub struct RunningService {
     queue: SyncSender<Msg>,
     thread: Option<JoinHandle<()>>,
@@ -304,8 +259,6 @@ impl RunningService {
         self.epoch.as_str()
     }
 
-    /// Blocks until the service thread ends (through [`Self::shutdown`] or an explicit
-    /// `service.stop` from the controlling client), then releases admission like `shutdown`.
     pub fn wait(mut self) {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -323,12 +276,9 @@ impl RunningService {
         }
         let _ = fs::remove_file(&self.socket);
         let _ = fs::remove_file(&self.capability);
-        // The link writer flushes the final `service.stop` reply before the process exits.
         thread::sleep(Duration::from_millis(200));
     }
 
-    /// Stops accepting, terminates supervised workers, closes the store and removes the socket and
-    /// capability. Durable records are left for the next start's recovery.
     pub fn shutdown(mut self) {
         if let Some(listener) = self.listener.take() {
             listener.stop();
@@ -341,8 +291,6 @@ impl RunningService {
     }
 }
 
-/// Refuses a runtime directory whose control socket or gateway sockets (for any objective id
-/// and generations up to [`RESERVED_GENERATION`]) could not be bound.
 fn check_socket_paths(runtime: &Path) -> Result<(), StartError> {
     let widest = gateway_socket_path(
         &runtime.join(GATEWAY_SOCKET_DIR),
@@ -373,8 +321,6 @@ pub(crate) fn lock_state(state: &Path) -> Result<File, StartError> {
         .mode(0o600)
         .open(state.join("lade.lock"))
         .map_err(|e| StartError::StateDir(format!("lock: {}", e.kind())))?;
-    // A briefly lingering holder (an exiting instance, or a descendant between fork and exec
-    // that still shares the descriptor) gets a short grace period before the start is refused.
     for _ in 0..40 {
         if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
             return Ok(file);
@@ -384,8 +330,6 @@ pub(crate) fn lock_state(state: &Path) -> Result<File, StartError> {
     Err(StartError::AlreadyRunning)
 }
 
-/// Starts the service: state layout, exclusive lock, store, restart recovery, capability, socket,
-/// then the service, timer and supervisor-forwarding threads.
 pub fn start(
     config: ServiceConfig,
     launcher: Arc<dyn WorkerLauncher>,
@@ -423,8 +367,6 @@ pub fn start(
         private_dir(dir)?;
     }
     let lock = lock_state(&paths.state)?;
-    // A service of another state directory may share the runtime directory: refuse before
-    // recovery sweeps its gateway sockets or a new capability replaces its own.
     transport::ensure_not_running(&config.runtime_dir).map_err(StartError::Transport)?;
     let store = Store::open(&paths.state.join("lade.db")).map_err(StartError::Store)?;
     let artifacts = ArtifactStore::open(&paths.state.join("artifacts"), &paths.tmp)
@@ -547,7 +489,6 @@ impl Service {
             }
         }
         self.flush_activity();
-        // Terminals never outlive the service and are never resumed.
         self.drop_terminals(None, true);
         for runtime in self.runtime.values_mut() {
             if let Some(mut control) = runtime.control.take() {
@@ -564,9 +505,6 @@ impl Service {
             pool.shutdown();
         }
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Links, lease and replies.
 
     fn on_link(&mut self, inbound: Inbound) {
         match inbound {
@@ -611,7 +549,6 @@ impl Service {
             Inbound::Detach { conn } => {
                 if self.controller.as_ref().is_some_and(|c| c.conn == conn) {
                     self.controller = None;
-                    // Terminals belong to the lease: authority loss ends them.
                     self.drop_terminals(Some(conn), false);
                 }
             }
@@ -644,7 +581,6 @@ impl Service {
         encode(&frame, Framing::Client).ok()
     }
 
-    /// Broadcasts one event to the controlling client (sequence increments per event).
     pub(crate) fn emit(&mut self, event: Event) {
         self.sequence += 1;
         if self.controller.is_none() {
@@ -786,8 +722,6 @@ impl Service {
             op: op.clone(),
             recorded: false,
         };
-        // Jobs a handler starts are held until the operation is journaled `pending`, so a crash
-        // can never leave effects of an operation the journal does not know.
         self.held = Some(Vec::new());
         let flow = self.dispatch(ctx, frame.request);
         let held = self.held.take().unwrap_or_default();
@@ -853,7 +787,6 @@ impl Service {
         }
     }
 
-    /// Answers `ctx`, journaling a mutating outcome first unless the handler already did.
     pub(crate) fn finish(&mut self, ctx: ReqCtx, result: Result<ReplyData, Rejection>) {
         if let Some(op) = &ctx.op
             && !ctx.recorded
@@ -897,8 +830,6 @@ impl Service {
         self.send_reply(ctx.conn, reply);
     }
 
-    /// Runs `writes` and, for a mutating request, journals its successful outcome in the same
-    /// transaction. Nothing is changed when any step fails.
     pub(crate) fn commit(
         &mut self,
         ctx: Option<&mut ReqCtx>,
@@ -938,7 +869,6 @@ impl Service {
         Ok(())
     }
 
-    /// Queues `work` on the general pool; its output comes back as [`Msg::Job`] for `pending`.
     pub(crate) fn spawn(
         &mut self,
         pending: handlers::Pending,
@@ -947,7 +877,6 @@ impl Service {
         self.spawn_in(false, pending, work);
     }
 
-    /// Like [`Self::spawn`], on the verification lane.
     pub(crate) fn spawn_long(
         &mut self,
         pending: handlers::Pending,
@@ -980,8 +909,6 @@ impl Service {
         }
     }
 
-    /// Runs a teardown (worker termination, terminal kill) on the reaper lane, which nothing
-    /// else uses: revocation never waits behind captures or verifications.
     pub(crate) fn reap(&self, work: impl FnOnce() + Send + 'static) {
         if let Some(reaper) = &self.reaper {
             reaper.submit(work);

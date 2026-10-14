@@ -1,6 +1,3 @@
-//! Egress gateway integration tests over a real Unix socket and loopback TCP servers. No
-//! external network is used.
-
 mod adapters_support;
 
 use std::io::{Read, Write};
@@ -24,7 +21,6 @@ fn local_rule(port: u16) -> EgressRule {
     }
 }
 
-/// A loopback server that echoes everything back on each accepted connection.
 fn echo_server() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -49,7 +45,6 @@ fn connect(socket: &Path, request: &[u8]) -> (UnixStream, String) {
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
-    // The gateway may refuse (and close) before reading everything.
     let _ = stream.write_all(request);
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -125,7 +120,6 @@ fn refusals() {
             b"CONNECT api.anthropic.com:80 HTTP/1.1\r\n\r\n".to_vec(),
             "HTTP/1.1 403 Forbidden",
         ),
-        // Allowlisted names that resolve to private addresses are blocked by default.
         (
             format!("CONNECT localhost:{port} HTTP/1.1\r\n\r\n").into_bytes(),
             "HTTP/1.1 403 Forbidden",
@@ -180,7 +174,6 @@ fn stop_closes_open_tunnels_and_removes_socket() {
         format!("CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n").as_bytes(),
     );
     assert_eq!(status_line(&head), "HTTP/1.1 200 Connection Established");
-    // A second connection still in its handshake is closed too.
     let mut pending = UnixStream::connect(&socket).unwrap();
     pending.write_all(b"CONNECT 127.0.0.1").unwrap();
     gateway.stop();
@@ -255,7 +248,6 @@ fn tunnels_chain_through_upstream_proxy_after_the_allowlist() {
         upstream,
     )
     .unwrap();
-    // Denied hosts never reach the proxy.
     let (_, head) = connect(&socket, b"CONNECT other.example.test:443 HTTP/1.1\r\n\r\n");
     assert_eq!(status_line(&head), "HTTP/1.1 403 Forbidden");
     let (mut stream, head) = connect(&socket, b"CONNECT api.example.test:443 HTTP/1.1\r\n\r\n");
@@ -278,7 +270,6 @@ fn tunnels_chain_through_upstream_proxy_after_the_allowlist() {
 #[test]
 fn unreachable_destination_is_bad_gateway() {
     let tmp = TempDir::new("gw-unreach");
-    // Bind and drop to obtain a closed loopback port.
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -298,11 +289,6 @@ fn unreachable_destination_is_bad_gateway() {
     assert_eq!(status_line(&head), "HTTP/1.1 502 Bad Gateway");
 }
 
-/// The worker side (`packages/pi-worker/src/worker/gateway.ts`): HTTPS servers with a
-/// test-generated certificate on two loopback ports, then — once the Rust side has started the
-/// gateway allowing only the first port — `fetch` (undici), `node:https` and a `wss://` WebSocket
-/// (undici's global `WebSocket`, the transport pi uses) through the gateway. Each origin also
-/// answers a WebSocket upgrade with a minimal echo (RFC 6455 handshake, one text frame).
 const TLS_CLIENT: &str = r#"
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -380,7 +366,6 @@ fn worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway() {
     };
     let tmp = TempDir::new("gw-tls");
     let (key, cert) = (tmp.path().join("key.pem"), tmp.path().join("cert.pem"));
-    // A throwaway self-signed certificate for 127.0.0.1, valid for one day.
     let generated = Command::new(&openssl)
         .args(["req", "-x509", "-newkey", "ec"])
         .args([
@@ -417,7 +402,6 @@ fn worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway() {
         .arg(format!("file://{}", module.display()))
         .arg(&key)
         .arg(&cert)
-        // The test certificate is the only extra trust anchor; verification stays on.
         .env("NODE_EXTRA_CA_CERTS", &cert)
         .env_remove("HTTPS_PROXY")
         .env_remove("https_proxy")
@@ -461,12 +445,9 @@ fn worker_https_and_wss_reach_a_local_tls_origin_through_the_gateway() {
             "{report}"
         );
     }
-    // The second port is not in the policy: the gateway refuses both client paths.
     for name in ["fetchDenied", "agentDenied"] {
         assert_eq!(value[name]["error"], "gateway_refused", "{report}");
     }
-    // A wss:// WebSocket is an ordinary CONNECT tunnel with TLS end to end: it reaches the
-    // allowed origin and is refused for the other port, exactly like fetch.
     let echoed = value["websocket"]["ok"]
         .as_str()
         .unwrap_or_else(|| panic!("{report}"));

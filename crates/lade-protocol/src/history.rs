@@ -5,9 +5,6 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
-/// Bounded in-memory correlation only, NOT durable acceptance or execution authority.
-/// The admitted transport must check caller/version/epoch before consulting history. The
-/// durable service journal applies the same rules using `RequestFrame::canonical_digest`.
 #[derive(Default)]
 pub struct RequestHistory {
     requests: BTreeMap<Id, (Id, [u8; 32])>,
@@ -16,9 +13,6 @@ pub struct RequestHistory {
 impl RequestHistory {
     pub const CAPACITY: usize = 256;
 
-    /// Records a mutating request's outcome, or returns the original outcome of a matching
-    /// duplicate. A changed payload under one operation, or one request id reused for different
-    /// content, rejects `duplicate_conflict`; a full ledger fails `limit_reached`, never evicts.
     pub fn observe(
         &mut self,
         request: &RequestFrame,

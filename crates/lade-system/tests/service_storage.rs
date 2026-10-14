@@ -1,7 +1,3 @@
-//! The §7 writable-storage monitor over the real service: an execution whose worktree and
-//! session directory exceed the configured budget is stopped with a visible `limit_reached`
-//! outcome, never restarted or given more room automatically.
-
 mod service_support;
 
 use std::fs;
@@ -23,7 +19,6 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
     let id = objective.objective_id.clone();
     start_execution(&mut client, &id);
     wait_state(&mut client, &id, ExecutionState::Idle);
-    // Below the budget nothing happens; then the agent (here: the test) writes 1 MiB.
     fs::write(worktree(&env, &id).join("small.txt"), vec![b'a'; 4096]).unwrap();
     fs::write(worktree(&env, &id).join("big.bin"), vec![7u8; 1 << 20]).unwrap();
 
@@ -43,7 +38,6 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
         unreachable!()
     };
     assert_eq!(notice.level, NoticeLevel::Error);
-    // Resuming stays the developer's explicit choice; the limit is not raised.
     assert!(action_enabled(&failed, ActionName::ExecutionResume));
     std::thread::sleep(std::time::Duration::from_secs(6));
     assert_eq!(

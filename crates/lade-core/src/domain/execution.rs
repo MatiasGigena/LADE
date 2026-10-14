@@ -1,18 +1,9 @@
-//! Agent Session association and execution generations.
-//!
-//! These are pure execution state-machine rules. Lifecycle preconditions (for example "no mutating execution
-//! while frozen") are enforced by [`crate::domain::objectives::Objective`], which owns the only mutable
-//! [`Execution`].
-
 use crate::domain::ids::{Revision, SessionId};
 use crate::error::DomainError;
 
-/// Bound for provider/model labels and failure reasons.
 pub const MAX_LABEL_BYTES: usize = 256;
-/// Failure reasons are clipped to the protocol's reply-detail bound.
 pub const MAX_FAILURE_REASON_BYTES: usize = 512;
 
-/// Selected provider/model pair.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ModelRef {
     provider: String,
@@ -46,7 +37,6 @@ impl ModelRef {
     }
 }
 
-/// Monotonic execution generation; 0 means never started. Each start or resume advances it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExecutionGeneration(u64);
 
@@ -76,18 +66,11 @@ pub enum ExecutionState {
     Running,
     Idle,
     Stopping,
-    /// Reversible stop. `interrupted` marks a stop caused by service restart/supervisor loss rather than by the
-    /// developer.
-    Cancelled {
-        interrupted: bool,
-    },
-    Failed {
-        reason: String,
-    },
+    Cancelled { interrupted: bool },
+    Failed { reason: String },
 }
 
 impl ExecutionState {
-    /// A worker process may exist (and may write) in these states.
     pub const fn is_live(&self) -> bool {
         matches!(
             self,
@@ -95,7 +78,6 @@ impl ExecutionState {
         )
     }
 
-    /// Accepted input may be handed to the worker in these states.
     pub const fn accepts_dispatch(&self) -> bool {
         matches!(self, Self::Running | Self::Idle)
     }
@@ -113,8 +95,6 @@ impl ExecutionState {
     }
 }
 
-/// The Objective's destination Agent Session. `association_revision` advances whenever the destination is
-/// replaced, so input addressed to an older association can be detected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionAssociation {
     pub session_id: SessionId,
@@ -136,7 +116,6 @@ impl Default for Execution {
 }
 
 impl Execution {
-    /// Never started: no session, generation 0.
     pub const fn new() -> Self {
         Self {
             state: ExecutionState::None,
@@ -145,7 +124,6 @@ impl Execution {
         }
     }
 
-    /// Rebuilds stored execution state, rejecting combinations no transition can produce.
     pub fn restore(
         state: ExecutionState,
         generation: ExecutionGeneration,
@@ -181,7 +159,6 @@ impl Execution {
         self.session.as_ref()
     }
 
-    /// First start: binds the destination session (association revision 1) and starts generation 1.
     pub fn start(
         &mut self,
         session_id: SessionId,
@@ -203,7 +180,6 @@ impl Execution {
         Ok(generation)
     }
 
-    /// Explicit continuation after cancellation, interruption or failure: a new generation, same session.
     pub fn resume(&mut self) -> Result<ExecutionGeneration, DomainError> {
         if !matches!(
             self.state,
@@ -243,7 +219,6 @@ impl Execution {
         }
     }
 
-    /// Worker reported readiness for the current generation.
     pub fn worker_ready(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         self.check_generation(generation)?;
         match self.state {
@@ -257,7 +232,6 @@ impl Execution {
         }
     }
 
-    /// Worker turn state. Ignored (no change) while stopping: a stop request is never undone by the worker.
     pub fn observe_turn(
         &mut self,
         generation: ExecutionGeneration,
@@ -280,7 +254,6 @@ impl Execution {
         }
     }
 
-    /// Developer cancellation request (or a service-initiated stop, e.g. before freeze).
     pub fn request_stop(&mut self) -> Result<(), DomainError> {
         match self.state {
             ExecutionState::Starting | ExecutionState::Running | ExecutionState::Idle => {
@@ -291,7 +264,6 @@ impl Execution {
         }
     }
 
-    /// The supervisor proved the worker and its descendants stopped after a stop request.
     pub fn stopped(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         self.check_generation(generation)?;
         match self.state {
@@ -305,7 +277,6 @@ impl Execution {
         }
     }
 
-    /// The worker of the current generation failed or exited unexpectedly.
     pub fn fail(
         &mut self,
         generation: ExecutionGeneration,
@@ -321,8 +292,6 @@ impl Execution {
         Ok(())
     }
 
-    /// Service restart or supervisor loss: every live execution becomes cancelled/interrupted. Nothing resumes
-    /// automatically. Returns whether anything changed.
     pub fn interrupt(&mut self) -> bool {
         if !self.state.is_live() {
             return false;
@@ -331,9 +300,6 @@ impl Execution {
         true
     }
 
-    /// The live, idle worker replaced its pi session (fork, clone or import): the destination becomes
-    /// `session_id` with a new association revision, so input and feedback addressed to the previous
-    /// session are detected as stale instead of being delivered to the replacement.
     pub fn rebind_live_session(
         &mut self,
         generation: ExecutionGeneration,
@@ -362,7 +328,6 @@ impl Execution {
         Ok(association_revision)
     }
 
-    /// Records the developer's model selection for the bound session (the destination is unchanged).
     pub fn select_model(&mut self, model: ModelRef) -> Result<(), DomainError> {
         let Some(current) = self.session.as_mut() else {
             return Err(DomainError::ExecutionUnavailable);
@@ -371,7 +336,6 @@ impl Execution {
         Ok(())
     }
 
-    /// Explicitly replaces the destination session; input addressed to the old association becomes stale.
     pub fn replace_session(
         &mut self,
         session_id: SessionId,

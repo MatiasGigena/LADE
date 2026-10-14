@@ -1,15 +1,3 @@
-//! Client admission over the private control socket (`$RUNTIME/control.sock`).
-//!
-//! Bootstrap order: validate/create the 0700 runtime directory, write a fresh 256-bit capability
-//! atomically to `control.cap` (0600), then bind `control.sock` (0600) — the capability exists before
-//! anyone can connect. A stale socket is removed only after a failed connect probe.
-//!
-//! Admission per connection: `SO_PEERCRED` uid must equal the service uid, then exactly `hello`
-//! (answered with `hello`), then `auth` with the capability (constant-time comparison; a mismatch
-//! closes the link without a reply). Only then is the link handed to the service, which grants or
-//! refuses the single controlling lease. Each admitted link has a reader thread and a writer thread
-//! with a bounded outbound queue; the service never blocks on a slow client.
-
 use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -31,11 +19,9 @@ use crate::service::convert::{constant_time_eq, hex, random_fill};
 
 pub const SOCKET_NAME: &str = "control.sock";
 pub const CAPABILITY_NAME: &str = "control.cap";
-/// Outbound budget per link (frames and bytes) before the link is dropped.
 pub const MAX_OUTBOUND_FRAMES: usize = 256;
 pub const MAX_OUTBOUND_BYTES: usize = 8 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-/// A single frame write that makes no progress for this long closes the link.
 pub const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PENDING_HANDSHAKES: usize = 8;
 
@@ -64,13 +50,10 @@ fn io_err(stage: &'static str) -> impl Fn(io::Error) -> TransportError {
     move |e| TransportError::Io(stage, e.kind())
 }
 
-/// The current process's real uid.
 pub fn service_uid() -> u32 {
     rustix::process::getuid().as_raw()
 }
 
-/// Creates `dir` (0700) or validates an existing one: a real directory (not a symlink), owned by
-/// the service uid, with no group/other permission bits.
 pub fn prepare_private_dir(dir: &Path) -> Result<(), TransportError> {
     match fs::symlink_metadata(dir) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
@@ -102,7 +85,6 @@ pub fn prepare_private_dir(dir: &Path) -> Result<(), TransportError> {
     Ok(())
 }
 
-/// Writes a fresh capability (64 lowercase hex) atomically as `dir/control.cap` (0600) and returns it.
 pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     let mut secret = [0u8; 32];
     random_fill(&mut secret).map_err(io_err("random"))?;
@@ -126,8 +108,6 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     Ok(capability)
 }
 
-/// Refuses when a service already answers on `dir/control.sock`. Called before anything in `dir`
-/// (capability, gateway sockets) is touched; [`bind_socket`] checks again.
 pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
     let path = dir.join(SOCKET_NAME);
     let socket = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket());
@@ -137,7 +117,6 @@ pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
     Ok(())
 }
 
-/// Binds `dir/control.sock` (0600). An existing socket is removed only when nothing answers it.
 pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     let path = dir.join(SOCKET_NAME);
     if let Ok(meta) = fs::symlink_metadata(&path) {
@@ -156,30 +135,13 @@ pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     Ok(listener)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Links.
-
-/// What an admitted connection reports to the service, in order.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Inbound {
-    /// Authenticated; the service decides about the lease and answers through `out`.
-    Attach {
-        conn: u64,
-        out: Outbound,
-    },
-    Request {
-        conn: u64,
-        frame: RequestFrame,
-    },
-    /// A well-formed request that failed the schema: answer `invalid_request`, keep the link.
-    Invalid {
-        conn: u64,
-        request_id: Id,
-    },
-    Detach {
-        conn: u64,
-    },
+    Attach { conn: u64, out: Outbound },
+    Request { conn: u64, frame: RequestFrame },
+    Invalid { conn: u64, request_id: Id },
+    Detach { conn: u64 },
 }
 
 #[derive(Default)]
@@ -190,7 +152,6 @@ struct OutState {
     dead: bool,
 }
 
-/// Bounded outbound queue of one link, drained by its writer thread.
 #[derive(Clone)]
 pub struct Outbound {
     shared: Arc<(Mutex<OutState>, Condvar)>,
@@ -202,7 +163,6 @@ impl std::fmt::Debug for Outbound {
     }
 }
 
-/// The outbound budget was exceeded; the caller should close the link with a notice.
 #[derive(Debug)]
 pub struct Overflow;
 
@@ -213,7 +173,6 @@ impl Outbound {
         }
     }
 
-    /// Queues one encoded frame. Never blocks.
     pub fn push(&self, frame: Vec<u8>) -> Result<(), Overflow> {
         let (lock, wake) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -231,7 +190,6 @@ impl Outbound {
         Ok(())
     }
 
-    /// Discards queued frames, sends `last` (if any) and closes the link.
     pub fn close_with(&self, last: Option<Vec<u8>>) {
         let (lock, wake) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -244,7 +202,6 @@ impl Outbound {
         wake.notify_one();
     }
 
-    /// Flushes queued frames, then closes.
     pub fn close(&self) {
         let (lock, wake) = &*self.shared;
         lock.lock().unwrap_or_else(PoisonError::into_inner).closing = true;
@@ -275,7 +232,6 @@ impl Outbound {
     }
 }
 
-/// Handle to the running listener.
 pub struct Listener {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
@@ -283,7 +239,6 @@ pub struct Listener {
 }
 
 impl Listener {
-    /// Stops accepting (existing links are closed by the service) and joins the accept thread.
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::SeqCst);
         let _ = UnixStream::connect(&self.socket);
@@ -293,7 +248,6 @@ impl Listener {
     }
 }
 
-/// Starts the accept loop. Admitted links are reported to `tx` as [`Inbound`] values.
 pub fn serve<T: From<Inbound> + Send + 'static>(
     listener: UnixListener,
     socket: PathBuf,
@@ -356,7 +310,6 @@ fn write_now(stream: &mut UnixStream, body: ClientBody) -> bool {
         .is_some_and(|bytes| stream.write_all(&bytes).is_ok())
 }
 
-/// Handshake, then forward frames until the link ends.
 fn run_link<T: From<Inbound>>(
     conn: u64,
     stream: UnixStream,
@@ -375,8 +328,6 @@ fn run_link<T: From<Inbound>>(
     let Ok(write_half) = stream.try_clone() else {
         return;
     };
-    // A client that stops reading cannot pin the writer thread: a stalled write ends the link
-    // (the queue bound already drops it from the service side, see `Outbound::push`).
     let _ = write_half.set_write_timeout(Some(WRITE_STALL_TIMEOUT));
     let writer_out = out.clone();
     let writer = thread::Builder::new()

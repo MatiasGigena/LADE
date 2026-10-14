@@ -34,7 +34,6 @@ cases = [
 with tempfile.TemporaryDirectory(prefix='lade-lint-') as directory:
     scratch = Path(directory)
     shutil.copyfile(worker / '.oxlintrc.json', scratch / '.oxlintrc.json')
-    # Resolve the unchanged vendored plugin and installed API from the disposable config.
     (scratch / 'tools').symlink_to(worker / 'tools', target_is_directory=True)
     (scratch / 'node_modules').symlink_to(worker / 'node_modules', target_is_directory=True)
     (scratch / 'src').mkdir()

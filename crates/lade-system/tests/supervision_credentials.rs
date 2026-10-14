@@ -1,6 +1,3 @@
-//! Credential custody: only the selected provider's variables are released, and the
-//! credentials file is refused unless it is private to the service user.
-
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -80,7 +77,6 @@ fn private_file_supplies_missing_variables_and_env_wins() {
         source.resolve("mistral"),
         Err(CredentialError::Missing { .. })
     ));
-    // A missing file is simply empty.
     let absent = CredentialSource::new(Vec::new(), Some(tmp.path().join("absent.env")));
     assert!(matches!(
         absent.resolve("openai"),
@@ -99,7 +95,6 @@ fn insecure_files_are_refused() {
         "{error:?}"
     );
     assert!(!error.to_string().contains("sk-file"));
-    // The fixture provider needs no file at all, so it is unaffected.
     assert!(source.resolve("lade-fixture").is_ok());
 
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();

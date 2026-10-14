@@ -1,15 +1,9 @@
-// Deterministic, credential-free, offline `lade-fixture` provider. It implements the SDK's custom
-// streaming API (`streamSimple`) and is registered on the ModelRuntime like an extension provider,
-// so its responses go through pi's real agent loop and its tool calls run pi's real tools.
-// Test-only: it is registered only when `LADE_TEST_FIXTURE_PROVIDER=1` is set (laded passes the
-// switch to the worker and the catalogue only when it was itself started with it).
 import { createAssistantMessageEventStream } from "./pi-ai.ts";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, TextContent, ToolCall } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const FIXTURE_PROVIDER = "lade-fixture";
 
-/** Test-only switch; without it the fixture provider does not exist. */
 export const FIXTURE_SWITCH = "LADE_TEST_FIXTURE_PROVIDER";
 
 export const FIXTURE_MODEL = "scripted";
@@ -18,10 +12,8 @@ export const FIXTURE_API = "lade-fixture-scripted";
 
 export const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
 
-/** Retryable by pi's provider-error classification ("overloaded"); the retry then succeeds. */
 export const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
 
-/** Marker tokens the `system` directive reports from the system prompt (proves loaded context/skills). */
 const MARKER = /LADE-MARKER:[A-Za-z0-9_.-]+/g;
 
 type ProviderRegistration = Parameters<ModelRuntime["registerProvider"]>[1];
@@ -86,7 +78,6 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
-/** User messages whose transient failure was already played (each fails exactly once). */
 const transientFailed = new Set<string>();
 
 function transientKey(message: Context["messages"][number] | undefined): string {
@@ -103,7 +94,6 @@ function chunks(text: string): string[] {
   return out;
 }
 
-/** Script for one model call, decided only from the visible conversation. */
 function plan(context: Context): Script {
   const messages = context.messages;
   let lastUser = -1;
@@ -219,7 +209,6 @@ function streamFixture(model: Model<Api>, context: Context, options?: SimpleStre
   return stream;
 }
 
-/** Registration through the SDK's supported custom-provider API; the apiKey is a non-secret placeholder. */
 export function fixtureProvider(): ProviderRegistration {
   return {
     name: "LADE fixture provider (offline, scripted; not a real model)",
@@ -239,7 +228,6 @@ export function fixtureProvider(): ProviderRegistration {
   };
 }
 
-/** Registers the fixture provider on `runtime` only when the test switch is set; whether it did. */
 export function registerTestFixture(runtime: ModelRuntime): boolean {
   if (process.env[FIXTURE_SWITCH] !== "1") return false;
   runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());

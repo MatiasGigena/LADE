@@ -1,20 +1,3 @@
-//! Pre-migration backups, the migration journal and the rollback restore (IMP-014).
-//!
-//! Before any schema migration of an existing database, [`before_migration`] writes a consistent
-//! copy of it (`VACUUM INTO`) to `$STATE/backups/lade.db.schema-<from>.<unix ms>.bak` (0600, the
-//! directory 0700) and records it in the append-only journal `$STATE/backups/migrations.journal`.
-//! A migration never runs without its backup. At most [`KEEP_BACKUPS`] backups are kept; older
-//! ones are deleted and the deletion is journaled.
-//!
-//! [`restore`] is the rollback path used by `scripts/install --rollback` (through
-//! `laded store restore`): it puts back the newest intact backup of the requested schema under the
-//! service's state lock. The newer database is never deleted: it is moved next to the backups as
-//! `lade.db.newer-schema-<n>.<unix ms>` (with its `-wal`), which is never pruned.
-//!
-//! Journal lines are tab-separated: `<unix ms> backup <from> <to> <file> <sha256> <bundle>`,
-//! `<unix ms> applied <from> <to>`, `<unix ms> pruned <file>`,
-//! `<unix ms> restored <schema> <backup file> <kept newer file>`. File names never contain tabs.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -25,16 +8,11 @@ use sha2::{Digest as _, Sha256};
 
 use crate::service::convert::{hex, now_ms};
 
-/// Directory (relative to the state directory) holding backups and the journal.
 pub const BACKUP_DIR: &str = "backups";
-/// Journal file name inside [`BACKUP_DIR`].
 pub const JOURNAL: &str = "migrations.journal";
-/// Pre-migration backups kept (newest first); older ones are deleted.
 pub const KEEP_BACKUPS: usize = 3;
-/// Database file name inside the state directory.
 pub const DATABASE: &str = "lade.db";
 
-/// One pre-migration backup recorded in the journal.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Backup {
     pub taken_ms: i64,
@@ -44,21 +22,13 @@ pub struct Backup {
     pub sha256: String,
 }
 
-/// Why a backup or restore failed. `Display` names no content.
 #[derive(Debug)]
 pub enum BackupError {
     Io(&'static str, io::ErrorKind),
     Sql(String),
-    /// The service (or another restore) holds the state lock.
     Busy,
-    /// No intact backup of the requested schema exists.
     NoBackup(i64),
-    /// The database is not newer than the requested schema: nothing to restore.
-    NotNeeded {
-        database: i64,
-        requested: i64,
-    },
-    /// The backup file exists but is not the recorded content or not the recorded schema.
+    NotNeeded { database: i64, requested: i64 },
     Invalid(String),
 }
 
@@ -140,8 +110,6 @@ fn sha256_file(path: &Path) -> Result<String, BackupError> {
     Ok(hex(&hasher.finalize()))
 }
 
-/// Backups recorded in the journal of `state` whose file was not pruned, oldest first. A missing
-/// journal is an empty list; unparseable lines are skipped.
 pub fn backups(state: &Path) -> Result<Vec<Backup>, BackupError> {
     let journal = match fs::read_to_string(backup_dir(state).join(JOURNAL)) {
         Ok(text) => text,
@@ -172,9 +140,6 @@ pub fn backups(state: &Path) -> Result<Vec<Backup>, BackupError> {
     Ok(list)
 }
 
-/// Writes the pre-migration backup of the open database `conn` (at schema `from`, about to be
-/// migrated to `to`) into `$STATE/backups`, journals it and prunes old backups. Fails closed: the
-/// caller must not migrate when this fails.
 pub(crate) fn before_migration(
     conn: &Connection,
     state: &Path,
@@ -184,7 +149,6 @@ pub(crate) fn before_migration(
     let dir = private_backup_dir(state)?;
     let name = format!("{DATABASE}.schema-{from}.{}.bak", now_ms());
     let path = dir.join(&name);
-    // VACUUM INTO needs a missing or empty target; creating it first fixes its mode at 0600.
     OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -222,7 +186,6 @@ pub(crate) fn before_migration(
     Ok(path)
 }
 
-/// Records that the migration `from` → `to` committed.
 pub(crate) fn record_applied(state: &Path, from: i64, to: i64) -> Result<(), BackupError> {
     let dir = private_backup_dir(state)?;
     append_journal(&dir, &["applied", &from.to_string(), &to.to_string()])
@@ -243,9 +206,6 @@ fn prune(state: &Path, dir: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
-/// Applied schema version of the database at `path` without migrating it (`None`: no database).
-/// The database is opened read-write without creating anything, so it works on a WAL database
-/// whose shared-memory file is absent; nothing is written.
 pub fn database_schema(path: &Path) -> Result<Option<i64>, BackupError> {
     if !path.exists() {
         return Ok(None);
@@ -277,18 +237,13 @@ fn schema_of(conn: &Connection) -> Result<i64, BackupError> {
     .map_err(sql_err)
 }
 
-/// What [`restore`] did.
 #[derive(Debug)]
 pub struct Restored {
     pub backup: Backup,
     pub database_schema: i64,
-    /// Where the newer database was kept.
     pub kept: PathBuf,
 }
 
-/// Restores the newest intact backup of `schema` as `$STATE/lade.db`, keeping the newer database
-/// under `$STATE/backups`. Holds the service's state lock for the whole operation, so it refuses
-/// while a service runs.
 pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
     let _lock = crate::service::lock_state(state).map_err(|_| BackupError::Busy)?;
     let db = state.join(DATABASE);
@@ -327,14 +282,12 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
         }
     }
 
-    // Fold the WAL into the newer database so it is kept as one consistent file.
     {
         let conn =
             Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(sql_err)?;
         conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
             .map_err(sql_err)?;
     }
-    // Stage the restored copy before touching the live database.
     let staged = state.join(format!("{DATABASE}.restore.tmp"));
     let _ = fs::remove_file(&staged);
     {

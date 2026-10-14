@@ -1,19 +1,3 @@
-//! Optional Secret Service custody of provider keys (GNOME Keyring on Mint) through the
-//! `secret-tool` CLI of libsecret-tools.
-//!
-//! An item carries the attributes `service=lade provider=<id> variable=<NAME>`. Only these
-//! attributes (provider ids and variable names, never values) appear on `secret-tool`'s command
-//! line; a secret travels only on its stdin (`store`) or stdout (`lookup`), both pipes private to
-//! `laded`. Every call runs with a minimal environment (session bus, display and `LC_ALL=C`), a
-//! deadline after which the whole process group is killed, and bounded output. Values are never
-//! logged; failure reasons come from `secret-tool`'s stderr, which carries no secrets.
-//!
-//! The Secret Service is consulted only when a worker launches (and by the start preflight when
-//! neither the environment nor the credentials file has the selected provider's key), for the
-//! selected provider only. It is never a reason to refuse a launch on its own: when it is
-//! unavailable (no `secret-tool`, no session bus, a locked keyring, an error or a timeout) the
-//! reason is reported and the other sources still apply. LADE never writes a key to a file.
-
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -29,18 +13,13 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use super::credentials::Secret;
 use crate::adapters::sandbox::find_program;
 
-/// Value of the `service` attribute of every LADE item.
 pub const SERVICE: &str = "lade";
-/// Bound on all Secret Service lookups of one credential resolution.
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
-/// Bound on one `store`/`clear` (a locked keyring may show its unlock prompt meanwhile).
 pub const STORE_TIMEOUT: Duration = Duration::from_secs(60);
-/// Largest accepted secret.
 pub const MAX_SECRET_BYTES: usize = 64 << 10;
 const MAX_STDERR_BYTES: usize = 4 << 10;
 const MAX_REASON_CHARS: usize = 200;
 const POLL: Duration = Duration::from_millis(10);
-/// Environment passed through to `secret-tool` (bus, prompts); nothing else of `laded`'s.
 const PASSED_ENV: &[&str] = &[
     "HOME",
     "XDG_RUNTIME_DIR",
@@ -50,20 +29,16 @@ const PASSED_ENV: &[&str] = &[
     "XAUTHORITY",
 ];
 
-/// The result of one lookup.
 #[derive(Debug)]
 pub enum Lookup {
     Found(Secret),
     NotFound,
-    /// The Secret Service could not answer (the reason names no value).
     Unavailable(String),
 }
 
 #[derive(Clone)]
 enum State {
-    /// Not consulted at all (tests, explicit sources).
     Disabled,
-    /// Known to be unusable before any call.
     Unavailable(String),
     Ready {
         program: PathBuf,
@@ -71,7 +46,6 @@ enum State {
     },
 }
 
-/// Access to the user's Secret Service through `secret-tool`.
 #[derive(Clone)]
 pub struct SecretService {
     state: State,
@@ -108,7 +82,6 @@ enum RunError {
 }
 
 impl SecretService {
-    /// Never consulted.
     pub fn disabled() -> Self {
         Self {
             state: State::Disabled,
@@ -116,7 +89,6 @@ impl SecretService {
         }
     }
 
-    /// `program` run with exactly `env` (plus `LC_ALL=C`).
     pub fn new(program: PathBuf, env: Vec<(OsString, OsString)>) -> Self {
         Self {
             state: State::Ready { program, env },
@@ -124,21 +96,15 @@ impl SecretService {
         }
     }
 
-    /// The same service with another lookup bound.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    /// `secret-tool` from `PATH` (then `/usr/bin`, `/bin`) and the session bus of `laded`'s
-    /// environment.
     pub fn from_env() -> Self {
         Self::detect(find_program("secret-tool"), |name| std::env::var_os(name))
     }
 
-    /// [`Self::from_env`] with explicit inputs. The session bus is `DBUS_SESSION_BUS_ADDRESS`, else
-    /// the standard socket `$XDG_RUNTIME_DIR/bus`; without either `secret-tool` is not run (it
-    /// would try to autolaunch a bus through X11).
     pub fn detect(program: Option<PathBuf>, var: impl Fn(&str) -> Option<OsString>) -> Self {
         let unavailable = |reason: &str| Self {
             state: State::Unavailable(reason.to_owned()),
@@ -172,12 +138,10 @@ impl SecretService {
         Self::new(program, env)
     }
 
-    /// Whether lookups are attempted at all.
     pub fn is_enabled(&self) -> bool {
         !matches!(self.state, State::Disabled)
     }
 
-    /// Why the Secret Service cannot be used, when that is known without calling it.
     pub fn unavailable_reason(&self) -> Option<&str> {
         match &self.state {
             State::Unavailable(reason) => Some(reason),
@@ -185,12 +149,10 @@ impl SecretService {
         }
     }
 
-    /// The bound on all lookups of one resolution.
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
-    /// The stored value of `variable` for `provider`. Deadline-bounded; an empty value is not found.
     pub fn lookup(&self, provider: &str, variable: &str, deadline: Instant) -> Lookup {
         let args = [
             "lookup", "service", SERVICE, "provider", provider, "variable", variable,
@@ -201,7 +163,6 @@ impl SecretService {
         };
         if !ran.status.success() {
             return match reason_of(&ran.stderr) {
-                // `secret-tool lookup` exits 1 silently when nothing matches.
                 None => Lookup::NotFound,
                 Some(reason) => Lookup::Unavailable(reason),
             };
@@ -213,7 +174,6 @@ impl SecretService {
             ));
         }
         let mut value = ran.stdout;
-        // `secret-tool` adds a newline only on a terminal; tolerate one anyway.
         if value.ends_with(b"\n") {
             value.pop();
         }
@@ -224,10 +184,6 @@ impl SecretService {
         }
     }
 
-    /// After lookups found nothing: whether LADE's items are in a locked keyring. A locked
-    /// collection whose unlock prompt cannot be shown (or was dismissed) makes `lookup` look like
-    /// "not found"; `search` without `--unlock` reports the lock instead. Its stdout (attributes,
-    /// and values of unlocked items) is discarded unread.
     pub fn locked(&self, provider: &str, deadline: Instant) -> Option<String> {
         let args = ["search", "service", SERVICE, "provider", provider];
         let ran = self.run(&args, None, false, deadline).ok()?;
@@ -236,7 +192,6 @@ impl SecretService {
             .then(|| "the keyring holding LADE's keys is locked; unlock it and try again".into())
     }
 
-    /// Store `secret` (sent on stdin) as `variable` of `provider`, replacing an existing item.
     pub fn store(&self, provider: &str, variable: &str, secret: &[u8]) -> Result<(), String> {
         let label = format!("LADE {provider} {variable}");
         let args = [
@@ -254,8 +209,6 @@ impl SecretService {
             .unwrap_or_else(|| format!("secret-tool store failed ({})", ran.status)))
     }
 
-    /// Remove `variable` of `provider` (every LADE item of the provider without a variable).
-    /// `Ok(false)` when nothing matched.
     pub fn clear(&self, provider: &str, variable: Option<&str>) -> Result<bool, String> {
         let mut args = vec!["clear", "service", SERVICE, "provider", provider];
         if let Some(variable) = variable {
@@ -274,8 +227,6 @@ impl SecretService {
         }
     }
 
-    /// Run `secret-tool args…` until `deadline`, with `input` on stdin (else /dev/null) and stdout
-    /// captured (else /dev/null). On timeout the process group is killed.
     fn run(
         &self,
         args: &[&str],
@@ -336,7 +287,6 @@ impl SecretService {
     }
 }
 
-/// Why a call failed to run; `bound` is the deadline it ran under.
 fn run_error(error: RunError, bound: Duration) -> String {
     match error {
         RunError::Spawn(kind) => format!("secret-tool could not be started ({kind})"),
@@ -348,7 +298,6 @@ fn run_error(error: RunError, bound: Duration) -> String {
     }
 }
 
-/// The exit status, or `None` after killing the process group at `deadline`.
 fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
     loop {
         match child.try_wait() {
@@ -357,7 +306,6 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
             _ => break,
         }
     }
-    // Not reaped yet, so the group id cannot have been reused.
     if let Some(group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
         let _ = kill_process_group(group, Signal::KILL);
     }
@@ -366,7 +314,6 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
     None
 }
 
-/// Read everything, keeping at most `cap` bytes (the rest is drained and flagged).
 fn read_capped(mut from: impl Read, cap: usize) -> (Vec<u8>, bool) {
     let mut kept = Vec::new();
     let mut overflow = false;
@@ -386,7 +333,6 @@ fn read_capped(mut from: impl Read, cap: usize) -> (Vec<u8>, bool) {
     (kept, overflow)
 }
 
-/// The first non-empty stderr line as a bounded printable reason, or `None` for no output.
 fn reason_of(stderr: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(stderr);
     let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
@@ -399,7 +345,6 @@ fn reason_of(stderr: &[u8]) -> Option<String> {
     )
 }
 
-/// Provider ids accepted as attribute values (`[A-Za-z0-9._-]{1,64}`).
 pub fn valid_provider_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id

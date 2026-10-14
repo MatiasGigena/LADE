@@ -1,5 +1,3 @@
-//! Artifact store integration tests, including injected write faults.
-
 mod adapters_support;
 
 use std::fs::{self, File};
@@ -110,7 +108,6 @@ struct FaultyIo(Fault);
 impl ArtifactIo for FaultyIo {
     fn write_chunk(&self, file: &mut File, chunk: &[u8]) -> io::Result<()> {
         if self.0 == Fault::Write {
-            // A partial write followed by failure (for example ENOSPC).
             io::Write::write_all(file, &chunk[..chunk.len() / 2])?;
             return Err(io::Error::from(io::ErrorKind::StorageFull));
         }

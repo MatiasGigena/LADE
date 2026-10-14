@@ -13,7 +13,6 @@ struct Transfer {
     bytes: Vec<u8>,
 }
 
-/// Private per-link state. Caller must drop it on disconnect or authority loss.
 pub struct Reassembler {
     owner: Scope,
     generation: Counter,

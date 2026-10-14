@@ -1,11 +1,3 @@
-//! Desktop notifications through `GApplication` (IMP-012). The in-app board stays the source of
-//! truth (`presentation::attention`); this is only a second channel.
-//!
-//! Availability is checked once per window on the session bus: without a bus, or without an
-//! owner of `org.freedesktop.Notifications` / `org.gtk.Notifications`, every request fails with
-//! a reason and the window shows one in-app notice instead. `GApplication` reports no delivery
-//! errors itself, so a server that accepts and then drops a notification is not detectable here.
-
 use std::cell::OnceCell;
 
 use gtk::gio;
@@ -15,7 +7,6 @@ use gtk4 as gtk;
 
 use crate::presentation::attention::{AttentionRequest, Notifier};
 
-/// The application action a notification activates; its target is the Objective id.
 pub const OPEN_OBJECTIVE_ACTION: &str = "open-objective";
 
 pub struct DesktopNotifier {
@@ -67,7 +58,6 @@ impl Notifier for DesktopNotifier {
         let notification = gio::Notification::new(&request.title);
         notification.set_body(Some(&request.body));
         notification.set_priority(gio::NotificationPriority::Normal);
-        // Activation navigates only (see `App::open_from_notification`).
         notification.set_default_action_and_target_value(
             &format!("app.{OPEN_OBJECTIVE_ACTION}"),
             Some(&request.objective_id.as_str().to_variant()),

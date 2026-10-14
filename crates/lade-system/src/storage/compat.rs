@@ -1,12 +1,8 @@
-//! IMP-011 product records: per-Objective thinking level, resource approvals keyed by content hash,
-//! and the current pi session file of an association.
-
 use lade_core::domain::ids::{ObjectiveId, SessionId, Uuid};
 use rusqlite::{Connection, OptionalExtension, params};
 
 type Sql<T> = rusqlite::Result<T>;
 
-/// Schema version 2 (append-only migration).
 pub(super) const SCHEMA_V2: &str = r"
 CREATE TABLE session_preferences (
     objective_id TEXT PRIMARY KEY REFERENCES objectives(id),
@@ -50,7 +46,6 @@ pub fn load_thinking(conn: &Connection) -> Sql<Vec<(ObjectiveId, String)>> {
     Ok(out)
 }
 
-/// Records the developer's decision for one exact extension content (`approve` or reject).
 pub fn save_approval(
     conn: &Connection,
     name: &str,
@@ -81,7 +76,6 @@ pub fn load_approvals(conn: &Connection) -> Sql<Vec<(String, String, bool)>> {
     rows.collect()
 }
 
-/// The pi session file last reported for `session`, if any.
 pub fn pi_session_file(conn: &Connection, session: SessionId) -> Sql<Option<String>> {
     conn.query_row(
         "SELECT session_file FROM sessions WHERE session_id = ?1",

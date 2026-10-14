@@ -1,38 +1,19 @@
-//! Where each action and fact lives, decided without GTK: every action of the service's
-//! `available_actions` has exactly **one home surface** ([`home`]); the right panel's Overview shows
-//! its one **next action** for the review/integration step, groups the other Overview actions
-//! (More actions, destructive ones last) and keeps the collapsed Details; other surfaces get a
-//! short pointer instead of a second control.
-//!
-//! Authority stays with the service: every action shown carries exactly the availability of
-//! `available_actions` (`ObjectiveDetail::availability`). The client only chooses where an action
-//! is drawn and which offered action to emphasise; it never enables, hides a disabled reason, or
-//! invents an action.
-
 use super::format;
 use super::model::{
     ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
 };
 
-/// Accessible name and visible label of the collapsed group of the other actions.
 pub const MORE_ACTIONS_TITLE: &str = "More actions";
-/// Accessible name and visible label of the collapsed metadata.
 pub const DETAILS_TITLE: &str = "Details";
 
-/// The surface that owns an action (its only control).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
-    /// Right panel, Overview tab: review, integration and Objective decisions; the intent.
     Overview,
-    /// Right panel, Evidence tab: service-observed checks.
     Evidence,
-    /// Right panel, Feedback tab: Contextual Feedback batches.
     Feedback,
-    /// Activity: Agent Session control (start, cancel, resume) and free-form messages.
     Activity,
 }
 
-/// Every action the service projects.
 pub const ALL_ACTIONS: [ActionName; 16] = [
     ActionName::ObjectiveUpdateIntent,
     ActionName::ExecutionStart,
@@ -52,7 +33,6 @@ pub const ALL_ACTIONS: [ActionName; 16] = [
     ActionName::ObjectiveDeleteHistory,
 ];
 
-/// The one surface that draws `action`.
 pub fn home(action: ActionName) -> Surface {
     match action {
         ActionName::ExecutionStart
@@ -74,14 +54,12 @@ pub fn home(action: ActionName) -> Surface {
     }
 }
 
-/// Agent Session controls in Activity's header, in order (Send is the composer's).
 pub const ACTIVITY_CONTROLS: [ActionName; 3] = [
     ActionName::ExecutionStart,
     ActionName::ExecutionCancel,
     ActionName::ExecutionResume,
 ];
 
-/// How an action is drawn. `Primary` (black) is used only for the enabled next action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Primary,
@@ -92,17 +70,12 @@ pub enum Tone {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PanelAction {
     pub action: ActionName,
-    /// Visible label and accessible name.
     pub label: String,
-    /// Exactly the service's availability for `action`.
     pub availability: ActionAvailability,
-    /// The service's note on an *enabled* action (for example "verification missing; an override
-    /// reason is required"). Disabled reasons live in `availability`.
     pub note: Option<String>,
     pub tone: Tone,
 }
 
-/// Overview lifecycle actions in the order "More actions" lists them.
 const MORE_ORDER: [ActionName; 6] = [
     ActionName::ReviewFreeze,
     ActionName::ReviewReturn,
@@ -112,15 +85,12 @@ const MORE_ORDER: [ActionName; 6] = [
     ActionName::ObjectiveComplete,
 ];
 
-/// Destructive actions: always last, separated, never the primary treatment.
 pub const DESTRUCTIVE: [ActionName; 3] = [
     ActionName::ObjectiveDiscard,
     ActionName::ObjectiveCleanup,
     ActionName::ObjectiveDeleteHistory,
 ];
 
-/// Review steps that move the collaboration forward, most advanced first: the first one the
-/// service enables is the next action. Starting and resuming the agent are Activity's.
 const PROGRESSION: [ActionName; 4] = [
     ActionName::ReviewIntegrate,
     ActionName::ReviewRefresh,
@@ -154,7 +124,6 @@ pub fn action_label(action: ActionName, detail: &ObjectiveDetail) -> String {
     }
 }
 
-/// The service's note on an enabled action, if it gave one.
 pub fn enabled_note(detail: &ObjectiveDetail, action: ActionName) -> Option<String> {
     detail
         .available_actions
@@ -164,8 +133,6 @@ pub fn enabled_note(detail: &ObjectiveDetail, action: ActionName) -> Option<Stri
         .filter(|r| !r.trim().is_empty())
 }
 
-/// The primary (black) treatment is only for a cleanly available step: an enabled action that
-/// carries a service caveat (for example an approval that needs an override reason) is neutral.
 pub fn entry(detail: &ObjectiveDetail, action: ActionName, tone: Tone) -> PanelAction {
     let availability = detail.availability(action);
     let note = enabled_note(detail, action);
@@ -184,8 +151,6 @@ pub fn entry(detail: &ObjectiveDetail, action: ActionName, tone: Tone) -> PanelA
     }
 }
 
-/// The review step the lifecycle is at, shown (disabled, with the service's reason) when the
-/// service enables no step forward. A defined Objective's step is starting the agent (Activity).
 fn expected_step(detail: &ObjectiveDetail) -> Option<ActionName> {
     match detail.summary.lifecycle {
         Lifecycle::Active => Some(ActionName::ReviewFreeze),
@@ -198,9 +163,6 @@ fn expected_step(detail: &ObjectiveDetail) -> Option<ActionName> {
     }
 }
 
-/// The Overview's one next action: the most advanced review step the service enables; for a
-/// closed Objective, an enabled Clean up (destructive treatment, confirmed in a dialog);
-/// otherwise the lifecycle's own step with the service's reason. `None` when nothing applies.
 pub fn next_action(detail: &ObjectiveDetail) -> Option<PanelAction> {
     if let Some(action) = PROGRESSION
         .into_iter()
@@ -217,9 +179,6 @@ pub fn next_action(detail: &ObjectiveDetail) -> Option<PanelAction> {
         .map(|a| entry(detail, a, Tone::Neutral))
 }
 
-/// Every other Overview action the service offers, for "More actions": lifecycle actions in a
-/// stable order, then the destructive ones. The next action is not repeated; not-offered actions
-/// are left out; Delete Git history disappears once the history is deleted (the panel says so).
 pub fn more_actions(
     detail: &ObjectiveDetail,
     next: Option<&PanelAction>,
@@ -242,7 +201,6 @@ pub fn more_actions(
     (regular, destructive)
 }
 
-/// Every action control the Overview draws: the next action, More actions and Edit intent.
 pub fn overview_actions(detail: &ObjectiveDetail) -> Vec<ActionName> {
     let next = next_action(detail);
     let (regular, destructive) = more_actions(detail, next.as_ref());
@@ -258,7 +216,6 @@ pub fn overview_actions(detail: &ObjectiveDetail) -> Vec<ActionName> {
     actions
 }
 
-/// Activity's header controls the service offers (Start, Cancel, Resume).
 pub fn activity_controls(detail: &ObjectiveDetail) -> Vec<PanelAction> {
     ACTIVITY_CONTROLS
         .iter()
@@ -274,8 +231,6 @@ pub fn activity_controls(detail: &ObjectiveDetail) -> Vec<PanelAction> {
         .collect()
 }
 
-/// When an agent control (Start, Resume) is what the Objective waits for, the Overview names it
-/// in one line and points to Activity instead of drawing a second control.
 pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
     let enabled = |a| detail.availability(a) == ActionAvailability::Enabled;
     if enabled(ActionName::ExecutionStart) {
@@ -290,9 +245,6 @@ pub fn agent_pointer(detail: &ObjectiveDetail) -> Option<String> {
     }
 }
 
-/// Status, sign and the attention reasons ("! Needs attention · check failed · unsent drafts").
-/// Its home is the Objectives list; the compact work area repeats it only because the list is
-/// then another region.
 pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
     let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
     if summary.badges.is_empty() {
@@ -302,8 +254,6 @@ pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
     }
 }
 
-/// The Objectives row's secondary line: what the group heading does not already say — the
-/// attention reasons with the sign, or the closed lifecycle in the archive. `None` otherwise.
 pub fn objective_row_line(summary: &ObjectiveSummary) -> Option<String> {
     let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
     if !summary.badges.is_empty() {
@@ -319,14 +269,10 @@ pub fn objective_row_line(summary: &ObjectiveSummary) -> Option<String> {
 pub struct DetailRow {
     pub key: &'static str,
     pub value: String,
-    /// Full value (tooltip and accessible description) when `value` is shortened.
     pub full: Option<String>,
     pub mono: bool,
 }
 
-/// The collapsed Details: what no other surface shows — lifecycle, last update, branch and start
-/// commit. (Agent Session identity is Activity's; changes and the comparison target are the
-/// work area's.)
 pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> {
     let row = |key, value: String, full: Option<String>, mono| DetailRow {
         key,
@@ -395,8 +341,6 @@ mod tests {
         d
     }
 
-    /// Every action, offered by the service with its own projection (one entry each, as Rust
-    /// projects them).
     fn all(enabled: &[ActionName]) -> Vec<(ActionName, bool, Option<&'static str>)> {
         ALL_ACTIONS
             .iter()
@@ -407,8 +351,6 @@ mod tests {
             .collect()
     }
 
-    /// The action controls each surface draws for `d` (the Evidence and Feedback tabs draw their
-    /// one action whenever the service offers it).
     fn rendered(d: &ObjectiveDetail) -> Vec<(Surface, ActionName)> {
         let offered = |a: ActionName| d.availability(a) != ActionAvailability::NotOffered;
         let mut out: Vec<(Surface, ActionName)> = overview_actions(d)
@@ -471,14 +413,12 @@ mod tests {
         for base in details() {
             let next = next_action(&base);
             if let Some(next) = &next {
-                // Never more available than the service says, and the same reason.
                 assert_eq!(next.availability, base.availability(next.action));
                 assert_eq!(home(next.action), Surface::Overview);
                 if next.tone == Tone::Primary {
                     assert_eq!(next.availability, ActionAvailability::Enabled);
                 }
             }
-            // Nothing enabled: no primary next action at all.
             let none = with(&base, &all(&[]));
             match next_action(&none) {
                 Some(n) => {
@@ -514,7 +454,6 @@ mod tests {
         let next = next_action(&d).unwrap();
         assert_eq!(next.action, ActionName::ReviewIntegrate);
         assert_eq!(next.tone, Tone::Primary);
-        // Integrate disabled: never the primary, whatever the lifecycle.
         let mut approved = with(&base, &all(&[ActionName::ReviewReturn]));
         approved.summary.lifecycle = Lifecycle::Approved;
         let next = next_action(&approved).unwrap();
@@ -524,7 +463,6 @@ mod tests {
             next.availability,
             ActionAvailability::Disabled { .. }
         ));
-        // Return, Cancel, Start, Resume and Complete are never suggested as the Overview's step.
         let d = with(
             &base,
             &all(&[
@@ -616,7 +554,6 @@ mod tests {
             next.note.as_deref(),
             Some("verification missing; an override reason is required")
         );
-        // Enabled, but with a caveat: the next step, never the primary treatment.
         assert_eq!(next.availability, ActionAvailability::Enabled);
         assert_eq!(next.tone, Tone::Neutral);
     }
@@ -628,7 +565,6 @@ mod tests {
         s.badges = vec![Badge::VerificationFailed, Badge::UnsentDrafts];
         let line = objective_row_line(&s).unwrap();
         assert!(line.contains("check failed") && !line.contains('\n'));
-        // The attention word is the group heading's, not repeated in the row.
         let (_, attention) = format::status_pill(s.lifecycle, s.attention);
         assert!(!line.contains(attention));
         assert!(status_line(&s).1.contains(" · "));

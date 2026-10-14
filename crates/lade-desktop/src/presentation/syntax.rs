@@ -1,22 +1,10 @@
-//! Whether the viewer highlights syntax. GtkSourceView detects the language from the file name
-//! and highlights; this decides when it may, so large files stay responsive.
-//!
-//! Highlighting is visual only: the buffer text, and so the byte-exact selection mapping in
-//! [`super::text_map`], is identical with and without it.
-
-/// Shown text above this size is not highlighted (the reference file of the performance budget is
-/// 1,280,000 bytes; see `docs/planning/performance-budgets.md`).
 pub const HIGHLIGHT_MAX_BYTES: usize = 2 * 1024 * 1024;
-/// Shown text with more lines than this is not highlighted.
 pub const HIGHLIGHT_MAX_LINES: usize = 40_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Highlight {
-    /// Highlight with the detected language.
     On,
-    /// No language is known for this file name: plain text.
     NoLanguage,
-    /// Too large to highlight responsively: plain text, stated in the viewer footer.
     TooLarge,
 }
 
@@ -31,7 +19,6 @@ impl Highlight {
         }
     }
 
-    /// The viewer footer's statement, when highlighting was turned off for size.
     pub fn note(self) -> Option<String> {
         (self == Self::TooLarge).then(|| {
             format!(
@@ -43,7 +30,6 @@ impl Highlight {
     }
 }
 
-/// The file name GtkSourceView matches language globs against (the last path component).
 pub fn file_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }

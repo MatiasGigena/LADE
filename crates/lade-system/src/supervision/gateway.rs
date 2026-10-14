@@ -1,15 +1,3 @@
-//! Per-launch egress gateway: an HTTP `CONNECT` proxy on a Unix socket, the worker sandbox's
-//! only network path.
-//!
-//! Policy is an allowlist of exact `(host, port)` pairs (port 443 by default). Only
-//! `CONNECT host:port HTTP/1.x` with a bounded (8 KiB) header is accepted; there is no plaintext
-//! request forwarding. The host is resolved once, every resolved address must be public unless
-//! the rule explicitly allows private addresses, and the connection goes to one of those checked
-//! addresses (never re-resolved). When the service runs with `HTTPS_PROXY`, tunnels are chained
-//! through that proxy (minimal `NO_PROXY` semantics), after the allowlist check. Stopping the
-//! gateway removes the socket and shuts down every open tunnel, so revocation also closes access
-//! that was already granted. Diagnostics carry only `host:port` and a decision code.
-
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
@@ -23,25 +11,20 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-/// Bound on the `CONNECT` request head (and on an upstream proxy's response head).
 pub const MAX_HEADER_BYTES: usize = 8 << 10;
-/// Default bound on concurrently open connections per gateway.
 pub const MAX_TUNNELS: usize = 32;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const COPY_BUFFER: usize = 16 << 10;
 
-/// One allowed destination. `host` is an exact lowercase DNS name or an IP literal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EgressRule {
     pub host: String,
     pub port: u16,
-    /// Permit loopback/private/link-local resolution results (custom local providers only).
     pub allow_private: bool,
 }
 
 impl EgressRule {
-    /// A public HTTPS destination (`host:443`).
     pub fn https(host: &str) -> Self {
         Self {
             host: normalize_host(host),
@@ -51,26 +34,22 @@ impl EgressRule {
     }
 }
 
-/// The destinations a worker may reach.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EgressPolicy {
     rules: Vec<EgressRule>,
 }
 
 impl EgressPolicy {
-    /// No network at all.
     pub fn none() -> Self {
         Self::default()
     }
 
-    /// `host:443` for each host, public addresses only.
     pub fn https_hosts(hosts: &[&str]) -> Self {
         Self {
             rules: hosts.iter().map(|h| EgressRule::https(h)).collect(),
         }
     }
 
-    /// This policy plus further rules (for example hosts from settings).
     pub fn with_extra(mut self, rules: impl IntoIterator<Item = EgressRule>) -> Self {
         for mut rule in rules {
             rule.host = normalize_host(&rule.host);
@@ -85,15 +64,12 @@ impl EgressPolicy {
         &self.rules
     }
 
-    /// The rule allowing `host:port`, if any (exact match after normalization).
     pub fn allows(&self, host: &str, port: u16) -> Option<&EgressRule> {
         let host = normalize_host(host);
         self.rules.iter().find(|r| r.host == host && r.port == port)
     }
 }
 
-/// Default provider egress policies, keyed by pi provider id. The hosts are the base URLs of
-/// pi-ai 0.85.1's built-in provider catalogues (`dist/providers/data/*.json`).
 pub fn default_policies() -> BTreeMap<String, EgressPolicy> {
     [
         ("lade-fixture", &[][..]),
@@ -108,7 +84,6 @@ pub fn default_policies() -> BTreeMap<String, EgressPolicy> {
         ("cerebras", &["api.cerebras.ai"][..]),
         ("together", &["api.together.ai"][..]),
         ("fireworks", &["api.fireworks.ai"][..]),
-        // IMP-011: further plain-variable providers (base URLs from the pinned catalogue).
         ("moonshotai", &["api.moonshot.ai"][..]),
         ("huggingface", &["router.huggingface.co"][..]),
         ("nvidia", &["integrate.api.nvidia.com"][..]),
@@ -130,7 +105,6 @@ fn normalize_host(host: &str) -> String {
     host.to_ascii_lowercase()
 }
 
-/// True when `addr` must not be reached without an explicit `allow_private` rule.
 pub fn is_non_public(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => is_non_public_v4(v4),
@@ -139,7 +113,6 @@ pub fn is_non_public(addr: IpAddr) -> bool {
                 return is_non_public_v4(v4);
             }
             let seg = v6.segments();
-            // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 destination.
             if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
                 let [a, b] = seg[6].to_be_bytes();
                 let [c, d] = seg[7].to_be_bytes();
@@ -148,11 +121,11 @@ pub fn is_non_public(addr: IpAddr) -> bool {
             v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || (seg[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
-                || (seg[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
-                || (seg[0] & 0xffc0) == 0xfec0 // site-local fec0::/10
-                || (seg[0] == 0x2001 && seg[1] == 0x0db8) // documentation
-                || seg[..6] == [0, 0, 0, 0, 0, 0] // IPv4-compatible (deprecated)
+                || (seg[0] & 0xfe00) == 0xfc00
+                || (seg[0] & 0xffc0) == 0xfe80
+                || (seg[0] & 0xffc0) == 0xfec0
+                || (seg[0] == 0x2001 && seg[1] == 0x0db8)
+                || seg[..6] == [0, 0, 0, 0, 0, 0]
         }
     }
 }
@@ -166,14 +139,13 @@ fn is_non_public_v4(v4: Ipv4Addr) -> bool {
         || v4.is_multicast()
         || v4.is_broadcast()
         || v4.is_documentation()
-        || a == 0 // "this network" 0.0.0.0/8
-        || (a == 100 && (b & 0xc0) == 64) // shared address space 100.64.0.0/10
-        || (a == 192 && b == 0 && c == 0) // IETF protocol assignments
-        || (a == 198 && (b & 0xfe) == 18) // benchmarking 198.18.0.0/15
-        || a >= 240 // reserved
+        || a == 0
+        || (a == 100 && (b & 0xc0) == 64)
+        || (a == 192 && b == 0 && c == 0)
+        || (a == 198 && (b & 0xfe) == 18)
+        || a >= 240
 }
 
-/// An upstream HTTP proxy that tunnels are chained through (from `HTTPS_PROXY`).
 #[derive(Clone)]
 pub struct UpstreamProxy {
     host: String,
@@ -197,7 +169,6 @@ impl fmt::Debug for UpstreamProxy {
 }
 
 impl UpstreamProxy {
-    /// `HTTPS_PROXY`/`https_proxy` and `NO_PROXY`/`no_proxy` of the service's environment.
     pub fn from_env() -> Option<Self> {
         let var = |upper: &str, lower: &str| {
             std::env::var(upper)
@@ -211,8 +182,6 @@ impl UpstreamProxy {
         )
     }
 
-    /// Parse `http://[user:pass@]host[:port][/]` (a missing scheme means `http`). Other schemes
-    /// are not supported and yield `None`.
     pub fn from_vars(https_proxy: Option<&str>, no_proxy: Option<&str>) -> Option<Self> {
         let url = https_proxy?.trim();
         let rest = match url.split_once("://") {
@@ -241,9 +210,6 @@ impl UpstreamProxy {
         })
     }
 
-    /// Minimal `NO_PROXY`: `*`, exact hosts/IP literals, and domain suffixes (`example.com`,
-    /// `.example.com` and `*.example.com` all match `example.com` subdomains). Entries with a
-    /// port or CIDR ranges match only literally.
     pub fn bypass(&self, host: &str) -> bool {
         let host = normalize_host(host);
         self.no_proxy.iter().any(|entry| {
@@ -257,7 +223,6 @@ impl UpstreamProxy {
     }
 }
 
-/// Split `host:port` / `[v6]:port` / `host` (default port).
 fn split_authority(text: &str, default_port: u16) -> Option<(String, u16)> {
     if let Some(rest) = text.strip_prefix('[') {
         let (host, after) = rest.split_once(']')?;
@@ -314,14 +279,12 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// The parsed, syntactically valid target of a `CONNECT` request.
 #[derive(Debug, PartialEq, Eq)]
 struct Target {
     host: String,
     port: u16,
 }
 
-/// Why a request was refused: HTTP status plus a stable decision code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Refusal {
     status: u16,
@@ -347,7 +310,6 @@ impl Refusal {
     }
 }
 
-/// Parse a complete request head (without the final blank line).
 fn parse_request(head: &[u8]) -> Result<Target, Refusal> {
     let head = std::str::from_utf8(head).map_err(|_| BAD_REQUEST)?;
     let request_line = head.split("\r\n").next().unwrap_or_default();
@@ -372,7 +334,6 @@ fn parse_request(head: &[u8]) -> Result<Target, Refusal> {
     if !valid_chars || authority.len() > 261 {
         return Err(BAD_REQUEST);
     }
-    // CONNECT requires an explicit port.
     let has_port = authority
         .rsplit_once(':')
         .is_some_and(|(h, p)| !p.is_empty() && (!h.starts_with('[') || h.ends_with(']')));
@@ -459,7 +420,6 @@ impl Shared {
     }
 }
 
-/// A running gateway. Dropping it stops it.
 pub struct Gateway {
     socket: PathBuf,
     shared: Arc<Shared>,
@@ -475,8 +435,6 @@ impl fmt::Debug for Gateway {
 }
 
 impl Gateway {
-    /// Bind `socket` (mode 0600; its directory is created 0700 when missing and must not be
-    /// group/other accessible) and serve `policy`. An existing file at `socket` is replaced.
     pub fn start(
         socket: &Path,
         policy: EgressPolicy,
@@ -534,18 +492,15 @@ impl Gateway {
         &self.socket
     }
 
-    /// Open connections (handshaking or tunnelling).
     pub fn active_connections(&self) -> usize {
         self.shared.active.load(Ordering::SeqCst)
     }
 
-    /// Stop accepting, remove the socket and shut down every open connection. Idempotent.
     pub fn stop(&mut self) {
         let Some(accept) = self.accept.take() else {
             return;
         };
         self.shared.stopped.store(true, Ordering::SeqCst);
-        // Wake the blocking accept.
         let _ = UnixStream::connect(&self.socket);
         let _ = accept.join();
         let _ = fs::remove_file(&self.socket);
@@ -569,7 +524,6 @@ impl Drop for Gateway {
     }
 }
 
-/// Create `dir` 0700 if missing; refuse an existing directory with group/other access.
 pub(crate) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     match fs::DirBuilder::new()
         .recursive(true)
@@ -635,7 +589,6 @@ fn write_refusal(stream: &mut UnixStream, refusal: Refusal) -> io::Result<()> {
     stream.write_all(response.as_bytes())
 }
 
-/// Read a request/response head up to the blank line. Returns `(head, leftover)`.
 fn read_head(stream: &mut impl Read) -> Result<(Vec<u8>, Vec<u8>), Refusal> {
     let mut buffer = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
@@ -714,7 +667,6 @@ fn serve(mut client: UnixStream, id: u64, shared: &Shared) {
     shared.log(&label, "tunnel_closed");
 }
 
-/// Apply the policy and open the upstream connection (direct or through the proxy).
 fn open_upstream(target: &Target, shared: &Shared) -> Result<TcpStream, Refusal> {
     let rule = shared
         .policy
@@ -803,7 +755,6 @@ fn connect_via_proxy(proxy: &UpstreamProxy, target: &Target) -> io::Result<TcpSt
     Ok(stream)
 }
 
-/// Copy bytes both ways with fixed buffers until either side closes.
 fn tunnel(client: UnixStream, upstream: TcpStream) {
     let (Ok(client_rx), Ok(upstream_tx)) = (client.try_clone(), upstream.try_clone()) else {
         return;
@@ -833,7 +784,6 @@ fn copy<R: Read + ShutdownBoth, W: Write + ShutdownBoth>(mut from: R, mut to: W)
             Err(_) => break,
         }
     }
-    // Either direction ending ends the tunnel.
     from.shutdown_both();
     to.shutdown_both();
 }

@@ -114,11 +114,9 @@ function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, str
 }
 
 function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
-  // DTOs reproduce the exact wire tree: no dropped, defaulted or coerced field.
   let previous = outcome(() => assert.deepEqual(codec.decode(bytes), boundedJson(bytes)));
 
   for (const framing of ["client", "worker"] as const) {
-    // More than one frame in a read must not lose or concatenate commands.
     const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing), framed(codec.valid, framing)]);
 
     for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
@@ -200,7 +198,6 @@ export function run(c: Fixture): string {
 
         for (const [index, step] of (c.source.steps ?? []).entries()) {
           const message = decode(Buffer.from(JSON.stringify(step)));
-          // A duplicate returns the original uncertain fact, not the new claimed outcome.
           assert.deepEqual(history.observe(message.body, rejected(index === 0 ? "interrupted" : "durability_failure")), rejected("interrupted"));
         }
 

@@ -1,7 +1,3 @@
-//! Launcher integration tests: real bubblewrap, real Node, the real pi worker with the offline
-//! `lade-fixture` model, and small probe scripts for sandbox properties and protocol abuse.
-//! When bwrap/prlimit or node are missing each test prints a skip notice and returns.
-
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -99,7 +95,6 @@ impl Fixture {
         }
     }
 
-    /// A config whose entry is `script` inside a fresh worker directory.
     fn probe_config(&self, node: PathBuf, script: &str) -> LauncherConfig {
         let dir = self.tmp.path().join("probe");
         fs::create_dir_all(&dir).unwrap();
@@ -154,7 +149,6 @@ fn next(rx: &Receiver<SupervisorEvent>) -> WorkerEvent {
     event.event
 }
 
-/// Collect events until `stop` matches one (returned last).
 fn until(rx: &Receiver<SupervisorEvent>, stop: impl Fn(&WorkerEvent) -> bool) -> Vec<WorkerEvent> {
     let mut seen = Vec::new();
     loop {
@@ -260,7 +254,6 @@ fn real_worker_writes_file_with_fixture_model_and_terminates_cleanly() {
         ),
         "{exited:?}"
     );
-    // PID-namespace teardown after the init exits is asynchronous; allow the kernel to finish.
     for record in records {
         assert!(
             wait_until(Duration::from_secs(5), || !alive(record.pid)),
@@ -273,8 +266,6 @@ fn real_worker_writes_file_with_fixture_model_and_terminates_cleanly() {
     assert!(control.send(WorkerBody::Abort).is_err());
 }
 
-/// A state directory far longer than `sun_path` still launches: pidfiles live under the long
-/// run directory while the gateway socket uses the short socket directory.
 #[test]
 fn long_state_directory_still_launches() {
     let Some(node) = prerequisites() else { return };
@@ -317,7 +308,6 @@ fn worker_package_resolves_from_env_then_bundle_layout() {
     fs::write(&exe, "").unwrap();
     let canonical = worker.canonicalize().unwrap();
     assert_eq!(worker_dir_from(None, Some(&exe)).unwrap(), canonical);
-    // The environment wins over the bundle layout.
     let other = tmp.path().join("other");
     fs::create_dir_all(&other).unwrap();
     assert_eq!(
@@ -326,7 +316,6 @@ fn worker_package_resolves_from_env_then_bundle_layout() {
     );
     let missing = worker_dir_from(Some(tmp.path().join("missing")), Some(&exe)).unwrap_err();
     assert!(matches!(missing, LaunchError::SandboxUnavailable(_)));
-    // Outside a bundle, only debug builds fall back to the source tree.
     let loose = tmp.path().join("laded");
     fs::write(&loose, "").unwrap();
     let fallback = worker_dir_from(None, Some(&loose));
@@ -429,7 +418,6 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
         .replace("__OUTSIDE__", outside.to_str().unwrap())
         .replace("__ALLOWED__", &format!("127.0.0.1:{port}"));
     let mut config = fx.probe_config(node, &script);
-    // A normal install: the test-only fixture switch is off and never reaches the sandbox.
     config.test_fixture_provider = false;
     config.policies.insert(
         "openai".into(),
@@ -455,7 +443,6 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     let mut control = launcher
         .launch(fx.request("openai", "gpt-test", 2), tx)
         .unwrap();
-    // The key is passed through the environment, never on a command line.
     for record in read_pidfile(&fx.pidfile(2)).unwrap() {
         let cmdline = fs::read(format!("/proc/{}/cmdline", record.pid)).unwrap_or_default();
         assert!(
@@ -606,7 +593,6 @@ fn unresponsive_worker_is_killed_on_terminate() {
         ),
         "{exited:?}"
     );
-    // SIGKILL of bwrap tears the PID namespace down asynchronously; allow the kernel to finish.
     assert!(wait_until(Duration::from_secs(5), || pids
         .iter()
         .all(|p| !alive(*p))));
@@ -638,7 +624,6 @@ fn providers_without_credentials_or_policy_are_unavailable() {
         launcher.launch(fx.request("no-such-provider", "m", 5), tx.clone()),
         Err(LaunchError::ProviderUnavailable(_))
     ));
-    // A start body that does not match the launch paths is refused.
     let mut request = fx.request("lade-fixture", "scripted", 5);
     request.worktree = fx.tmp.path().to_path_buf();
     assert!(matches!(

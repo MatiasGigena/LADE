@@ -101,7 +101,6 @@ test("frames queued while a drain settles are still written", async () => {
 
 test("character-bounded titles, labels and messages never end in half a surrogate pair", async () => {
   const emoji = "\u{1F600}";
-  // Each cut lands between the two halves of a surrogate pair; the frame must still encode.
   const sent: OutboundBody[] = [];
   const mapper = new ActivityMapper(body => { sent.push(body); });
   mapper.handle({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: emoji.repeat(100) } });

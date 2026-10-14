@@ -1,28 +1,3 @@
-//! `laded`: the authoritative LADE service.
-//!
-//! Test harnesses start `serve` with `LADE_TEST_FIXTURE_PROVIDER=1` to enable the offline
-//! `lade-fixture` model (a warning is logged); a normal install never offers it.
-//!
-//! ```text
-//! laded --version
-//! laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N] [--max-terminals N]
-//!             [--storage-warn-mib N] [--storage-reserve-mib N]
-//! laded credentials set <provider> [--variable NAME]
-//! laded credentials clear <provider> [--variable NAME]
-//! laded store info [--state-dir DIR]
-//! laded store restore --schema N [--state-dir DIR]
-//! laded diagnostics export OUT [--state-dir DIR]
-//! ```
-//!
-//! Exit statuses: 0 success, 64 usage error, 78 refused to start (unsafe directory, unopenable or
-//! corrupt store, another instance), 70 internal failure; `credentials` 65 an empty or multi-line
-//! key and 69 the Secret Service is unavailable (the reason and the credentials-file alternative
-//! are printed; nothing is written anywhere else); `store restore` 75 while a service holds the
-//! state directory, 1 when refused (no intact backup, nothing to restore); `diagnostics export`
-//! 73 when the output exists, 74 on I/O errors. `serve` diagnostics go to stderr and, redacted
-//! and bounded, to `$STATE/logs` (see `lade_system::diagnostics`); `credentials` never starts
-//! that capture, and the key it reads is never printed.
-
 use std::ffi::OsString;
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
@@ -54,7 +29,6 @@ const USAGE: &str = "usage: laded serve [--state-dir DIR] [--runtime-dir DIR] [-
        laded diagnostics export OUT [--state-dir DIR]
        laded --version";
 
-/// What `laded credentials` prints when the Secret Service cannot be used.
 const FILE_FALLBACK: &str = "put the key in ~/.config/lade/credentials.env instead: one line \
      NAME=value, file mode 0600 (chmod 600 ~/.config/lade/credentials.env)";
 
@@ -63,8 +37,6 @@ enum CredentialsAction {
     Clear,
 }
 
-/// `credentials set|clear <provider> [--variable NAME]`, validated: the variable is the provider's
-/// own (the first one by default), or a `LADE_PROVIDER_*` name for a custom provider.
 fn parse_credentials(
     args: &[OsString],
 ) -> Result<(CredentialsAction, String, Option<String>), String> {
@@ -96,7 +68,6 @@ fn parse_credentials(
             ));
         }
         (Some(_), Some(variable)) => Some(variable.to_owned()),
-        // Setting defaults to the provider's first variable; clearing removes all of them.
         (Some(vars), None) => match action {
             CredentialsAction::Set => vars.first().map(|v| (*v).to_owned()),
             CredentialsAction::Clear => None,
@@ -112,7 +83,6 @@ fn parse_credentials(
     Ok((action, provider.to_owned(), variable))
 }
 
-/// Terminal echo is off while this lives.
 struct EchoOff(Termios);
 
 impl EchoOff {
@@ -131,8 +101,6 @@ impl Drop for EchoOff {
     }
 }
 
-/// The key from stdin: one line typed without echo on a terminal, else everything piped in. One
-/// trailing newline is dropped; the rest must be one non-empty line of at most 64 KiB.
 fn read_key(variable: &str, provider: &str) -> Result<Vec<u8>, ExitCode> {
     let mut key = Vec::new();
     let read = if isatty(io::stdin()) {
@@ -174,10 +142,6 @@ fn read_key(variable: &str, provider: &str) -> Result<Vec<u8>, ExitCode> {
     Ok(key)
 }
 
-/// `laded credentials …`: store or remove a key in the user's Secret Service. The key is read
-/// from stdin and handed to `secret-tool` on its stdin; it is never an argument and never written
-/// to a file. Without a usable Secret Service the reason and the credentials-file alternative are
-/// printed.
 fn credentials_command(args: &[OsString]) -> ExitCode {
     let (action, provider, variable) = match parse_credentials(args) {
         Ok(parsed) => parsed,
@@ -227,8 +191,6 @@ fn credentials_command(args: &[OsString]) -> ExitCode {
     }
 }
 
-/// Launcher used when the sandboxed launcher cannot be constructed: every launch is refused, so
-/// execution fails closed and never runs unsandboxed.
 struct Unavailable(String);
 
 impl WorkerLauncher for Unavailable {
@@ -269,8 +231,6 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
     }
 }
 
-/// Per-Objective cgroup limits when systemd delegated a subtree to this service; otherwise an
-/// explicit diagnostic and the `prlimit` limits only (never a refusal to start).
 fn delegated_cgroups() -> Option<Arc<SandboxCgroups>> {
     match cgroup::detect(OBJECTIVE_CGROUP_LIMITS) {
         Ok(cgroups) => {
@@ -300,12 +260,9 @@ struct Args {
     runtime: Option<PathBuf>,
     schema: Option<i64>,
     out: Option<PathBuf>,
-    /// Aggregate accounting across Objectives (`serve` only); defaults printed at startup.
     limits: ResourceLimits,
 }
 
-/// Parses `--flag VALUE` pairs (each at most once, only the `allowed` ones) and, when
-/// `positional` is set, one leading positional path.
 fn parse_args(args: &[OsString], allowed: &[&str], positional: bool) -> Option<Args> {
     let mut parsed = Args {
         state: None,
@@ -379,9 +336,7 @@ fn serve(parsed: &Args) -> ExitCode {
         Ok(config) => config,
         Err(code) => return code,
     };
-    // Every file the service creates is private to its user.
     rustix::process::umask(rustix::fs::Mode::from_raw_mode(0o077));
-    // From here on, stderr is redacted and also kept in the bounded $STATE/logs.
     let capture = match diagnostics::capture_stderr(config.state_dir.clone()) {
         Ok(capture) => Some(capture),
         Err(e) => {
@@ -429,7 +384,6 @@ fn serve(parsed: &Args) -> ExitCode {
     code
 }
 
-/// `laded store info`: what the installer needs to decide a rollback.
 fn store_info(parsed: &Args) -> ExitCode {
     let config = match config(parsed) {
         Ok(config) => config,
@@ -467,7 +421,6 @@ fn store_info(parsed: &Args) -> ExitCode {
     }
 }
 
-/// `laded store restore --schema N`: the rollback restore (exit 75 while a service runs).
 fn store_restore(parsed: &Args) -> ExitCode {
     let Some(schema) = parsed.schema else {
         return usage();
@@ -499,7 +452,6 @@ fn store_restore(parsed: &Args) -> ExitCode {
     }
 }
 
-/// `laded diagnostics export OUT`: a new 0600 redacted text bundle.
 fn diagnostics_export(parsed: &Args) -> ExitCode {
     let Some(out) = parsed.out.as_deref() else {
         return usage();
@@ -542,7 +494,6 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
-    // Before any diagnostics capture: `credentials` reads a key and must never reach $STATE/logs.
     if args.first().is_some_and(|a| a == "credentials") {
         return credentials_command(&args[1..]);
     }

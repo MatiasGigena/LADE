@@ -1,7 +1,3 @@
-//! Frozen review: freeze (writer exclusion + exact candidate), isolated verification, approval,
-//! return for revision, refresh after a target move, journaled protected integration, completion
-//! without changes, discard and cleanup.
-
 use std::time::Instant;
 
 use lade_core::domain::execution::ExecutionState;
@@ -45,9 +41,6 @@ impl Service {
         Ok(CandidateId::new(parse_uuid(id)?))
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Freeze.
-
     pub(crate) fn review_freeze(&mut self, mut ctx: ReqCtx, id: &Id) -> Flow {
         let prepared = (|| {
             let oid = self.objective_id(id)?;
@@ -61,7 +54,6 @@ impl Service {
             if st.row.worktree.is_none() {
                 return Err(invalid("no agent work to freeze yet"));
             }
-            // Same precondition as the projection; the job re-checks the exact content.
             if st.capture.as_ref().is_some_and(|c| c.counts.files == 0) {
                 return Err(domain(lade_core::DomainError::InvalidLifecycle(
                     super::project::NO_CHANGES_TO_FREEZE,
@@ -77,7 +69,6 @@ impl Service {
             }
         };
         self.rt(oid).busy = Some("freeze");
-        // Review writer exclusion: no terminal may write the worktree from here on.
         self.exclude_terminal_writers(oid);
         let live = self.objectives[&oid]
             .objective()
@@ -88,7 +79,6 @@ impl Service {
             self.start_freeze(oid, ctx);
             return Flow::Deferred;
         }
-        // Exclude the writer first: stop the execution and wait for the observed exit.
         let mut st = self.objectives[&oid].clone();
         if st.objective().execution().state() != &ExecutionState::Stopping
             && let Err(e) = st.objective_mut().request_stop(ts_now())
@@ -109,7 +99,6 @@ impl Service {
         Flow::Deferred
     }
 
-    /// Continues a freeze that was waiting for the worker to exit.
     pub(crate) fn continue_freeze(&mut self, oid: ObjectiveId) {
         let live = self
             .objectives
@@ -235,9 +224,6 @@ impl Service {
         }
         self.emit_objective(oid);
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Return, verify, approve.
 
     pub(crate) fn review_return(
         &mut self,
@@ -409,9 +395,6 @@ impl Service {
         Ok(data)
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Refresh.
-
     pub(crate) fn review_refresh(&mut self, ctx: ReqCtx, cmd: &CandidateCommand) -> Flow {
         let prepared = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;
@@ -558,10 +541,6 @@ impl Service {
         self.emit_objective(oid);
     }
 
-    // -----------------------------------------------------------------------------------------
-    // Integration.
-
-    /// The (Workspace, target branch) an Objective integrates into.
     fn integration_key(&self, oid: ObjectiveId) -> Option<(WorkspaceId, String)> {
         self.objectives.get(&oid).map(|st| {
             let record = st.objective().record();
@@ -573,8 +552,6 @@ impl Service {
     }
 
     pub(crate) fn review_integrate(&mut self, ctx: ReqCtx, cmd: &ReviewIntegrateCommand) -> Flow {
-        // Same-target integrations are serialized: while one runs, later requests wait and are
-        // then checked against the target it moved (normally `stale_target`).
         let queued = self
             .objective_id(&cmd.objective_id)
             .ok()
@@ -606,7 +583,6 @@ impl Service {
             {
                 Ok(plan) => Ok((oid, st, plan)),
                 Err(lade_core::DomainError::StaleTarget) => {
-                    // The approval no longer matches the target: it expires now, durably.
                     let mut st = st;
                     st.review
                         .observe_target(&mut st.row.objective, &current, ts_now())
@@ -659,8 +635,6 @@ impl Service {
             plan.candidate_id
         );
         let commit_time = now_ms() / 1000;
-        // The intent and the pending operation are one transaction: a crash after the intent
-        // leaves an operation that recovery reports `uncertain`, never an unknown one.
         let op = ctx.op.clone();
         let journaled = self.commit(None, None, |tx| {
             storage::insert_journal(tx, &journal, &message, commit_time, now_ms())?;
@@ -767,7 +741,6 @@ impl Service {
         };
         self.finish(ctx, outcome);
         self.emit_objective(oid);
-        // Other Objectives targeting the same branch now see a moved target.
         let siblings: Vec<ObjectiveId> = self
             .objectives
             .iter()
@@ -785,7 +758,6 @@ impl Service {
         for sibling in siblings {
             self.emit_objective(sibling);
         }
-        // Release the target and run the integrations that waited for it, in arrival order.
         let waiting = self
             .integration_key(oid)
             .and_then(|key| self.integrating.remove(&key))
@@ -797,9 +769,6 @@ impl Service {
             let _ = self.review_integrate(ctx, &cmd);
         }
     }
-
-    // -----------------------------------------------------------------------------------------
-    // Completion, discard, cleanup.
 
     pub(crate) fn objective_complete(&mut self, ctx: ReqCtx, id: &Id) -> Flow {
         let prepared = (|| {
@@ -935,9 +904,6 @@ impl Service {
         }
     }
 
-    /// `objective.delete_history`: the deliberate, user-confirmed deletion of a cleaned-up
-    /// Objective's Git history — its capture and candidate retention refs and (if still present)
-    /// its branch. Never automatic; records, artifacts and session files stay.
     pub(crate) fn objective_delete_history(
         &mut self,
         ctx: ReqCtx,

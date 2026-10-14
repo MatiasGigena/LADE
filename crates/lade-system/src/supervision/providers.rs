@@ -1,24 +1,15 @@
-//! Provider access as the developer sees it: for every provider of the pinned SDK catalogue (and
-//! the LADE profile's custom providers) which authentication LADE can use, whether it is usable now,
-//! and — when it is not — the trust rule or missing credential that explains why. Nothing here is a
-//! silent omission: unsupported authentication is an explicit `Restricted` with a reason.
-
 use std::collections::BTreeMap;
 
 use super::credentials::{CredentialSource, FIXTURE_PROVIDER, provider_env_vars};
 use super::gateway::EgressPolicy;
 use crate::adapters::profile::CustomProvider;
 
-/// Facts the SDK catalogue reports about one provider.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProviderFacts {
     pub id: String,
     pub name: String,
-    /// pi offers key-style authentication (an environment variable or stored key).
     pub api_key: bool,
-    /// The provider's interactive OAuth login, if any (for example "Anthropic (Claude Pro/Max)").
     pub oauth: Option<String>,
-    /// The OAuth login is backed by a subscription.
     pub subscription: bool,
     pub base_url: Option<String>,
 }
@@ -45,11 +36,9 @@ pub struct ProviderAccess {
     pub auth: Vec<AuthKind>,
     pub status: AccessStatus,
     pub reason: Option<String>,
-    /// Credential variable names (never values) that make the provider available.
     pub variables: Vec<String>,
 }
 
-/// Subscription access that pi accepts as a plain variable (works like an API key here).
 const SUBSCRIPTION_VARS: &[&str] = &["ANTHROPIC_OAUTH_TOKEN", "KIMI_API_KEY"];
 
 pub const OAUTH_RESTRICTION: &str = "interactive OAuth login and refresh-token storage are restricted: refresh-token \
@@ -84,8 +73,6 @@ fn cloud(id: &str) -> Option<&'static str> {
     })
 }
 
-/// Classifies one provider against the reviewed egress policies, the credential source and the
-/// LADE profile's custom providers.
 pub fn classify(
     facts: &ProviderFacts,
     policies: &BTreeMap<String, EgressPolicy>,
@@ -171,8 +158,6 @@ pub fn classify(
             },
         );
     };
-    // The Secret Service is not asked here (that would read every provider's key): a key kept
-    // only there shows as missing until execution starts and looks it up.
     let available = credentials.is_available(&facts.id);
     let mut reason = if available {
         None
@@ -295,7 +280,6 @@ mod tests {
         assert_eq!(local.auth, [AuthKind::Custom]);
     }
 
-    /// The pinned compatibility manifest states exactly what this build's tables decide.
     #[test]
     fn compatibility_manifest_matches_the_reviewed_tables() {
         let manifest: serde_json::Value = serde_json::from_str(include_str!(

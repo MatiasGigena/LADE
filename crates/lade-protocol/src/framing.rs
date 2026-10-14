@@ -3,13 +3,10 @@ use std::marker::PhantomData;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Framing {
-    /// Four-byte unsigned big-endian body length, then the UTF-8 JSON body.
     Client,
-    /// UTF-8 JSON body then one LF byte (JSONL). U+2028/U+2029 are content, not delimiters.
     Worker,
 }
 
-/// Byte-level frame splitter. Retains at most one partial body; any error poisons it.
 pub struct Deframer {
     framing: Framing,
     header: Vec<u8>,
@@ -28,8 +25,6 @@ impl Deframer {
         }
     }
 
-    /// Consumes bytes from `input` up to the end of the first complete frame and returns that
-    /// body; unconsumed bytes stay in `input`. Never scans ahead past one frame.
     pub fn next_frame(&mut self, input: &mut &[u8]) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
             return Err(WireError("closed"));
@@ -66,7 +61,6 @@ impl Deframer {
                         if size == 0 || size > MAX_FRAME {
                             return Err(WireError("frame_size"));
                         }
-                        // Allocate only after validating the declared length.
                         self.body.reserve_exact(size);
                         self.expected = Some(size);
                     }
@@ -106,7 +100,6 @@ impl Deframer {
         Ok(None)
     }
 
-    /// End of stream: fails if a partial frame remains. The deframer is closed afterwards.
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
             return Err(WireError("closed"));
@@ -122,8 +115,6 @@ impl Deframer {
     }
 }
 
-/// Incremental strict decoder: one body retained, one callback at a time, and any framing,
-/// decoding or downstream error poisons the link.
 pub struct Decoder<M> {
     deframer: Deframer,
     failed: bool,
@@ -155,7 +146,6 @@ impl<M: Message> Decoder<M> {
         })();
         if result.is_err() {
             self.failed = true;
-            // Drops any retained partial body; later pushes report `closed`.
             let _ = self.deframer.finish();
         }
         result
@@ -169,7 +159,6 @@ impl<M: Message> Decoder<M> {
     }
 }
 
-/// Serializes within the frame cap, re-validates the bytes as the peer would, then frames them.
 pub fn encode<M: Message>(frame: &M, framing: Framing) -> Result<Vec<u8>, WireError> {
     if frame.identity() != (crate::VERSION, crate::BUNDLE) {
         return Err(WireError("version_mismatch"));

@@ -11,7 +11,6 @@ import { after, test } from "node:test";
 import { getGlobalDispatcher } from "undici";
 import { installGateway, installNoNetwork, tunnel } from "../src/worker/gateway.ts";
 
-// Loopback-only fixtures: an origin HTTP server and a CONNECT gateway on a Unix socket.
 const root = mkdtempSync(join(tmpdir(), "lade-gateway-"));
 
 const socketPath = join(root, "gateway.sock");
@@ -35,7 +34,6 @@ const origin = createServer((request, response) => {
   response.end(`origin saw ${request.url}`);
 });
 
-// A minimal WebSocket echo (RFC 6455 handshake; one short masked text frame back, unmasked).
 origin.on("upgrade", (request, socket: Socket) => {
   open.add(socket);
   socket.once("close", () => open.delete(socket));
@@ -69,7 +67,6 @@ const gateway = createNetServer(client => {
       return;
     }
 
-    // A gateway that drops the connection without any reply (e.g. while it is stopping).
     if (authority.startsWith("silent.")) {
       client.end();
 
@@ -110,7 +107,6 @@ test("fetch is tunnelled through the gateway socket with HTTP CONNECT", async ()
   assert.deepEqual(authorities, [`provider.lade.test:${port}`]);
 });
 
-/** GET through the `node:http` global agent. */
 function httpGet(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     http.get(url, response => {
@@ -132,7 +128,6 @@ test("node:http clients use the global agent, which tunnels through the gateway"
   http.globalAgent.destroy();
 });
 
-/** Open a WebSocket (the global one, undici's, as pi uses), send `ping`, resolve with the reply. */
 function echo(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
@@ -165,7 +160,6 @@ test("without a gateway socket every connection fails with a clear reason", asyn
 
     return true;
   });
-  // WebSocket fails closed too: it uses the same refusing dispatcher, never a socket of its own.
   const tunnels = authorities.length;
   await assert.rejects(echo(`ws://provider.lade.test:${portOf(origin)}/`), /websocket failed/);
   assert.equal(authorities.length, tunnels);
@@ -178,7 +172,6 @@ test("a tunnel closed before the gateway replies fails instead of hanging", { ti
 test("an established tunnel is not destroyed by its user's own idle timeout", { timeout: 5_000 }, async () => {
   const socket = await tunnel(socketPath, `idle.lade.test:${portOf(origin)}`);
   open.add(socket);
-  // Socket timeouts only notify; whoever set one decides whether to close (node:http semantics).
   socket.setTimeout(20);
   await new Promise(resolve => socket.once("timeout", resolve));
   await new Promise(resolve => setImmediate(resolve));

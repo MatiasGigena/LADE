@@ -1,5 +1,4 @@
 #!/bin/sh
-# Use the authorized repository-local toolchain, without altering the login shell.
 set -eu
 cd "$(dirname "$0")/.."
 export CARGO_HOME="$PWD/.tools/cargo"

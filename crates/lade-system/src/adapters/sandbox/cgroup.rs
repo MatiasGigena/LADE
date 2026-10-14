@@ -1,22 +1,3 @@
-//! Optional cgroup v2 placement of sandboxes inside the service's delegated subtree.
-//!
-//! When `laded` runs from the shipped unit (`Delegate=memory pids cpu`), systemd hands it its own
-//! cgroup, marked with the `user.delegate` (or `trusted.delegate`) extended attribute. [`detect`]
-//! then arranges, below that cgroup:
-//!
-//! ```text
-//! <service cgroup>/service              laded itself (cgroup v2 forbids processes in inner nodes)
-//! <service cgroup>/sandboxes/<objective>/<kind>-<name>
-//! ```
-//!
-//! Each Objective gets one cgroup with `memory.max`, `pids.max` and `cpu.max` from
-//! [`OBJECTIVE_CGROUP_LIMITS`](super::OBJECTIVE_CGROUP_LIMITS), shared by its worker, terminals
-//! and verification runs (one leaf each). The launcher moves a sandbox's outer bwrap and its
-//! PID-namespace init into the leaf while the launch gate is closed, before the sandboxed
-//! program starts, so every descendant is accounted. Without delegation (no cgroup v2, a cgroup
-//! not delegated by systemd, missing controllers) [`detect`] returns the reason and execution
-//! falls back to the `prlimit` limits only; it never writes into a cgroup it was not delegated.
-
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::fs::MetadataExt;
@@ -33,16 +14,12 @@ const SERVICE_LEAF: &str = "service";
 const SANDBOXES: &str = "sandboxes";
 const KILL_WAIT: Duration = Duration::from_secs(2);
 
-/// The service's delegated cgroup subtree, prepared for sandbox placement.
 #[derive(Debug)]
 pub struct SandboxCgroups {
     root: PathBuf,
     limits: CgroupLimits,
 }
 
-/// Detects a delegated cgroup v2 subtree for this process and prepares it (moving this process
-/// into `<own cgroup>/service`). `Err` is the human-readable reason it is unavailable;
-/// `LADE_CGROUPS=off` disables it explicitly.
 pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, String> {
     if std::env::var_os("LADE_CGROUPS").is_some_and(|v| v == "off") {
         return Err("disabled by LADE_CGROUPS=off".into());
@@ -52,7 +29,6 @@ pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, String> {
     detect_in(&membership, Path::new(MOUNT), limits, std::process::id())
 }
 
-/// [`detect`] for a given `/proc/<pid>/cgroup` text and cgroup v2 mount point.
 pub fn detect_in(
     membership: &str,
     mount: &Path,
@@ -81,7 +57,6 @@ pub fn detect_in(
     SandboxCgroups::prepare(&dir, limits, pid)
 }
 
-/// The cgroup v2 path (`0::<path>`) from `/proc/<pid>/cgroup` text.
 fn own_cgroup(membership: &str) -> Option<&str> {
     membership
         .lines()
@@ -109,8 +84,6 @@ fn mkdir(path: &Path) -> io::Result<()> {
 }
 
 impl SandboxCgroups {
-    /// Prepares `dir` (a delegated cgroup, or a test directory): moves `pid` into `dir/service`,
-    /// enables the controllers for `dir` and `dir/sandboxes`.
     pub fn prepare(dir: &Path, limits: CgroupLimits, pid: u32) -> Result<Self, String> {
         let fail = |what: &str, e: io::Error| format!("{what}: {}", e.kind());
         let available = fs::read_to_string(dir.join("cgroup.controllers"))
@@ -139,7 +112,6 @@ impl SandboxCgroups {
         Ok(Self { root, limits })
     }
 
-    /// `<service cgroup>/sandboxes`.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -148,7 +120,6 @@ impl SandboxCgroups {
         self.limits
     }
 
-    /// Creates (or reuses) the Objective's limited cgroup and a fresh leaf `name` in it.
     pub fn leaf(&self, objective: &str, name: &str) -> io::Result<CgroupLeaf> {
         let safe = |s: &str| {
             (1..=96).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -158,8 +129,6 @@ impl SandboxCgroups {
         }
         let group = self.root.join(objective);
         let path = group.join(name);
-        // A leaf of the same Objective that ends concurrently may remove the (then empty)
-        // Objective cgroup between the two steps: recreate it once.
         for attempt in 0..2 {
             match fs::create_dir(&group) {
                 Ok(()) => self.apply_limits(&group)?,
@@ -188,8 +157,6 @@ impl SandboxCgroups {
         write(&group.join("cgroup.subtree_control"), ENABLE)
     }
 
-    /// Kills and removes every sandbox cgroup a previous instance left (service start only).
-    /// Returns how many leaves were removed.
     pub fn sweep(&self) -> usize {
         let mut removed = 0;
         for group in subdirs(&self.root) {
@@ -215,8 +182,6 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// `cgroup.kill` (Linux ≥ 5.14) ends every process of the cgroup; then wait for it to empty and
-/// remove it.
 fn kill_and_remove(leaf: &Path) {
     let _ = write(&leaf.join("cgroup.kill"), "1");
     let deadline = Instant::now() + KILL_WAIT;
@@ -231,8 +196,6 @@ fn populated(leaf: &Path) -> bool {
         .is_ok_and(|events| events.lines().any(|l| l == "populated 1"))
 }
 
-/// One sandbox's leaf cgroup. Dropping it kills what is left in it and removes it (and the
-/// Objective's cgroup once that is empty).
 #[derive(Debug)]
 pub struct CgroupLeaf {
     path: PathBuf,
@@ -244,12 +207,10 @@ impl CgroupLeaf {
         &self.path
     }
 
-    /// Moves `pid` (all its threads) into the leaf.
     pub fn add(&self, pid: u32) -> io::Result<()> {
         write(&self.path.join("cgroup.procs"), &pid.to_string())
     }
 
-    /// Whether `pid` is a member (from `/proc/<pid>/cgroup`).
     pub fn contains(&self, pid: u32) -> bool {
         let Ok(text) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
             return false;
@@ -258,7 +219,6 @@ impl CgroupLeaf {
             .is_some_and(|path| Path::new(MOUNT).join(path.trim_start_matches('/')) == self.path)
     }
 
-    /// OOM kills recorded for the Objective (`memory.events` `oom_kill`).
     pub fn oom_kills(&self) -> u64 {
         fs::read_to_string(self.path.join("memory.events"))
             .ok()

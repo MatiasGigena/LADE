@@ -5,19 +5,13 @@ use std::path::PathBuf;
 use super::command::Diagnostics;
 use super::{GitId, GitVersion, InProgress, RepoPath};
 
-/// Why a checked-out Integration Target cannot be updated right now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TargetBusyReason {
-    /// A merge, rebase, cherry-pick, revert, bisect or sequencer operation is in progress.
     InProgress(Vec<InProgress>),
-    /// Another Git process holds `index.lock` in that worktree.
     IndexLocked,
-    /// The branch is checked out in more than one worktree.
     MultipleCheckouts,
 }
 
-/// Typed Git adapter failure. `Display` is a short code (plus a static operation label); stderr is
-/// kept separately, truncated to [`super::STDERR_LIMIT`] bytes, for diagnostics only.
 #[derive(Debug)]
 pub enum GitError {
     Spawn {
@@ -59,19 +53,15 @@ pub enum GitError {
         what: &'static str,
     },
     NotABlob,
-    /// Compare-and-swap reference update rejected: the reference no longer has the expected value.
     StaleRef {
         refname: String,
         current: Option<GitId>,
     },
     WorktreeNotFound,
-    /// `worktree_remove` without force found modified or untracked content.
     WorktreeDirty,
-    /// The Integration Target no longer points at the expected commit.
     TargetMoved {
         current: Option<GitId>,
     },
-    /// The Integration Target is checked out with uncommitted tracked changes.
     TargetDirty {
         worktree: PathBuf,
     },
@@ -79,20 +69,14 @@ pub enum GitError {
         worktree: PathBuf,
         reason: TargetBusyReason,
     },
-    /// The checkout step's dry run refused, before any ref moved: in practice untracked files
-    /// where the candidate adds files. `paths` names those found (bounded; may be empty when
-    /// Git refused for another reason, which `stderr` then shows).
     TargetUntracked {
         worktree: PathBuf,
         paths: Vec<RepoPath>,
         stderr: Diagnostics,
     },
-    /// The worktree that has the target checked out is missing on disk (prunable).
     TargetWorktreeUnavailable {
         worktree: PathBuf,
     },
-    /// The ref was updated but the checked-out worktree could not be brought along.
-    /// `reverted` reports whether the compare-and-swap revert of the ref succeeded.
     CheckoutFailed {
         worktree: PathBuf,
         reverted: bool,
@@ -101,7 +85,6 @@ pub enum GitError {
 }
 
 impl GitError {
-    /// Stable short code for logs and protocol mapping.
     pub fn code(&self) -> &'static str {
         match self {
             Self::Spawn { .. } => "git_spawn_failed",
@@ -132,7 +115,6 @@ impl GitError {
         }
     }
 
-    /// Truncated stderr of the failing Git process, when there was one.
     pub fn stderr(&self) -> Option<&Diagnostics> {
         match self {
             Self::Failed { stderr, .. }

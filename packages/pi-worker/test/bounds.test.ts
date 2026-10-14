@@ -102,7 +102,6 @@ test("worker API encodes JSONL lines and decodes them one at a time", () => {
 
   for (const byte of wire) decoder.push(Buffer.from([byte]), frame => received.push(frame.body));
   decoder.finish();
-  // The bounded parser yields null-prototype objects; compare the wire content.
   assert.deepEqual(JSON.parse(JSON.stringify(received)), bodies);
   assert.ok(received.every(isWorkerToService));
 });
@@ -119,8 +118,6 @@ test("worker API distinguishes directions and rejects client bodies", () => {
 });
 
 test("a trailing or dangling array comma is invalid_json even when the node budget is spent", () => {
-  // 1 root + 43 arrays of 380 values = MAX_NODES exactly; Rust's sequence access rejects the
-  // comma before it asks for (and counts) another value.
   const inner = `[${Array.from({ length: 380 }, () => "0").join(",")}]`;
   const body = Array.from({ length: 43 }, () => inner).join(",");
   assert.equal(1 + 43 * 381, MAX_NODES);

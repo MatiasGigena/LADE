@@ -1,10 +1,3 @@
-//! Startup: load durable state, then restart recovery before anything is served.
-//!
-//! Recovery never replays effects: live executions become cancelled/interrupted, dispatched
-//! inputs become uncertain, unconsumed approvals expire, running verifications are interrupted,
-//! pending operations are recorded as interrupted, the integration journal is reconciled against
-//! the actual target refs, and stale sandboxes/verification copies are swept (best effort).
-
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
@@ -173,8 +166,6 @@ impl Service {
         Ok(())
     }
 
-    /// Integration intents without a recorded outcome: recompute the exact squash commit and
-    /// compare with the actual target ref. Never re-runs the integration.
     fn reconcile_journal(&mut self) -> Result<(), String> {
         let open = storage::open_journal(self.store.conn()).map_err(|e| sql_text(&e))?;
         for (row, message, commit_time) in open {
@@ -241,8 +232,6 @@ impl Service {
                     "laded: reconciled integration objective={} done",
                     row.objective_id
                 );
-                // A crash between the ref move and `read-tree` leaves the checked-out target
-                // behind its ref; finish that step (it refuses to overwrite local edits).
                 if let Some(commit) = &current {
                     let finished = ws.repo.finish_integration_checkout(
                         &row.target_branch,
@@ -281,7 +270,6 @@ impl Service {
         Ok(())
     }
 
-    /// Best-effort removal of leftovers of a previous instance.
     fn sweep(&mut self) {
         match crate::supervision::sweep_stale(&self.paths.run) {
             Ok(report) if !report.killed.is_empty() => {
@@ -331,8 +319,6 @@ impl Service {
     }
 }
 
-/// Kills sandbox roots (`bwrap`/`prlimit`) whose arguments reference this state directory and
-/// that a dead instance left behind (the launcher pidfiles are swept by `sweep_stale` first).
 fn kill_stale_sandboxes(state: &Path) {
     let me = std::process::id();
     let uid = crate::transport::service_uid();

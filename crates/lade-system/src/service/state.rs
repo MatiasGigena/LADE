@@ -1,5 +1,3 @@
-//! In-memory authoritative state, mirrored write-through into the product store.
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -15,7 +13,6 @@ use crate::supervision::WorkerControl;
 
 use super::ReqCtx;
 
-/// An opened Workspace and its validated repository handle.
 #[derive(Clone, Debug)]
 pub struct WsState {
     pub id: WorkspaceId,
@@ -25,20 +22,14 @@ pub struct WsState {
     pub default_branch: Option<String>,
 }
 
-/// Durable per-Objective state (cloned, modified, committed, then swapped in).
 #[derive(Clone, Debug)]
 pub struct ObjState {
     pub row: ObjectiveRow,
     pub review: Review,
-    /// Non-deleted drafts in creation order.
     pub drafts: Vec<Draft>,
-    /// Last computed staleness of unsent drafts against the current basis.
     pub draft_stale: HashMap<DraftId, bool>,
-    /// Accepted inputs in acceptance order with their global sequence.
     pub inputs: Vec<(u64, AcceptedInput)>,
-    /// Latest working capture.
     pub capture: Option<CaptureRow>,
-    /// Retained verification output tails (summary text only).
     pub tails: HashMap<VerificationId, String>,
 }
 
@@ -64,17 +55,12 @@ impl ObjState {
     }
 }
 
-/// Non-durable runtime facts about an Objective.
 #[derive(Default)]
 pub struct Runtime {
     pub control: Option<Box<dyn WorkerControl>>,
-    /// A launch job is in flight for this generation.
     pub launching: Option<u64>,
-    /// A long mutating operation holds the Objective (per-Objective sequencing).
     pub busy: Option<&'static str>,
-    /// A freeze waiting for the worker to exit.
     pub waiting_freeze: Option<(ReqCtx, Instant)>,
-    /// An input dispatch check is in flight; later inputs wait (strict order).
     pub dispatching: bool,
     pub capture_running: bool,
     pub recapture: bool,

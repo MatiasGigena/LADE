@@ -1,9 +1,3 @@
-//! Secret Service custody of provider keys: it ranks between `laded`'s environment and the
-//! credentials file, only attributes reach `secret-tool`'s command line, every failure is
-//! explained and bounded, and `laded credentials` stores and clears keys through `secret-tool`'s
-//! stdin. A fake `secret-tool` (`tests/fixtures/fake-secret-tool`) covers every outcome; the real
-//! one runs against a private GNOME Keyring when the tools are installed.
-
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -32,7 +26,6 @@ fn private_file(tmp: &TempDir, text: &str) -> PathBuf {
     path
 }
 
-/// A private directory holding a copy of `tests/fixtures/fake-secret-tool` as `secret-tool`.
 struct FakeSecretTool {
     tmp: TempDir,
 }
@@ -94,7 +87,6 @@ fn secret_service_ranks_between_the_environment_and_the_file() {
     let source = CredentialSource::new(env(&[("GROQ_API_KEY", "gsk-env")]), Some(file))
         .with_secret_service(fake.service());
 
-    // The Secret Service over the file; the environment over the Secret Service (not even asked).
     let openai = source.resolve("openai").unwrap();
     assert_eq!(openai.vars[0].1.expose(), "sk-keyring");
     assert_eq!(
@@ -102,7 +94,6 @@ fn secret_service_ranks_between_the_environment_and_the_file() {
         "gsk-env"
     );
     assert!(!fake.calls().iter().any(|c| c.contains("groq")));
-    // Not stored there: the file supplies it.
     assert_eq!(
         source.resolve("mistral").unwrap().vars[0].1.expose(),
         "m-file"
@@ -111,7 +102,6 @@ fn secret_service_ranks_between_the_environment_and_the_file() {
         source.resolve("anthropic").unwrap().names(),
         ["ANTHROPIC_OAUTH_TOKEN"]
     );
-    // Only the selected provider's variables are looked up, by attributes alone.
     let calls = fake.calls();
     assert!(
         calls.contains(&"lookup service lade provider openai variable OPENAI_API_KEY".to_string()),
@@ -123,7 +113,6 @@ fn secret_service_ranks_between_the_environment_and_the_file() {
             .all(|c| !c.contains("keyring") && !c.contains("-file")),
         "{calls:?}"
     );
-    // secret-tool gets the bus and C messages, none of laded's other variables.
     let seen = fs::read_to_string(fake.dir().join("env")).unwrap();
     assert!(
         seen.contains("DBUS_SESSION_BUS_ADDRESS") && seen.contains("LC_ALL"),
@@ -132,8 +121,6 @@ fn secret_service_ranks_between_the_environment_and_the_file() {
     assert!(!seen.contains("_API_KEY"), "{seen}");
     assert!(!format!("{source:?}{openai:?}").contains("sk-keyring"));
 
-    // Readiness asks the Secret Service only when the environment and the file do not suffice;
-    // describing providers never asks it.
     let before = fake.calls().len();
     source.check("openai").unwrap();
     source.check("groq").unwrap();
@@ -188,7 +175,6 @@ fn a_secret_service_that_never_answers_is_bounded_and_not_fatal() {
     );
     let without = CredentialSource::new(Vec::new(), None).with_secret_service(service);
     let error = without.resolve("anthropic").unwrap_err();
-    // One deadline per resolution: the first hung call ends the Secret Service's part.
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "{:?}",
@@ -231,7 +217,6 @@ fn an_unavailable_or_locked_secret_service_is_explained_and_the_file_still_appli
     assert!(message.contains("locked"), "{message}");
     assert!(fake.calls().iter().any(|c| c.starts_with("search ")));
 
-    // Known before any call: not installed, or no session bus.
     let missing = CredentialSource::new(Vec::new(), None)
         .with_secret_service(SecretService::detect(None, |_| None));
     let message = missing.resolve("openai").unwrap_err().to_string();
@@ -245,7 +230,6 @@ fn an_unavailable_or_locked_secret_service_is_explained_and_the_file_still_appli
     assert_eq!(fake.calls().len(), calls);
 }
 
-/// `laded credentials …` with the fake `secret-tool` first on `PATH`.
 fn laded_credentials(fake: &FakeSecretTool, args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_laded"))
         .arg("credentials")
@@ -259,7 +243,6 @@ fn laded_credentials(fake: &FakeSecretTool, args: &[&str], stdin: &[u8]) -> Outp
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    // A refused invocation may exit before reading stdin.
     let _ = child.stdin.take().unwrap().write_all(stdin);
     child.wait_with_output().unwrap()
 }
@@ -286,7 +269,6 @@ fn laded_credentials_stores_and_clears_through_secret_tool_stdin() {
         String::from_utf8_lossy(&stored.stderr)
     );
     assert!(!printed.contains("sk-cli-value"), "{printed}");
-    // `credentials` never starts the persistent diagnostics capture of `serve`.
     assert!(!fake.dir().join(".local/state").exists());
 
     let token = laded_credentials(
@@ -307,7 +289,6 @@ fn laded_credentials_stores_and_clears_through_secret_tool_stdin() {
     );
     assert!(custom.status.success(), "{custom:?}");
 
-    // Refused before anything is stored.
     for (args, stdin, code) in [
         (
             &["set", "openai", "--variable", "GROQ_API_KEY"][..],
@@ -352,7 +333,6 @@ fn laded_credentials_without_a_secret_service_points_to_the_credentials_file() {
         assert!(stderr.contains("credentials.env"), "{stderr}");
         assert!(!stderr.contains("sk-never-stored"));
     }
-    // No session bus: secret-tool is not even run.
     let calls = fake.calls().len();
     let out = Command::new(env!("CARGO_BIN_EXE_laded"))
         .args(["credentials", "set", "openai"])
@@ -370,7 +350,6 @@ fn laded_credentials_without_a_secret_service_points_to_the_credentials_file() {
             .next()
             .is_none()
     );
-    // LADE never wrote a credentials file as a fallback.
     assert!(!fake.dir().join(".config").exists());
 }
 
@@ -380,7 +359,6 @@ fn on_path(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-/// A private session bus with an unlocked GNOME Keyring in a disposable HOME.
 struct Keyring {
     tmp: TempDir,
     bus: Child,
@@ -430,7 +408,6 @@ impl Keyring {
         Ok(keyring)
     }
 
-    /// Start the keyring daemon (replacing a running one) unlocked with the test password.
     fn unlock(&self) -> bool {
         let Ok(mut unlock) = Command::new("gnome-keyring-daemon")
             .args(["--replace", "--unlock", "--components=secrets"])
@@ -473,7 +450,6 @@ impl Keyring {
     }
 }
 
-/// No display: an unlock prompt cannot be shown, so a locked keyring answers at once.
 fn base_env(home: &Path) -> Vec<(OsString, OsString)> {
     vec![
         ("PATH".into(), "/usr/bin:/bin".into()),
@@ -486,7 +462,6 @@ fn base_env(home: &Path) -> Vec<(OsString, OsString)> {
 
 impl Drop for Keyring {
     fn drop(&mut self) {
-        // gnome-keyring-daemon exits when its session bus goes away.
         let _ = self.bus.kill();
         let _ = self.bus.wait();
     }
@@ -515,7 +490,6 @@ fn real_secret_service_round_trip_lock_and_clear() {
         })
     ));
 
-    // A locked collection: the lookup cannot prompt here and the lock is reported, not hidden.
     let locked = Command::new("dbus-send")
         .args([
             "--session",

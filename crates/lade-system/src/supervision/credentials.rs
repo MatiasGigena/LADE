@@ -1,25 +1,3 @@
-//! Provider credential custody for worker launches.
-//!
-//! Credentials come from three places, in this order of precedence for each variable:
-//!
-//! 1. `laded`'s own process environment (an explicit operator override, for example in the unit);
-//! 2. the user's Secret Service (GNOME Keyring), through `secret-tool`, when it is installed and a
-//!    session bus exists ([`super::secret_service`]): items `service=lade provider=<id>
-//!    variable=<NAME>`, stored with `laded credentials set <provider>`;
-//! 3. the optional file `$XDG_CONFIG_HOME/lade/credentials.env` (default
-//!    `~/.config/lade/credentials.env`), the plaintext fallback the user writes by hand.
-//!
-//! The Secret Service ranks above the file so that a key moved into the keyring is not shadowed by
-//! a stale plaintext copy, and below the environment so that a deliberate override keeps working.
-//! It is consulted only when a worker for the selected provider launches (and by the start
-//! preflight when neither the environment nor the file satisfies the provider), with a deadline;
-//! an unavailable Secret Service is reported, never fatal, and never causes a key to be written
-//! anywhere. The file must be a regular file owned by the service user with no group/other
-//! permission bits; otherwise it is refused (there is no fallback location). Only the variables
-//! of the selected provider are released to a launch, values are never logged, and every `Debug`
-//! output redacts them. The released key is readable by the worker process and its tools (the
-//! in-process credential exposure accepted by issue #8).
-
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs;
@@ -31,34 +9,19 @@ use std::time::Instant;
 
 use super::secret_service::{Lookup, SecretService};
 
-/// Largest accepted credentials file.
 const MAX_FILE_BYTES: u64 = 64 << 10;
 
-/// The offline scripted test model; it needs no credentials. Test-only: the service offers and
-/// starts it only when it runs with [`FIXTURE_SWITCH`].
 pub const FIXTURE_PROVIDER: &str = "lade-fixture";
 
-/// Environment switch (`LADE_TEST_FIXTURE_PROVIDER=1`) that enables [`FIXTURE_PROVIDER`] for test
-/// harnesses. `laded serve` reads it once at start and passes it on to the worker and the model
-/// catalogue; without it the provider is absent from the catalogue and refused at start.
 pub use crate::adapters::sandbox::FIXTURE_SWITCH;
 
-/// Why [`FIXTURE_PROVIDER`] is refused when the switch is off.
 pub const FIXTURE_REFUSED: &str = "lade-fixture is an offline test provider; it is available only \
      when laded runs with LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)";
 
-/// Whether this process was started with [`FIXTURE_SWITCH`] set to `1`.
 pub fn fixture_switch_on() -> bool {
     std::env::var_os(FIXTURE_SWITCH).is_some_and(|v| v == "1")
 }
 
-/// Credential variables per provider, mirroring pi-ai 0.85.1 `env-api-keys.js`
-/// (`getApiKeyEnvVars`). Any one present variable satisfies the provider; all present ones are
-/// released. `ANTHROPIC_OAUTH_TOKEN` is a Claude subscription token (for example from
-/// `claude setup-token`) and `KIMI_API_KEY` a Kimi Code subscription key: subscription access that
-/// is a plain variable works like an API key. Providers whose pi authentication is not a plain
-/// variable (Bedrock profiles, Vertex ADC, interactive OAuth logins) are not listed and therefore
-/// unavailable; see `supervision::providers` for the reasons shown to the developer.
 const PROVIDER_VARS: &[(&str, &[&str])] = &[
     (FIXTURE_PROVIDER, &[]),
     (
@@ -87,7 +50,6 @@ const PROVIDER_VARS: &[(&str, &[&str])] = &[
     ("kimi-coding", &["KIMI_API_KEY"]),
 ];
 
-/// The credential variable names pi reads for `provider`, or `None` for an unknown provider.
 pub fn provider_env_vars(provider: &str) -> Option<&'static [&'static str]> {
     PROVIDER_VARS
         .iter()
@@ -99,7 +61,6 @@ fn known_var(name: &str) -> bool {
     PROVIDER_VARS.iter().any(|(_, vars)| vars.contains(&name)) || custom_var(name)
 }
 
-/// Custom providers of the LADE profile reference credentials as `LADE_PROVIDER_*` variables.
 pub fn custom_var(name: &str) -> bool {
     name.strip_prefix(crate::adapters::profile::CUSTOM_VAR_PREFIX)
         .is_some_and(|rest| {
@@ -111,7 +72,6 @@ pub fn custom_var(name: &str) -> bool {
         })
 }
 
-/// A credential value. `Debug` never shows it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(OsString);
 
@@ -131,7 +91,6 @@ impl fmt::Debug for Secret {
     }
 }
 
-/// The variables released for one launch (only the selected provider's).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleasedCredentials {
     pub vars: Vec<(String, Secret)>,
@@ -146,20 +105,16 @@ impl ReleasedCredentials {
 #[derive(Debug)]
 pub enum CredentialError {
     UnknownProvider(String),
-    /// None of the provider's variables is set (names only). `secret_service` says why the
-    /// Secret Service could not be asked, when it could not.
     Missing {
         provider: String,
         vars: &'static [&'static str],
         secret_service: Option<String>,
     },
-    /// A custom provider's referenced variables are not set (names only).
     MissingCustom {
         provider: String,
         vars: Vec<String>,
         secret_service: Option<String>,
     },
-    /// The credentials file exists but is not private to the service user.
     InsecureFile {
         path: PathBuf,
         reason: &'static str,
@@ -220,17 +175,12 @@ fn unavailable_note(f: &mut fmt::Formatter<'_>, reason: &Option<String>) -> fmt:
     }
 }
 
-/// Variables found for one resolution and what is still missing.
 struct Gathered {
     found: Vec<(String, Secret)>,
     missing: Vec<String>,
-    /// Why the Secret Service could not answer, if it could not.
     secret_service: Option<String>,
 }
 
-/// Where credentials are read from. Holds only known credential variables of the environment
-/// snapshot; the Secret Service is asked and the file re-read (and re-checked) on every
-/// resolution.
 #[derive(Clone)]
 pub struct CredentialSource {
     env: Vec<(String, OsString)>,
@@ -250,8 +200,6 @@ impl fmt::Debug for CredentialSource {
 }
 
 impl CredentialSource {
-    /// Known credential variables from `env` plus the optional credentials file; the Secret
-    /// Service is not consulted (see [`Self::with_secret_service`]).
     pub fn new(env: impl IntoIterator<Item = (OsString, OsString)>, file: Option<PathBuf>) -> Self {
         let env = env
             .into_iter()
@@ -265,20 +213,16 @@ impl CredentialSource {
         }
     }
 
-    /// The same source, consulting `secret_service` between the environment and the file.
     pub fn with_secret_service(mut self, secret_service: SecretService) -> Self {
         self.secret_service = secret_service;
         self
     }
 
-    /// `laded`'s environment, the user's Secret Service and `$XDG_CONFIG_HOME/lade/credentials.env`
-    /// (`$HOME/.config/lade/credentials.env` when `XDG_CONFIG_HOME` is unset or relative).
     pub fn from_process() -> Self {
         Self::new(std::env::vars_os(), default_file())
             .with_secret_service(SecretService::from_env())
     }
 
-    /// No credentials at all (only the fixture provider resolves).
     pub fn empty() -> Self {
         Self::new(Vec::new(), None)
     }
@@ -287,8 +231,6 @@ impl CredentialSource {
         self.file.as_deref()
     }
 
-    /// Release the selected provider's variables: every one that is set, each from the first
-    /// source that has it (environment, Secret Service, credentials file).
     pub fn resolve(&self, provider: &str) -> Result<ReleasedCredentials, CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -308,8 +250,6 @@ impl CredentialSource {
         })
     }
 
-    /// Release exactly `vars` for a custom provider (`LADE_PROVIDER_*` names only). Every listed
-    /// variable must be set; a provider without variables (a keyless local server) releases none.
     pub fn resolve_custom(
         &self,
         provider: &str,
@@ -335,9 +275,6 @@ impl CredentialSource {
         })
     }
 
-    /// Whether a worker for `provider` could get its credentials now, without returning values.
-    /// The Secret Service is asked only when the environment and the file do not already satisfy
-    /// the provider.
     pub fn check(&self, provider: &str) -> Result<(), CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -347,7 +284,6 @@ impl CredentialSource {
         self.resolve(provider).map(drop)
     }
 
-    /// [`Self::check`] for a custom provider (every variable is required).
     pub fn check_custom(&self, provider: &str, vars: &[String]) -> Result<(), CredentialError> {
         let names: Vec<&str> = vars.iter().map(String::as_str).collect();
         if vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true)? {
@@ -356,26 +292,21 @@ impl CredentialSource {
         self.resolve_custom(provider, vars).map(drop)
     }
 
-    /// Whether `provider` is satisfied by the environment or the credentials file alone. The
-    /// Secret Service is never asked here (describing every provider must not read keys).
     pub fn is_available(&self, provider: &str) -> bool {
         provider_env_vars(provider).is_some_and(|vars| {
             vars.is_empty() || self.plain_sources_have(vars, false).unwrap_or(false)
         })
     }
 
-    /// [`Self::is_available`] for a custom provider (every variable is required).
     pub fn is_available_custom(&self, vars: &[String]) -> bool {
         let names: Vec<&str> = vars.iter().map(String::as_str).collect();
         vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true).unwrap_or(false)
     }
 
-    /// The Secret Service this source consults.
     pub fn secret_service(&self) -> &SecretService {
         &self.secret_service
     }
 
-    /// Any (with `all`: every) of `names` set in the environment or the file.
     fn plain_sources_have(&self, names: &[&str], all: bool) -> Result<bool, CredentialError> {
         let file_vars = self.file_vars()?;
         let has = |name: &&str| {
@@ -398,9 +329,6 @@ impl CredentialSource {
         }
     }
 
-    /// Each of `names` from the first source that has it. When `failed` says the result fails the
-    /// resolution after the Secret Service found nothing, a locked keyring is looked for to
-    /// explain it.
     fn gather(
         &self,
         provider: &str,
@@ -467,13 +395,10 @@ fn default_file() -> Option<PathBuf> {
     Some(base.join("lade").join("credentials.env"))
 }
 
-/// The effective uid of this process (owner of `/proc/self`), without `unsafe`.
 pub(crate) fn current_uid() -> io::Result<u32> {
     fs::metadata("/proc/self").map(|m| m.uid())
 }
 
-/// Read `NAME=value` lines (optional `export `, `#` comments, optional matching quotes). A
-/// missing file yields nothing; an insecure one is refused.
 fn read_file(path: &Path) -> Result<Vec<(String, OsString)>, CredentialError> {
     let io_err = |e: io::Error| CredentialError::Io {
         path: path.to_path_buf(),

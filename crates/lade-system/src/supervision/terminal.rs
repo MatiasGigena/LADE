@@ -1,20 +1,3 @@
-//! Contained terminals (IMP-012): an interactive shell on a service-owned PTY, inside the same
-//! bubblewrap sandbox and `prlimit` quotas as the worker.
-//!
-//! The service allocates the PTY (`posix_openpt` through rustix, the user side opened with
-//! `TIOCGPTPEER`, both close-on-exec and without becoming the service's controlling terminal),
-//! hands the user side to `prlimit … bwrap … setsid --ctty --wait <shell> -i` as its standard
-//! streams and keeps the controller side. Nothing else of the service is inherited. Every process
-//! of the terminal — including `setsid`/double-forked daemons — lives in the sandbox's PID
-//! namespace, so killing the namespace init ends all of them, exactly as for workers.
-//!
-//! Threads per terminal: a reader (controller side → bounded ring, [`RING_BYTES`]) that observes
-//! the exit once the user side is closed everywhere, and a writer (bounded input queue →
-//! controller side). Output is never copied anywhere else (no diagnostic copy): the service drains
-//! the ring on its tick. When the ring is full the reader waits up to [`FULL_WAIT`] for the
-//! service to drain it (backpressure on the shell), then discards the oldest bytes and counts
-//! them, so a flood costs bounded memory and the client sees a marked gap.
-
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
@@ -37,14 +20,10 @@ use crate::adapters::sandbox::{
     CgroupLeaf, Limits, SandboxCgroups, SandboxTools, TerminalLaunch, terminal_spec,
 };
 
-/// Output retained per terminal between service drains.
 pub const RING_BYTES: usize = 1 << 20;
-/// How long the reader waits for the service to drain a full ring before discarding output.
 pub const FULL_WAIT: Duration = Duration::from_millis(100);
-/// Queued input bytes per terminal; beyond this `write` fails with `WouldBlock`.
 pub const INPUT_QUEUE_BYTES: usize = 256 << 10;
 const INPUT_QUEUE_FRAMES: usize = 256;
-/// Accepted terminal sizes.
 pub const MAX_COLS: u16 = 500;
 pub const MAX_ROWS: u16 = 200;
 const KILL_WAIT: Duration = Duration::from_secs(10);
@@ -52,33 +31,26 @@ const POLL: Duration = Duration::from_millis(20);
 const SHELLS: &[&str] = &["/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh"];
 const SETSID: &[&str] = &["/usr/bin/setsid", "/bin/setsid"];
 
-/// One terminal to open.
 #[derive(Clone, Debug)]
 pub struct TerminalRequest {
     pub objective_id: String,
     pub terminal_id: String,
     pub worktree: PathBuf,
     pub repo_common_dir: PathBuf,
-    /// `false` binds the worktree read-only (review writer exclusion).
     pub writable: bool,
     pub cols: u16,
     pub rows: u16,
-    /// Private directory for the pidfile the startup sweep reads (`$STATE/run`).
     pub run_dir: PathBuf,
     pub limits: Limits,
-    /// Delegated cgroup subtree: the terminal runs in a leaf of its Objective's cgroup.
     pub cgroups: Option<Arc<SandboxCgroups>>,
 }
 
-/// Output taken from a terminal's ring.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Drained {
     pub bytes: Vec<u8>,
-    /// Bytes discarded since the previous drain because the ring overflowed.
     pub dropped: u64,
 }
 
-/// How the terminal's sandbox ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TerminalExit {
     pub code: Option<i32>,
@@ -89,7 +61,6 @@ pub struct TerminalExit {
 struct Ring {
     bytes: VecDeque<u8>,
     dropped: u64,
-    /// The controller side reported end of file / `EIO` (every user side is closed).
     eof: bool,
 }
 
@@ -130,8 +101,6 @@ impl Shared {
         }
     }
 
-    /// `SIGKILL` the namespace init (ending every process of the terminal) and bwrap, holding
-    /// the child lock so an already-reaped pid is never signalled.
     fn kill(&self) {
         let mut child = lock(&self.child);
         if matches!(child.try_wait(), Ok(Some(_))) {
@@ -143,13 +112,11 @@ impl Shared {
         let _ = child.kill();
     }
 
-    /// After the exit: removes the pidfile and the cgroup leaf.
     fn release(&self) {
         drop(lock(&self.leaf).take());
         let _ = std::fs::remove_file(&self.pidfile);
     }
 
-    /// Appends output, waiting briefly for room, then discarding the oldest bytes.
     fn push(&self, data: &[u8]) {
         let mut ring = lock(&self.ring);
         let deadline = Instant::now() + FULL_WAIT;
@@ -201,7 +168,6 @@ fn winsize(cols: u16, rows: u16) -> io::Result<Winsize> {
     })
 }
 
-/// A running contained terminal. Dropping it kills the sandbox.
 pub struct Terminal {
     shared: Arc<Shared>,
     controller: File,
@@ -220,8 +186,6 @@ impl fmt::Debug for Terminal {
 }
 
 impl Terminal {
-    /// Allocates the PTY and starts the shell in its sandbox. There is no unsandboxed path: the
-    /// caller passes tools whose sandbox probe succeeded.
     pub fn open(tools: &SandboxTools, request: &TerminalRequest) -> io::Result<Self> {
         if !safe_id(&request.objective_id) || !safe_id(&request.terminal_id) {
             return Err(invalid("terminal identity"));
@@ -263,8 +227,6 @@ impl Terminal {
             .stdout(Stdio::from(user.try_clone()?))
             .stderr(Stdio::from(user))
             .process_group(0);
-        // Spawning consumes the command, which holds this process's only other copies of the
-        // user side.
         let (child, mut gate) = cmd.spawn()?;
         let pid = child.id();
         let pidfile = request.run_dir.join(format!(
@@ -289,7 +251,6 @@ impl Terminal {
             link_failed: Arc::new(AtomicBool::new(false)),
             killed: false,
         };
-        // The shell starts only once the sandbox is recorded and placed.
         let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
             shared.poll_exit().is_some()
         })
@@ -335,8 +296,6 @@ impl Terminal {
         Ok(terminal)
     }
 
-    /// Queues input for the shell (never blocks the caller). `WouldBlock` when the bounded queue
-    /// is full, `BrokenPipe` when the terminal is gone.
     pub fn write(&self, data: &[u8]) -> io::Result<()> {
         let gone = || io::Error::new(ErrorKind::BrokenPipe, "terminal_closed");
         let Some(tx) = self.input.as_ref() else {
@@ -364,12 +323,10 @@ impl Terminal {
         }
     }
 
-    /// Sets the PTY window size; the kernel signals `SIGWINCH` to the foreground job.
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
         tcsetwinsize(&self.controller, winsize(cols, rows)?).map_err(io::Error::from)
     }
 
-    /// Takes up to `max` bytes of buffered output and the count of discarded bytes.
     pub fn drain(&self, max: usize) -> Drained {
         let mut ring = lock(&self.shared.ring);
         let n = ring.bytes.len().min(max);
@@ -382,13 +339,11 @@ impl Terminal {
         drained
     }
 
-    /// Whether output is waiting.
     pub fn pending(&self) -> bool {
         let ring = lock(&self.shared.ring);
         !ring.bytes.is_empty() || ring.dropped > 0
     }
 
-    /// The exit, once the sandbox ended and every user side is closed.
     pub fn exit(&self) -> Option<TerminalExit> {
         let status = self.shared.poll_exit()?;
         Some(TerminalExit {
@@ -397,15 +352,12 @@ impl Terminal {
         })
     }
 
-    /// Whether the terminal ended and all its output was drained.
     pub fn finished(&self) -> Option<TerminalExit> {
         let eof = lock(&self.shared.ring).eof;
         let exit = self.exit()?;
         (eof && !self.pending()).then_some(exit)
     }
 
-    /// Kills every process of the terminal (PID-namespace init, then bwrap) and waits for the
-    /// sandbox to end; the pidfile is removed once it has.
     pub fn kill(&mut self) {
         if self.killed {
             return;
@@ -420,16 +372,13 @@ impl Terminal {
             }
             self.shared.kill();
         }
-        // Unblock a reader waiting for room.
         self.shared.space.notify_all();
     }
 
-    /// The pidfile recording this terminal's sandbox (removed once it has ended).
     pub fn pidfile(&self) -> &Path {
         &self.shared.pidfile
     }
 
-    /// The PID-namespace init of the sandbox, once discovered.
     pub fn namespace_init(&self) -> Option<u32> {
         lock(&self.shared.init).map(|record| record.pid)
     }
@@ -441,7 +390,6 @@ impl Drop for Terminal {
     }
 }
 
-/// Reader thread: controller side → ring until `EIO`/EOF, then wait for the sandbox to end.
 fn read_output(shared: &Shared, mut controller: File) {
     let mut buffer = vec![0u8; 16 << 10];
     loop {
@@ -449,13 +397,11 @@ fn read_output(shared: &Shared, mut controller: File) {
             Ok(0) => break,
             Ok(n) => shared.push(&buffer[..n]),
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
-            // `EIO` once the last user side is closed.
             Err(_) => break,
         }
     }
     drop(controller);
     lock(&shared.ring).eof = true;
-    // Every process holding the user side is gone; the sandbox ends right after.
     if shared.wait_exit(KILL_WAIT).is_none() {
         shared.kill();
     }

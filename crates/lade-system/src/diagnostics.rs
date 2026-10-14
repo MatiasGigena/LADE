@@ -1,22 +1,3 @@
-//! Persistent, bounded and redacted service diagnostics (IMP-003 / IMP-014, #14 policy).
-//!
-//! `laded serve` routes its own standard error through [`capture_stderr`]: every line any part of
-//! the process (or an inheriting child) writes to stderr is cut to [`LINE_BYTES`], passed through
-//! [`redact`], and then written both to the original stderr (the user journal under systemd) and,
-//! as one JSON object per line, to the rotating log `$STATE/logs/laded.log` (0600, directory
-//! 0700). Rotation is size based: the current file holds at most [`FILE_BYTES`], and with
-//! [`FILES`] files (`laded.log`, `laded.log.1` …) the logs never exceed `FILES × FILE_BYTES`.
-//!
-//! What the service writes to stderr is already limited to codes, ids and kinds (no prompts,
-//! source, tool output or credentials); redaction is a second, best-effort layer for anything
-//! that slips through (forwarded worker stderr, library messages, panics): credential-looking
-//! `NAME=value` / `"name": "value"` pairs, `Bearer`/`Basic` values, URL user-info, well-known
-//! token prefixes and long mixed-case opaque strings become `<redacted>`, and the home directory
-//! becomes `~`. Redaction is tested but not infallible (#14), which is why export is explicit.
-//!
-//! [`export`] writes a redacted plain-text bundle (logs and the migration journal, never the
-//! database, artifacts, worktrees, session files or environment) to a new 0600 file.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::OwnedFd;
@@ -29,20 +10,14 @@ use std::time::Duration;
 use crate::service::convert::{now_ms, wire_ts};
 use crate::storage::backup;
 
-/// Log directory relative to the state directory.
 pub const LOG_DIR: &str = "logs";
-/// Current log file name; rotated copies append `.1` … `.{FILES - 1}`.
 pub const LOG_FILE: &str = "laded.log";
-/// Maximum bytes of one log file.
 pub const FILE_BYTES: u64 = 1024 * 1024;
-/// Number of log files kept (current plus rotated).
 pub const FILES: usize = 4;
-/// Maximum bytes of one diagnostic line before redaction (longer lines are cut and marked).
 pub const LINE_BYTES: usize = 2048;
 
 const REDACTED: &str = "<redacted>";
 
-/// Name fragments (upper case) marking a credential-bearing field.
 const SECRET_NAMES: &[&str] = &[
     "KEY",
     "TOKEN",
@@ -54,7 +29,6 @@ const SECRET_NAMES: &[&str] = &[
     "CAPABILITY",
 ];
 
-/// Well-known credential prefixes.
 const SECRET_PREFIXES: &[&str] = &[
     "sk-",
     "sk_",
@@ -104,8 +78,6 @@ fn redact_url_userinfo(token: &str) -> Option<String> {
     Some(format!("{}{REDACTED}{}", &token[..scheme_end], &rest[at..]))
 }
 
-/// Redacts one whitespace-free token. `value_next` is set when the token announces a secret
-/// value in the following token (`Bearer`, `api_key:`).
 fn redact_token(token: &str, value_next: &mut bool) -> String {
     let (start, core) = trim_punct(token);
     if core.eq_ignore_ascii_case("bearer") || core.eq_ignore_ascii_case("basic") {
@@ -115,7 +87,6 @@ fn redact_token(token: &str, value_next: &mut bool) -> String {
     if std::mem::take(value_next) {
         return REDACTED.to_owned();
     }
-    // `"name":"value"`, `name: value`.
     if let Some(colon) = core.find(':')
         && !core[..colon].contains('/')
         && is_secret_name(core[..colon].trim_matches(|c| c == '"' || c == '\''))
@@ -127,7 +98,6 @@ fn redact_token(token: &str, value_next: &mut bool) -> String {
         }
         return format!("{}{}:{REDACTED}", &token[..start], &core[..colon]);
     }
-    // `NAME=value`.
     if let Some(eq) = core.find('=')
         && eq > 0
         && is_secret_name(&core[..eq])
@@ -170,8 +140,6 @@ fn replace_home(line: &str, home: &str) -> String {
     out
 }
 
-/// Applies the diagnostics redaction policy to one line (see the module documentation). Control
-/// characters become spaces.
 pub fn redact(line: &str, home: Option<&str>) -> String {
     let clean: String = line
         .chars()
@@ -200,12 +168,10 @@ pub fn redact(line: &str, home: Option<&str>) -> String {
     out
 }
 
-/// The current user's home directory, for [`redact`].
 pub fn home() -> Option<String> {
     std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
 }
 
-/// A size-rotated log: `dir/laded.log` plus `FILES - 1` rotated copies.
 pub struct RotatingLog {
     dir: PathBuf,
     file_bytes: u64,
@@ -266,7 +232,6 @@ impl RotatingLog {
         Ok(())
     }
 
-    /// Appends one record (a newline is added). A record larger than a whole file is cut.
     pub fn append(&mut self, record: &str) -> io::Result<()> {
         let limit = usize::try_from(self.file_bytes)
             .unwrap_or(usize::MAX)
@@ -289,7 +254,6 @@ impl RotatingLog {
     }
 }
 
-/// The source prefix of a diagnostic line (`laded`, `lade-worker[…]`, `lade-gateway[…]`).
 fn source_of(line: &str) -> &str {
     match line.find(": ") {
         Some(at) if at <= 64 && !line[..at].contains(' ') => &line[..at],
@@ -297,7 +261,6 @@ fn source_of(line: &str) -> &str {
     }
 }
 
-/// One JSON log record for an already redacted line.
 pub fn record(line: &str) -> String {
     serde_json::json!({
         "ts": wire_ts(now_ms()).as_str(),
@@ -314,23 +277,18 @@ fn state_is_private(state: &Path) -> bool {
     })
 }
 
-/// Restores the original stderr and flushes the log when dropped through [`Self::finish`].
 pub struct StderrCapture {
     original: OwnedFd,
     done: mpsc::Receiver<()>,
 }
 
 impl StderrCapture {
-    /// Points stderr back at the original descriptor, which closes the pipe, and waits briefly
-    /// for the last lines to reach the log.
     pub fn finish(self) {
         let _ = rustix::stdio::dup2_stderr(&self.original);
         let _ = self.done.recv_timeout(Duration::from_secs(2));
     }
 }
 
-/// Reads one line of at most `max` bytes (without the newline) into `buf`. Returns `false` at end
-/// of input; a longer line is cut, marked and its remainder discarded.
 fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -> bool {
     buf.clear();
     let limit = u64::try_from(max).unwrap_or(u64::MAX) + 1;
@@ -358,10 +316,6 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
     true
 }
 
-/// Redirects this process's stderr through the redacting, persisting reader described in the
-/// module documentation. The log file is opened lazily, only once `state` exists as a private
-/// directory of this user (the service validates and creates it); until then lines go to the
-/// original stderr only.
 pub fn capture_stderr(state: PathBuf) -> io::Result<StderrCapture> {
     let original = rustix::io::fcntl_dupfd_cloexec(io::stderr(), 3)?;
     let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
@@ -378,7 +332,6 @@ pub fn capture_stderr(state: PathBuf) -> io::Result<StderrCapture> {
                 let line = redact(&String::from_utf8_lossy(&buf), home.as_deref());
                 let _ = writeln!(out, "{line}");
                 if state_is_private(&state) {
-                    // A log write failure must never stop stderr forwarding.
                     let _ = log.append(&record(&line));
                 }
             }
@@ -388,10 +341,8 @@ pub fn capture_stderr(state: PathBuf) -> io::Result<StderrCapture> {
     Ok(StderrCapture { original, done })
 }
 
-/// Why an export failed. `Display` names no content.
 #[derive(Debug)]
 pub enum ExportError {
-    /// The output path already exists (it is never overwritten).
     Exists,
     Io(&'static str, io::ErrorKind),
 }
@@ -407,10 +358,8 @@ impl std::fmt::Display for ExportError {
 
 impl std::error::Error for ExportError {}
 
-/// What an export contained.
 #[derive(Debug)]
 pub struct ExportSummary {
-    /// `(section, lines)` in export order.
     pub sections: Vec<(String, usize)>,
     pub bytes: u64,
 }
@@ -432,7 +381,6 @@ fn read_lines_lossy(path: &Path) -> io::Result<Option<Vec<String>>> {
     ))
 }
 
-/// Writes the redacted diagnostics bundle of `state` to the new file `out` (0600).
 pub fn export(state: &Path, out: &Path) -> Result<ExportSummary, ExportError> {
     let home = home();
     let mut file = OpenOptions::new()
@@ -606,7 +554,6 @@ mod tests {
         assert!(total <= 4 * 4096);
         assert!(total > 3 * 3500, "older files are full: {total}");
         assert_eq!(mode(&dir), 0o700);
-        // An oversized record is cut to one file.
         log.append(&"y".repeat(10_000)).expect("append");
         assert!(fs::metadata(dir.join(LOG_FILE)).expect("meta").len() <= 4096);
         let _ = fs::remove_dir_all(dir.parent().expect("parent"));
@@ -633,7 +580,6 @@ mod tests {
         let mut log = RotatingLog::new(state.join(LOG_DIR), FILE_BYTES, FILES);
         log.append(&record("laded: serving epoch=1"))
             .expect("append");
-        // A raw secret in the file (as if written by an older build) is redacted on export.
         log.append("ANTHROPIC_API_KEY=sk-ant-0123456789abcdefghij")
             .expect("append");
         let out = state.join("export.txt");

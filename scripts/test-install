@@ -1,21 +1,4 @@
 #!/bin/sh
-# Exercise scripts/install and scripts/uninstall in a disposable HOME and prefix.
-#
-#   scripts/test-install                 synthetic bundle (stub executables, a few seconds)
-#   scripts/test-install --bundle DIR [--allowed-signers FILE]
-#                                        a real bundle from scripts/bundle; additionally starts the
-#                                        installed laded with the unit's environment, and with
-#                                        --allowed-signers requires its signature to verify
-#
-# Covers: install, manifest tamper and extra-file refusal, signature verification with throwaway
-# SSH keys (good, wrong key, re-manifested tamper, unsigned with a trust root, untrusted trust-root
-# mode, configured trust root; when ssh-keygen is available), the bundled Node runtime (synthetic),
-# second version + previous, rollback (twice), rollback across a schema change (missing backup,
-# no confirmation, busy service, restore, roll forward; synthetic stubs model `laded store`, whose
-# real behaviour is tested in crates/lade-system/tests/laded_cli.rs), unit/desktop path
-# substitution (systemd-analyze verify when available), uninstall keeping the state directory,
-# and --purge-data refused without a terminal. Never touches the real HOME, never runs systemctl
-# against a real user manager (enable is not exercised).
 set -eu
 cd "$(dirname "$0")/.."
 root=$PWD
@@ -45,16 +28,14 @@ prefix="$work/prefix"
 libdir="$prefix/lib/lade"
 unit="$HOME/.config/systemd/user/lade.service"
 
-manifest() { # same format as scripts/bundle
+manifest() {
     (cd "$1" && find . -type f ! -path ./MANIFEST.sha256 ! -path ./MANIFEST.sha256.sig -print0 \
         | LC_ALL=C sort -z | xargs -0 sha256sum --) >"$work/manifest"
     mv "$work/manifest" "$1/MANIFEST.sha256"
 }
 set_id() { sed -i "s/^id=.*/id=$2/" "$1/VERSION"; }
 
-# A stand-in laded: --version, and `store info` / `store restore` over a fake state directory whose
-# lade.db holds the schema number and backups.stub the backup lines (`held` = a running service).
-stub_laded() { # supported schema, file
+stub_laded() {
     cat >"$2" <<STUB
 #!/bin/sh
 state="\${XDG_STATE_HOME:-\$HOME/.local/state}/lade"
@@ -105,7 +86,6 @@ b2="$work/b2"
 cp -R "$b1" "$b2"
 set_id "$b2" "$id1-second"
 if [ -z "$real" ]; then
-    # The second version migrates to schema 2.
     stub_laded 2 "$b2/bin/laded"
     sed -i 's/^schema=.*/schema=2/' "$b2/VERSION"
 fi
@@ -119,7 +99,6 @@ bwrap --unshare-all --die-with-parent --new-session --ro-bind / / --proc /proc -
 try_install() { "$b1/install" --prefix "$prefix" $probe "$@" >"$work/out" 2>&1; }
 run_install() { try_install "$@" || { cat "$work/out" >&2; return 1; }; }
 
-# 1. Tampered and extended bundles are refused before anything is written.
 bad="$work/bad"
 cp -R "$b1" "$bad"
 printf 'tampered\n' >>"$bad/lib/lade/pi-worker/src/worker.ts"
@@ -131,8 +110,6 @@ if try_install --bundle "$bad"; then die "bundle with an unlisted file was insta
 grep -q 'bin/extra' "$work/out" || die "extra-file refusal does not name the file"
 ok "tampered and extended bundles refused, nothing written"
 
-# 1b. Signatures (synthetic bundle: copying a real one per case is too slow; throwaway keys — the
-#     release key and trust bootstrap are Matias's decision).
 if [ -z "$real" ] && command -v ssh-keygen >/dev/null 2>&1; then
     keys="$work/keys"
     mkdir -m 700 "$keys"
@@ -155,7 +132,7 @@ if [ -z "$real" ] && command -v ssh-keygen >/dev/null 2>&1; then
     bt="$work/bt"
     cp -R "$bs" "$bt"
     printf 'tampered\n' >>"$bt/lib/lade/pi-worker/src/worker.ts"
-    manifest "$bt" # the attacker recomputes the checksums; the signature no longer matches
+    manifest "$bt"
     if sig_install --bundle "$bt" --allowed-signers "$keys/allowed"; then die "re-manifested tampered bundle was installed"; fi
     grep -q 'BAD signature' "$work/out" || die "bad-signature refusal: $(cat "$work/out")"
     bu="$work/bu"
@@ -183,7 +160,6 @@ else
     [ -n "$real" ] || printf 'test-install: skip: ssh-keygen not available (signature checks)\n'
 fi
 
-# 1b'. The real bundle's own signature, when the caller supplies its trust root.
 if [ -n "$real_signers" ]; then
     pr="$work/preal"
     "$b1/install" --prefix "$pr" $probe --bundle "$b1" --allowed-signers "$real_signers" >"$work/out" 2>&1 \
@@ -193,7 +169,6 @@ if [ -n "$real_signers" ]; then
     ok "the real bundle's signature verifies against $real_signers"
 fi
 
-# 1c. A bundle carrying its own Node runtime: launchers and unit use it (synthetic only).
 if [ -z "$real" ]; then
     bn="$work/bn"
     pn="$work/pnode"
@@ -215,7 +190,6 @@ if [ -z "$real" ]; then
     ok "bundled Node: off-pin runtime refused, launchers and unit prefer the bundled runtime"
 fi
 
-# 2. First install.
 run_install --bundle "$b1" || die "install of $id1 failed"
 [ "$(readlink "$libdir/current")" = "$id1" ] || die "current is not $id1"
 [ ! -e "$libdir/previous" ] || die "previous exists after the first install"
@@ -242,8 +216,6 @@ cmp -s "$work/foreign" "$work/p2/bin/laded" || die "foreign laded was modified"
 ok "a foreign $work/p2/bin/laded is refused before anything is written"
 
 if command -v systemd-analyze >/dev/null 2>&1; then
-    # Offline syntax/semantic check of the generated unit (no user manager needed).
-    # It exits 0 for ignored keys/values, so any diagnostic naming the unit file is a failure.
     if systemd-analyze verify "$unit" >"$work/verify" 2>&1 && ! grep -q 'lade\.service' "$work/verify"; then
         ok "systemd-analyze verify $unit"
     else
@@ -254,7 +226,6 @@ else
     printf 'test-install: skip: systemd-analyze not available\n'
 fi
 
-# 3. Second version keeps the first as previous; rollback switches back and forth.
 run_install --bundle "$b2" || die "install of $id2 failed"
 [ "$(readlink "$libdir/current")" = "$id2" ] && [ "$(readlink "$libdir/previous")" = "$id1" ] \
     || die "after second install: current=$(readlink "$libdir/current") previous=$(readlink "$libdir/previous")"
@@ -268,7 +239,6 @@ sed -i '$d' "$libdir/$id2/VERSION"
 [ "$(readlink "$libdir/current")" = "$id2" ] || die "after second rollback"
 ok "second version, rollback, tampered rollback refused, roll forward"
 
-# 3b. Rollback across a schema change (current = second version at schema 2, previous = schema 1).
 if [ -z "$real" ]; then
     st="$HOME/.local/state/lade"
     mkdir -p "$st"
@@ -298,10 +268,7 @@ if [ -z "$real" ]; then
     ok "rollback across a schema change: missing backup, unconfirmed and busy restores refused; restore then roll forward"
 fi
 
-# 4. A real bundle: the installed service finds its worker and Node both as the unit starts it
-#    (ExecStart + Environment=) and through the launcher with an otherwise empty environment, which
-#    is how lade-desktop starts it when the unit is not running.
-serve_check() { # label, command...
+serve_check() {
     label=$1; shift
     state="$work/state-$label"; run="$work/run-$label"
     "$@" serve --state-dir "$state" --runtime-dir "$run" 2>"$work/laded.err" &
@@ -324,7 +291,6 @@ if [ -n "$real" ]; then
     serve_check launcher env -i HOME="$HOME" PATH=/usr/bin:/bin "$prefix/bin/laded"
 fi
 
-# 5. Uninstall keeps user data; purge without a terminal is refused.
 mkdir -p "$HOME/.local/state/lade"
 printf 'precious\n' >"$HOME/.local/state/lade/lade.db"
 "$libdir/current/uninstall" --prefix "$prefix" >"$work/out" 2>&1 || { cat "$work/out" >&2; die "uninstall"; }

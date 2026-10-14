@@ -1,22 +1,3 @@
-//! Canonical load, latency and soak procedures of the performance budgets (IMP-013, A19).
-//!
-//! Ignored by default (long-running, host-dependent); run through `scripts/load`, which builds in
-//! release mode and records the results:
-//!
-//! ```text
-//! scripts/load [OUT_DIR]                       # nominal 1/4 workers, launches, client phase
-//! LADE_LOAD_SOAK_SECS=1800 scripts/load --soak [OUT_DIR]
-//! ```
-//!
-//! Everything runs against the real `laded` binary with real sandboxed workers and the offline
-//! `lade-fixture` model; nothing is mocked. The driver is a test client holding the controlling
-//! lease, so the GTK client is measured in separate phases (idle with the reference workload and
-//! while four agents stream queued work), when `LADE_LOAD_CLIENT` names `lade-desktop` and an X
-//! display is available. Memory is PSS summed per owned process group (service: `laded` and its
-//! Git helpers; worker: each Node/SDK sandbox; jobs: processes below a worker's Node and terminal
-//! or verification sandboxes; client), CPU is percent of one logical core from `/proc/<pid>/stat`
-//! ticks between samples (short-lived processes between two samples are not counted).
-
 mod service_support;
 
 use std::collections::HashMap;
@@ -38,9 +19,6 @@ use lade_protocol::types::{Counter, DeliveryMode, Id, ReadLimit, WirePath};
 use lade_system::supervision::credentials::FIXTURE_SWITCH;
 use service_support::*;
 
-// ---------------------------------------------------------------------------------------------
-// Configuration.
-
 fn env_u64(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -61,7 +39,6 @@ const REF_LINES: usize = 20_000;
 const REF_BYTES: usize = 1_280_000;
 const DIFF_LINES: usize = 2_000;
 
-/// Deterministic UTF-8 reference file: 20,000 lines, 1,280,000 bytes.
 fn reference_file() -> String {
     let mut out = String::with_capacity(REF_BYTES);
     let width = REF_BYTES / REF_LINES - 1;
@@ -78,7 +55,6 @@ fn reference_file() -> String {
     out
 }
 
-/// 2,000 lines; the worktree version changes every line, a 4,000-line signed diff.
 fn diff_file(changed: bool) -> String {
     (0..DIFF_LINES)
         .map(|n| {
@@ -90,9 +66,6 @@ fn diff_file(changed: bool) -> String {
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------------------------
-// Process accounting.
 
 #[derive(Clone, Copy, Debug, Default)]
 struct Groups {
@@ -111,11 +84,9 @@ impl Groups {
 
 #[derive(Clone, Debug)]
 struct Sample {
-    /// Seconds since the phase started.
     t: f64,
     phase: String,
     pss_kib: Groups,
-    /// Percent of one logical core since the previous sample.
     cpu: [f64; 4],
 }
 
@@ -155,7 +126,6 @@ fn pss_kib(pid: u32) -> u64 {
         .unwrap_or(0)
 }
 
-/// Group of every owned process: 0 client, 1 service, 2 worker, 3 jobs.
 fn classify(service: u32, client: Option<u32>) -> Vec<(u32, usize, Proc)> {
     let mut procs: HashMap<u32, Proc> = HashMap::new();
     for entry in fs::read_dir("/proc").unwrap().flatten() {
@@ -170,7 +140,6 @@ fn classify(service: u32, client: Option<u32>) -> Vec<(u32, usize, Proc)> {
         children.entry(p.ppid).or_default().push(*pid);
     }
     let mut out = Vec::new();
-    // Descendants of `root` with the group decided per subtree.
     fn walk(
         pid: u32,
         group: usize,
@@ -221,7 +190,6 @@ fn classify(service: u32, client: Option<u32>) -> Vec<(u32, usize, Proc)> {
     out
 }
 
-/// Samples the owned process groups every `interval` until stopped.
 struct Sampler {
     samples: Arc<Mutex<Vec<Sample>>>,
     phase: Arc<Mutex<String>>,
@@ -311,9 +279,6 @@ impl Sampler {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Statistics.
-
 #[derive(Clone, Debug, Default)]
 struct Dist {
     ms: Vec<f64>,
@@ -324,7 +289,6 @@ impl Dist {
         self.ms.push(d.as_secs_f64() * 1000.0);
     }
 
-    /// Nearest-rank percentile.
     fn pct(&self, p: f64) -> f64 {
         if self.ms.is_empty() {
             return f64::NAN;
@@ -354,7 +318,6 @@ fn mib(kib: u64) -> f64 {
     kib as f64 / 1024.0
 }
 
-/// Max and median PSS (MiB) and mean CPU (%) of one phase.
 fn phase_stats(samples: &[Sample], phase: &str) -> String {
     let rows: Vec<&Sample> = samples.iter().filter(|s| s.phase == phase).collect();
     if rows.is_empty() {
@@ -410,10 +373,6 @@ fn write_timeline(path: &Path, samples: &[Sample]) {
     fs::write(path, csv).unwrap();
 }
 
-// ---------------------------------------------------------------------------------------------
-// The service under test.
-
-/// `laded` from `LADE_LOAD_LADED` (the release binary from `scripts/load`), else this build's.
 fn laded_binary() -> PathBuf {
     std::env::var_os("LADE_LOAD_LADED")
         .map(PathBuf::from)
@@ -427,8 +386,6 @@ struct Laded {
 }
 
 impl Laded {
-    /// Starts the service (stopped before) and returns the launch-to-ready time: process start
-    /// until an admitted client received its snapshot.
     fn start(env: &Env) -> (Self, Duration) {
         let worker_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../packages/pi-worker")
@@ -466,7 +423,6 @@ impl Laded {
             {
                 let ready = started.elapsed();
                 drop(client);
-                // Let the lease free before the driver connects.
                 thread::sleep(Duration::from_millis(50));
                 return (laded, ready);
             }
@@ -476,7 +432,6 @@ impl Laded {
     }
 
     fn connect(&self) -> Option<Client> {
-        // Probe first: the test client helper panics on a missing or dead socket.
         drop(std::os::unix::net::UnixStream::connect(&self.socket).ok()?);
         let capability = fs::read_to_string(&self.capability).ok()?;
         Client::connect(&self.socket, &capability).ok()
@@ -486,7 +441,6 @@ impl Laded {
         self.child.id()
     }
 
-    /// Explicit stop (`service.stop`), as the window's Exit does.
     fn stop(mut self, client: Option<Client>) {
         let client = client.or_else(|| {
             let deadline = Instant::now() + Duration::from_secs(10);
@@ -528,9 +482,6 @@ fn stop_service(laded: Laded, client: Client) {
     laded.stop(Some(client));
 }
 
-// ---------------------------------------------------------------------------------------------
-// Workload.
-
 struct World {
     env: Env,
     objectives: Vec<Id>,
@@ -552,8 +503,6 @@ fn message_text(turn: u64, delay_ms: u64) -> String {
     }
 }
 
-/// Creates the 32-Objective reference state with the probe Objective's worktree holding the
-/// reference file and diff.
 fn build_world(tag: &str) -> World {
     let env = Env::new(tag);
     fs::write(env.repo.join("ref.txt"), reference_file()).unwrap();
@@ -618,7 +567,6 @@ fn diff_get(client: &mut Client, objective: &Id) -> bool {
     }
 }
 
-/// Keeps `streams` Objectives busy: a new message whenever one goes idle.
 struct Streams {
     objectives: Vec<Id>,
     turns: u64,
@@ -641,7 +589,6 @@ impl Streams {
         }
     }
 
-    /// Reacts to buffered events: an Objective of ours that became idle gets its next turn.
     fn pump(&mut self, client: &mut Client) {
         let idle: Vec<Id> = client
             .events
@@ -687,8 +634,6 @@ struct RunResult {
     diff_truncated: bool,
 }
 
-/// One nominal run: fresh service, 60 s idle, then `workers` streaming Objectives for the load
-/// duration with 200 draft saves and 40 file/diff opens spread over it.
 fn nominal_run(
     world: &World,
     workers: usize,
@@ -707,7 +652,6 @@ fn nominal_run(
     sampler.phase(&format!("idle-{workers}w-run{run}"));
     thread::sleep(Duration::from_secs(idle_secs));
 
-    // Reference for the draft saves: exact bytes of the reference file.
     let content = file_read(&mut client, &world.probe, "ref.txt");
     let capture = match client.call(Request::ChangesList(
         lade_protocol::client::ChangesListQuery {
@@ -741,7 +685,6 @@ fn nominal_run(
     for objective in &streaming {
         wait_state(&mut client, objective, ExecutionState::Idle);
     }
-    // Already-open idle workers, measured separately (lazy lifecycle unchanged).
     thread::sleep(Duration::from_secs(5));
     sampler.phase(&format!("idleworkers-{workers}w-run{run}"));
     thread::sleep(Duration::from_secs(idle_secs / 2));
@@ -749,7 +692,6 @@ fn nominal_run(
     let mut streams = Streams {
         objectives: streaming.clone(),
         turns: 0,
-        // Total routine stream updates ≈ 20/s across the active workers (4 deltas per turn).
         delay_ms: 50 * workers as u64,
         accept: Dist::default(),
     };
@@ -773,7 +715,6 @@ fn nominal_run(
         streams.pump(&mut client);
         let due = total.mul_f64(done as f64 / actions as f64);
         if done < actions && begin.elapsed() >= due {
-            // Interleave: one open after every five inputs.
             if done % 6 == 5
                 && result.open_file.ms.len() + result.open_diff.ms.len() < opens as usize
             {
@@ -854,9 +795,6 @@ fn versions() -> String {
     )
 }
 
-// ---------------------------------------------------------------------------------------------
-// GTK client phases (optional).
-
 fn client_binary() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::var_os("LADE_LOAD_CLIENT")?);
     (path.is_file() && std::env::var_os("DISPLAY").is_some()).then_some(path)
@@ -877,7 +815,6 @@ fn spawn_client(binary: &Path, env: &Env) -> Child {
         .unwrap()
 }
 
-/// A mapped window of exactly this client process (other clients may share the display).
 fn window_visible(pid: u32) -> bool {
     Command::new("xdotool")
         .args(["search", "--onlyvisible", "--pid", &pid.to_string()])
@@ -885,7 +822,6 @@ fn window_visible(pid: u32) -> bool {
         .is_ok_and(|o| o.status.success() && !o.stdout.is_empty())
 }
 
-/// Time until the client's window is mapped, or `None` after 30 s.
 fn wait_mapped(child: &Child, started: Instant) -> Option<Duration> {
     let deadline = Instant::now() + Duration::from_secs(30);
     while Instant::now() < deadline {
@@ -902,7 +838,6 @@ fn kill_client(mut child: Child) {
     let _ = child.wait();
 }
 
-/// Client warm launches (window mapped, a proxy), then idle and streaming client phases.
 fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sample>) {
     let Some(binary) = client_binary() else {
         report.push_str(
@@ -913,7 +848,6 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     let launches = env_u64("LADE_LOAD_LAUNCHES", 20);
     let (laded, _) = Laded::start(&world.env);
     let mut mapped = Dist::default();
-    // One start to warm the caches, not counted.
     let warm = spawn_client(&binary, &world.env);
     let _ = wait_mapped(&warm, Instant::now());
     kill_client(warm);
@@ -929,7 +863,6 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
         kill_client(child);
         thread::sleep(Duration::from_millis(300));
     }
-    // Idle reference workload: 32 Objective records, no executing workers.
     let sampler = Sampler::start(laded.pid(), Duration::from_secs(1));
     let child = spawn_client(&binary, &world.env);
     sampler.set_client(Some(child.id()));
@@ -943,8 +876,6 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     sampler.set_client(None);
     sampler.phase("client-prepare");
     kill_client(child);
-    // Four agents stream queued work while the window is attached (the driver queued it and
-    // left; the window holds the lease and shows the Objectives list and its default view).
     let mut client = world.env.connect();
     let streaming: Vec<Id> = world.objectives[..4].to_vec();
     for objective in &streaming {
@@ -992,9 +923,6 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     samples_out.extend(samples);
     laded.stop(None);
 }
-
-// ---------------------------------------------------------------------------------------------
-// Procedures.
 
 #[test]
 #[ignore = "long-running load procedure; run scripts/load"]
@@ -1063,7 +991,6 @@ fn canonical_load() {
         }
         report.push('\n');
     }
-    // Warm launches of the service alone (service initially stopped, existing state).
     let launches = env_u64("LADE_LOAD_LAUNCHES", 20);
     for _ in launch.ms.len()..(launch.ms.len() + launches as usize) {
         let (laded, ready) = Laded::start(&world.env);
@@ -1075,7 +1002,6 @@ fn canonical_load() {
         "## Service launch\n\nProcess start → admitted client received its snapshot (warm OS cache, {OBJECTIVES} Objectives; includes restart recovery and the sandbox sweep).\n\n| Measure | n | p50 ms | p95 ms | max ms |\n| --- | --- | --- | --- | --- |\n{}",
         launch.row("laded start → snapshot")
     );
-    // Saved before the optional client phases, which cannot lose the nominal results.
     write_timeline(&out.join("load-timeline.csv"), &samples);
     fs::write(out.join("load.md"), &report).unwrap();
     client_phases(&world, &mut report, &mut samples);
@@ -1115,7 +1041,6 @@ fn soak() {
     while begin.elapsed() < Duration::from_secs(warmup + soak) {
         cycle_no += 1;
         let soaking = begin.elapsed() >= Duration::from_secs(warmup);
-        // Streaming half: four agents.
         sampler.phase(if soaking {
             "soak-stream"
         } else {
@@ -1129,7 +1054,6 @@ fn soak() {
             streams.pump(&mut client);
             thread::sleep(Duration::from_millis(50));
         }
-        // Views half: no new turns; switch across Objectives and views, then settle.
         sampler.phase(if soaking {
             "soak-views"
         } else {
@@ -1156,7 +1080,6 @@ fn soak() {
             thread::sleep(Duration::from_millis(200));
         }
         streams.objectives = streaming.clone();
-        // Quiescent point: the last sample of the views half (agents idle, caches filled).
         thread::sleep(Duration::from_secs(6));
         if let Some(last) = sampler.samples.lock().unwrap().last() {
             quiescent.push((begin.elapsed().as_secs_f64(), last.pss_kib));
@@ -1195,7 +1118,6 @@ fn soak() {
     }
     if let (Some(first), Some(last)) = (after.first(), after.last()) {
         let change = |a: u64, b: u64| (b as f64 - a as f64) / a.max(1) as f64 * 100.0;
-        // Least-squares slope of the all-owned quiescent PSS, MiB per 10 minutes.
         let n = after.len() as f64;
         let mean_t = after.iter().map(|(t, _)| *t).sum::<f64>() / n;
         let mean_m = after.iter().map(|(_, g)| mib(g.total())).sum::<f64>() / n;

@@ -1,5 +1,3 @@
-//! Objectives: intent, product lifecycle, owned execution and derived board attention.
-
 use crate::domain::execution::{Execution, ExecutionGeneration, ExecutionState, ModelRef};
 use crate::domain::ids::{GitId, ObjectiveId, Revision, SessionId, Timestamp, WorkspaceId};
 use crate::domain::inspection::MAX_TEXT_BYTES;
@@ -8,7 +6,6 @@ use crate::error::DomainError;
 pub const MAX_TITLE_CHARS: usize = 200;
 pub const MAX_BRANCH_BYTES: usize = 255;
 
-/// Objective title: 1..=200 characters after trimming, no control characters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Title(String);
 
@@ -29,7 +26,6 @@ impl Title {
     }
 }
 
-/// A Git branch name (conservative `git check-ref-format --branch` subset).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BranchName(String);
 
@@ -62,13 +58,11 @@ impl BranchName {
         &self.0
     }
 
-    /// The Objective's own branch, `lade/<short-id>`.
     pub fn for_objective(id: ObjectiveId) -> Self {
         Self(format!("lade/{}", id.uuid().short()))
     }
 }
 
-/// Developer-confirmed scope.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Intent {
     outcome: String,
@@ -77,7 +71,6 @@ pub struct Intent {
 }
 
 impl Intent {
-    /// `outcome` must contain non-whitespace text; every field is bounded by [`MAX_TEXT_BYTES`].
     pub fn new(outcome: &str, constraints: &str, acceptance: &str) -> Result<Self, DomainError> {
         if outcome.trim().is_empty() {
             return Err(DomainError::InvalidRequest("intent outcome is required"));
@@ -108,7 +101,6 @@ impl Intent {
     }
 }
 
-/// Product lifecycle (not presentation).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Lifecycle {
     Defined,
@@ -138,7 +130,6 @@ impl Lifecycle {
         )
     }
 
-    /// The complete single-step transition table.
     pub const fn permits(self, to: Self) -> bool {
         use Lifecycle::{
             Active, Approved, CompletedNoChanges, Defined, Discarded, Frozen, Integrated,
@@ -169,7 +160,6 @@ impl Lifecycle {
     }
 }
 
-/// Plain stored form of an Objective. Use [`Objective::restore`] to obtain a validated entity.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectiveRecord {
     pub id: ObjectiveId,
@@ -185,11 +175,9 @@ pub struct ObjectiveRecord {
     pub cleaned_up: bool,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
-    /// Optimistic revision; advances on every successful mutation.
     pub revision: Revision,
 }
 
-/// Input for defining a new Objective.
 #[derive(Clone, Debug)]
 pub struct NewObjective {
     pub id: ObjectiveId,
@@ -200,8 +188,6 @@ pub struct NewObjective {
     pub start_commit: GitId,
 }
 
-/// The Objective entity. All mutation goes through methods that enforce lifecycle rules and advance the
-/// revision atomically (a rejected call leaves the entity unchanged).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
     record: ObjectiveRecord,
@@ -229,7 +215,6 @@ impl Objective {
         }
     }
 
-    /// Validates a stored record against invariants that every transition preserves.
     pub fn restore(record: ObjectiveRecord) -> Result<Self, DomainError> {
         let lifecycle = record.lifecycle;
         let state = record.execution.state();
@@ -273,7 +258,6 @@ impl Objective {
         self.record.revision
     }
 
-    /// Applies `change` to a copy and commits it with an advanced revision only if everything succeeded.
     fn update<T>(
         &mut self,
         now: Timestamp,
@@ -287,7 +271,6 @@ impl Objective {
         Ok(output)
     }
 
-    /// Moves along `path` (each step must be permitted) as one atomic mutation.
     pub(crate) fn transition(
         &mut self,
         path: &[Lifecycle],
@@ -310,7 +293,6 @@ impl Objective {
         })
     }
 
-    /// Optimistic intent change. Rejected once approved (return for revision first) or when terminal.
     pub fn update_intent(
         &mut self,
         expected_intent_revision: Revision,
@@ -335,7 +317,6 @@ impl Objective {
         })
     }
 
-    /// First repository execution (Defined → Active) binding the destination session.
     pub fn start_execution(
         &mut self,
         session_id: SessionId,
@@ -354,7 +335,6 @@ impl Objective {
         })
     }
 
-    /// Explicit continuation; a frozen or approved candidate must be returned for revision first.
     pub fn resume_execution(&mut self, now: Timestamp) -> Result<ExecutionGeneration, DomainError> {
         self.update(now, |record| {
             if record.lifecycle != Lifecycle::Active {
@@ -406,7 +386,6 @@ impl Objective {
         self.update(now, |record| record.execution.fail(generation, reason))
     }
 
-    /// Service restart: a live execution becomes cancelled/interrupted. Returns whether anything changed.
     pub fn interrupt_after_restart(&mut self, now: Timestamp) -> Result<bool, DomainError> {
         if !self.record.execution.state().is_live() {
             return Ok(false);
@@ -414,7 +393,6 @@ impl Objective {
         self.update(now, |record| Ok(record.execution.interrupt()))
     }
 
-    /// The idle worker of `generation` replaced its pi session (fork/clone/import).
     pub fn rebind_live_session(
         &mut self,
         generation: ExecutionGeneration,
@@ -431,7 +409,6 @@ impl Objective {
         })
     }
 
-    /// Persists the developer's model choice for this Objective's session.
     pub fn select_model(&mut self, model: ModelRef, now: Timestamp) -> Result<(), DomainError> {
         self.update(now, |record| {
             if record.lifecycle.is_terminal() {
@@ -441,7 +418,6 @@ impl Objective {
         })
     }
 
-    /// Explicitly selects a new destination session (association revision advances).
     pub fn replace_session(
         &mut self,
         session_id: SessionId,
@@ -456,7 +432,6 @@ impl Objective {
         })
     }
 
-    /// Removes the branch/worktree authority of a closed Objective. Unsent drafts need explicit confirmation.
     pub fn cleanup(
         &mut self,
         unsent_drafts: usize,
@@ -483,14 +458,12 @@ impl Objective {
     }
 }
 
-/// Board category in precedence order (`Ord` is board order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Attention {
     NeedsAttention,
     ReadyForReview,
     Working,
     Idle,
-    /// Integrated, completed or discarded: shown in the separate archive.
     Archived,
 }
 
@@ -506,7 +479,6 @@ impl Attention {
     }
 }
 
-/// Secondary badges, emitted in declaration order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Badge {
     Interrupted,
@@ -536,12 +508,9 @@ impl Badge {
     }
 }
 
-/// Facts outside the Objective entity, computed by the caller (see `Review::verification_failed` and
-/// `Review::target_stale` for the review-derived ones).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AttentionFacts {
     pub delivery_uncertain: bool,
-    /// Unsent drafts whose references are stale.
     pub stale_feedback: bool,
     pub verification_failed: bool,
     pub integration_conflict: bool,
@@ -555,7 +524,6 @@ pub struct AttentionView {
     pub badges: Vec<Badge>,
 }
 
-/// Pure board derivation: NeedsAttention > ReadyForReview > Working > Idle, archive for closed Objectives.
 pub fn derive_attention(objective: &Objective, facts: &AttentionFacts) -> AttentionView {
     let record = objective.record();
     if record.lifecycle.is_terminal() {

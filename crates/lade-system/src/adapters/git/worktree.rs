@@ -1,7 +1,3 @@
-//! Objective worktrees. Operations on a worktree always pass its administrative directory
-//! (`<common>/worktrees/<name>`) explicitly: the `.git` file inside a worktree is writable by the
-//! sandboxed worker and is never used for discovery.
-
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
@@ -10,7 +6,6 @@ use std::path::{Path, PathBuf};
 use super::command::GitCommand;
 use super::{GitError, GitId, Repository, Result, validate_branch_name};
 
-/// A worktree and its trusted administrative Git directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
     pub(crate) path: PathBuf,
@@ -22,7 +17,6 @@ impl Worktree {
         &self.path
     }
 
-    /// The per-worktree Git directory (the common directory for the main worktree).
     pub fn admin_dir(&self) -> &Path {
         &self.admin_dir
     }
@@ -34,7 +28,6 @@ impl Worktree {
     }
 }
 
-/// One record of `git worktree list --porcelain -z`.
 #[derive(Debug)]
 pub(crate) struct WorktreeEntry {
     pub path: PathBuf,
@@ -44,8 +37,6 @@ pub(crate) struct WorktreeEntry {
 }
 
 impl Repository {
-    /// Create `branch` at `start` and check it out in a new worktree at `path` (absolute; must not
-    /// exist or be an empty directory). Post-checkout hooks and smudge filters never run.
     pub fn worktree_add(&self, branch: &str, start: &GitId, path: &Path) -> Result<Worktree> {
         validate_branch_name(branch)?;
         if start.format() != self.object_format() {
@@ -64,8 +55,6 @@ impl Repository {
         self.open_worktree(path)
     }
 
-    /// Identify an existing worktree of this repository by path, resolving its administrative
-    /// directory from the common directory (never from the worktree's own `.git` file).
     pub fn open_worktree(&self, path: &Path) -> Result<Worktree> {
         let path = path
             .canonicalize()
@@ -88,7 +77,6 @@ impl Repository {
         Ok(Worktree { path, admin_dir })
     }
 
-    /// Scan `<common>/worktrees/*/gitdir` for the record pointing at `<path>/.git`.
     pub(crate) fn linked_admin_dir(&self, path: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(self.common_dir().join("worktrees")).ok()?;
         entries.flatten().map(|e| e.path()).find(|admin| {
@@ -105,10 +93,6 @@ impl Repository {
         })
     }
 
-    /// Remove a linked worktree. Without `force`, modified or untracked content refuses with
-    /// [`GitError::WorktreeDirty`]. The worktree's `.git` file is first restored to point at its
-    /// trusted administrative directory so Git's internal status check cannot be redirected to
-    /// worker-controlled configuration.
     pub fn worktree_remove(&self, worktree: &Worktree, force: bool) -> Result<()> {
         if worktree.admin_dir() == self.common_dir() {
             return Err(GitError::InvalidArgument {
@@ -140,12 +124,6 @@ impl Repository {
         }
     }
 
-    /// Make a linked worktree's own Git view agree with `commit`, whose tree equals the files
-    /// already on disk (a frozen candidate): `HEAD` is re-pointed at `refs/heads/<branch>` (which
-    /// must already hold `commit`), the worktree's index is replaced with `commit`'s tree without
-    /// touching files (`read-tree`, no `-u`), and stat information is refreshed
-    /// (`update-index -q --refresh`), so `git status` in the worktree reports the candidate as
-    /// committed. Filters and merge drivers from the worktree's configuration are disabled.
     pub fn sync_worktree_index(
         &self,
         worktree: &Worktree,
@@ -173,7 +151,6 @@ impl Repository {
             .git("read-tree")
             .args(["read-tree", commit.hex()])
             .run()?;
-        // Exit status 1 only reports paths that still differ; the index itself is updated.
         let out = worktree
             .git("update-index")
             .args(["update-index", "-q", "--refresh"])

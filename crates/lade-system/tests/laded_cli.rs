@@ -1,7 +1,3 @@
-//! The `laded` executable's maintenance commands: persistent redacted diagnostics and export, and
-//! the rollback restore used by `scripts/install --rollback` (forward migration → restore → the
-//! older schema starts again).
-
 #[path = "adapters_support/mod.rs"]
 mod adapters_support;
 
@@ -35,9 +31,7 @@ fn private_dir(path: &Path) {
         .expect("mkdir");
 }
 
-/// Starts `laded serve` and waits for its control socket.
 fn serve(state: &Path, run_dir: &Path, home: &Path) -> Child {
-    // A killed instance leaves its socket behind; wait for the new one.
     let _ = fs::remove_file(run_dir.join("control.sock"));
     let mut child = laded()
         .args(["serve", "--state-dir"])
@@ -93,7 +87,6 @@ fn serve_keeps_private_redacted_logs_and_export_is_private() {
         "{text}"
     );
 
-    // A second instance refuses; its refusal is logged with the home directory redacted.
     let child = serve(&state, &run_dir, &home);
     let refused = laded()
         .args(["serve", "--state-dir"])
@@ -113,7 +106,6 @@ fn serve_keeps_private_redacted_logs_and_export_is_private() {
         "{text}"
     );
 
-    // Paths under the home directory reach the journal and the log as `~`.
     let long_runtime = root.path().join("r".repeat(100));
     let refused = laded()
         .args(["serve", "--state-dir"])
@@ -202,12 +194,10 @@ fn rollback_restore_after_the_real_migrations_lets_a_schema_1_store_start() {
     private_dir(&state);
     let db = state.join(backup::DATABASE);
 
-    // A store as the first release (schema 1) left it.
     drop(Store::open_as_schema(&db, 1).expect("schema-1 store"));
     add_workspace(&db, BEFORE);
     assert!(info(&state).contains("database_schema=1\n"));
 
-    // This build migrates it through every real migration (1 -> 3) after a journaled backup.
     let child = serve(&state, &run_dir, root.path());
     stop(child);
     add_workspace(&db, AFTER);
@@ -237,13 +227,11 @@ fn rollback_restore_after_the_real_migrations_lets_a_schema_1_store_start() {
     for entry in fs::read_dir(state.join(backup::BACKUP_DIR)).expect("dir") {
         assert_eq!(mode(&entry.expect("entry").path()), 0o600);
     }
-    // A schema-1 build refuses the migrated database and leaves it untouched.
     assert!(matches!(
         Store::open_as_schema(&db, 1),
         Err(lade_system::storage::StoreError::NewerSchema(v)) if v == latest
     ));
 
-    // A running service blocks the restore.
     let blocker = fs::OpenOptions::new()
         .write(true)
         .open(state.join("lade.lock"))
@@ -283,7 +271,6 @@ fn rollback_restore_after_the_real_migrations_lets_a_schema_1_store_start() {
         .expect("count");
     assert_eq!(after, 1, "post-migration data is kept");
 
-    // The schema-1 build starts again with its own data.
     let older = Store::open_as_schema(&db, 1).expect("schema-1 store starts after the restore");
     assert_eq!(older.schema_version().expect("version"), 1);
     let ids: i64 = older
@@ -293,7 +280,6 @@ fn rollback_restore_after_the_real_migrations_lets_a_schema_1_store_start() {
     assert_eq!(ids, 1);
     drop(older);
 
-    // Nothing left to restore; rolling forward migrates again (with a new backup).
     assert_eq!(restore(&state, "1").status.code(), Some(1));
     let child = serve(&state, &run_dir, root.path());
     stop(child);

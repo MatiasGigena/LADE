@@ -1,6 +1,3 @@
-//! Small use cases over the ports. The service may equally call domain functions inside its own transactions;
-//! these exist for the Objective-only flows and for restart recovery, which spans several aggregates.
-
 use crate::domain::execution::{ExecutionGeneration, ModelRef};
 use crate::domain::feedback::AcceptedInput;
 use crate::domain::ids::{GitId, ObjectiveId, Revision, SessionId, Timestamp, WorkspaceId};
@@ -15,11 +12,9 @@ pub struct CreateObjective {
     pub title: Title,
     pub intent: Intent,
     pub integration_target: BranchName,
-    /// Resolved by the Git adapter (target tip or an explicit commit).
     pub start_commit: GitId,
 }
 
-/// Objective use cases bound to their ports by explicit construction.
 #[derive(Debug)]
 pub struct Objectives<S, C, G> {
     pub store: S,
@@ -46,7 +41,6 @@ impl<S: ObjectiveStore, C: Clock, G: IdGenerator> Objectives<S, C, G> {
         Ok(objective)
     }
 
-    /// Load, apply a domain change, and save with the loaded revision as the optimistic expectation.
     pub fn mutate<T>(
         &mut self,
         id: ObjectiveId,
@@ -71,7 +65,6 @@ impl<S: ObjectiveStore, C: Clock, G: IdGenerator> Objectives<S, C, G> {
         .map(|(objective, _)| objective)
     }
 
-    /// First start: generates the LADE session identity and binds it as the destination.
     pub fn start_execution(
         &mut self,
         id: ObjectiveId,
@@ -96,15 +89,12 @@ impl<S: ObjectiveStore, C: Clock, G: IdGenerator> Objectives<S, C, G> {
     }
 }
 
-/// What restart recovery changed for one Objective.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RestartRecovery {
     pub execution_interrupted: bool,
     pub inputs_uncertain: usize,
 }
 
-/// Service restart for one Objective: live execution → cancelled/interrupted, unconsumed approval expires,
-/// running verifications are interrupted, dispatched input becomes uncertain. Nothing resumes or redispatches.
 pub fn recover_after_restart(
     objective: &mut Objective,
     review: &mut Review,
@@ -242,7 +232,6 @@ mod tests {
         let concurrent = service
             .update_intent(objective.id(), Revision::INITIAL, intent.clone())
             .expect("update");
-        // A writer holding the older revision is rejected by the store.
         let mut stale = objective.clone();
         stale
             .update_intent(Revision::INITIAL, intent, ts(101))

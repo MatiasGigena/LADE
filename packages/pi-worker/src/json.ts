@@ -17,7 +17,6 @@ export class WireError extends Error {
   constructor(code: string) { super(code); this.code = code; }
 }
 
-/** Incrementally constructs bounded values; never JSON.parse an unchecked tree. */
 export function boundedJson(bytes: Uint8Array): JsonValue {
   if (bytes.length === 0 || bytes.length > MAX_FRAME) throw new WireError("frame_size");
   let text: string;
@@ -78,7 +77,6 @@ export function boundedJson(bytes: Uint8Array): JsonValue {
       }
 
       while (pos < text.length) {
-        // Rust's sequence visitor sees the next bounded value before checking count.
         if (array) {
           const item = value(depth + 1);
 
@@ -107,8 +105,6 @@ export function boundedJson(bytes: Uint8Array): JsonValue {
         if (next !== ",") throw new WireError("invalid_json");
 
         if (array) {
-          // Like Rust's sequence access: a comma must be followed by a value, checked before
-          // that value is requested (and counted against the node budget).
           whitespace();
 
           if (pos >= text.length || text[pos] === close) throw new WireError("invalid_json");

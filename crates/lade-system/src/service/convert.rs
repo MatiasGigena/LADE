@@ -1,6 +1,3 @@
-//! Conversions between domain (`lade_core`), wire (`lade_protocol`) and adapter (`git`) values, plus the
-//! service's clock and identity sources.
-
 use std::fs::File;
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,26 +14,22 @@ use lade_protocol::types::{self as wire_types, Counter, Id};
 
 use crate::adapters::git::{self, GitError, ObjectFormat};
 
-/// Wall clock in unix milliseconds.
 pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Canonical wire timestamp; out-of-range values clamp to the epoch (never produced by a sane clock).
 pub fn wire_ts(ms: i64) -> wire_types::Timestamp {
     wire_types::Timestamp::from_unix_ms(ms)
         .or_else(|| wire_types::Timestamp::from_unix_ms(0))
         .expect("epoch is representable")
 }
 
-/// Fills `buf` from the kernel CSPRNG.
 pub fn random_fill(buf: &mut [u8]) -> std::io::Result<()> {
     File::open("/dev/urandom")?.read_exact(buf)
 }
 
-/// A fresh UUIDv4. Randomness failure is unrecoverable for identity generation.
 pub fn new_uuid() -> Uuid {
     let mut bytes = [0u8; 16];
     random_fill(&mut bytes).expect("kernel random source unavailable");
@@ -58,9 +51,6 @@ pub fn counter(value: u64) -> Counter {
 pub fn counter_u32(value: &Counter) -> Result<u32, Rejection> {
     u32::try_from(value.value()).map_err(|_| invalid("counter out of range"))
 }
-
-// ---------------------------------------------------------------------------------------------
-// Rejections.
 
 pub fn rejection(code: ErrorCode, action: SafeAction, detail: &str) -> Rejection {
     Rejection::new(code, action, detail)
@@ -120,7 +110,6 @@ pub fn domain_rejection(error: &DomainError) -> Rejection {
     Rejection::new(code, action, &error.detail())
 }
 
-/// Maps a Git adapter failure onto a source-free rejection (stderr is never forwarded).
 pub fn git_rejection(error: &GitError) -> Rejection {
     match error {
         GitError::NotFound { what } => not_found(what),
@@ -192,9 +181,6 @@ pub fn git_rejection(error: &GitError) -> Rejection {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// Git ids.
-
 pub fn core_algorithm(format: ObjectFormat) -> GitAlgorithm {
     match format {
         ObjectFormat::Sha1 => GitAlgorithm::Sha1,
@@ -209,7 +195,6 @@ pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
     }
 }
 
-/// Adapter id → domain id. A null id cannot be produced by the adapter for real objects.
 pub fn core_git(id: &git::GitId) -> core_ids::GitId {
     core_ids::GitId::new(core_algorithm(id.format()), id.hex()).expect("adapter ids are full ids")
 }
@@ -234,7 +219,6 @@ pub fn from_wire_git(id: &wire_types::GitId) -> Result<core_ids::GitId, Rejectio
     core_ids::GitId::new(algorithm, id.hex()).map_err(|e| domain_rejection(&e))
 }
 
-/// Parses a stored `algorithm:hex` pair.
 pub fn stored_git(algorithm: &str, hex: &str) -> Option<core_ids::GitId> {
     let algorithm = match algorithm {
         "sha1" => GitAlgorithm::Sha1,
@@ -244,7 +228,6 @@ pub fn stored_git(algorithm: &str, hex: &str) -> Option<core_ids::GitId> {
     core_ids::GitId::new(algorithm, hex).ok()
 }
 
-/// Infers the algorithm from the hex length (40 = SHA-1, 64 = SHA-256).
 pub fn hex_git(hex: &str) -> Option<core_ids::GitId> {
     let algorithm = if hex.len() == 40 {
         GitAlgorithm::Sha1
@@ -253,9 +236,6 @@ pub fn hex_git(hex: &str) -> Option<core_ids::GitId> {
     };
     core_ids::GitId::new(algorithm, hex).ok()
 }
-
-// ---------------------------------------------------------------------------------------------
-// Enumerations.
 
 pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
     match lifecycle {
@@ -290,9 +270,6 @@ pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Op
         ),
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// References.
 
 pub fn wire_reference(reference: &Reference) -> wire::Reference {
     let version = match reference.version() {
@@ -353,7 +330,6 @@ pub fn core_reference(reference: &wire::Reference) -> Result<Reference, Rejectio
     .map_err(domain)
 }
 
-/// Adapter path for a wire path (normalized repository-relative bytes).
 pub fn repo_path(path: &wire_types::WirePath) -> Result<git::RepoPath, Rejection> {
     git::RepoPath::new(path.as_bytes().to_vec()).map_err(|_| invalid("invalid repository path"))
 }
@@ -364,12 +340,10 @@ pub fn wire_path(bytes: &[u8]) -> wire_types::WirePath {
         .unwrap_or_else(|_| wire_types::WirePath::from_bytes(b"?".to_vec()).expect("valid path"))
 }
 
-/// Lowercase hex of bytes.
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Constant-time equality of two byte strings (length is not secret).
 pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
@@ -377,7 +351,6 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// A UTF-8 prefix of at most `max` characters, for previews.
 pub fn preview(text: &str, max: usize) -> String {
     wire_types::truncate_chars(text, max).to_string()
 }

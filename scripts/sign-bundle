@@ -1,15 +1,4 @@
 #!/bin/sh
-# Sign a LADE bundle with an SSH key (IMP-014).
-#
-#   scripts/sign-bundle DIR KEY
-#
-# Marks DIR/VERSION signed=yes with the key's fingerprint (signer=SHA256:…), regenerates
-# DIR/MANIFEST.sha256 (VERSION is listed in it) and writes the detached signature
-# DIR/MANIFEST.sha256.sig with `ssh-keygen -Y sign -n lade-release`. KEY is a private key file, or
-# a public key whose private half is loaded in ssh-agent. scripts/install verifies the signature
-# against an allowed-signers file (--allowed-signers FILE or ~/.config/lade/allowed_signers).
-# Which key signs releases and how users obtain its public half (the trust bootstrap) is pending
-# Matias's decision: no release key is shipped or assumed.
 set -eu
 
 die() { printf 'sign-bundle: %s\n' "$*" >&2; exit 1; }

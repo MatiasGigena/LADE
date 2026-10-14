@@ -1,38 +1,20 @@
-//! GTK-free model of the contained terminal (IMP-012): a minimal VT100-style screen, the key →
-//! byte encoding and the per-terminal session state.
-//!
-//! The service owns the PTY and the sandboxed shell; this client only renders the output stream
-//! and sends key bytes. The screen understands what a `TERM=vt100` shell and common line-oriented
-//! tools emit (printable text, CR/LF/BS/TAB, cursor movement and positioning, erase, insert and
-//! delete, scroll regions, save/restore, the alternate screen, cursor-key and bracketed-paste
-//! modes). Attributes (SGR colours, bold) are accepted and ignored: the pane is plain monospace
-//! text so it stays readable by Orca and inside the design tokens. Everything is bounded: the
-//! grid by the PTY size, scrollback by [`SCROLLBACK_LINES`], escape parameters by
-//! [`MAX_PARAMS`].
-
 use std::collections::VecDeque;
 
 use super::model::ObjectiveId;
 
-/// Lines kept above the visible screen.
 pub const SCROLLBACK_LINES: usize = 2000;
-/// CSI parameters kept per sequence; more are ignored.
 pub const MAX_PARAMS: usize = 16;
-/// Bounds on the grid, matching the service's limits.
 pub const MIN_COLS: usize = 20;
 pub const MAX_COLS: usize = 500;
 pub const MIN_ROWS: usize = 5;
 pub const MAX_ROWS: usize = 200;
-/// Largest input chunk per `terminal.input` request (the schema allows 16,384 code points).
 pub const INPUT_CHUNK_CHARS: usize = 4096;
-/// Largest paste accepted into the terminal at once.
 pub const MAX_PASTE_BYTES: usize = 256 << 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Parse {
     Ground,
     Escape,
-    /// `ESC (`/`ESC )`…: the next character selects a character set (ignored).
     Charset,
     Csi,
     Osc,
@@ -46,7 +28,6 @@ struct Saved {
     col: usize,
 }
 
-/// A bounded character grid fed with terminal output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Screen {
     cols: usize,
@@ -60,14 +41,11 @@ pub struct Screen {
     top: usize,
     bottom: usize,
     alternate: Option<Saved>,
-    /// DECCKM: cursor keys send `ESC O x` instead of `ESC [ x`.
     pub application_cursor: bool,
-    /// Bracketed paste (`?2004h`).
     pub bracketed_paste: bool,
     pub cursor_visible: bool,
     state: Parse,
     params: String,
-    /// Output the client discarded or the service reported dropped.
     pub skipped_bytes: u64,
 }
 
@@ -112,7 +90,6 @@ impl Screen {
         self.scrollback.len()
     }
 
-    /// Resizes the grid (keeping the bottom-most content and the cursor inside).
     pub fn resize(&mut self, cols: usize, rows: usize) {
         let cols = cols.clamp(MIN_COLS, MAX_COLS);
         let rows = rows.clamp(MIN_ROWS, MAX_ROWS);
@@ -139,14 +116,12 @@ impl Screen {
         self.wrap_pending = false;
     }
 
-    /// Feeds decoded output text.
     pub fn feed(&mut self, text: &str) {
         for c in text.chars() {
             self.step(c);
         }
     }
 
-    /// Records a gap in the output (service-side flood drop or a sequence gap) visibly.
     pub fn mark_gap(&mut self, bytes: u64) {
         self.skipped_bytes += bytes;
         let note = if bytes > 0 {
@@ -409,12 +384,10 @@ impl Screen {
                     }
                 }
             }
-            // SGR, device status and everything else: accepted, no visible effect.
             _ => {}
         }
     }
 
-    /// DECRC: the saved position, kept inside a grid that may have shrunk since it was saved.
     fn restore_cursor(&mut self) {
         let (row, col) = self.saved_cursor;
         self.row = row.min(self.rows - 1);
@@ -482,7 +455,6 @@ impl Screen {
         }
     }
 
-    /// The visible screen as lines (trailing blanks trimmed).
     pub fn screen_lines(&self) -> Vec<String> {
         self.grid
             .iter()
@@ -490,7 +462,6 @@ impl Screen {
             .collect()
     }
 
-    /// Scrollback plus screen as one text, and the cursor's character offset in it.
     pub fn render(&self) -> (String, usize) {
         let mut text = String::new();
         let mut offset = 0;
@@ -512,7 +483,6 @@ impl Screen {
     }
 }
 
-/// A key as the terminal pane sees it (decoded from GTK by the view).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TermKey {
     Char(char),
@@ -541,9 +511,6 @@ pub struct Mods {
     pub shift: bool,
 }
 
-/// Bytes a VT100-compatible terminal sends for `key`, or `None` for keys it does not send
-/// (the event then propagates). Application shortcuts never reach here: the window installs
-/// them from the keymap, and a focused terminal lets only its escape bindings through.
 pub fn encode_key(key: TermKey, mods: Mods, application_cursor: bool) -> Option<String> {
     let cursor = |c: char| {
         if application_cursor {
@@ -585,8 +552,6 @@ pub fn encode_key(key: TermKey, mods: Mods, application_cursor: bool) -> Option<
     })
 }
 
-/// `Ctrl+<c>` as a C0 control character (`Ctrl+A` = 0x01 … `Ctrl+_` = 0x1f, `Ctrl+?` = DEL).
-/// `Ctrl+@`/`Ctrl+Space` (NUL) is not sent: terminal input is text without NUL.
 fn control_char(c: char) -> Option<char> {
     let upper = c.to_ascii_uppercase();
     match upper {
@@ -601,8 +566,6 @@ fn control_char(c: char) -> Option<char> {
     }
 }
 
-/// Text to send for a paste: NUL removed, bracketed when the shell asked for it. `Err` when the
-/// paste is larger than [`MAX_PASTE_BYTES`] (nothing is sent).
 pub fn paste_text(text: &str, bracketed: bool) -> Result<String, String> {
     if text.len() > MAX_PASTE_BYTES {
         return Err(format!(
@@ -619,7 +582,6 @@ pub fn paste_text(text: &str, bracketed: bool) -> Result<String, String> {
     })
 }
 
-/// Splits input into request-sized chunks at character boundaries.
 pub fn input_chunks(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -650,7 +612,6 @@ impl TerminalMode {
     }
 }
 
-/// Why a terminal ended (service-reported or local).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalEnd {
     Exited {
@@ -661,7 +622,6 @@ pub enum TerminalEnd {
     ReviewFreeze,
     Lifecycle,
     Failed,
-    /// The connection to the service was lost; the service ended the terminal with the lease.
     ConnectionLost,
 }
 
@@ -692,7 +652,6 @@ pub enum TerminalStatus {
     Ended(TerminalEnd),
 }
 
-/// One terminal of this window, as rendered.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalSession {
     pub terminal_id: Option<String>,
@@ -701,7 +660,6 @@ pub struct TerminalSession {
     pub status: TerminalStatus,
     pub screen: Screen,
     pub last_seq: u64,
-    /// The latest refusal or input problem, shown in the pane (not as a notice).
     pub problem: Option<String>,
 }
 
@@ -722,7 +680,6 @@ impl TerminalSession {
         self.status == TerminalStatus::Open
     }
 
-    /// Applies one output event; a sequence gap or a service-side drop is marked in the text.
     pub fn output(&mut self, seq: u64, data: &str, dropped: u64) {
         if seq <= self.last_seq {
             return;
@@ -768,7 +725,6 @@ mod tests {
 
     #[test]
     fn readline_editing_sequences_render_the_final_line() {
-        // Typing "ls", backspace, then "s -l", then cursor left and insert.
         let s = screen("$ ls\x08 \x08s -l\x1b[3D\x1b[1@x");
         assert_eq!(s.screen_lines()[0], "$ lsx -l");
         let s = screen("abcdef\r\x1b[K");
@@ -784,13 +740,10 @@ mod tests {
         let s = screen("\x1b[3;4HX\x1b[1;1HY");
         assert_eq!(s.screen_lines()[2], "   X");
         assert_eq!(s.screen_lines()[0], "Y");
-        // Full-screen programs restore the shell screen when they leave.
         let s = screen("prompt\x1b[?1049h\x1b[Hfull screen\x1b[?1049l");
         assert_eq!(s.screen_lines()[0], "prompt");
-        // Scroll region: line feeds at its bottom scroll only inside it.
         let s = screen("a\r\nb\r\nc\r\nd\r\ne\x1b[2;4r\x1b[4;1H\nX");
         assert_eq!(s.screen_lines(), ["a", "c", "d", "X", "e"]);
-        // SGR and OSC are consumed without visible effect.
         let s = screen("\x1b[1;31mred\x1b[0m\x1b]0;title\x07!");
         assert_eq!(s.screen_lines()[0], "red!");
     }

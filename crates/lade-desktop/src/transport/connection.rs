@@ -1,7 +1,3 @@
-//! The network side: runtime-directory discovery, capability check, handshake, optional service
-//! spawn, and the driver thread that owns the link. Nothing here runs on the GTK main context;
-//! results reach the store only through the [`UpdateSink`].
-
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 use std::net::Shutdown;
@@ -27,15 +23,11 @@ use crate::presentation::store::StoreUpdate;
 pub const SOCKET_NAME: &str = "control.sock";
 pub const CAPABILITY_NAME: &str = "control.cap";
 
-/// Handshake and write timeout.
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long a first connection (including a spawned service's start-up) is retried.
 const START_WINDOW: Duration = Duration::from_secs(5);
-/// How long reconnection after a lost link is retried before showing "Disconnected — Retry".
 const RECONNECT_WINDOW: Duration = Duration::from_secs(60);
 const TICK: Duration = Duration::from_secs(1);
 
-/// Receives store updates on behalf of the window; `false` when the window is gone.
 pub trait UpdateSink: Send + 'static {
     fn deliver(&self, update: StoreUpdate) -> bool;
 }
@@ -46,7 +38,6 @@ impl UpdateSink for Sender<StoreUpdate> {
     }
 }
 
-/// How to start `laded serve` when no service answers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpawnService {
     pub program: PathBuf,
@@ -56,15 +47,10 @@ pub struct SpawnService {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub runtime_dir: PathBuf,
-    /// `None` with `--no-spawn` or when no `laded` sits next to this executable.
     pub spawn: Option<SpawnService>,
-    /// Folder to open as a Workspace once connected (`--open PATH`).
     pub open: Option<PathBuf>,
 }
 
-/// Resolves the control runtime directory the way `laded` does: an explicit directory, then
-/// `LADE_RUNTIME_DIR`, `$XDG_RUNTIME_DIR/lade`, and finally `$STATE/run` with
-/// `$STATE = ${XDG_STATE_HOME:-$HOME/.local/state}/lade` (or the explicit `--state-dir`).
 pub fn runtime_dir(
     explicit: Option<&Path>,
     state_dir: Option<&Path>,
@@ -88,20 +74,14 @@ pub fn runtime_dir(
     Some(state.join("run"))
 }
 
-/// `laded` next to the running executable, if present.
 pub fn sibling_service() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let candidate = exe.parent()?.join("laded");
     candidate.is_file().then_some(candidate)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Identifiers.
-
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
 
-/// A fresh UUIDv4 from `/dev/urandom`. Ids are public correlation values, never secrets; if the
-/// device is unreadable the id is derived from time, process id and a counter (still unique).
 pub fn random_id() -> Id {
     let mut bytes = [0u8; 16];
     let read = File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
@@ -117,18 +97,11 @@ pub fn random_id() -> Id {
     Id::from_random_bytes(bytes)
 }
 
-// ---------------------------------------------------------------------------------------------
-// Connecting.
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConnectError {
-    /// No socket, refused, or no capability yet: the service is not running.
     NotRunning,
-    /// Another client holds the single controlling lease.
     LeaseHeld,
-    /// The service closed the link after `auth` without a welcome (capability mismatch).
     Refused,
-    /// The runtime directory or capability file is not private to this user.
     Unsafe(String),
     Protocol(String),
 }
@@ -137,8 +110,6 @@ fn own_uid() -> Option<u32> {
     fs::metadata("/proc/self").ok().map(|m| m.uid())
 }
 
-/// Reads `control.cap`, refusing unless the directory is 0700-private and the file is a regular
-/// 0600 file, both owned by this user.
 pub fn read_capability(dir: &Path) -> Result<Capability, ConnectError> {
     let uid =
         own_uid().ok_or_else(|| ConnectError::Unsafe("cannot determine the user id".into()))?;
@@ -173,7 +144,6 @@ pub fn read_capability(dir: &Path) -> Result<Capability, ConnectError> {
         .map_err(|_| ConnectError::Unsafe("the capability file is malformed".into()))
 }
 
-/// An authenticated link.
 pub struct Link {
     pub service_epoch: Id,
     pub reader: FrameReader<UnixStream>,
@@ -181,7 +151,6 @@ pub struct Link {
     pub stream: UnixStream,
 }
 
-/// Connects and authenticates: `hello` ⇄ `hello`, `auth` → `welcome`.
 pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
     let socket = dir.join(SOCKET_NAME);
     match fs::symlink_metadata(&socket) {
@@ -251,7 +220,6 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
     })
 }
 
-/// Starts `laded serve` detached in its own process group with null stdio.
 pub fn spawn_service(spawn: &SpawnService, runtime_dir: &Path) -> std::io::Result<()> {
     let mut command = Command::new(&spawn.program);
     command.arg("serve").arg("--runtime-dir").arg(runtime_dir);
@@ -264,7 +232,6 @@ pub fn spawn_service(spawn: &SpawnService, runtime_dir: &Path) -> std::io::Resul
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()?;
-    // Reap it if it exits while this window runs; closing the window never stops the service.
     thread::Builder::new()
         .name("lade-reap".into())
         .spawn(move || {
@@ -273,10 +240,6 @@ pub fn spawn_service(spawn: &SpawnService, runtime_dir: &Path) -> std::io::Resul
     Ok(())
 }
 
-// ---------------------------------------------------------------------------------------------
-// Driver.
-
-/// Everything the driver thread reacts to.
 pub enum Input {
     Intent(Intent),
     Frame(u64, ClientEnvelope),
@@ -294,7 +257,6 @@ enum Phase {
         after_loss: bool,
     },
     Connected,
-    /// Waiting for an explicit Retry (unavailable, refused or another window holds the lease).
     Waiting,
 }
 
@@ -335,12 +297,9 @@ struct Driver<S: UpdateSink> {
     link: Option<ActiveLink>,
     generation: u64,
     phase: Phase,
-    /// `service.stop` was sent: a closed link is the service exiting on request, so the driver
-    /// neither reconnects nor starts a new service (no automatic resume after Exit/logout).
     stopping: bool,
 }
 
-/// Runs the driver on a dedicated thread. `rx` receives intents from the main context.
 pub fn spawn_driver<S: UpdateSink>(
     config: Config,
     sink: S,
@@ -415,7 +374,6 @@ impl<S: UpdateSink> Driver<S> {
         self.sink.deliver(StoreUpdate::Connection(state))
     }
 
-    /// Attempts a connection when one is due. Returns `false` when the window is gone.
     fn maybe_connect(&mut self) -> bool {
         let Phase::Connecting {
             started,
@@ -462,7 +420,6 @@ impl<S: UpdateSink> Driver<S> {
                 }
                 (!in_window).then_some(why)
             }
-            // The capability may have rotated between reading and proving it: retry briefly.
             Err(ConnectError::Refused) if attempt < 3 => None,
             Err(ConnectError::Refused) => Some(
                 "The service refused this window's credentials. If it was just restarted, retry."
@@ -545,7 +502,6 @@ impl<S: UpdateSink> Driver<S> {
         let step = match envelope.body {
             ClientBody::Reply(reply) => self.core.on_reply(reply),
             ClientBody::Event(event) => self.core.on_event(event),
-            // Anything else from the service after welcome is a protocol violation.
             _ => {
                 self.fail_link();
                 return true;
@@ -583,12 +539,11 @@ impl<S: UpdateSink> Driver<S> {
         self.status(ConnectionState::Reconnecting { attempt: 0 })
     }
 
-    /// Applies updates and writes frames. Returns `false` when the window is gone.
     fn deliver(&mut self, step: Step) -> bool {
         let mut followups = Step::default();
         for frame in step.frames {
             let Some(link) = self.link.as_mut().filter(|l| !l.failed) else {
-                continue; // stays pending; settled by on_link_lost
+                continue;
             };
             let request_id = frame.request_id.clone();
             match link
@@ -598,7 +553,6 @@ impl<S: UpdateSink> Driver<S> {
                 Ok(()) => {}
                 Err(TransportError::Io(_)) => self.fail_link(),
                 Err(TransportError::Wire(e)) => {
-                    // Encoding refused (e.g. over the frame cap): nothing left this process.
                     let rejection = Rejection::new(
                         ErrorCode::LimitReached,
                         SafeAction::None,

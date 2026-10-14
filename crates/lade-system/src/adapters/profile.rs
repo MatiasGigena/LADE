@@ -1,14 +1,3 @@
-//! The LADE profile: LADE-managed pi resources (context file, skills, prompt templates, executable
-//! extensions and custom providers) under `$STATE/profile`. It is never the user's own pi profile:
-//! `~/.pi` is read only by an explicit, copy-only [`import`], which never writes to its source.
-//!
-//! Executable extensions are identified by a content hash (the same algorithm as the worker's
-//! `extensionHash` in `packages/pi-worker/src/worker/resources.ts`): a file hashes as its bytes; a
-//! directory as the SHA-256 of `sha256sum`-style lines (`<hex>  <relative path>\n`) of every regular
-//! file sorted by path bytes. Symbolic links and special files are refused. Each launch and reload
-//! materialises a snapshot of the profile in the session directory containing only approved
-//! extensions whose copied content still hashes to the approved value.
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -22,17 +11,13 @@ use sha2::{Digest, Sha256};
 
 use crate::supervision::gateway::is_non_public;
 
-/// Directory-extension hashing bounds (mirrored by the worker).
 pub const MAX_EXTENSION_FILES: usize = 256;
 pub const MAX_EXTENSION_BYTES: u64 = 8 << 20;
 const MAX_DEPTH: usize = 8;
-/// Bounds for copying a profile tree (snapshot or import).
 const MAX_COPY_FILES: usize = 2048;
 const MAX_COPY_BYTES: u64 = 32 << 20;
-/// Inventory bound (the wire carries at most 256 entries).
 pub const MAX_ENTRIES: usize = 200;
 const MAX_MODELS_JSON: u64 = 1 << 20;
-/// Custom-provider credential variables must carry this prefix (see the credentials module).
 pub const CUSTOM_VAR_PREFIX: &str = "LADE_PROVIDER_";
 
 const EXTENSION_SUFFIXES: &[&str] = &[".ts", ".js", ".mjs", ".cjs", ".mts", ".cts"];
@@ -46,7 +31,6 @@ pub enum Kind {
     Models,
 }
 
-/// One profile resource. `problem` explains why it cannot be used at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub kind: Kind,
@@ -98,7 +82,6 @@ fn walk(root: &Path, dir: &Path, depth: usize, files: &mut Vec<Vec<u8>>) -> Resu
     Ok(())
 }
 
-/// Content hash of one extension entry (see the module documentation).
 pub fn extension_hash(path: &Path) -> Result<String, String> {
     let meta = fs::symlink_metadata(path).map_err(|e| format!("unreadable: {}", e.kind()))?;
     if meta.file_type().is_symlink() {
@@ -152,7 +135,6 @@ fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "md")
 }
 
-/// Inventory of a profile directory (missing directory: empty). Bounded to [`MAX_ENTRIES`].
 pub fn scan(profile: &Path) -> Vec<Entry> {
     let mut entries = Vec::new();
     let plain = |kind, name: String, path: &Path| {
@@ -224,18 +206,12 @@ pub fn scan(profile: &Path) -> Vec<Entry> {
     entries
 }
 
-// ---------------------------------------------------------------------------------------------
-// Custom providers (`models.json`).
-
-/// A custom provider the LADE profile defines and LADE can reach through its gateway.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CustomProvider {
     pub id: String,
     pub host: String,
     pub port: u16,
-    /// The endpoint is a loopback/private address (a local server such as Ollama).
     pub local: bool,
-    /// Credential variables (`LADE_PROVIDER_*`) referenced as `$NAME` or `${NAME}`.
     pub vars: Vec<String>,
 }
 
@@ -252,7 +228,6 @@ fn variable(value: &str) -> Option<&str> {
     valid.then_some(name)
 }
 
-/// `scheme://host[:port][/path]` → (secure, host, port).
 fn endpoint(url: &str) -> Result<(bool, String, u16), String> {
     let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
@@ -308,12 +283,6 @@ fn read_models(path: &Path) -> Result<(Vec<u8>, Vec<CustomProvider>), String> {
     Ok((bytes, providers))
 }
 
-/// Validates the LADE profile's `models.json` against LADE's trust rules and returns its providers.
-///
-/// Refused: shell-command values (`!…`), environment interpolation other than one whole
-/// `LADE_PROVIDER_*` variable, literal keys for non-local endpoints, `oauth` providers, plain HTTP
-/// to public hosts, and ids that redefine a provider LADE already has a policy or credential
-/// mapping for (`builtin`).
 pub fn custom_providers(bytes: &[u8]) -> Result<Vec<CustomProvider>, String> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| "models.json is not valid JSON".to_string())?;
@@ -411,7 +380,6 @@ pub fn custom_providers(bytes: &[u8]) -> Result<Vec<CustomProvider>, String> {
     Ok(found)
 }
 
-/// The custom providers of `profile/models.json` (none when absent; an error when invalid).
 pub fn profile_providers(profile: &Path) -> Result<Vec<CustomProvider>, String> {
     let path = profile.join("models.json");
     if !path.exists() {
@@ -419,9 +387,6 @@ pub fn profile_providers(profile: &Path) -> Result<Vec<CustomProvider>, String> 
     }
     read_models(&path).map(|(_, providers)| providers)
 }
-
-// ---------------------------------------------------------------------------------------------
-// Copies.
 
 struct Budget {
     files: usize,
@@ -435,7 +400,6 @@ fn private_dir(path: &Path) -> io::Result<()> {
         .create(path)
 }
 
-/// Copies one regular file without following links on either side (destination created fresh).
 fn copy_file(from: &Path, to: &Path, budget: &mut Budget) -> io::Result<()> {
     let meta = fs::symlink_metadata(from)?;
     if !meta.is_file() {
@@ -461,7 +425,6 @@ fn copy_file(from: &Path, to: &Path, budget: &mut Budget) -> io::Result<()> {
     io::Write::write_all(&mut file, &bytes)
 }
 
-/// Copies a tree of regular files and directories; symbolic links and special files are skipped.
 fn copy_tree(from: &Path, to: &Path, budget: &mut Budget, depth: usize) -> io::Result<()> {
     if depth > MAX_DEPTH {
         return Ok(());
@@ -489,7 +452,6 @@ fn copy_entry(from: &Path, to: &Path, budget: &mut Budget) -> io::Result<()> {
     }
 }
 
-/// An approved extension inside a materialised snapshot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Materialized {
     pub name: String,
@@ -497,9 +459,6 @@ pub struct Materialized {
     pub sha256: String,
 }
 
-/// Replaces `dest` with a snapshot of `profile`: context file, skills, prompts, a valid
-/// `models.json`, and only those extensions `approved(name, sha256)` accepts whose copy still
-/// hashes to the approved value. Returns the approved extensions as loaded by the worker.
 pub fn materialize(
     profile: &Path,
     dest: &Path,
@@ -538,7 +497,6 @@ pub fn materialize(
             &target,
             &mut budget,
         )?;
-        // The snapshot itself must match the approval (the source may change while copying).
         if extension_hash(&target).ok().as_deref() == Some(hash) {
             extensions.push(Materialized {
                 name: entry.name,
@@ -552,16 +510,12 @@ pub fn materialize(
     Ok(extensions)
 }
 
-/// What a profile import copied and skipped (names and reasons only).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportReport {
     pub copied: Vec<String>,
     pub skipped: Vec<String>,
 }
 
-/// Copy-only import from a pi agent directory (`~/.pi/agent` layout): `AGENTS.md`, `skills/`,
-/// `prompts/`, `extensions/` and a `models.json` that passes LADE's rules. The source is only read;
-/// nothing existing in the LADE profile is overwritten; imported extensions still need approval.
 pub fn import(source: &Path, profile: &Path) -> io::Result<ImportReport> {
     let meta = fs::metadata(source)?;
     if !meta.is_dir() {
@@ -648,7 +602,6 @@ mod tests {
         fs::create_dir_all(ext.join("lib")).unwrap();
         fs::write(ext.join("index.js"), "export default function () {}\n").unwrap();
         fs::write(ext.join("lib/util.js"), "export const x = 1;\n").unwrap();
-        // The same constants are asserted by packages/pi-worker/test/worker-compat.test.ts.
         assert_eq!(
             extension_hash(&ext.join("index.js")).unwrap(),
             "4554c00dbb28cad89d67afb301d893073eefca19bee50292764c7b8c3dc8bf03"
@@ -689,7 +642,6 @@ mod tests {
             !dest.join("extensions/b.js").exists(),
             "unapproved code is never copied"
         );
-        // A changed file no longer matches its approval.
         fs::write(profile.join("extensions/a.js"), "changed").unwrap();
         let loaded = materialize(&profile, &dest, |name, sha| name == "a.js" && sha == a).unwrap();
         assert!(loaded.is_empty());

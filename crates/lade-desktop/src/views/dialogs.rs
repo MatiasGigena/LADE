@@ -1,5 +1,3 @@
-//! Modal dialogs. Each closes on Escape (keybinding table) and returns focus to its opener.
-
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -17,7 +15,6 @@ use crate::presentation::keys::{self, AppAction, Keymap};
 use crate::presentation::model::Intent as ObjectiveIntent;
 use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
 
-/// Generic confirmation; `destructive` uses the destructive treatment for the confirm button.
 pub fn confirm(
     opener: &impl IsA<gtk::Widget>,
     title: &str,
@@ -47,9 +44,6 @@ pub fn confirm(
     dialog.present();
 }
 
-/// Closing or Exit would lose draft text the service has not acknowledged: the developer keeps the
-/// window open (default) or explicitly discards that text. Returns the dialog window so the
-/// caller can close it when the drafts get saved meanwhile.
 pub fn unsaved_drafts(
     opener: &impl IsA<gtk::Widget>,
     exit: bool,
@@ -178,8 +172,6 @@ pub fn cleanup(
     dialog.present();
 }
 
-/// The deliberate deletion of a cleaned-up Objective's Git history. The button stays disabled
-/// until the user ticks the acknowledgement; nothing else ever sends this request.
 pub fn delete_history(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>, title: &str) {
     let dialog = Dialog::new(opener, "Delete Git history", 500);
     dialog.body.append(&label(
@@ -212,7 +204,6 @@ pub fn delete_history(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller
     dialog.present();
 }
 
-/// Lists the exact items, destination and mode before the explicit submission request.
 pub fn submit_feedback(
     opener: &impl IsA<gtk::Widget>,
     controller: &Rc<Controller>,
@@ -373,8 +364,6 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     title.grab_focus();
 }
 
-/// Edits outcome, constraints and acceptance of the selected Objective. The request carries the
-/// intent revision shown here, so an intent changed meanwhile is refused rather than overwritten.
 pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) {
     let Some((revision, current)) = controller
         .store
@@ -442,10 +431,6 @@ pub fn open_workspace(window: &gtk::Window, controller: &Rc<Controller>) {
     });
 }
 
-/// Shortcut reference and remapping. Every action is listed with its current binding; remappable
-/// actions take an F-key (or their default), fixed ones explain why. Apply validates the whole
-/// proposal and installs it at once (then saves it as the client preference); Reset only stages
-/// the defaults in the fields.
 pub fn shortcuts(
     opener: &impl IsA<gtk::Widget>,
     controller: &Rc<Controller>,
@@ -460,7 +445,7 @@ pub fn shortcuts(
     let grid = gtk::Grid::new();
     grid.set_row_spacing(space::ITEM.unsigned_abs());
     grid.set_column_spacing(space::SECTION.unsigned_abs());
-    grid.set_margin_end(space::SECTION); // room for the (non-overlay) scrollbar
+    grid.set_margin_end(space::SECTION);
     let mut entries: Vec<(AppAction, gtk::Entry)> = Vec::new();
     for (row, binding) in keys::DEFAULT_APP_KEYBINDINGS.iter().enumerate() {
         let row = i32::try_from(row).unwrap_or(i32::MAX);

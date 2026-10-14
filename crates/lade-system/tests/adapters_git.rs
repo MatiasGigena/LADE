@@ -1,5 +1,3 @@
-//! Git adapter integration tests over disposable repositories.
-
 mod adapters_support;
 
 use std::ffi::OsStr;
@@ -104,7 +102,6 @@ fn worktree_add_open_and_remove() {
     ));
 
     fs::write(wt.path().join("scratch.txt"), "dirty").unwrap();
-    // A worker-written `.git` file must not redirect Git to another configuration.
     fs::write(wt.path().join(".git"), "gitdir: /nonexistent\n").unwrap();
     assert!(matches!(
         repo.worktree_remove(&wt, false),
@@ -570,7 +567,6 @@ struct IntegrationFixture {
     candidate_tree: GitId,
 }
 
-/// `main` with an Objective worktree whose capture adds `feature.txt` and edits `README`.
 fn integration_fixture(tag: &str) -> IntegrationFixture {
     let tmp = TempDir::new(tag);
     let repo_dir = init_repo(tmp.path(), "sha1");
@@ -713,7 +709,6 @@ fn integrate_refuses_untracked_collision_before_moving_the_ref() {
     let f = integration_fixture("int-e");
     let dir = f.main_dir();
     let reflog_before = git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]);
-    // An untracked file where the candidate adds one: the preflight refuses before update-ref.
     fs::write(dir.join("feature.txt"), "precious local file\n").unwrap();
     match f.repo.integrate_squash(&f.request("main")) {
         Err(GitError::TargetUntracked {
@@ -731,7 +726,6 @@ fn integrate_refuses_untracked_collision_before_moving_the_ref() {
         f.repo.resolve_ref("refs/heads/main").unwrap(),
         Some(f.target.clone())
     );
-    // The ref never moved: no update and no revert in its log.
     assert_eq!(
         git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]),
         reflog_before
@@ -754,7 +748,6 @@ fn integrate_reverts_ref_when_checkout_fails_after_the_preflight() {
     }
     let f = integration_fixture("int-f");
     let dir = f.main_dir();
-    // The dry run passes (nothing collides), but the real step cannot create feature.txt.
     let mode = fs::metadata(&dir).unwrap().permissions().mode();
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
     let result = f.repo.integrate_squash(&f.request("main"));
@@ -937,7 +930,6 @@ fn malicious_repository_configuration_never_executes() {
     );
 }
 
-/// Whether this host's Git runs hooks defined in configuration (`hook.<name>.command`).
 fn config_hooks_supported(tmp: &Path) -> bool {
     let probe = tmp.join("hook-probe");
     fs::create_dir(&probe).unwrap();
@@ -1115,7 +1107,6 @@ fn capture_applies_only_the_configured_user_excludes_file() {
             .map(|c| c.path.into_bytes())
             .collect()
     };
-    // The repository's own core.excludesFile is never honoured (it could hide new files).
     assert_eq!(
         names(&plain),
         [&b"keys.secret"[..], b"repo-hidden.txt", b"visible.txt"]
@@ -1198,7 +1189,6 @@ fn grep_reports_exact_byte_ranges() {
         .grep(
             &tree,
             &GrepQuery {
-                // Git folds ASCII only (LADE runs it with LC_ALL=C); the byte range is exact.
                 text: "ÉCOLE".into(),
                 ignore_case: true,
                 max_results: 10,

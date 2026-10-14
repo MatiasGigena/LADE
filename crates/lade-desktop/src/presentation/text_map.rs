@@ -1,15 +1,6 @@
-//! Mapping between what the read-only viewer displays and the exact source bytes it represents.
-//!
-//! GTK text positions are (line, character offset) where a character is a Unicode scalar value. The
-//! viewer shows one buffer line per source line; characters GTK would treat as paragraph delimiters
-//! (`\r`, U+2029) are replaced with visible symbols so buffer lines never drift from source lines.
-//! Every display character keeps the UTF-8 byte offset of the source character it stands for.
-
 use super::model::{DiffLineKind, FileContent, FileDiff, Side};
 
-/// Visible stand-in for a carriage return that is not part of a CRLF terminator.
 pub const CR_SYMBOL: char = '\u{240D}';
-/// Visible stand-in for U+2029 PARAGRAPH SEPARATOR.
 pub const PARAGRAPH_SYMBOL: char = '\u{00B6}';
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,9 +8,7 @@ pub enum ViewLineKind {
     Context,
     Add,
     Del,
-    /// A line of a full file.
     Text,
-    /// DiffHunk header / omitted-lines separator; represents no source bytes.
     Separator,
 }
 
@@ -31,12 +20,8 @@ pub struct ViewLine {
     pub new_no: Option<u64>,
     pub old_start: Option<u64>,
     pub new_start: Option<u64>,
-    /// Source text without the `\n` terminator (CR retained).
     pub source: String,
-    /// DiffHunk index; `None` for full-file lines (one contiguous region).
     pub hunk: Option<usize>,
-    /// `char_bytes[i]` is the source byte offset (within `source`) of display character `i`;
-    /// the final element is the byte offset of the display line's end.
     char_bytes: Vec<usize>,
 }
 
@@ -91,7 +76,6 @@ impl ViewLine {
         }
     }
 
-    /// Source byte offset (within this line) for a display character offset, clamped to the line.
     pub fn byte_at(&self, char_offset: usize) -> usize {
         let last = self.char_bytes.len() - 1;
         self.char_bytes[char_offset.min(last)]
@@ -102,14 +86,12 @@ impl ViewLine {
     }
 }
 
-/// Builds the display text and its char → source-byte map.
 pub fn display_text(source: &str) -> (String, Vec<usize>) {
     let mut display = String::with_capacity(source.len());
     let mut map = Vec::with_capacity(source.len() + 1);
     let crlf_cr = source.ends_with('\r').then(|| source.len() - 1);
     for (byte, ch) in source.char_indices() {
         if Some(byte) == crlf_cr {
-            // The CR of a CRLF terminator: hidden, the line end maps to just before it.
             break;
         }
         map.push(byte);
@@ -154,7 +136,6 @@ pub fn file_lines(content: &FileContent) -> Vec<ViewLine> {
     let text = content.text.as_str();
     let mut lines: Vec<&str> = text.split('\n').collect();
     if text.ends_with('\n') {
-        // The empty remainder after a final newline is not a line.
         lines.pop();
     }
     for (index, source) in lines.into_iter().enumerate() {
@@ -175,8 +156,6 @@ pub fn file_lines(content: &FileContent) -> Vec<ViewLine> {
     out
 }
 
-/// Display position of source byte `byte` on `side` — the inverse of the selection map — when a
-/// displayed line holds it.
 pub fn position_at(lines: &[ViewLine], side: Side, byte: u64) -> Option<TextPos> {
     lines.iter().enumerate().find_map(|(index, line)| {
         let within = usize::try_from(byte.checked_sub(line.start(side)?)?).ok()?;
@@ -228,10 +207,6 @@ impl SelectionError {
     }
 }
 
-/// Maps a viewer selection to exact source bytes `[start, end)` on one side.
-///
-/// The new side is preferred whenever the selection touches new-side content; a selection made only
-/// of deleted lines refers to the old side.
 pub fn map_selection(
     lines: &[ViewLine],
     a: TextPos,
@@ -247,7 +222,6 @@ pub fn map_selection(
     } else {
         to
     };
-    // A selection ending at column 0 does not include that line's characters.
     let covered: Vec<usize> = (from.line..=to.line)
         .filter(|&i| !(i == to.line && to.char_offset == 0 && i != from.line))
         .collect();
@@ -275,8 +249,6 @@ pub fn map_selection(
     let end = if last == to.line {
         line_start(last) + lines[last].byte_at(to.char_offset) as u64
     } else {
-        // Selection continues past `last` on lines without this side: include its terminator when
-        // the next same-side line in this hunk proves where the terminator ends.
         let next = (last + 1..lines.len())
             .find(|&i| lines[i].start(side).is_some() && lines[i].hunk == hunk);
         match next {
@@ -287,7 +259,6 @@ pub fn map_selection(
     if end <= start {
         return Err(SelectionError::Empty);
     }
-    // Reconstruct the exact selected source text from contiguous same-side lines.
     let base = line_start(first);
     let mut contiguous = String::new();
     let mut expected = base;
@@ -378,19 +349,16 @@ mod tests {
 
     #[test]
     fn multibyte_characters_convert_char_offsets_to_bytes() {
-        // "é" = 2 bytes, "漢" = 3 bytes, "🎉" = 4 bytes.
         let text = "aé漢🎉z\n";
         let m = select(text, TextPos::new(0, 1), TextPos::new(0, 4));
         assert_eq!((m.start, m.end), (1, 10));
         assert_eq!(m.selected_text, "é漢🎉");
-        // Reversed endpoints map identically.
         let r = select(text, TextPos::new(0, 4), TextPos::new(0, 1));
         assert_eq!((r.start, r.end), (1, 10));
     }
 
     #[test]
     fn combining_marks_are_separate_scalar_values() {
-        // "e\u{301}" is one grapheme but two scalar values (GTK offsets count scalar values).
         let text = "xe\u{301}y\n";
         let m = select(text, TextPos::new(0, 1), TextPos::new(0, 3));
         assert_eq!((m.start, m.end), (1, 4));
@@ -403,10 +371,8 @@ mod tests {
         let lines = file(text);
         assert_eq!(lines[0].display, "ab");
         assert_eq!(lines[1].new_start, Some(4));
-        // Select to end of the first line: excludes the CR.
         let m = select(text, TextPos::new(0, 0), TextPos::new(0, 2));
         assert_eq!((m.start, m.end), (0, 2));
-        // Select into the next line: includes CRLF.
         let m = select(text, TextPos::new(0, 1), TextPos::new(1, 1));
         assert_eq!((m.start, m.end), (1, 5));
         assert_eq!(m.selected_text, "b\r\nc");
@@ -468,7 +434,6 @@ mod tests {
     }
 
     fn diff() -> FileDiff {
-        // old: "a\nold\nc\n"  new: "a\nnew é\nc\n" ; second hunk far below.
         FileDiff {
             objective_id: ObjectiveId::new("o"),
             basis: Basis::Working,
@@ -509,7 +474,6 @@ mod tests {
     #[test]
     fn diff_selection_prefers_new_side_and_skips_deleted_lines() {
         let lines = diff_lines(&diff());
-        // lines: 0 sep, 1 ctx a, 2 del old, 3 add new é, 4 ctx c, 5 sep, 6 ctx z
         let m = map_selection(&lines, TextPos::new(1, 0), TextPos::new(3, 5)).unwrap();
         assert_eq!(m.side, Side::New);
         assert_eq!((m.start, m.end), (0, 8));

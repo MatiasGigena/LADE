@@ -1,23 +1,3 @@
-/* LADE — the single application stylesheet (design.md tokens).
- *
- * Colour tokens are named below; components use only these. Radii: 6 (buttons, fields, rows),
- * 8 (popovers, dialogs). Platform fonts only. GTK 4.14 CSS has no custom properties, so the
- * spacing and type tokens are written from these scales directly:
- *
- * Spacing (px): 4 tight · 8 item · 12 group · 16 section · 24 page · 32 empty-state margin.
- *   Gaps between widgets come from `views::widgets::space` (the same 4–24 scale); paddings here.
- *   No one-off margins: a negative margin only aligns a quiet button's text with the column.
- *
- * Type (one platform sans family, monospace for code):
- *   title    20px / 600  .objective-heading, .empty-title       page and Objective titles
- *   heading  15px / 600  .section-title, .empty-heading, .popover-heading
- *   body     platform size / 400 (plain labels; .strong = 600 for emphasis by weight)
- *   meta     13px / 400  .meta (.group-heading: 600)             secondary text and metadata
- *   mono     13px         .mono                                   code, paths, ids, commands
- *
- * Boundaries: separators only where they aid scanning (columns, lists, toolbars); no boxes or
- * pills for grouping; semantic fills only with a sign or text (errors, warnings, diff lines).
- */
 
 @define-color surface #FFFFFF;
 @define-color ink_primary #000000;
@@ -47,12 +27,10 @@
 @define-color fill_band #F5F5F5;
 @define-color fill_inset #F7F7F7;
 @define-color fill_user #FAFAFA;
-/* Syntax highlighting inks (also named in code-scheme.xml; restrained, see design.md §3). */
 @define-color syntax_comment #474747;
 @define-color syntax_string #1F4E79;
 @define-color syntax_constant #5B3A82;
 
-/* Base surfaces ---------------------------------------------------------------------------- */
 
 window, window.background, .lade-root, dialog, stack, notebook > stack, scrolledwindow,
 viewport, list, listview {
@@ -63,8 +41,6 @@ viewport, list, listview {
 label { color: inherit; }
 label:disabled { color: @ink_metadata; }
 
-/* GTK sets :focus-visible on the whole window; the focused widget itself is also :focus. */
-/* One focus treatment everywhere: 2 px black outline, offset where space permits. */
 *:focus:focus-visible {
   outline: 2px solid @focus_ring;
   outline-offset: 2px;
@@ -88,7 +64,6 @@ entry > text > selection:focus-within {
   color: @ink_primary;
 }
 
-/* Typography roles -------------------------------------------------------------------------- */
 
 .wordmark { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
 .objective-heading, .empty-title { font-size: 20px; font-weight: 600; }
@@ -103,7 +78,6 @@ entry > text > selection:focus-within {
 .removed { color: @del_ink; }
 .warning-text { color: @warn_ink; }
 
-/* Controls --------------------------------------------------------------------------------- */
 
 button {
   min-height: 26px;
@@ -133,7 +107,6 @@ button.primary {
 button.primary label { color: @surface; }
 button.primary:hover { background-color: @primary_hover; }
 button.primary:active { background-color: @primary_pressed; }
-/* Inverse focus treatment for black buttons: white inner ring plus the black outline. */
 button.primary:focus:focus-visible {
   box-shadow: inset 0 0 0 2px @surface;
   outline: 2px solid @focus_ring;
@@ -155,7 +128,6 @@ button.quiet, button.icon-button {
   background-color: transparent;
 }
 button.quiet:hover, button.icon-button:hover { background-color: @fill_hover; }
-/* A quiet destructive action: warning ink, never identical to a neutral quiet button. */
 button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
 button.destructive-quiet:hover { background-color: @del_fill; }
 button.destructive-quiet:disabled, button.destructive-quiet:disabled label { color: @ink_metadata; }
@@ -210,7 +182,6 @@ popover.menu > contents { padding: 4px; }
 popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
 popover row:selected { background-color: @fill_selected; color: @ink_primary; }
 
-/* Disclosures and list actions: quiet buttons whose text aligns with the column. */
 button.disclosure-toggle, button.list-action-button {
   padding: 4px 8px;
   margin-left: -8px;
@@ -232,7 +203,6 @@ scrollbar { background-color: transparent; border: none; }
 scrollbar slider { background-color: @scrollbar_slider; border-radius: 6px; min-width: 6px; min-height: 6px; border: none; }
 scrollbar slider:hover { background-color: @scrollbar_slider_hover; }
 
-/* Thin structural divider with an invisible 8 px grab area (as the platform theme does). */
 paned.horizontal > separator {
   min-width: 1px;
   background-color: transparent;
@@ -246,7 +216,6 @@ paned.horizontal > separator {
 }
 separator.region-divider { background-color: @border_separator; min-width: 1px; }
 
-/* Header ----------------------------------------------------------------------------------- */
 
 .lade-header {
   min-height: 56px;
@@ -273,7 +242,6 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
   box-shadow: inset 0 -2px @ink_primary;
 }
 .nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
-/* Connection status: small text with a sign, no box. */
 .connection { font-size: 13px; }
 .search entry { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .search dropdown > button {
@@ -302,7 +270,6 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 .notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
 
-/* Compact composition: explicit region switches below the header. */
 .region-bar {
   padding: 8px 12px;
   border-bottom: 1px solid @border_separator;
@@ -312,7 +279,6 @@ separator.region-divider { background-color: @border_separator; min-width: 1px; 
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 
-/* Objectives rail -------------------------------------------------------------------------- */
 
 .rail { padding: 16px 12px; }
 list.objective-list, list.file-list, list.plain-list, list.transcript {
@@ -331,17 +297,14 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .objective-list > row:selected .objective-title { font-weight: 700; }
 .objective-title { font-weight: 600; }
 
-/* Status: a sign and text (no pill box); the sign carries the state without colour. */
 .status-sign { font-weight: 700; }
 
-/* Centre ----------------------------------------------------------------------------------- */
 
 .centre-page { padding: 24px; }
 .centre-empty { padding: 32px; }
 .empty-state { padding: 64px 32px 32px 64px; }
 .breadcrumb-current { font-size: 13px; font-weight: 500; }
 
-/* Journey: small and secondary; the current step stands out by weight and ink, not a box. */
 .journey { padding-top: 4px; }
 .journey-dot {
   min-width: 12px;
@@ -399,7 +362,6 @@ textview.code-view border.left, textview.code-view gutter {
 .gutter-number { color: @ink_metadata; font-family: monospace; font-size: 13px; }
 .gutter-sign { font-family: monospace; font-size: 13px; }
 
-/* Inspector -------------------------------------------------------------------------------- */
 
 notebook.inspector, notebook.inspector > header {
   background-color: @surface;
@@ -462,7 +424,6 @@ notebook.inspector > stack { background-color: @surface; }
   padding: 8px 12px;
 }
 
-/* Activity --------------------------------------------------------------------------------- */
 
 .activity { padding: 24px; }
 .transcript > row.activity-item {
@@ -476,14 +437,12 @@ notebook.inspector > stack { background-color: @surface; }
 .activity-text { margin-top: 2px; }
 .composer { border-top: 1px solid @border_separator; padding-top: 12px; }
 
-/* Dialogs ---------------------------------------------------------------------------------- */
 
 window.lade-dialog { background-color: @surface; border-radius: 8px; }
 .dialog-content { padding: 24px; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .limited-error > .error-box { margin-top: 6px; }
 
-/* Terminal (IMP-012): plain monospace text on the surface, existing tokens only ------------ */
 
 .terminal-pane { padding: 24px; }
 .compact .terminal-pane { padding: 16px; }

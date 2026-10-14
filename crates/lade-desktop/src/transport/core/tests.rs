@@ -128,7 +128,6 @@ fn lost_command_reply_is_recovered_with_the_same_operation_id() {
     let operation_id = sent.operation_id.clone().unwrap();
     core.on_link_lost();
     assert_eq!(core.uncertain().len(), 1);
-    // Commands are never queued blindly while disconnected.
     let refused = core.submit(Intent::Freeze {
         objective_id: oid(),
     });
@@ -159,7 +158,6 @@ fn lost_command_reply_is_recovered_with_the_same_operation_id() {
         StoreUpdate::CommandStatus { status: Some(s), .. } if s.message.starts_with("Checking outcome")
     )));
 
-    // The recorded outcome is applied exactly like the lost reply.
     let outcome = Outcome::Ok(Box::new(ReplyData::MessageSend(input_summary(
         &operation_id,
     ))));
@@ -242,14 +240,11 @@ fn sequence_gap_triggers_resnapshot_and_requery_of_the_open_objective() {
     });
     core.on_reply(ok(&snapshot, snapshot_data(10)));
     assert_eq!(core.last_sequence(), Some(10));
-    // In order: applied, no requests.
     let step = core.on_event(event(11));
     assert!(step.frames.is_empty());
     assert_eq!(step.updates.len(), 1);
     assert_eq!(core.last_sequence(), Some(11));
-    // Old or duplicate: ignored.
     assert!(core.on_event(event(11)).updates.is_empty());
-    // Gap: the event still applies, then snapshot + the open Objective are re-queried.
     let step = core.on_event(event(13));
     assert_eq!(
         names(&step),
@@ -258,7 +253,6 @@ fn sequence_gap_triggers_resnapshot_and_requery_of_the_open_objective() {
     assert!(step.updates.contains(&StoreUpdate::WorktreeChanged {
         objective_id: oid()
     }));
-    // A second gap before the snapshot answers does not stack snapshots.
     assert!(!names(&core.on_event(event(20))).contains(&"snapshot"));
 }
 
@@ -309,9 +303,7 @@ fn draft_saves_wait_for_drafts_list_on_each_connection() {
     ));
     assert_eq!(names(&step), ["draft.save"]);
     assert!(step.frames[0].operation_id.is_some());
-    // Reconciled: the next save goes straight out ...
     assert_eq!(names(&core.submit(save.clone())), ["draft.save"]);
-    // ... until the link drops; then drafts are listed again first.
     core.on_link_lost();
     core.on_welcome(epoch());
     assert_eq!(names(&core.submit(save)), ["drafts.list"]);

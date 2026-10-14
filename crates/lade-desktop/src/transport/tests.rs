@@ -1,6 +1,3 @@
-//! Transport integration tests without a display: the real driver thread against an in-test fake
-//! server over a Unix socket, and (when built) against the real `laded serve` in temp dirs.
-
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
@@ -31,7 +28,6 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(tag: &str) -> Self {
-        // Short absolute path: Unix socket paths are limited to 108 bytes.
         let path = std::env::temp_dir().join(format!("lade-{tag}-{}", &random_id().as_str()[..8]));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self(path)
@@ -64,7 +60,6 @@ fn start(runtime_dir: &Path, open: Option<PathBuf>) -> (Sender<Input>, Receiver<
     (tx, updates)
 }
 
-/// Waits for an update matching `pred`, returning it (earlier updates are discarded).
 fn wait_for(
     updates: &Receiver<StoreUpdate>,
     what: &str,
@@ -81,9 +76,6 @@ fn wait_for(
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------------
-// Fake server.
 
 const CAPABILITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -113,8 +105,6 @@ impl FakeLink {
             .body
     }
 
-    /// The next request, skipping the catalogue/resource queries a client issues after every
-    /// snapshot (this fake service does not answer them; the client keeps them pending).
     fn request(&mut self) -> wire::RequestFrame {
         loop {
             match self.recv() {
@@ -130,7 +120,6 @@ impl FakeLink {
     }
 }
 
-/// Accepts and checks `hello` and `auth`; the caller sends welcome or refuses.
 fn accept(listener: &UnixListener) -> FakeLink {
     let (stream, _) = listener.accept().unwrap();
     let mut link = FakeLink {
@@ -189,17 +178,15 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
         assert!(first.operation_id.is_none());
         link.send(ClientBody::Reply(Reply::ok(first.request_id, snapshot(5))));
         link.send(event(6));
-        link.send(event(8)); // gap: 7 is missing
+        link.send(event(8));
         let resync = link.request();
         assert_eq!(resync.request.name(), wire::RequestName::Snapshot);
         link.send(ClientBody::Reply(Reply::ok(resync.request_id, snapshot(8))));
-        // A mutating request, then the link drops before its reply.
         let command = link.request();
         assert_eq!(command.request.name(), wire::RequestName::ReviewFreeze);
         let operation_id = command.operation_id.clone().expect("operation id");
         drop(link);
 
-        // Reconnect: the lost command is queried, not resent.
         let mut link = accept(&listener);
         link.send(ClientBody::Welcome {
             service_epoch: epoch(),
@@ -229,7 +216,6 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
         assert!(saw_query);
         drop(link);
 
-        // A third connection finds another client holding the lease.
         let mut link = accept(&listener);
         link.send(ClientBody::Event(EventFrame {
             service_epoch: epoch(),
@@ -362,11 +348,7 @@ fn runtime_dir_follows_the_service_defaults() {
     assert_eq!(dir(None, None, &[("XDG_RUNTIME_DIR", "relative")]), None);
 }
 
-// ---------------------------------------------------------------------------------------------
-// Real service.
-
 fn laded() -> Option<PathBuf> {
-    // target/debug/deps/<test> → target/debug/laded
     let exe = std::env::current_exe().ok()?;
     let candidate = exe.parent()?.parent()?.join("laded");
     candidate.is_file().then_some(candidate)
@@ -417,14 +399,12 @@ fn real_service_workspace_objective_execution_and_change_set() {
             .arg(dir.0.join("state"))
             .arg("--runtime-dir")
             .arg(&runtime)
-            // The offline test model is a test-only provider.
             .env("LADE_TEST_FIXTURE_PROVIDER", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .spawn()
             .unwrap(),
     );
-    // Wait for the socket (no spawn from the client in this test).
     let deadline = Instant::now() + Duration::from_secs(20);
     while !runtime.join(connection::SOCKET_NAME).exists() {
         assert!(Instant::now() < deadline, "laded did not start");
@@ -443,7 +423,6 @@ fn real_service_workspace_objective_execution_and_change_set() {
     };
     assert!(workspace.branches.contains(&"main".to_owned()));
 
-    // A second window is refused explicitly while this one holds the lease.
     let (tx2, updates2) = start(&runtime, None);
     wait_for(&updates2, "lease held", |u| {
         u == &StoreUpdate::Connection(ConnectionState::LeaseHeld)
@@ -539,8 +518,6 @@ fn real_service_workspace_objective_execution_and_change_set() {
         |u| matches!(u, StoreUpdate::FilePage(p) if p.eof && p.text.as_deref().is_some_and(|t| t.contains("hi"))),
     );
 
-    // Contained terminal (IMP-012): the client only asks; the service runs the shell in the
-    // Objective sandbox, or refuses when the sandbox is unavailable.
     send(Intent::OpenTerminal {
         objective_id: objective_id.clone(),
         cols: 80,
@@ -573,7 +550,6 @@ fn real_service_workspace_objective_execution_and_change_set() {
         eprintln!("note: terminal refused (no sandbox on this host): {opened:?}");
     }
 
-    // Explicit Exit: the service stops and the window neither reconnects nor respawns it.
     send(Intent::StopService {
         reason: crate::presentation::intents::StopReason::Exit,
     });

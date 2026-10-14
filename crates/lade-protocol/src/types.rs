@@ -1,5 +1,3 @@
-//! Validated wire primitives shared by the client and worker contracts.
-//! A value of these types always satisfies its schema format; construction validates.
 use crate::{WireError, base64, schema};
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
@@ -11,7 +9,6 @@ macro_rules! wire_string {
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
         impl $name {
-            /// Validates `value` against the schema format.
             pub fn parse(value: impl Into<String>) -> Result<Self, WireError> {
                 Self::try_from(value.into())
             }
@@ -42,44 +39,15 @@ macro_rules! wire_string {
     };
 }
 
-wire_string!(
-    /// Canonical lowercase UUIDv4 (RFC variant). Public correlation, never a capability.
-    Id,
-    "uuid-v4"
-);
-wire_string!(
-    /// Canonical unsigned 64-bit decimal string (no sign, no leading zero except `0`).
-    Counter,
-    "u64"
-);
-wire_string!(
-    /// Lowercase hex SHA-256 digest.
-    Digest,
-    "sha256"
-);
-wire_string!(
-    /// 64 lowercase hex characters (256 bits). Secret: never log or echo.
-    Capability,
-    "capability"
-);
-wire_string!(
-    /// RFC 3339 UTC timestamp in the single canonical form `YYYY-MM-DDTHH:MM:SS.mmmZ`.
-    Timestamp,
-    "timestamp"
-);
-wire_string!(
-    /// Page size: canonical decimal 1..=200.
-    PageLimit,
-    "page-limit"
-);
-wire_string!(
-    /// Read window: canonical decimal 1..=262144 bytes.
-    ReadLimit,
-    "read-limit"
-);
+wire_string!(Id, "uuid-v4");
+wire_string!(Counter, "u64");
+wire_string!(Digest, "sha256");
+wire_string!(Capability, "capability");
+wire_string!(Timestamp, "timestamp");
+wire_string!(PageLimit, "page-limit");
+wire_string!(ReadLimit, "read-limit");
 
 impl Id {
-    /// Formats 16 random bytes (e.g. from `/dev/urandom`) as a UUIDv4.
     pub fn from_random_bytes(mut bytes: [u8; 16]) -> Self {
         bytes[6] = (bytes[6] & 0x0f) | 0x40;
         bytes[8] = (bytes[8] & 0x3f) | 0x80;
@@ -147,7 +115,6 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 }
 
 impl Timestamp {
-    /// Milliseconds since the Unix epoch; `None` outside 1970-01-01..=9999-12-31.
     pub fn from_unix_ms(ms: i64) -> Option<Self> {
         if ms < 0 {
             return None;
@@ -180,7 +147,6 @@ pub enum GitAlgorithm {
     Sha256,
 }
 
-/// Git object id with its object format. The hex length always matches the algorithm.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RawGitId", into = "RawGitId")]
 pub struct GitId {
@@ -200,7 +166,6 @@ impl GitId {
             hex: hex.into(),
         })
     }
-    /// Infers the object format from a lowercase hex id (40 = SHA-1, 64 = SHA-256).
     pub fn from_hex(hex: &str) -> Result<Self, WireError> {
         let algorithm = if hex.len() == 40 {
             GitAlgorithm::Sha1
@@ -245,8 +210,6 @@ impl From<GitId> for RawGitId {
 pub const MAX_PATH_BYTES: usize = 4096;
 const MAX_DISPLAY_CHARS: usize = 4096;
 
-/// Lossless repository path: raw bytes travel as canonical base64; `display` is a lossy UTF-8
-/// label for presentation only and is never authority.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "RawPath", into = "RawPath")]
 pub struct WirePath {
@@ -260,7 +223,6 @@ struct RawPath {
     display: String,
 }
 impl WirePath {
-    /// Raw bytes (1..=4096) with a derived lossy display label.
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, WireError> {
         let bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > MAX_PATH_BYTES {
@@ -345,8 +307,6 @@ pub enum ActivityRole {
     System,
 }
 
-/// pi thinking level (`ThinkingLevel` in pi-agent-core 0.85.1). The worker clamps a requested
-/// level to the selected model's capabilities.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThinkingLevel {
@@ -387,7 +347,6 @@ impl ThinkingLevel {
     }
 }
 
-/// Kind of one pi session-tree entry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TreeEntryKind {
@@ -405,7 +364,6 @@ pub enum TreeEntryKind {
     Other,
 }
 
-/// One entry of the pi session tree (labels are short previews, never full content).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TreeEntry {
@@ -418,7 +376,6 @@ pub struct TreeEntry {
     pub bookmark: Option<String>,
 }
 
-/// A semantic extension dialog. There is no automatic answer for any kind.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UiPrompt {
@@ -428,7 +385,6 @@ pub enum UiPrompt {
     Editor { title: String, prefill: String },
 }
 
-/// The developer's answer to a [`UiPrompt`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum UiAnswer {
@@ -465,7 +421,6 @@ pub enum ForkPosition {
     At,
 }
 
-/// Longest prefix of `text` within `max_bytes`, cut at a UTF-8 boundary, and whether it was cut.
 pub fn truncate_utf8(text: &str, max_bytes: usize) -> (&str, bool) {
     if text.len() <= max_bytes {
         return (text, false);
@@ -477,7 +432,6 @@ pub fn truncate_utf8(text: &str, max_bytes: usize) -> (&str, bool) {
     (&text[..end], true)
 }
 
-/// Longest prefix of `text` with at most `max_chars` code points (the schema `maxLength` unit).
 pub fn truncate_chars(text: &str, max_chars: usize) -> &str {
     text.char_indices()
         .nth(max_chars)

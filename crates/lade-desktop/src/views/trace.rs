@@ -1,13 +1,3 @@
-//! Opt-in presentation timing trace for the native reference measurements (`scripts/e2e-perf`).
-//!
-//! Inert unless the window was started with `LADE_DESKTOP_TRACE` naming an absolute file. Each
-//! line is `<monotonic ms> <event> <detail>`: `intent` when a request leaves the views (detail:
-//! the intent label), `draft-edit` when a draft's text changes, semantic store changes (`draft`,
-//! `viewer`, `activity`, `detail`), and `paint` after the first frame painted following such a
-//! change. Details carry identifiers, labels, states and sizes only — never file content, draft
-//! or message text. "Painted" is GTK's after-paint of the window's frame clock: the frame was
-//! rendered by the toolkit, not confirmed on screen by the compositor.
-
 use std::cell::{Cell, RefCell};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -29,7 +19,6 @@ pub struct Trace {
 }
 
 impl Trace {
-    /// The trace named by [`TRACE_ENV`], if set to an absolute path that can be opened.
     pub fn from_env() -> Option<Rc<Self>> {
         let path = std::env::var_os(TRACE_ENV)
             .map(PathBuf::from)
@@ -49,17 +38,14 @@ impl Trace {
 
     pub fn event(&self, name: &str, detail: &str) {
         let now = glib::monotonic_time() / 1000;
-        // Best effort: a full disk must not disturb the window.
         let _ = writeln!(self.file.borrow_mut(), "{now} {name} {detail}");
     }
 
-    /// Records a semantic change and asks for the next `paint` line.
     pub fn changed(&self, name: &str, detail: &str) {
         self.event(name, detail);
         self.paint_pending.set(true);
     }
 
-    /// Writes `paint` after every frame that follows a recorded change.
     pub fn watch_paints(self: &Rc<Self>, window: &gtk::ApplicationWindow) {
         let trace = self.clone();
         window.connect_realize(move |window| {
@@ -76,7 +62,6 @@ impl Trace {
     }
 }
 
-/// Records each intent's label, then forwards it.
 pub struct TracingSink {
     pub inner: Rc<dyn IntentSink>,
     pub trace: Rc<Trace>,

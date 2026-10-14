@@ -62,16 +62,13 @@ COUNTER = ref('Counter')
 TS = ref('Timestamp')
 O = {'objective_id': ID}
 
-# Shared by both schemas; generate-dtos.py asserts identical definitions for identical names.
 shared = {
     'Id': string('uuid-v4'),
     'Counter': string('u64'),
     'Model': obj({'provider': string(min_length=1, max_length=128), 'id': string(min_length=1, max_length=256)}),
     'DeliveryMode': enum('prompt', 'steer', 'follow_up'),
     'ActivityRole': enum('user', 'assistant', 'thinking', 'tool', 'system'),
-    # IMP-011 pi compatibility (shared by both contracts).
     'ThinkingLevel': enum('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'),
-    # pi session-tree entry id (pi chooses 8 hex characters, a UUID on collision).
     'EntryId': string(min_length=1, max_length=64),
     'TreeEntry': obj({'entry_id': ref('EntryId'),
                       'kind': enum('user', 'assistant', 'tool_result', 'custom_message', 'compaction',
@@ -79,8 +76,6 @@ shared = {
                                    'custom', 'other'),
                       'label': string(max_length=200)},
                      {'parent_id': ref('EntryId'), 'bookmark': string(max_length=200)}),
-    # Semantic extension UI. Every prompt is answered explicitly by the developer or closed by the worker;
-    # nothing is answered automatically.
     'UiPrompt': one_of(
         obj({'kind': const('confirm'), 'title': string(max_length=512), 'message': string(max_length=4096)}),
         obj({'kind': const('select'), 'title': string(max_length=512),
@@ -106,7 +101,6 @@ client.update({
     'ReadLimit': string('read-limit'),
     'GitId': one_of(obj({'algorithm': const('sha1'), 'hex': string('git-sha1')}),
                     obj({'algorithm': const('sha256'), 'hex': string('sha256')})),
-    # Raw path bytes (1..=4096, canonical base64) are authoritative; display is a lossy UTF-8 label only.
     'Path': obj({'b64': string('path-b64'), 'display': string(max_length=4096)}),
     'Branch': string(min_length=1, max_length=255),
     'Title': string(min_length=1, max_length=200),
@@ -178,7 +172,6 @@ client['ObjectiveDetail'] = obj({
     'change_counts': ref('ChangeCounts'), 'unsent_drafts': COUNTER,
     'available_actions': array(ref('AvailableAction'), 32),
 }, {'session': ref('SessionInfo'), 'approval': ref('ApprovalSummary'),
-    # The Objective's Git history (retention refs, branch) was deleted on the user's explicit request.
     'history_deleted': BOOL})
 client.update({
     'ActivityItem': obj({'item_id': ID, 'seq': COUNTER, 'at': TS, 'role': ref('ActivityRole'),
@@ -187,11 +180,7 @@ client.update({
     'ChangedFile': obj({'path': ref('Path'),
                         'status': enum('added', 'modified', 'deleted', 'renamed', 'type_changed'),
                         'added': COUNTER, 'removed': COUNTER, 'binary': BOOL},
-                       # filtered: the path's `filter` attribute names a filter driver (Git LFS, clean/smudge);
-                       # LADE never runs filters, so its raw working-tree bytes are compared (unsupported content).
                        {'old_path': ref('Path'), 'filtered': BOOL}),
-    # Why part of a Change Set is not (fully) represented: a nested repository without a commit left out of
-    # the capture, or filtered content stored raw. Repository-wide notices carry no path.
     'ContentNotice': obj({'kind': enum('nested_repository', 'filtered_content'), 'message': ref('ShortText')},
                          {'path': ref('Path')}),
     'ReferenceVersion': one_of(obj({'kind': const('working'), 'capture_id': ID}),
@@ -211,12 +200,9 @@ client.update({
                     {'old_no': COUNTER, 'new_no': COUNTER, 'old_byte_start': COUNTER, 'new_byte_start': COUNTER}),
     'DiffHunk': obj({'old_start': COUNTER, 'old_lines': COUNTER, 'new_start': COUNTER, 'new_lines': COUNTER,
                      'lines': array(ref('DiffLine'), 1024)}),
-    # Content results: 1-based line and byte column, and the exact byte range [byte_start, byte_end) of the first
-    # match in the raw file bytes (the bytes file.read retains), when the file is small enough to locate it.
     'SearchResult': obj({'kind': enum('objective', 'file', 'content'), 'preview': ref('Preview')},
                         {'objective_id': ID, 'path': ref('Path'), 'line': COUNTER, 'byte_start': COUNTER,
                          'column': COUNTER, 'byte_end': COUNTER}),
-    # Payloads (request name -> payload def).
     'ObjectiveSelector': obj(O),
     'ActivityPageQuery': obj({**O, 'limit': ref('PageLimit')}, {'before': COUNTER}),
     'ChangesListQuery': obj({**O, 'basis': ref('Basis')}),
@@ -245,11 +231,9 @@ client.update({
                                 {'override_reason': string(min_length=1, max_length=2048)}),
     'ReviewIntegrateCommand': obj({**O, 'approval_id': ID}),
     'ObjectiveCleanupCommand': obj({**O, 'confirm_data_loss': BOOL}),
-    # Deliberate, user-confirmed deletion of a cleaned-up Objective's retention refs and branch; never automatic.
     'ObjectiveHistoryDeleteCommand': obj({**O, 'confirm_history_loss': BOOL}),
     'SettingsUpdateCommand': obj({}, {'default_model': ref('Model'),
                                       'verification_commands': array(ref('Argv'), 32)}),
-    # Reply data.
     'SnapshotData': obj({'service_epoch': ID, 'sequence': COUNTER, 'workspaces': array(ref('Workspace'), 64),
                          'objectives': array(ref('ObjectiveSummary'), 512), 'settings': ref('Settings')}),
     'ActivityPage': obj({'items': array(ref('ActivityItem'), 200), 'has_more': BOOL}),
@@ -260,8 +244,6 @@ client.update({
     'FileContent': obj({'artifact_digest': ref('Digest'), 'total_bytes': COUNTER, 'offset': COUNTER,
                         'length': COUNTER, 'encoding': enum('utf8', 'binary'), 'eof': BOOL,
                         'version_label': ref('Label')},
-                       # chunked: the file exceeds the whole-file inspection bound and is served in bounded chunks
-                       # (encoding judged per chunk); the artifact still holds the whole file.
                        {'text': string(), 'chunked': BOOL}),
     'FileDiff': obj({'binary': BOOL, 'hunks': array(ref('DiffHunk'), 512), 'truncated': BOOL},
                     {'old_digest': ref('Digest'), 'new_digest': ref('Digest')}),
@@ -270,34 +252,25 @@ client.update({
     'DraftList': obj({'drafts': array(ref('Draft'), 512)}),
     'InputList': obj({'inputs': array(ref('InputSummary'), 512)}),
     'OperationStatus': obj({'state': ref('OperationState')}, {'outcome': ref('Outcome')}),
-    # Event payloads.
     'ActivityAppended': obj({**O, 'items': array(ref('ActivityItem'), 200)}),
     'ActivityDelta': obj({**O, 'item_id': ID, 'append_text': string()}),
     'WorktreeChanged': obj({**O, 'capture_id': ID}),
     'ServiceNotice': obj({'level': enum('info', 'warning', 'error'), 'code': string(min_length=1, max_length=64),
                           'message': ref('ShortText')}),
     'Scope': obj({'workspace_id': ID, 'objective_id': ID, 'session_id': ID, 'association_revision': COUNTER}),
-    # Contained terminal (IMP-012). Terminal requests are ephemeral interaction with a service-owned PTY inside the
-    # Objective sandbox: they create no durable state, are never journaled or replayed, and so carry no
-    # operation_id. Sizes are decimal strings like every other counter; the service bounds them.
     'TerminalMode': enum('read_write', 'read_only'),
     'TerminalOpenCommand': obj({**O, 'cols': COUNTER, 'rows': COUNTER}),
     'TerminalInfo': obj({'terminal_id': ID, **O, 'mode': ref('TerminalMode'), 'cols': COUNTER, 'rows': COUNTER}),
     'TerminalInputCommand': obj({'terminal_id': ID, 'data': string(min_length=1, max_length=16384)}),
     'TerminalResizeCommand': obj({'terminal_id': ID, 'cols': COUNTER, 'rows': COUNTER}),
     'TerminalSelector': obj({'terminal_id': ID}),
-    # Output is UTF-8 text decoded by the service (invalid bytes replaced); dropped_bytes counts output discarded
-    # since the previous event because the bounded buffer overflowed (flood), so the client can mark the gap.
     'TerminalOutput': obj({**O, 'terminal_id': ID, 'seq': COUNTER, 'data': string(max_length=65536),
                            'dropped_bytes': COUNTER}),
     'TerminalClosed': obj({**O, 'terminal_id': ID,
                            'reason': enum('exited', 'closed', 'review_freeze', 'lifecycle', 'failed')},
                           {'exit_code': COUNTER, 'signal': COUNTER}),
-    # Explicit Exit / session logout: the service stops its workers and terminals and exits. Nothing resumes on
-    # the next start (restart recovery marks interrupted work).
     'ServiceStopCommand': obj({'reason': enum('exit', 'logout')}),
 })
-# IMP-011: model catalogue, session tree/fork/import/export, resources and semantic extension UI.
 PROVIDER_ID = string(min_length=1, max_length=128)
 client.update({
     'ProviderAuth': enum('none', 'api_key', 'subscription_token', 'oauth_login', 'cloud_credentials', 'custom'),
@@ -339,8 +312,6 @@ client.update({
     'UiRespondCommand': obj({**O, 'ui_id': ID, 'generation': COUNTER, 'answer': ref('UiAnswer')}),
 })
 
-# name, mutating, payload def, reply data def. Mutating names require operation_id; queries (and the ephemeral
-# terminal.* interaction) must omit it.
 REQUESTS = [
     ('snapshot', False, 'Empty', 'SnapshotData'),
     ('objective.get', False, 'ObjectiveSelector', 'ObjectiveDetail'),
@@ -377,7 +348,6 @@ REQUESTS = [
     ('terminal.resize', False, 'TerminalResizeCommand', 'Empty'),
     ('terminal.close', False, 'TerminalSelector', 'Empty'),
     ('service.stop', True, 'ServiceStopCommand', 'Empty'),
-    # IMP-011.
     ('models.list', False, 'ModelsListQuery', 'ModelCatalog'),
     ('session.tree', False, 'ObjectiveSelector', 'SessionTree'),
     ('resources.list', False, 'Empty', 'ResourceInventory'),
@@ -405,7 +375,6 @@ EVENTS = [
     ('service.notice', 'ServiceNotice'),
     ('terminal.output', 'TerminalOutput'),
     ('terminal.closed', 'TerminalClosed'),
-    # IMP-011.
     ('session.changed', 'SessionState'),
     ('ui.request', 'UiRequest'),
     ('ui.closed', 'UiClosed'),
@@ -422,8 +391,6 @@ client['Request'] = one_of(*[
     obj({'kind': const('request'), 'request_id': ID, **({'operation_id': ID} if mutating else {}),
          'name': const(name), 'payload': ref(payload)})
     for name, mutating, payload, _ in REQUESTS])
-# A reply names its request so the data shape is schema-checked; a request whose name could not be read is
-# answered by the unnamed rejection.
 client['Reply'] = one_of(*[
     obj({'kind': const('reply'), 'request_id': ID, 'name': const(name), 'result': result(data)})
     for name, _, _, data in REQUESTS], obj({'kind': const('reply'), 'request_id': ID, 'result': ref('Rejection')}))
@@ -449,8 +416,6 @@ worker = dict(shared)
 worker.update({
     'WorkerErrorCode': enum('startup_failed', 'session_failed', 'provider_failed', 'delivery_failed',
                             'protocol_violation', 'limit_reached', 'internal'),
-    # IMP-011: LADE-profile resources materialised in the session directory. Only listed extensions whose
-    # content still hashes to the approved sha256 are loaded.
     'WorkerExtension': obj({'name': string(min_length=1, max_length=256), 'path': SANDBOX_PATH,
                             'sha256': string('sha256')}),
     'WorkerResources': obj({'profile_dir': SANDBOX_PATH, 'extensions': array(ref('WorkerExtension'), 64)}),
@@ -562,7 +527,6 @@ def dump(value, indent=0):
 outputs = {
     'contracts/v1/schema.json': envelope('https://lade.local/contracts/v1', 'Body', client),
     'contracts/v1/worker-schema.json': envelope('https://lade.local/contracts/v1/worker', 'WorkerBody', worker),
-    # The worker sandbox binds only the worker package, so the worker validates against this copy.
     'packages/pi-worker/src/worker/worker-schema.json': envelope('https://lade.local/contracts/v1/worker',
                                                                  'WorkerBody', worker),
 }

@@ -10,12 +10,10 @@ import { LadeResourceLoader } from "./resources.ts";
 import type { UiBridge } from "./ui.ts";
 import type { CommandBody, DeliverBody, ModelRef, OutboundBody, ResultBody, StartBody, ThinkingLevel, TreeEntry, WorkerResources } from "./wire.ts";
 
-/** Built-in coding tools; they run inside the outer bwrap sandbox, not a pi-level one. */
 export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 
 export const MAX_TREE_ENTRIES = 1024;
 
-/** Encoded size of the listed entries; with the rest of `session.result` it stays below the 1 MiB frame. */
 const MAX_TREE_BYTES = 900 * 1024;
 
 const MAX_LABEL = 200;
@@ -33,7 +31,6 @@ class CommandError extends Error {}
 
 export interface ProfilePaths { agentDir: string; sessionsDir: string }
 
-/** Profile layout inside the Objective's session_dir; the real ~/.pi is never consulted. */
 export function profilePaths(sessionDir: string): ProfilePaths {
   return { agentDir: join(sessionDir, "agent"), sessionsDir: join(sessionDir, "sessions") };
 }
@@ -56,7 +53,6 @@ function contentText(content: string | ReadonlyArray<{ type: string; text?: stri
   return content.map(part => part.type === "text" ? part.text ?? "" : `[${part.type}]`).join(" ");
 }
 
-/** A short, content-free-as-possible label for one session entry (previews of at most 200 characters). */
 export function treeEntry(entry: SessionEntry, bookmark: string | undefined): TreeEntry {
   const base = (kind: TreeEntry["kind"], label: string): TreeEntry => {
     const node: TreeEntry = { kind, entry_id: entry.id, label: clip(label) };
@@ -95,10 +91,6 @@ export function treeEntry(entry: SessionEntry, bookmark: string | undefined): Tr
 
 export interface TreePage { entries: TreeEntry[]; truncated: boolean }
 
-/**
- * The newest session entries (oldest first) that fit one `session.result` frame: at most
- * MAX_TREE_ENTRIES and MAX_TREE_BYTES of encoded entries. `truncated` when older entries were left out.
- */
 export function treePage(entries: readonly SessionEntry[], label: (id: string) => string | undefined): TreePage {
   const page: TreeEntry[] = [];
   let bytes = 0;
@@ -121,11 +113,6 @@ function isThinking(level: string): level is ThinkingLevel {
   return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level);
 }
 
-/**
- * Owns the Objective's pi session runtime: creation/resume, session replacement (fork, import),
- * tree navigation, compaction, reload and model/thinking changes. Each bind of a session runtime is
- * one generation; extension dialogs are bound to it through the `UiBridge`.
- */
 export class SessionHost {
   private readonly start: StartBody;
   private readonly send: (body: OutboundBody) => void;
@@ -153,7 +140,6 @@ export class SessionHost {
     return this.runtimeHost.session;
   }
 
-  /** Create or resume the Objective's pi session, then bind generation 1. */
   async open(): Promise<void> {
     const start = this.start;
 
@@ -161,7 +147,6 @@ export class SessionHost {
     const { agentDir, sessionsDir } = profilePaths(start.session_dir);
     mkdirSync(agentDir, { recursive: true, mode: 0o700 });
     mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
-    // getAgentDir() fallbacks inside the SDK resolve here too; set before a session object exists.
     process.env.PI_CODING_AGENT_DIR = agentDir;
     process.env.PI_CODING_AGENT_SESSION_DIR = sessionsDir;
     const profile = start.resources?.profile_dir;
@@ -192,7 +177,6 @@ export class SessionHost {
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ agentDir: dir, sessionManager, sessionStartEvent }) => {
-      // The Objective's worktree is the only working directory, whatever an imported header says.
       const cwd = start.cwd;
       const loader = new LadeResourceLoader({ cwd, agentDir: dir, settingsManager, systemNote: start.system_note, resources: this.resources });
       await loader.reload();
@@ -254,7 +238,6 @@ export class SessionHost {
     };
   }
 
-  /** Subscribe and bind extensions for the current session runtime, then report the generation. */
   private async bind(session: AgentSession): Promise<void> {
     this.unsubscribe?.();
     this.unsubscribe = this.observe(session);
@@ -272,7 +255,6 @@ export class SessionHost {
     this.reason = "start";
   }
 
-  /** Reports the first generation once the service has seen `worker.ready`. */
   announce(): void {
     this.announced = true;
     this.changed("start");
@@ -307,7 +289,6 @@ export class SessionHost {
     this.changed("reload");
   }
 
-  /** Runs one session command; a second command while one runs fails at once. */
   async command(body: CommandBody): Promise<ResultBody> {
     const result: ResultBody = { kind: "session.result", command_id: body.command_id, ok: true, message: "" };
 
@@ -354,7 +335,6 @@ export class SessionHost {
         this.idle("tree navigation");
 
         if (!session.sessionManager.getEntry(command.entry_id)) throw new CommandError("no such session entry");
-        // Session-only: pi moves the leaf pointer; files in the worktree are never touched.
         const outcome = await session.navigateTree(command.entry_id, { summarize: false });
 
         if (outcome.cancelled) throw new CommandError("tree navigation was cancelled by an extension");
@@ -428,14 +408,6 @@ export class SessionHost {
   }
 }
 
-/**
- * Delivery-mode mapping. While a run is active: `steer` → steer(), `follow_up` → followUp(), and
- * `prompt` → followUp() (pi rejects an unqueued prompt during streaming). While idle every mode
- * starts a run with prompt(). Prompt templates and skill commands are expanded exactly once, by pi,
- * on this one path. Resolves once pi has accepted or queued the text, not when the run ends;
- * `onRunError` receives failures of the started run. An extension command is started and not
- * awaited: it may wait for a dialog that only a later inbound frame can answer.
- */
 export function deliver(session: AgentSession, input: DeliverBody, onRunError: (error: Error) => void): Promise<void> {
   if (session.isStreaming) return input.mode === "steer" ? session.steer(input.text) : session.followUp(input.text);
   const space = input.text.indexOf(" ");
@@ -463,10 +435,6 @@ export function deliver(session: AgentSession, input: DeliverBody, onRunError: (
   });
 }
 
-/**
- * Pinned pi ordering for an interrupt: drop queued steering/follow-up first (reported through
- * `onCleared` before the run settles), then abort and wait for the session to become idle.
- */
 export async function abort(session: AgentSession, onCleared: (steering: number, followUp: number) => void): Promise<void> {
   const cleared = session.clearQueue();
 

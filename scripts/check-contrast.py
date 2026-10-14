@@ -74,20 +74,16 @@ def solid(*layers):
     return color
 
 
-# The viewer's diff colours are set from Rust (GtkTextTag / gutter markup); they must be tokens.
 viewer = viewer_path.read_text()
 token_hex = {('#%02X%02X%02X' % tuple(rgb(v))): k for k, v in tokens.items() if v[3] == 1.0}
 viewer_colours = {}
 for literal in sorted(set(re.findall(r'#[0-9A-Fa-f]{6}', viewer))):
     name = token_hex.get(literal.upper())
     viewer_colours[literal] = name
-    # The separator line foreground is the one deliberate viewer-only ink; checked below.
     if name is None and literal.upper() != '#5C5C5C':
         errors.append(f'viewer.rs: {literal} is not a style.css token')
 tokens['viewer_separator_ink'] = parse('#5C5C5C')
 
-# The syntax scheme names its colours; each must be the style.css token of that name and value,
-# and every style may use only those named colours (no literal foreground/background).
 scheme = scheme_path.read_text()
 scheme_colours = dict(re.findall(r'<color name="(\w+)" value="([^"]+)"', scheme))
 for name, value in scheme_colours.items():
@@ -107,7 +103,6 @@ for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']:
     for fill in text_fills:
         pairs.append((ink, [fill], TEXT, 'text'))
 pairs += [
-    # Semantic inks on their fills and on plain surfaces (diff signs, results, errors, warnings).
     ('add_ink', ['add_fill'], TEXT, 'text'),
     ('add_ink', ['surface'], TEXT, 'text'),
     ('del_ink', ['del_fill'], TEXT, 'text'),
@@ -115,23 +110,17 @@ pairs += [
     ('warn_ink', ['warn_fill'], TEXT, 'text'),
     ('warn_ink', ['surface'], TEXT, 'text'),
     ('ink_metadata', ['warn_fill'], TEXT, 'text'),
-    # Selected text stays readable over plain and diff fills.
     ('ink_primary', ['text_selection'], TEXT, 'text'),
     ('ink_primary', ['add_fill', 'text_selection'], TEXT, 'text'),
     ('ink_primary', ['del_fill', 'text_selection'], TEXT, 'text'),
-    # Primary (black) buttons: white label in every state.
     ('surface', ['ink_primary'], TEXT, 'text'),
     ('surface', ['primary_hover'], TEXT, 'text'),
     ('surface', ['primary_pressed'], TEXT, 'text'),
-    # Destructive buttons: label on hover fill.
     ('del_ink', ['del_fill'], TEXT, 'text'),
-    # Diff separator lines in the viewer.
     ('viewer_separator_ink', ['fill_band'], TEXT, 'text'),
-    # Syntax inks (code-scheme.xml) on the code surface, the diff line fills and the selection.
     *[(ink, fills, TEXT, 'syntax text') for ink in syntax_inks
       for fills in (['surface'], ['add_fill'], ['del_fill'], ['text_selection'],
                     ['add_fill', 'text_selection'], ['del_fill', 'text_selection'])],
-    # Required non-text indicators.
     ('border_control', ['surface'], NON_TEXT, 'control boundary'),
     ('border_control', ['fill_hover'], NON_TEXT, 'control boundary'),
     ('border_control', ['fill_selected'], NON_TEXT, 'control boundary'),

@@ -1,8 +1,3 @@
-//! Frozen review: candidates, observed verification, approval and integration preconditions.
-//!
-//! [`Review`] is the per-Objective review aggregate. Operations that change the Objective lifecycle take the
-//! Objective mutably and either apply both changes or neither.
-
 use crate::domain::ids::{ApprovalId, CandidateId, GitId, ObjectiveId, Timestamp, VerificationId};
 use crate::domain::inspection::{ArtifactDigest, MAX_TEXT_BYTES};
 use crate::domain::objectives::{Lifecycle, Objective};
@@ -20,9 +15,7 @@ pub struct ChangeCounts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CandidateStatus {
     Current,
-    /// Superseded (returned for revision or refreshed); retained for comparison.
     Historical,
-    /// Unexpected change detected after freezing; review authority lost.
     Invalidated,
 }
 
@@ -40,7 +33,6 @@ impl CandidateStatus {
 pub struct Candidate {
     pub id: CandidateId,
     pub objective_id: ObjectiveId,
-    /// 1-based, increasing per Objective.
     pub ordinal: u32,
     pub commit: GitId,
     pub tree: GitId,
@@ -51,7 +43,6 @@ pub struct Candidate {
     pub status: CandidateStatus,
 }
 
-/// Candidate facts produced by the Git adapter after writers were excluded.
 #[derive(Clone, Debug)]
 pub struct NewCandidate {
     pub id: CandidateId,
@@ -85,7 +76,6 @@ impl VerificationOutcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Provenance {
-    /// Process exit/output observed by the service itself, never a worker claim.
     ServiceObserved,
 }
 
@@ -112,7 +102,6 @@ pub struct NewVerification {
     pub cwd_label: String,
 }
 
-/// How an observed verification run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerificationEnd {
     Exited { code: i32 },
@@ -162,12 +151,10 @@ pub struct Approval {
 pub struct ApproveCandidate {
     pub approval_id: ApprovalId,
     pub candidate_id: CandidateId,
-    /// The target commit the developer saw when approving.
     pub target_commit: GitId,
     pub override_reason: Option<String>,
 }
 
-/// Verification evidence of one candidate, over the latest run of each distinct command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Evidence {
     Missing,
@@ -176,7 +163,6 @@ pub enum Evidence {
     Passed,
 }
 
-/// Result of the isolated refresh attempted by the Git adapter after the target moved.
 #[derive(Clone, Debug)]
 pub enum RefreshOutcome {
     Rebuilt(NewCandidate),
@@ -185,13 +171,10 @@ pub enum RefreshOutcome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefreshResult {
-    /// A new current candidate exists; it needs verification and approval again.
     Refreshed { candidate_id: CandidateId },
-    /// The refresh conflicted; the Objective was returned for revision.
     Conflicted,
 }
 
-/// Everything the Git adapter needs for a protected integration, validated by the domain.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IntegrationPlan {
     pub approval_id: ApprovalId,
@@ -219,8 +202,6 @@ impl Review {
         }
     }
 
-    /// Rebuilds stored review state. Records must be in creation order (candidates by ordinal, verifications
-    /// and approvals by start/approval time).
     pub fn restore(
         objective_id: ObjectiveId,
         candidates: Vec<Candidate>,
@@ -299,7 +280,6 @@ impl Review {
             .find(|approval| approval.state == ApprovalState::Valid)
     }
 
-    /// Latest run per distinct argv for `candidate_id`, in first-run order.
     pub fn latest_verifications(&self, candidate_id: CandidateId) -> Vec<&Verification> {
         let mut latest: Vec<&Verification> = Vec::new();
         for verification in self
@@ -337,13 +317,11 @@ impl Review {
         }
     }
 
-    /// Attention fact: the current candidate's latest checks include a failure, interruption or error.
     pub fn verification_failed(&self) -> bool {
         self.current_candidate()
             .is_some_and(|candidate| self.evidence(candidate.id) == Evidence::Failed)
     }
 
-    /// Attention fact: the current candidate is based on a target commit that is no longer current.
     pub fn target_stale(&self, current_target: &GitId) -> bool {
         self.current_candidate()
             .is_some_and(|candidate| candidate.base_target_commit != *current_target)
@@ -434,7 +412,6 @@ impl Review {
         Ok(())
     }
 
-    /// Active → Frozen with an exact candidate. Execution must already be stopped (writers excluded).
     pub fn freeze(
         &mut self,
         objective: &mut Objective,
@@ -452,8 +429,6 @@ impl Review {
         Ok(self.push_candidate(new, ordinal, now))
     }
 
-    /// Frozen/Approved → Active. Invalidates any approval and keeps the candidate as history. Accepts the latest
-    /// candidate whether still current or invalidated by an unexpected change.
     pub fn return_for_revision(
         &mut self,
         objective: &mut Objective,
@@ -482,7 +457,6 @@ impl Review {
         Ok(())
     }
 
-    /// Records the start of a service-observed verification of the current frozen candidate.
     pub fn start_verification(
         &mut self,
         objective: &Objective,
@@ -526,7 +500,6 @@ impl Review {
         Ok(())
     }
 
-    /// Records how an observed run ended. Only exit code 0 is a pass.
     pub fn finish_verification(
         &mut self,
         id: VerificationId,
@@ -557,8 +530,6 @@ impl Review {
         Ok(outcome)
     }
 
-    /// Frozen → Approved, bound to the exact current candidate and current target commit. Requires passing
-    /// latest-per-command evidence, or a non-empty override reason for missing/failed checks.
     pub fn approve(
         &mut self,
         objective: &mut Objective,
@@ -616,7 +587,6 @@ impl Review {
         Ok(command.approval_id)
     }
 
-    /// Approved → Frozen. Returns false (and changes nothing) when no approval is valid.
     pub fn invalidate_approval(
         &mut self,
         objective: &mut Objective,
@@ -632,8 +602,6 @@ impl Review {
         Ok(true)
     }
 
-    /// Reacts to the observed target commit: if the current candidate's base differs, any approval is invalidated
-    /// (`TargetMoved`). Returns whether the candidate is stale against the target.
     pub fn observe_target(
         &mut self,
         objective: &mut Objective,
@@ -647,8 +615,6 @@ impl Review {
         Ok(stale)
     }
 
-    /// Unexpected change of the frozen content: the candidate loses review authority, any approval is
-    /// invalidated, and the Objective must be returned for revision.
     pub fn invalidate_candidate(
         &mut self,
         objective: &mut Objective,
@@ -673,8 +639,6 @@ impl Review {
         Ok(())
     }
 
-    /// The target moved: either a rebuilt candidate on the new target (re-verify, re-approve) or a conflict that
-    /// returns the Objective for revision. Any approval is invalidated either way.
     pub fn refresh(
         &mut self,
         objective: &mut Objective,
@@ -723,7 +687,6 @@ impl Review {
         }
     }
 
-    /// Validates integration preconditions without changing anything.
     pub fn check_integration(
         &self,
         objective: &Objective,
@@ -759,7 +722,6 @@ impl Review {
         })
     }
 
-    /// After the Git adapter proved the integration: Approved → Integrated and the approval is consumed.
     pub fn complete_integration(
         &mut self,
         objective: &mut Objective,
@@ -778,7 +740,6 @@ impl Review {
         Ok(())
     }
 
-    /// Service restart: running verifications become interrupted and an unconsumed approval expires.
     pub fn recover_after_restart(
         &mut self,
         objective: &mut Objective,
@@ -795,7 +756,6 @@ impl Review {
         Ok(())
     }
 
-    /// Any non-terminal → Discarded (execution and verification must be stopped first).
     pub fn discard(
         &mut self,
         objective: &mut Objective,
@@ -808,7 +768,6 @@ impl Review {
         Ok(())
     }
 
-    /// Defined/Active/Frozen → CompletedNoChanges, only when the caller observed an empty Change Set.
     pub fn complete_without_changes(
         &mut self,
         objective: &mut Objective,
@@ -995,7 +954,6 @@ mod tests {
                 )
                 .is_err()
         );
-        // Latest run per command counts: re-running the failed command and passing clears the failure.
         verify(
             &mut review,
             &objective,
@@ -1170,7 +1128,6 @@ mod tests {
                 .is_err(),
             "not frozen"
         );
-        // A second freeze gets the next ordinal; the old candidate stays historical.
         review
             .freeze(&mut objective, new_candidate(2, &git(1)), ts(22))
             .expect("refreeze");
@@ -1234,7 +1191,6 @@ mod tests {
             review.check_integration(&objective, approval_id(1), &target),
             Err(DomainError::InvalidLifecycle(_))
         ));
-        // Re-approve with a new approval; the old one stays invalid.
         review
             .approve(
                 &mut objective,

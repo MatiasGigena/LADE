@@ -4,7 +4,6 @@ import type { Readable } from "node:stream";
 import { encodeOutbound, LineDecoder } from "./wire.ts";
 import type { InboundBody, OutboundBody, WorkerChannel } from "./wire.ts";
 
-/** Above this many queued bytes, streaming deltas are dropped; the final activity.item still lands. */
 export const DELTA_BUDGET = 4 * 1024 * 1024;
 
 const MAX_COALESCED_DELTA = 64 * 1024;
@@ -17,11 +16,6 @@ function weight(body: OutboundBody): number {
   }
 }
 
-/**
- * JSONL over inherited pipes. Inbound frames are yielded one at a time, so stdin is only read while
- * the worker is ready for the next frame. Outbound frames are written strictly in order and every
- * write that reports a full pipe waits for "drain" before the next one.
- */
 export class StdioChannel implements WorkerChannel {
   private readonly input: Readable;
   private readonly write: (frame: Buffer) => boolean;
@@ -51,10 +45,6 @@ export class StdioChannel implements WorkerChannel {
     return this.flush();
   }
 
-  /**
-   * Resolves once every frame queued so far has been handed to the pipe. A frame queued while a
-   * drain is finishing (after its last write, before it settles) starts the next drain.
-   */
   flush(): Promise<void> {
     this.flushing ??= this.drain().finally(() => { this.flushing = undefined; });
 

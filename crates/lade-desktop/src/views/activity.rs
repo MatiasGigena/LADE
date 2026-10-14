@@ -1,12 +1,3 @@
-//! Activity: the one home of Agent Session control — the agent's state line (model, execution,
-//! session and generation), Start / Cancel / Resume, the accepted inputs with their delivery
-//! state, the transcript with incremental appends and in-place delta updates, and the composer
-//! (Prompt / Steer / Follow-up). New items never take focus.
-//!
-//! The agent's contextual tools live here too, collapsed under one disclosure: the model and
-//! thinking picker (used by Start agent), the Agent Session section (tree, apply, compact, reload,
-//! export, import) and the LADE profile resources.
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -52,20 +43,14 @@ pub struct Activity {
     follow: Cell<bool>,
     auto_scrolling: Cell<bool>,
     scroll_pending: Cell<bool>,
-    /// Content of the collapsed agent tools (model, Agent Session, profile resources).
     agent_panel: gtk::Box,
     agent_error: RefCell<Option<String>>,
-    /// The latest local error of Start / Cancel / Resume, below the state line.
     control_error: gtk::Box,
-    /// Accepted inputs: an always-visible line for uncertain or blocked delivery, the list
-    /// collapsed.
     inputs_alert: gtk::Box,
     inputs_list: gtk::Box,
 }
 
-/// Title (and accessible name) of the agent tools disclosure.
 pub const AGENT_TOOLS_TITLE: &str = "Model, Agent Session and profile";
-/// Title (and accessible name) of the accepted-inputs disclosure.
 pub const INPUTS_TITLE: &str = "Accepted inputs and delivery";
 
 impl Activity {
@@ -90,7 +75,6 @@ impl Activity {
         head.append(&controls);
         root.append(&head);
 
-        // Contextual agent tools, on demand: collapsed, bounded in height when open.
         let agent_panel = vbox(space::PAGE);
         agent_panel.add_css_class("agent-panel");
         let agent_scroll = gtk::ScrolledWindow::builder()
@@ -108,8 +92,6 @@ impl Activity {
             |_| {},
         ));
 
-        // Accepted inputs (prompts, steers, follow-ups and submitted feedback) with their
-        // delivery state; an uncertain or blocked one is stated outside the disclosure.
         let inputs_alert = vbox(space::TIGHT);
         root.append(&inputs_alert);
         let inputs_list = vbox(space::TIGHT);
@@ -214,7 +196,6 @@ impl Activity {
                 this.store_composer();
             }
         });
-        // Follow the newest item only while the reader is at the bottom; never move focus.
         let adjustment = activity.scroll.vadjustment();
         let this = Rc::downgrade(&activity);
         adjustment.connect_value_changed(move |adj| {
@@ -225,8 +206,6 @@ impl Activity {
                     .set(adj.value() + adj.page_size() >= adj.upper() - 8.0);
             }
         });
-        // Adjustments change during size allocation; apply the new position on the next idle so
-        // the viewport re-allocates (setting it inside the notification leaves a stale view).
         let follow_tail = {
             let this = Rc::downgrade(&activity);
             move |_: &gtk::Adjustment| {
@@ -259,7 +238,6 @@ impl Activity {
         activity
     }
 
-    /// The accepted-input ledger of the selected Objective, newest first.
     fn render_inputs(&self) {
         widgets::clear(&self.inputs_alert);
         widgets::clear(&self.inputs_list);
@@ -322,8 +300,6 @@ impl Activity {
         }
     }
 
-    /// The agent tools: model and thinking, the Agent Session section and the LADE profile
-    /// resources, with the latest local error of a session operation.
     fn render_agent(self: &Rc<Self>) {
         widgets::clear(&self.agent_panel);
         let detail = self.controller.store.state().selected_detail().cloned();
@@ -389,7 +365,6 @@ impl Activity {
     }
 
     pub fn composer_has_focus(&self) -> bool {
-        // `is_focus`: the window's focus widget, also while the toplevel is not the active window.
         self.composer.is_focus()
     }
 
@@ -409,7 +384,6 @@ impl Activity {
                 }
                 Change::Inputs(id) if Some(id) == selected.as_ref() => self.render_inputs(),
                 Change::Catalog => {
-                    // The chosen model is named beside Start agent.
                     self.render_header();
                     agent = true;
                 }
@@ -470,7 +444,6 @@ impl Activity {
             return;
         };
         let controls = panel::activity_controls(&detail);
-        // Starting uses the model chosen under "Model, Agent Session and profile": name it here.
         if controls
             .iter()
             .any(|p| p.action == ActionName::ExecutionStart && p.tone == Tone::Primary)
@@ -488,8 +461,6 @@ impl Activity {
         self.status.set_text(&line);
         self.status.set_tooltip_text(Some(&full));
         widgets::set_accessible_description(&self.status, &full);
-        // The state line beside them states why one is unavailable; the reason is also the
-        // button's tooltip and accessible description.
         for control in controls {
             let this = Rc::downgrade(self);
             let action = control.action;
@@ -622,8 +593,6 @@ impl Activity {
         let Some(log) = state.activity.get(&id) else {
             return;
         };
-        // From the start, the list holds a placeholder row ("Loading…", "No activity yet.")
-        // instead of items: rebuild rather than append below it.
         if from_index == 0 || self.text_labels.borrow().len() != from_index {
             drop(state);
             self.render_items();

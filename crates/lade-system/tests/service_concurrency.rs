@@ -1,8 +1,3 @@
-//! Concurrent Objectives over the real service (IMP-013): four real workers at once on two
-//! repositories, Git and grant isolation between Objectives, same-target integration contention
-//! with stale-review invalidation, aggregate quotas, storage pressure, lease loss with four
-//! terminals, and a client that stops reading.
-
 mod service_support;
 
 use std::fs;
@@ -74,7 +69,6 @@ fn integrate_request(objective: &Id, approval: &Id) -> Request {
     })
 }
 
-/// Refresh onto the moved target, approve again, integrate.
 fn refresh_and_integrate(client: &mut Client, objective: &Id) {
     let stale = detail(client, objective);
     match client.call(Request::ReviewRefresh(CandidateCommand {
@@ -164,7 +158,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
             create_objective(&mut client, &ws.workspace_id, &format!("Four {n}")).objective_id,
         );
     }
-    // Four workers start at once; none waits for another.
     for objective in &objectives {
         start_execution(&mut client, objective);
     }
@@ -172,7 +165,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
         wait_state(&mut client, objective, ExecutionState::Idle);
     }
     let trees: Vec<_> = objectives.iter().map(|o| worktree(&env, o)).collect();
-    // Concurrent turns: every message is accepted before any reply is awaited.
     let sent: Vec<Id> = objectives
         .iter()
         .enumerate()
@@ -188,7 +180,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
         result(client.wait_reply(&request)).unwrap();
     }
     if sandboxed {
-        // Worker 0 tries to write into worker 1's worktree by absolute path.
         let escape = trees[1].join("escape.txt");
         let request = send_message(
             &mut client,
@@ -206,7 +197,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
     for objective in &objectives {
         wait_state(&mut client, objective, ExecutionState::Idle);
     }
-    // Every worktree holds only its own Objective's work; the shared checkouts are untouched.
     for (i, tree) in trees.iter().enumerate() {
         for j in 0..trees.len() {
             assert_eq!(
@@ -223,7 +213,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
             !trees[1].join("escape.txt").exists(),
             "grant crossed Objectives"
         );
-        // A terminal of Objective 0 cannot see Objective 1's worktree or any session directory.
         let terminal = open_terminal(&mut client, &objectives[0]).unwrap();
         let sessions = env.root.path().join("state/sessions");
         type_line(
@@ -246,7 +235,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
             }))
             .unwrap();
     }
-    // Branches and refs stay in their own repository and Objective scope.
     let details: Vec<ObjectiveDetail> = objectives.iter().map(|o| detail(&mut client, o)).collect();
     let mut branches: Vec<&str> = details.iter().map(|d| d.branch.as_str()).collect();
     branches.sort_unstable();
@@ -287,8 +275,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
     let approvals: Vec<Id> = objectives.iter().map(|o| approve(&mut client, o)).collect();
     let main_before = git(&env.repo, &["rev-parse", "main"]);
 
-    // Same-target contention: two integrations into repository A's main arrive together, plus
-    // one into repository B. A runs one at a time; B does not wait for A.
     let first = client.send(integrate_request(&objectives[0], &approvals[0]), true);
     let second_req = client.send(integrate_request(&objectives[1], &approvals[1]), true);
     let other_repo = client.send(integrate_request(&objectives[3], &approvals[3]), true);
@@ -311,7 +297,6 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
         other => panic!("integration into repository B: {other:?}"),
     }
     assert_eq!(git(&env.repo, &["rev-parse", "main^"]), main_before);
-    // The third approval of repository A was bound to the old target as well.
     let stale = client
         .call(integrate_request(&objectives[2], &approvals[2]))
         .unwrap_err();
@@ -352,7 +337,6 @@ fn aggregate_worker_quota_is_configurable_visible_and_four_is_not_a_cap() {
             create_objective(&mut client, &ws.workspace_id, &format!("Quota {n}")).objective_id
         })
         .collect();
-    // Five live executions at once (more than four).
     for objective in &objectives[..5] {
         start_execution(&mut client, objective);
         wait_state(&mut client, objective, ExecutionState::Idle);
@@ -388,7 +372,6 @@ fn aggregate_worker_quota_is_configurable_visible_and_four_is_not_a_cap() {
         ExecutionState::None,
         "a refused start records nothing"
     );
-    // Stopping one frees a slot; the stopped one cannot resume while the quota is full again.
     client
         .call(Request::ExecutionCancel(ObjectiveSelector {
             objective_id: objectives[0].clone(),
@@ -457,7 +440,6 @@ fn terminal_total_is_aggregate_across_objectives() {
 #[test]
 fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
     let env = Env::new("conc-storage");
-    // Warning level: everything still works, the notice says why it may stop.
     let service = env.start_limited(
         FakeLauncher::shared(),
         ResourceLimits {
@@ -478,7 +460,6 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
     drop(client);
     service.shutdown();
 
-    // Below the reserve: new writers are refused with the reason; records keep working.
     let service = env.start_limited(
         FakeLauncher::shared(),
         ResourceLimits {
@@ -528,7 +509,6 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
         }))
         .unwrap_err();
     assert_eq!(resume.code, ErrorCode::LimitReached);
-    // Input and history are still recorded inside the reserve.
     match client.call(Request::MessageSend(MessageSendCommand {
         objective_id: running.clone(),
         text: "kept for later".into(),
@@ -555,7 +535,6 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
     drop(client);
     service.shutdown();
 
-    // Space back: the same requests are accepted again.
     let service = env.start(FakeLauncher::shared());
     let mut client = env.connect();
     start_execution(&mut client, &fresh);
@@ -603,13 +582,10 @@ fn client_crash_kills_four_terminals_while_four_agents_keep_running() {
     eventually("four detached sleepers", || {
         (sleepers(&marker) == 4).then_some(())
     });
-    // The client crashes: its lease and every terminal of it end, descendants included.
     drop(client);
     eventually("terminals killed with the lease", || {
         (sleepers(&marker) == 0).then_some(())
     });
-    // Agents are authorized background work: they keep running for the next client, which
-    // sees no terminal of the previous one.
     let mut next = env.connect();
     for objective in &objectives {
         assert_eq!(
@@ -633,7 +609,6 @@ fn client_crash_kills_four_terminals_while_four_agents_keep_running() {
     service.shutdown();
 }
 
-/// Resident memory of this process (service and test client share it), in KiB.
 fn rss_kib() -> u64 {
     fs::read_to_string("/proc/self/status")
         .unwrap()
@@ -658,7 +633,6 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
     }
     drop(client);
 
-    // A client that completes the handshake, then only writes.
     let stream = UnixStream::connect(env.socket()).unwrap();
     let mut reader = FrameReader::new(stream.try_clone().unwrap(), Framing::Client);
     let mut writer = FrameWriter::new(stream.try_clone().unwrap(), Framing::Client);
@@ -678,7 +652,6 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
     );
     let before = rss_kib();
     for _ in 0..8000 {
-        // A cheap query: the service answers fast, so only the unread link fills up.
         let query = Request::OperationGet(lade_protocol::client::OperationGetQuery {
             operation_id: new_id(),
         });
@@ -690,9 +663,6 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
             break;
         }
     }
-    // The service dropped the slow link instead of buffering for it (frame bound: 256 queued
-    // replies): the next client gets the
-    // lease while the slow one still reads nothing, and resyncs from the snapshot.
     let mut next = eventually("next client admitted", || {
         Client::connect(&env.socket(), &env.capability()).ok()
     });
@@ -705,7 +675,6 @@ fn a_client_that_stops_reading_is_dropped_and_the_next_one_resyncs() {
         grown < 64 * 1024,
         "memory grew by {grown} KiB for a stalled client"
     );
-    // The slow client finally reads: a bounded tail of frames, then the end of the link.
     let mut raw = stream;
     raw.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     let started = Instant::now();

@@ -1,7 +1,3 @@
-// JSON-free core of the wire contracts: the closed schema-subset validator, version identity,
-// direction checks and identifier brands. The worker validates against its package-local generated
-// copy of the worker schema (src/worker/worker-schema.json), because the sandbox binds only the
-// worker package; the shared contracts/ directory is used by tests and the client contract.
 import { randomUUID } from "node:crypto";
 import type { Counter, Id, ServiceToWorker, WorkerBody, WorkerToService } from "./dto.ts";
 import { WireError } from "./json.ts";
@@ -17,12 +13,10 @@ export const MAX_TRANSFER = 8 * 1024 * 1024;
 
 export const MAX_TRANSFERS = 2;
 
-/** Single activity-item text above this many UTF-8 bytes must be truncated by the worker. */
 export const MAX_ITEM_TEXT_BYTES = 192 * 1024;
 
 export const MAX_PATH_BYTES = 4096;
 
-/** The closed JSON-Schema subset emitted by scripts/generate-schema.py; anything else fails closed. */
 export interface Schema {
   $ref?: string;
   oneOf?: Schema[];
@@ -74,7 +68,6 @@ function within(value: bigint | undefined, max: bigint): boolean {
   return value !== undefined && value >= 1n && value <= max;
 }
 
-/** Canonical padded RFC 4648 base64 of 1..=4096 raw path bytes; re-encoding must reproduce the text. */
 function pathBytes(value: string): boolean {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return false;
   const bytes = Buffer.from(value, "base64");
@@ -98,7 +91,6 @@ export function format(value: string, kind: string): boolean {
   }
 }
 
-/** JSON-Schema string lengths count Unicode code points. */
 function codePoints(value: string): number {
   let count = 0;
 
@@ -138,7 +130,6 @@ export function matches(value: JsonValue, definition: Schema, contract: Contract
     case "array": {
       const items = definition.items;
 
-      // Unbounded arrays are not part of the subset.
       return items !== undefined && definition.maxItems !== undefined && Array.isArray(value) &&
         value.length <= definition.maxItems && value.length >= (definition.minItems ?? 0) &&
         value.every(item => matches(item, items, contract));
@@ -168,18 +159,15 @@ export function versioned(value: JsonValue): JsonObject {
   return value;
 }
 
-/** Bodies the service may send to a worker. A worker must reject every other kind. */
 export function isServiceToWorker(body: WorkerBody): body is ServiceToWorker {
   return body.kind === "worker.start" || body.kind === "input.deliver" || body.kind === "session.abort" || body.kind === "worker.shutdown" ||
     body.kind === "session.command" || body.kind === "ui.respond";
 }
 
-/** Bodies only a worker may send. */
 export function isWorkerToService(body: WorkerBody): body is WorkerToService {
   return !isServiceToWorker(body);
 }
 
-/** Validates a canonical lowercase UUIDv4 received from outside the wire decoder. */
 export function parseId(text: string): Id {
   if (!format(text, "uuid-v4")) throw new WireError("invalid_schema");
 
@@ -187,12 +175,10 @@ export function parseId(text: string): Id {
   return text as Id;
 }
 
-/** A fresh random UUIDv4 for worker-generated identifiers (activity items). */
 export function newId(): Id {
   return parseId(randomUUID());
 }
 
-/** The canonical decimal `Counter` of a non-negative safe integer. */
 export function counter(value: number): Counter {
   const text = String(value);
 

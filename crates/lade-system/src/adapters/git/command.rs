@@ -1,19 +1,3 @@
-//! The single hardened Git invocation path.
-//!
-//! Every Git process LADE starts is built here. The environment is cleared (no inherited `GIT_*`,
-//! no user/system configuration, no credential or editor helpers) and a fixed set of overrides is
-//! injected through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`. Those carry
-//! command-line precedence, so they win over the untrusted repository configuration, they accept
-//! arbitrary bytes in subsection names, and Git propagates them to any Git child process.
-//!
-//! Before every invocation the configuration visible to it (repository, worktree and included
-//! files) is enumerated once and every repository-defined filter driver, merge driver and
-//! configuration-defined hook (`hook.<name>.command`, newer Git) is overridden in the same way,
-//! so nothing the untrusted configuration names can run, whatever the subcommand or Git version.
-//!
-//! Children receive only stdin/stdout/stderr: the standard library opens every descriptor with
-//! `O_CLOEXEC`, so nothing else the service holds is inherited.
-
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -25,20 +9,15 @@ use std::thread::{self, JoinHandle};
 
 use super::GitError;
 
-/// Maximum stderr bytes retained for diagnostics.
 pub const STDERR_LIMIT: usize = 2048;
 const DEFAULT_STDOUT_LIMIT: usize = 64 << 20;
 const CONFIG_SCAN_LIMIT: usize = 4 << 20;
 const GIT_PROGRAM: &str = "git";
 const FALLBACK_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 
-/// LADE's fixed identity for every commit it creates.
 pub const LADE_IDENTITY_NAME: &str = "LADE";
-/// LADE's fixed identity e-mail for every commit it creates.
 pub const LADE_IDENTITY_EMAIL: &str = "lade@localhost";
 
-/// Overrides applied to every invocation. Repository configuration, hooks, filters, helpers and
-/// external programs are untrusted and must never run with the service's authority.
 const HARDENED_CONFIG: &[(&str, &str)] = &[
     ("core.hooksPath", "/dev/null"),
     ("core.fsmonitor", "false"),
@@ -66,7 +45,6 @@ const HARDENED_CONFIG: &[(&str, &str)] = &[
     ("sequence.editor", "false"),
 ];
 
-/// Bounded stderr retained for diagnostics; never part of an error's `Display`.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Diagnostics {
     bytes: Vec<u8>,
@@ -74,12 +52,10 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
-    /// The retained bytes (at most [`STDERR_LIMIT`]).
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    /// Whether more stderr was produced than was retained.
     pub fn truncated(&self) -> bool {
         self.truncated
     }
@@ -101,14 +77,12 @@ impl fmt::Debug for Diagnostics {
     }
 }
 
-/// Completed process output.
 pub(crate) struct GitOutput {
     pub status: ExitStatus,
     pub stdout: Vec<u8>,
     pub stderr: Diagnostics,
 }
 
-/// Builder for one hardened Git invocation.
 pub(crate) struct GitCommand {
     op: &'static str,
     args: Vec<OsString>,
@@ -120,13 +94,10 @@ pub(crate) struct GitCommand {
     read_only: bool,
     stdin: Option<Vec<u8>>,
     stdout_limit: usize,
-    /// Enumerate the visible configuration first and neutralise what it defines (see
-    /// [`untrusted_overrides`]). Off only for the enumeration itself and `git version`.
     scan_config: bool,
 }
 
 impl GitCommand {
-    /// `op` is a short, static label used in errors (never user content).
     pub(crate) fn new(op: &'static str) -> Self {
         Self {
             op,
@@ -143,21 +114,16 @@ impl GitCommand {
         }
     }
 
-    /// Skip the configuration scan: only for commands that read no repository configuration
-    /// (`git version`) and for the scan itself.
     pub(crate) fn without_config_scan(mut self) -> Self {
         self.scan_config = false;
         self
     }
 
-    /// Explicit `--git-dir`; repository discovery through a (possibly worker-written) `.git` file
-    /// is never used for operations on known repositories.
     pub(crate) fn git_dir(mut self, path: &Path) -> Self {
         self.git_dir = Some(path.to_path_buf());
         self
     }
 
-    /// Explicit `--work-tree` (overrides an untrusted `core.worktree`); also the working directory.
     pub(crate) fn work_tree(mut self, path: &Path) -> Self {
         self.work_tree = Some(path.to_path_buf());
         self
@@ -183,21 +149,18 @@ impl GitCommand {
         self
     }
 
-    /// An explicit `GIT_*` (or other) variable; the inherited environment is always cleared.
     pub(crate) fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.env
             .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
         self
     }
 
-    /// An additional command-scope configuration override.
     pub(crate) fn config(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.config
             .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
         self
     }
 
-    /// Read-only invocation: `GIT_OPTIONAL_LOCKS=0` so no opportunistic index refresh is written.
     pub(crate) fn read_only(mut self) -> Self {
         self.read_only = true;
         self
@@ -213,8 +176,6 @@ impl GitCommand {
         self
     }
 
-    /// The process for this invocation; `scanned` are the overrides derived from the visible
-    /// configuration (they follow the fixed ones and precede explicit [`Self::config`] values).
     fn build(&self, scanned: &[(OsString, OsString)]) -> Command {
         let mut cmd = Command::new(GIT_PROGRAM);
         cmd.env_clear();
@@ -275,8 +236,6 @@ impl GitCommand {
         cmd
     }
 
-    /// The configuration scan for this invocation: same repository selection, only the fixed
-    /// overrides (`git config` itself runs no hooks, filters or drivers).
     fn scan(&self) -> Result<Vec<(OsString, OsString)>, GitError> {
         if !self.scan_config {
             return Ok(Vec::new());
@@ -308,7 +267,6 @@ impl GitCommand {
             .map_err(|e| GitError::Spawn { op, kind: e.kind() })?;
         let stdin_writer = match (self.stdin, child.stdin.take()) {
             (Some(bytes), Some(mut pipe)) => Some(thread::spawn(move || {
-                // A child that exits early closes the pipe; its exit status reports the failure.
                 let _ = pipe.write_all(&bytes);
             })),
             _ => None,
@@ -348,7 +306,6 @@ impl GitCommand {
         })
     }
 
-    /// Run to completion, returning status and bounded output; does not interpret the status.
     pub(crate) fn output(self) -> Result<GitOutput, GitError> {
         let mut running = self.spawn()?;
         let mut stdout = Vec::new();
@@ -374,7 +331,6 @@ impl GitCommand {
         })
     }
 
-    /// Run and require exit status 0; returns stdout.
     pub(crate) fn run(self) -> Result<Vec<u8>, GitError> {
         let op = self.op;
         let out = self.output()?;
@@ -389,7 +345,6 @@ impl GitCommand {
         }
     }
 
-    /// Spawn with a streaming stdout for bounded readers (blob pages, grep).
     pub(crate) fn stream(self) -> Result<GitStream, GitError> {
         Ok(GitStream {
             running: self.spawn()?,
@@ -397,16 +352,6 @@ impl GitCommand {
     }
 }
 
-/// Command-scope overrides that neutralise everything the (untrusted) configuration names in
-/// `names` (`git config --list -z --name-only` output):
-///
-/// - filter drivers become no-ops (content passes through unconverted, `required` off);
-/// - custom merge drivers become `false`, so affected paths report conflicts instead of running;
-/// - configuration-defined hooks (`hook.<name>.command`/`.event`/`.enabled`, newer Git) lose
-///   their command and events and are disabled. An empty `event` resets that multi-valued list
-///   where Git supports resetting and is an inert extra value otherwise.
-///
-/// Git versions without a feature ignore its keys, so the overrides are unconditional.
 pub(crate) fn untrusted_overrides(names: &[u8]) -> Vec<(OsString, OsString)> {
     let mut filters = BTreeSet::new();
     let mut merges = BTreeSet::new();
@@ -495,7 +440,6 @@ impl Running {
     }
 }
 
-/// A running Git process whose stdout is consumed incrementally.
 pub(crate) struct GitStream {
     running: Running,
 }
@@ -505,13 +449,11 @@ impl GitStream {
         &mut self.running.stdout
     }
 
-    /// Wait for exit after the caller consumed what it needed (draining the rest).
     pub(crate) fn finish(mut self) -> Result<(ExitStatus, Diagnostics), GitError> {
         let _ = io::copy(&mut self.running.stdout, &mut io::sink());
         self.running.finish()
     }
 
-    /// Stop early: kill the process and reap it.
     pub(crate) fn abort(self) {
         self.running.abort();
     }
@@ -554,7 +496,6 @@ mod tests {
             !got.iter()
                 .any(|(k, _)| k.starts_with("hookx.") || k == "hook.command")
         );
-        // Two hooks (3 keys each), one filter (4), one merge driver (2).
         assert_eq!(got.len(), 12, "{got:?}");
     }
 
@@ -564,7 +505,6 @@ mod tests {
         assert_eq!(got[0].0.as_encoded_bytes(), b"hook.caf\xe9 X.command");
     }
 
-    /// Every invocation carries the overrides derived from the repository's configuration.
     #[test]
     fn invocations_emit_the_scanned_overrides() {
         let dir = std::env::temp_dir().join(format!(

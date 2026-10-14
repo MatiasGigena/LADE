@@ -1,9 +1,3 @@
-// Semantic extension UI routed to the LADE client. Every dialog carries the session generation it was
-// raised in; an answer for another generation, an unknown dialog or a second answer is refused, and a
-// session refresh/replacement closes the open dialogs as "replaced". Nothing is ever answered
-// automatically: a dialog stays open until the developer answers, the extension's own timeout or abort
-// signal closes it, or the session is replaced. TUI-only surfaces (custom components, editor control,
-// themes) fail explicitly or are display-only no-ops; they never fabricate a decision.
 import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { Id } from "../dto.ts";
@@ -29,7 +23,6 @@ const COLORS: ThemeColors = {
 
 const BACKGROUNDS: ThemeBackgrounds = { selectedBg: "", userMessageBg: "", customMessageBg: "", toolPendingBg: "", toolSuccessBg: "", toolErrorBg: "" };
 
-/** Plain (uncoloured) theme: LADE renders extension text itself, never terminal escapes. */
 const PLAIN = new Theme(COLORS, BACKGROUNDS, "256color", { name: "lade-plain" });
 
 export class UnsupportedUiError extends Error {
@@ -47,7 +40,6 @@ export class UiBridge {
 
   get generation(): number { return this.current; }
 
-  /** A refresh or replacement starts a new generation; open dialogs of the old one are closed. */
   advance(): number {
     for (const [id, open] of this.pending) {
       this.pending.delete(id);
@@ -60,7 +52,6 @@ export class UiBridge {
     return this.current;
   }
 
-  /** The developer's answer. Returns why it was refused, or undefined when it was applied. */
   respond(body: RespondBody): string | undefined {
     const open = this.pending.get(body.ui_id);
 
@@ -108,17 +99,14 @@ export class UiBridge {
     });
   }
 
-  /** The `ExtensionUIContext` bound to every session runtime of this worker. */
   context(): ExtensionUIContext {
     const value = (answer: UiAnswer | undefined): string | undefined => answer?.kind === "value" ? answer.value : undefined;
 
     return {
       select: async (title, options, opts) => {
-        // The wire needs at least one choice; an empty list fails instead of being answered.
         if (options.length === 0) throw new Error("LADE: a select dialog needs at least one option");
         const shown = options.slice(0, 64).map(option => prefix(option, 512));
         const answer = value(await this.ask({ kind: "select", title: prefix(title, 512), options: shown }, opts));
-        // The developer chose among the shown (possibly clipped) options; return the extension's own.
         const index = answer === undefined ? -1 : shown.indexOf(answer);
 
         return index < 0 ? undefined : options[index];

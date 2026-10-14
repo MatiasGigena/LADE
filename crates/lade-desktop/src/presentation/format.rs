@@ -1,5 +1,3 @@
-//! Text equivalents for states: every color the views use has a sign and a label from here.
-
 use super::model::{
     ActionAvailability, ActionName, ActivityRole, ApprovalState, Attention, Basis, CandidateStatus,
     ChangeStatus, DeliveryMode, DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle,
@@ -27,7 +25,6 @@ pub fn attention_sign(attention: Attention) -> &'static str {
     }
 }
 
-/// Compact pill text for an Objective: archived lifecycles name the lifecycle, others the attention.
 pub fn status_pill(lifecycle: Lifecycle, attention: Attention) -> (&'static str, &'static str) {
     match lifecycle {
         Lifecycle::Integrated => ("✓", "Integrated"),
@@ -56,7 +53,6 @@ pub fn execution_label(execution: &Execution) -> String {
         ExecutionState::Running => "Running".to_owned(),
         ExecutionState::Idle => "Idle — waiting for input".to_owned(),
         ExecutionState::Stopping => "Stopping".to_owned(),
-        // Whether it can resume is the service's call (`execution.resume` availability).
         ExecutionState::Cancelled => "Cancelled".to_owned(),
         ExecutionState::Failed => match &execution.reason {
             Some(reason) => format!("Failed — {reason}"),
@@ -65,7 +61,6 @@ pub fn execution_label(execution: &Execution) -> String {
     }
 }
 
-/// [`execution_label`] plus "resumable" when the service currently offers Resume.
 pub fn execution_label_for(detail: &ObjectiveDetail) -> String {
     let label = execution_label(&detail.summary.execution);
     if detail.availability(ActionName::ExecutionResume) == ActionAvailability::Enabled {
@@ -114,7 +109,6 @@ pub fn duration_label(start: Timestamp, end: Option<Timestamp>) -> String {
     }
 }
 
-/// Human size in binary units ("812 bytes", "4.0 KiB", "65.2 MiB", "1.0 GiB").
 pub fn byte_size(bytes: u64) -> String {
     const UNITS: [&str; 3] = ["KiB", "MiB", "GiB"];
     if bytes < 1024 {
@@ -170,8 +164,6 @@ pub fn mode_label(mode: DeliveryMode) -> &'static str {
     }
 }
 
-/// What a delivery mode means — written once; Activity's composer shows it, the Feedback tab's
-/// delivery choice carries it as tooltip and accessible description.
 pub fn mode_explanation(mode: DeliveryMode) -> &'static str {
     match mode {
         DeliveryMode::Prompt => "Starts a turn when the agent is idle.",
@@ -221,7 +213,6 @@ pub fn side_label(side: Side) -> &'static str {
     }
 }
 
-/// Basis selector entry label, using candidate ordinals from the detail.
 pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
     let ordinal = |id: &super::model::CandidateId| {
         detail
@@ -242,10 +233,6 @@ pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
     }
 }
 
-/// The inspected version's line beside the version selector: only what the selector does not
-/// say — whether the content may change (working capture) or is frozen, and the comparison
-/// target — and the full statement (service version label, candidate status, exact target
-/// commit) for the tooltip and accessible name.
 pub fn version_line(
     basis: &Basis,
     service_label: &str,
@@ -292,7 +279,6 @@ pub fn reference_version_label(
     }
 }
 
-/// "src/a.rs · Candidate 2 · new side · line 42 · bytes 1024–1090".
 pub fn reference_label(reference: &Reference, detail: Option<&ObjectiveDetail>) -> String {
     let mut parts = vec![
         reference.path.display.clone(),
@@ -342,8 +328,6 @@ pub fn verification_summary_line(v: &VerificationSummary) -> String {
     }
 }
 
-/// Splits a check command into argv without a shell: whitespace separates, single quotes are
-/// literal, double quotes allow `\"` and `\\`, a backslash outside quotes escapes the next char.
 pub fn split_argv(input: &str) -> Result<Vec<String>, &'static str> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -419,7 +403,6 @@ pub const JOURNEY_STEPS: [&str; 5] = [
     "Integrate",
 ];
 
-/// Presentation-only collaboration journey derived from lifecycle; it is not a state machine.
 pub fn journey(detail: &ObjectiveDetail, has_inputs: bool) -> [StepState; 5] {
     use StepState::{Current, Done, Upcoming};
     let summary = &detail.summary;
@@ -527,7 +510,6 @@ mod tests {
         ] {
             let (short, full) =
                 version_line(&candidate, "Candidate 2 — frozen", Some(status), &target);
-            // The selector names the candidate and its status; the line only says frozen.
             assert_eq!(short, "Frozen · vs main@86fc063");
             assert!(!short.contains("Candidate"));
             assert!(full.contains("Candidate 2 — frozen"));

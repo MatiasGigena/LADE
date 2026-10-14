@@ -1,8 +1,3 @@
-//! The first-release collaboration loop over the real service: real pi worker with the
-//! `lade-fixture` model (inside the real bubblewrap sandbox when available), real Git, real
-//! SQLite, real socket: message, working change, draft, feedback, freeze, sandboxed
-//! verification, approve, integrate, cleanup.
-
 mod service_support;
 
 use std::fs;
@@ -103,8 +98,6 @@ fn head(repo: &Path) -> String {
 #[test]
 fn full_loop_with_the_real_worker() {
     let env = Env::new("svc-flow");
-    // The real bubblewrap launcher when the host supports it (the release path), else the
-    // unsandboxed test launcher.
     let (launcher, sandboxed) = best_launcher(&env);
     eprintln!("full loop sandboxed: {sandboxed}");
     let service = env.start(launcher);
@@ -115,7 +108,6 @@ fn full_loop_with_the_real_worker() {
     start_execution(&mut client, &objective);
     wait_state(&mut client, &objective, ExecutionState::Idle);
 
-    // Agent work in the isolated worktree.
     send_message(&mut client, &objective, "lade-fixture: write hello.txt hi");
     wait_file(&mut client, &objective, "hello.txt", "hi");
     assert!(
@@ -148,7 +140,6 @@ fn full_loop_with_the_real_worker() {
         other => panic!("{other:?}"),
     }
 
-    // Draft on an exact range of the inspected bytes, then submit it as feedback.
     let list = changes(&mut client, &objective, Basis::Working);
     let capture = list.capture_id.clone().unwrap();
     let file = read_file(&mut client, &objective, Basis::Working, "hello.txt");
@@ -199,15 +190,12 @@ fn full_loop_with_the_real_worker() {
     wait_file(&mut client, &objective, "hello.txt", "hi there");
     wait_state(&mut client, &objective, ExecutionState::Idle);
 
-    // Frozen review: writers excluded, exact candidate.
     let candidate = freeze(&mut client, &objective);
     assert_eq!(candidate.status, CandidateStatus::Current);
     assert_eq!(candidate.files.value(), 1);
     let frozen = detail(&mut client, &objective);
     assert_eq!(frozen.lifecycle, Lifecycle::Frozen);
     assert_eq!(frozen.execution.state, ExecutionState::Cancelled);
-    // The worktree's own Git view follows the candidate: HEAD on the branch at the candidate
-    // commit, index refreshed, nothing reported as changed.
     let objective_wt = worktree(&env, &objective);
     assert_eq!(
         git(&objective_wt, &["rev-parse", "HEAD"]),
@@ -240,7 +228,6 @@ fn full_loop_with_the_real_worker() {
         other => panic!("{other:?}"),
     }
 
-    // Verification in an isolated copy when the sandbox works; otherwise a recorded override.
     let approval = if sandbox_works() {
         let started = match client
             .call(Request::ReviewVerify(ReviewVerifyCommand {
@@ -292,7 +279,6 @@ fn full_loop_with_the_real_worker() {
         )
     };
 
-    // Protected integration into the checked-out, clean main.
     let before = head(&env.repo);
     let integrated = match integrate(&mut client, &objective, &approval).unwrap() {
         ReplyData::ReviewIntegrate(d) => *d,
@@ -309,7 +295,6 @@ fn full_loop_with_the_real_worker() {
     assert!(git(&env.repo, &["status", "--porcelain"]).is_empty());
     assert!(git(&env.repo, &["log", "-1", "--format=%s"]).contains("Greeting"));
 
-    // Cleanup removes branch and worktree, keeps the record.
     let branch = integrated.branch.clone();
     match client.call(Request::ObjectiveCleanup(ObjectiveCleanupCommand {
         objective_id: objective.clone(),
@@ -325,7 +310,6 @@ fn full_loop_with_the_real_worker() {
     let retained = git(&env.repo, &["for-each-ref", "refs/lade/retain/"]);
     assert!(retained.contains("candidate-"), "{retained}");
 
-    // Only an explicit, confirmed request deletes the retained history; the record stays.
     match client.call(Request::ObjectiveDeleteHistory(
         lade_protocol::client::ObjectiveHistoryDeleteCommand {
             objective_id: objective.clone(),
@@ -344,7 +328,6 @@ fn full_loop_with_the_real_worker() {
     service.shutdown();
 }
 
-/// Frozen candidate produced from direct worktree writes (fake worker).
 fn frozen_objective(
     env: &Env,
     client: &mut Client,
@@ -375,7 +358,6 @@ fn dirty_target_refuses_and_moved_target_invalidates_approval() {
         .unwrap(),
     );
 
-    // A dirty checked-out target refuses and stays untouched.
     let before = head(&env.repo);
     fs::write(env.repo.join("README"), "local edit\n").unwrap();
     let refused = integrate(&mut client, &objective, &approval).unwrap_err();
@@ -392,7 +374,6 @@ fn dirty_target_refuses_and_moved_target_invalidates_approval() {
         Lifecycle::Approved
     );
 
-    // The target moves after approval: integration is stale and the approval expires.
     fs::write(env.repo.join("other.txt"), "other\n").unwrap();
     commit_all(&env.repo, "moved target");
     let moved = head(&env.repo);
@@ -413,7 +394,6 @@ fn dirty_target_refuses_and_moved_target_invalidates_approval() {
     assert!(action_enabled(&after, ActionName::ReviewRefresh));
     assert!(!action_enabled(&after, ActionName::ReviewIntegrate));
 
-    // Refresh onto the moved target, approve again, integrate.
     let refreshed = match client
         .call(Request::ReviewRefresh(CandidateCommand {
             objective_id: objective.clone(),

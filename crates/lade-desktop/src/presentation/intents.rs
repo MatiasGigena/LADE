@@ -1,6 +1,3 @@
-//! User requests the views may emit. An intent is a *request*: the service decides and replies;
-//! views never infer that an intent succeeded.
-
 use std::path::PathBuf;
 
 use super::compat::{ForkPosition, ThinkingLevel, UiAnswerView};
@@ -9,12 +6,9 @@ use super::model::{
     ModelRef, ObjectiveId, Reference, RepoPath, SearchScope, SessionId, Side, WorkspaceId,
 };
 
-/// Where the New Objective dialog starts the work from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartPoint {
-    /// The integration target's current commit.
     Target,
-    /// An explicit commit (hex as typed by the developer).
     Commit(String),
 }
 
@@ -24,29 +18,23 @@ pub struct DraftRevisionRef {
     pub revision: u64,
 }
 
-/// Why the developer asked the service to stop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StopReason {
-    /// Explicit Exit from the window.
     Exit,
-    /// The desktop session is ending (logout/shutdown).
     Logout,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Intent {
-    // Connection and workspace.
     RetryConnection,
     OpenWorkspace {
         path: PathBuf,
     },
-    // Queries.
     LoadObjective {
         objective_id: ObjectiveId,
     },
     LoadActivity {
         objective_id: ObjectiveId,
-        /// Load items older than this sequence; `None` loads the newest page.
         before: Option<u64>,
     },
     LoadChanges {
@@ -78,7 +66,6 @@ pub enum Intent {
         basis: Option<Basis>,
         query: String,
     },
-    // Commands.
     CreateObjective {
         workspace_id: WorkspaceId,
         title: String,
@@ -86,7 +73,6 @@ pub enum Intent {
         integration_target: String,
         start: StartPoint,
     },
-    /// Replaces the intent; the service refuses a stale `expected_intent_revision`.
     UpdateObjective {
         objective_id: ObjectiveId,
         expected_intent_revision: u64,
@@ -111,7 +97,6 @@ pub enum Intent {
     SaveDraft {
         objective_id: ObjectiveId,
         draft_id: DraftId,
-        /// 0 creates the draft.
         expected_revision: u64,
         reference: Reference,
         body: String,
@@ -164,17 +149,12 @@ pub enum Intent {
         objective_id: ObjectiveId,
         confirm_data_loss: bool,
     },
-    /// Deletes a cleaned-up Objective's retention refs and branch; sent only after the user
-    /// confirmed the dialog (never automatic).
     DeleteHistory {
         objective_id: ObjectiveId,
     },
-    /// Records the model picked for an execution as the default for the next one.
     UpdateSettings {
         default_model: ModelRef,
     },
-    // IMP-011: model catalogue, Agent Session operations, profile resources, dialogs.
-    /// The provider list (and, with `provider`, that provider's models).
     LoadModels {
         provider: Option<String>,
     },
@@ -223,7 +203,6 @@ pub enum Intent {
         generation: u64,
         answer: UiAnswerView,
     },
-    // Contained terminal (ephemeral interaction with a service-owned PTY; never journaled).
     OpenTerminal {
         objective_id: ObjectiveId,
         cols: u16,
@@ -244,15 +223,12 @@ pub enum Intent {
         objective_id: ObjectiveId,
         terminal_id: String,
     },
-    /// Explicit Exit or logout: the service stops its agents and terminals and exits; nothing
-    /// resumes automatically.
     StopService {
         reason: StopReason,
     },
 }
 
 impl Intent {
-    /// Short human label for notices ("Freeze for review", ...).
     pub fn label(&self) -> &'static str {
         match self {
             Self::RetryConnection => "Retry connection",
@@ -314,7 +290,6 @@ impl Intent {
         }
     }
 
-    /// Terminal interaction: answered in the terminal pane, never deferred or replayed.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -325,7 +300,6 @@ impl Intent {
         )
     }
 
-    /// The Objective a terminal intent belongs to.
     pub fn terminal_objective(&self) -> Option<&ObjectiveId> {
         match self {
             Self::OpenTerminal { objective_id, .. }
@@ -336,7 +310,6 @@ impl Intent {
         }
     }
 
-    /// Queries read projections; everything else asks the service to change state.
     pub fn is_query(&self) -> bool {
         matches!(
             self,
@@ -355,14 +328,10 @@ impl Intent {
     }
 }
 
-/// Receiver of user intents (WP-G: the transport).
-///
-/// Implementations must not block the GTK main context.
 pub trait IntentSink {
     fn submit(&self, intent: Intent);
 }
 
-/// A sink that records intents; used by tests.
 #[derive(Default)]
 pub struct RecordingSink {
     pub intents: std::cell::RefCell<Vec<Intent>>,

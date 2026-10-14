@@ -1,7 +1,3 @@
-//! Projection of service state onto wire DTOs, including `available_actions` — the client's only
-//! authority source. Every action's enablement is derived from the same domain rules the commands
-//! enforce; a disabled action carries a human-readable reason.
-
 use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::feedback::{AcceptedInput, DeliveryState, Draft, DraftState};
 use lade_core::domain::ids::{GitId, WorkspaceId};
@@ -29,9 +25,7 @@ use super::state::{ObjState, WsState};
 
 const SUMMARY_OUTCOME_CHARS: usize = 512;
 const DETAIL_LIST_MAX: usize = 64;
-/// Shared by the `review.freeze` projection and its rejection.
 pub const NO_CHANGES_TO_FREEZE: &str = "No changes to freeze — complete without changes instead";
-/// Shared by the `review.verify` projection and its rejection.
 pub const VERIFICATION_SANDBOX_UNAVAILABLE: &str =
     "verification sandbox unavailable (bubblewrap/prlimit)";
 
@@ -196,7 +190,6 @@ fn gate(action: ActionName, blocker: Option<&str>) -> AvailableAction {
 }
 
 impl Service {
-    /// Resolves the Integration Target commit fresh and refreshes the cache.
     pub(crate) fn resolve_target(&mut self, workspace: WorkspaceId, branch: &str) -> Option<GitId> {
         let ws = self.workspaces.get(&workspace)?;
         let target = super::jobs::target_commit(&ws.repo, branch).ok();
@@ -302,7 +295,6 @@ impl Service {
         self.summary_with(st, self.cached_target(st).as_ref())
     }
 
-    /// Full detail with a freshly resolved target commit.
     pub(crate) fn detail_of(&mut self, st: &ObjState) -> ObjectiveDetail {
         let target = self.fresh_target(st);
         self.detail_with(st, target.as_ref())
@@ -386,7 +378,6 @@ impl Service {
         }
     }
 
-    /// The authority projection: one entry per [`ActionName`].
     fn actions(&self, st: &ObjState, target: Option<&GitId>) -> Vec<AvailableAction> {
         let oid = st.objective().id();
         let record = st.objective().record();
@@ -406,7 +397,6 @@ impl Service {
             (Some(c), Some(t)) => c.base_target_commit != *t,
             _ => false,
         };
-        // Aggregate quota and storage pressure (service/limits.rs), named in the reason.
         let worker_blocker = self.worker_blocker(oid);
         let storage_blocker = self.storage_blocker();
         let mut out = Vec::with_capacity(16);
@@ -451,7 +441,6 @@ impl Service {
                 worker_blocker.as_deref()
             }),
         ));
-        // Input to a stopped execution is accepted and waits (blocked) until an explicit resume.
         let input_blocker = if lifecycle != Lifecycle::Active {
             Some("input requires an active objective")
         } else if record.execution.session().is_none() {
@@ -594,7 +583,6 @@ impl Service {
                 None
             }),
         ));
-        // A frozen objective always holds a non-empty candidate (current or invalidated).
         let has_changes = lifecycle == Lifecycle::Frozen
             || st.capture.as_ref().is_some_and(|c| c.counts.files > 0);
         out.push(gate(
@@ -670,7 +658,6 @@ impl Service {
         }
     }
 
-    /// `objective.changed` and `objective.detail` for the current state of `oid`.
     pub(crate) fn emit_objective(&mut self, oid: lade_core::domain::ids::ObjectiveId) {
         let Some(st) = self.objectives.get(&oid).cloned() else {
             return;
@@ -682,7 +669,6 @@ impl Service {
     }
 }
 
-/// Why `objective.delete_history` is not available (it also needs explicit confirmation).
 pub(crate) fn delete_history_blocker(st: &ObjState) -> Option<&'static str> {
     let record = st.objective().record();
     if !record.cleaned_up {

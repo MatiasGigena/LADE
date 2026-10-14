@@ -1,22 +1,4 @@
 #!/bin/sh
-# One-worker reference trace of the collaboration loop (IMP-010): the real GTK client under Xvfb
-# against a real `laded serve` with one sandboxed `lade-fixture` worker (test-only
-# LADE_TEST_FIXTURE_PROVIDER=1 switch), in a **release** build.
-# Measures, from the client's own timing trace (LADE_DESKTOP_TRACE): warm launch, input → first
-# agent activity, Full file and diff opens at the reference sizes of
-# docs/planning/performance-budgets.md (1,280,000-byte / 20,000-line file; 4,000-line /
-# 184,000-byte diff; plus a highlighted 1.28 MB Rust file), draft save (keystroke → "Saved rN"
-# painted, request → acknowledgement), freeze and integrate; PSS of client, service group and
-# worker every second; idle CPU windows.
-#
-#   scripts/e2e-perf [OUT_DIR]     (default: docs/implementation/evidence/imp-010)
-#                                  → perf-report.txt, perf-trace.log, perf-memory.csv, perf-cpu.txt,
-#                                    perf-run.log (suffixed -$GSK_RENDERER when set)
-#
-# Requires: `./scripts/cargo build --release --workspace --locked`, Xvfb, xdotool, ImageMagick,
-# git, bubblewrap, python3. Environment: E2E_DISPLAY (default 80), E2E_SAMPLES (default 20),
-# E2E_KEEP=1, GSK_RENDERER (passed to the client; when set, output files are suffixed with it). This is a development-host Xvfb trace (software rendering, no compositor), not the
-# Mint/Cinnamon/X11 reference host of the budgets; it is not a pass/fail certification.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/docs/implementation/evidence/imp-010}
@@ -74,7 +56,6 @@ find_button() {
       python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
   esac
 }
-# Activity's Start agent (Agent Session control): its filled black button in the Activity header.
 click_start() {
   key ctrl+2
   tries=0
@@ -102,7 +83,6 @@ wait_for() {
     sleep 0.05
   done
 }
-# since MARK PATTERN: a trace line after line MARK matches PATTERN.
 since() { tail -n +"$1" "$TRACE" | grep -q "$2"; }
 lines() { wc -l <"$TRACE"; }
 mono_ms() { python3 -I -c 'import time; print(int(time.clock_gettime(time.CLOCK_MONOTONIC) * 1000))'; }
@@ -131,7 +111,6 @@ git -C "$REPO" init -q -b main
 git -C "$REPO" config user.email dev@example.com
 git -C "$REPO" config user.name Developer
 printf '# Demo\n' >"$REPO/README.md"
-# 2,000 lines of 46 bytes; every line is rewritten below: a 4,000-line, 184,000-byte diff.
 awk 'BEGIN { for (i = 0; i < 2000; i++) printf "old line %036d\n", i }' >"$REPO/c-ref-diff.txt"
 git -C "$REPO" add README.md c-ref-diff.txt
 git -C "$REPO" commit -q -m initial
@@ -197,10 +176,9 @@ awk 'BEGIN { for (i = 0; i < 2000; i++) printf "new line %036d\n", i }' >"$d/c-r
 awk 'BEGIN { for (i = 0; i < 19999; i++) printf "let value_%07d: u64 = %08d; // reference line %014d\n", i, i, i }' >"$d/a-ref.rs"
 step "reference files: a-ref.rs $(wc -c <"$d/a-ref.rs") bytes, b-ref.txt $(wc -c <"$d/b-ref.txt") bytes, c-ref-diff.txt $(git -C "$d" diff --no-color c-ref-diff.txt | wc -l) diff lines / $(git -C "$d" diff --no-color c-ref-diff.txt | wc -c) bytes"
 key ctrl+1
-click 1057 249 3   # Refresh (the worktree changed)
-# Change Set rows: a-ref.rs, b-ref.txt, c-ref-diff.txt, hello.txt
+click 1057 249 3
 ROW_A=262; ROW_B=318; ROW_C=374; ROW_H=430
-click 920 262 1    # Full file
+click 920 262 1
 step "Full file opens: $N × b-ref.txt (1,280,000 bytes), $((N / 2)) × a-ref.rs (highlighted), alternating with hello.txt"
 i=1
 while [ $i -le "$N" ]; do
@@ -217,7 +195,7 @@ done
 click 330 $ROW_A 3
 x mousemove 700 880; sleep 1
 import -window root "$OUT/perf-highlighted-file$SUFFIX.png"
-click 867 262 1    # Diff
+click 867 262 1
 step "diff opens: $N × c-ref-diff.txt (4,000 lines), alternating with hello.txt"
 i=1
 while [ $i -le "$N" ]; do
@@ -241,11 +219,11 @@ while [ $i -le "$N" ]; do
 done
 
 phase review
-click 1175 78 1    # Overview tab
-click_inspector "Freeze for review" black   # the Overview's next action
+click 1175 78 1
+click_inspector "Freeze for review" black
 wait_for 60 "candidate" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3
-click_inspector "Approve Candidate 1" approve-candidate-1   # neutral: an override reason is required
+click_inspector "Approve Candidate 1" approve-candidate-1
 typ "Reference trace: no check configured."
 click 382 299 3
 click_inspector "Integrate into main" black

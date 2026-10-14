@@ -1,13 +1,3 @@
-//! The Objective terminal pane (IMP-012): renders the service-owned PTY of the selected Objective
-//! and sends its key bytes. The shell runs only inside the Objective's sandbox in the service;
-//! this view never starts a process.
-//!
-//! Keyboard: the window's shortcut controller sees every key first. While the terminal has focus
-//! it lets only the escape routes through (F6 / Shift+F6, the configurable Leave terminal key),
-//! plus terminal copy/paste and Exit (`keys::reaches_window_from_terminal`); every other key is
-//! translated to the bytes a VT100 sends (`presentation::terminal::encode_key`) — that is the
-//! terminal's own input, not an application shortcut.
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -98,7 +88,6 @@ impl TerminalPane {
         controls.append(&close_button);
         head.append(&controls);
         root.append(&head);
-        // The scope in one line; the full statement is its tooltip and accessible description.
         let full_scope = "A shell in this Objective's sandbox: its worktree only, no network, no \
              credentials, the same limits as the agent. Read-only while a Change Set is frozen for \
              review. Closing the window or losing the connection ends it; nothing restarts on its \
@@ -130,7 +119,6 @@ impl TerminalPane {
             .min_content_height(160)
             .build();
         scroll.add_css_class("terminal-frame");
-        // The probe reports the area the grid gets, so the PTY size follows the window.
         let probe = gtk::DrawingArea::new();
         probe.set_hexpand(true);
         probe.set_vexpand(true);
@@ -206,7 +194,6 @@ impl TerminalPane {
         if self.controller.terminal_input(&bytes) {
             glib::Propagation::Stop
         } else {
-            // No open terminal: Tab and the other keys keep their usual meaning.
             glib::Propagation::Proceed
         }
     }
@@ -238,7 +225,6 @@ impl TerminalPane {
         };
     }
 
-    /// Moves focus into the terminal (or to Open terminal when none is open).
     pub fn focus(&self) {
         let open = self.with_session(|s| s.is_open()).unwrap_or(false);
         if open {
@@ -251,11 +237,9 @@ impl TerminalPane {
     }
 
     pub fn has_focus(&self) -> bool {
-        // The focus widget of the window, whether or not the window is active (no WM, a dialog).
         self.view.is_focus()
     }
 
-    /// Copies the selected terminal text.
     pub fn copy(&self) {
         let buffer = self.view.buffer();
         if let Some((start, end)) = buffer.selection_bounds() {
@@ -265,7 +249,6 @@ impl TerminalPane {
         }
     }
 
-    /// Pastes the clipboard into the open terminal (bounded; bracketed when the shell asked).
     pub fn paste(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         self.view
@@ -349,7 +332,6 @@ impl TerminalPane {
             _ => false,
         });
         if relevant && !self.render_pending.replace(true) {
-            // Output bursts render once per main-loop iteration.
             let weak = Rc::downgrade(self);
             glib::idle_add_local_once(move || {
                 if let Some(pane) = weak.upgrade() {
@@ -402,7 +384,6 @@ impl TerminalPane {
             .is_some_and(|s| matches!(s.status, TerminalStatus::Opening | TerminalStatus::Open));
         let can_open = connected && admits && !busy;
         self.open_button.set_sensitive(can_open);
-        // The black primary treatment is for an available action only.
         if can_open {
             self.open_button.add_css_class("primary");
         } else {

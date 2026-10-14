@@ -1,42 +1,25 @@
-//! Change listing (`diff-tree --raw --numstat -z -M`) and structured per-file hunks with exact
-//! byte offsets into the compared blobs.
-
 use super::tree::ObjectKind;
 use super::{GitError, GitId, RepoPath, Repository, Result};
 
-/// Maximum diff lines returned per file; beyond it the result is `truncated`.
 pub const MAX_DIFF_LINES: usize = 20_000;
-/// Blobs larger than this are not diffed (`too_large`).
 pub const MAX_DIFF_BLOB_BYTES: u64 = 16 << 20;
-/// Git's binary heuristic: a NUL byte in the first 8000 bytes.
 const BINARY_PROBE: usize = 8000;
 
-/// How a path changed between two trees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeStatus {
     Added,
     Modified,
     Deleted,
-    /// Rename with Git's similarity score (0..=100).
-    Renamed {
-        similarity: u8,
-    },
-    Copied {
-        similarity: u8,
-    },
-    /// File type changed (regular file, symlink, gitlink).
+    Renamed { similarity: u8 },
+    Copied { similarity: u8 },
     TypeChanged,
 }
 
-/// One changed path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChangedFile {
-    /// New-side path (old-side path for deletions).
     pub path: RepoPath,
-    /// Source path of a rename/copy.
     pub old_path: Option<RepoPath>,
     pub status: ChangeStatus,
-    /// Octal modes; 0 for an absent side.
     pub old_mode: u32,
     pub new_mode: u32,
     pub old_id: Option<GitId>,
@@ -53,18 +36,14 @@ pub enum LineKind {
     Del,
 }
 
-/// One diff line. `text` excludes the terminating `\n` (a `\r` before it is kept).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DiffLine {
     pub kind: LineKind,
     pub old_no: Option<u64>,
     pub new_no: Option<u64>,
-    /// Byte offset of the start of this line within the old blob (context/del lines).
     pub old_byte_start: Option<u64>,
-    /// Byte offset of the start of this line within the new blob (context/add lines).
     pub new_byte_start: Option<u64>,
     pub text: Vec<u8>,
-    /// The line is the last in its blob and has no terminating newline.
     pub no_newline: bool,
 }
 
@@ -77,7 +56,6 @@ pub struct Hunk {
     pub lines: Vec<DiffLine>,
 }
 
-/// Structured diff of one path.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiff {
     pub old_blob: Option<GitId>,
@@ -85,15 +63,12 @@ pub struct FileDiff {
     pub old_mode: Option<u32>,
     pub new_mode: Option<u32>,
     pub binary: bool,
-    /// A side exceeded [`MAX_DIFF_BLOB_BYTES`]; no hunks were produced.
     pub too_large: bool,
     pub hunks: Vec<Hunk>,
-    /// Hunks were cut at [`MAX_DIFF_LINES`] (or omitted because `too_large`).
     pub truncated: bool,
 }
 
 impl Repository {
-    /// Changed paths between two tree-ish ids with rename detection and line counts.
     pub fn diff_numstat(&self, old: &GitId, new: &GitId) -> Result<Vec<ChangedFile>> {
         let out = self
             .git("diff-tree")
@@ -207,10 +182,6 @@ impl Repository {
         Ok(files)
     }
 
-    /// Structured hunks for `path` between tree-ish `old` and `new`. `old_path` is the old-side
-    /// path of a rename (defaults to `path`). Every context/add line carries the byte offset of
-    /// its start within the new blob, every context/del line within the old blob, so a selection
-    /// maps to exact bytes.
     pub fn diff_hunks(
         &self,
         old: &GitId,
@@ -303,7 +274,6 @@ impl Repository {
     }
 }
 
-/// Start offset of every line (1-based line `n` starts at `starts[n - 1]`).
 fn line_starts(bytes: &[u8]) -> Vec<u64> {
     if bytes.is_empty() {
         return Vec::new();
@@ -375,7 +345,6 @@ fn parse_range(text: &str) -> Option<(u64, u64)> {
     }
 }
 
-/// Parse a single-file unified patch. `Ok(None)` when Git reported the content as binary.
 fn parse_patch(patch: &[u8], old: &[u8], new: &[u8]) -> Result<Option<(Vec<Hunk>, bool)>> {
     let bad = |what| GitError::Parse { op: "diff", what };
     let old_starts = line_starts(old);

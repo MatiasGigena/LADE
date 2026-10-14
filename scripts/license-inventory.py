@@ -132,7 +132,6 @@ def node_from_tree(bundle: Path) -> list[dict]:
     for manifest_path in sorted((worker / "node_modules").rglob("package.json")):
         directory = manifest_path.parent
         rel = directory.relative_to(worker)
-        # A package directory is node_modules/<name> or node_modules/@scope/<name>, possibly nested.
         scoped = directory.parent.name.startswith("@") and directory.parent.parent.name == "node_modules"
         if directory.parent.name != "node_modules" and not scoped:
             continue

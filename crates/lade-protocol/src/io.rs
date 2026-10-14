@@ -1,4 +1,3 @@
-//! Blocking, bounded frame I/O over `std::io::Read`/`Write` for both framings.
 use crate::{Deframer, Framing, Message, WireError, encode};
 use std::io::{ErrorKind, Read, Write};
 
@@ -6,8 +5,6 @@ const READ_BUFFER: usize = 64 * 1024;
 
 #[derive(Debug)]
 pub enum TransportError {
-    /// Protocol rejection with a stable code. The link must close unless the caller has a
-    /// documented recovery (see `decode_client_frame`).
     Wire(WireError),
     Io(std::io::Error),
 }
@@ -31,8 +28,6 @@ impl From<std::io::Error> for TransportError {
     }
 }
 
-/// Reads one frame at a time. Holds at most one partial body plus a fixed 64 KiB read buffer;
-/// bytes after the current frame stay buffered for the next call. Any error closes the reader.
 pub struct FrameReader<R> {
     inner: R,
     deframer: Deframer,
@@ -53,7 +48,6 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
-    /// Next raw frame body; `Ok(None)` on clean end of stream between frames.
     pub fn read_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
         if self.failed {
             return Err(WireError("closed").into());
@@ -89,7 +83,6 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
-    /// Next frame decoded strictly; any decode failure closes the reader.
     pub fn read<M: Message>(&mut self) -> Result<Option<M>, TransportError> {
         let Some(frame) = self.read_frame()? else {
             return Ok(None);
@@ -108,8 +101,6 @@ impl<R: Read> FrameReader<R> {
     }
 }
 
-/// Writes whole validated frames and flushes each. A failed write closes the writer, since a
-/// partial frame may have reached the peer.
 pub struct FrameWriter<W> {
     inner: W,
     framing: Framing,
@@ -123,7 +114,6 @@ impl<W: Write> FrameWriter<W> {
             failed: false,
         }
     }
-    /// Encoding failures (schema, size) write nothing and leave the writer usable.
     pub fn write<M: Message>(&mut self, message: &M) -> Result<(), TransportError> {
         if self.failed {
             return Err(WireError("closed").into());

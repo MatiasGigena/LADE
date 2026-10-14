@@ -1,10 +1,3 @@
-//! IMP-011 gestures: the model picker over the service's catalogue, Agent Session operations
-//! (tree, navigate, fork/clone, import/export, compaction, reload, model and thinking), LADE-profile
-//! resource approval and import, and explicit answers to extension dialogs.
-//!
-//! The controller only refuses what the service already projects as impossible (no live session,
-//! a running turn); every decision stays with the service.
-
 use std::path::PathBuf;
 
 use super::compat::{ForkPosition, ModelChoice, ThinkingLevel, UiAnswerView};
@@ -18,12 +11,10 @@ impl Controller {
         self.submit_intent(intent);
     }
 
-    /// Loads the provider list (and the chosen provider's models when known).
     pub fn load_models(&self, provider: Option<String>) {
         self.emit_intent(Intent::LoadModels { provider });
     }
 
-    /// Records the picker's choice; loads a newly chosen provider's models.
     pub fn choose_model(&self, choice: ModelChoice) {
         let needs_models = choice
             .provider
@@ -38,8 +29,6 @@ impl Controller {
         }
     }
 
-    /// Selects the provider/model the picker should show first: the persisted session model, the
-    /// default model, or the first available provider.
     pub fn picker_defaults(&self) {
         let (choice, missing) = {
             let state = self.store.state();
@@ -88,7 +77,6 @@ impl Controller {
         }
     }
 
-    /// The picker's resolved model, or why there is none yet.
     pub fn chosen_model(&self) -> Result<(ModelRef, ThinkingLevel), String> {
         let state = self.store.state();
         let compat = &state.compat;
@@ -103,7 +91,6 @@ impl Controller {
         Ok((model.model_ref(), compat.choice.thinking))
     }
 
-    /// The selected Objective with a live worker that can take a session operation now.
     fn live_session(&self, allow_running: bool) -> Result<ObjectiveId, String> {
         let state = self.store.state();
         let detail = state
@@ -169,8 +156,6 @@ impl Controller {
         Ok(())
     }
 
-    /// Applies the picker's model and thinking to the selected Objective: to the running session
-    /// when it is idle, or for the next start/resume when it is stopped.
     pub fn configure_session(&self) -> Result<(), String> {
         let (model, thinking) = self.chosen_model()?;
         let objective_id = {
@@ -210,8 +195,6 @@ impl Controller {
         self.emit_intent(Intent::ImportProfile { source });
     }
 
-    /// Sends the developer's explicit answer to an open dialog. Closing the window without an
-    /// answer is a `Cancel`, never an implicit confirmation.
     pub fn answer_dialog(&self, ui_id: &str, answer: UiAnswerView) -> Result<(), String> {
         let dialog = self
             .store
@@ -231,7 +214,6 @@ impl Controller {
         Ok(())
     }
 
-    /// One line describing the selected Objective's pi session (generation, thinking, reason).
     pub fn session_line(&self) -> Option<String> {
         let state = self.store.state();
         let id = state.ui.selected.as_ref()?;
@@ -244,7 +226,6 @@ impl Controller {
         ))
     }
 
-    /// Changes that should refresh views showing IMP-011 state for the selection.
     pub fn compat_changes_for(&self, changes: &[Change]) -> bool {
         let selected = self.store.state().ui.selected.clone();
         changes.iter().any(|c| match c {

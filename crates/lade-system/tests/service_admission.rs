@@ -1,5 +1,3 @@
-//! Admission over the real control socket: handshake, capability, single lease, reconnect.
-
 mod service_support;
 
 use std::fs;
@@ -14,7 +12,6 @@ use service_support::{Client, Env, FakeLauncher, new_id, raw_connect, raw_write}
 #[test]
 fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
     let env = Env::new("longpaths");
-    // A long state directory is fine: no socket lives under it.
     let long_state = env.root.path().join("s".repeat(200));
     let config = lade_system::service::ServiceConfig {
         state_dir: long_state.clone(),
@@ -23,7 +20,6 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
     };
     let running = lade_system::service::start(config, FakeLauncher::shared()).expect("starts");
     running.shutdown();
-    // A runtime directory whose sockets cannot be bound refuses before creating anything.
     let long_runtime = env.root.path().join("r".repeat(100));
     let config = lade_system::service::ServiceConfig {
         state_dir: long_state,
@@ -98,7 +94,6 @@ fn wrong_capability_and_pre_auth_frames_close_the_link() {
         .expect("refused");
     assert!(error.contains("welcome"), "{error}");
 
-    // A request before authentication closes the link without a reply.
     let (mut writer, frames) = raw_connect(&env.socket());
     writer
         .write(&ClientEnvelope::new(ClientBody::Hello))
@@ -111,7 +106,6 @@ fn wrong_capability_and_pre_auth_frames_close_the_link() {
     let _ = writer.write(&ClientEnvelope::new(ClientBody::Request(frame)));
     assert!(frames.recv_timeout(service_support::TIMEOUT).is_err());
 
-    // Auth without hello also closes.
     let (mut writer, frames) = raw_connect(&env.socket());
     let auth = ClientBody::Auth {
         capability: Capability::parse(env.capability()).unwrap(),
@@ -119,11 +113,9 @@ fn wrong_capability_and_pre_auth_frames_close_the_link() {
     writer.write(&ClientEnvelope::new(auth)).unwrap();
     assert!(frames.recv_timeout(service_support::TIMEOUT).is_err());
 
-    // Garbage framing closes.
     let stream = raw_write(&env.socket(), &[0xff, 0xff, 0xff, 0xff]);
     drop(stream);
 
-    // The legitimate client is still admitted afterwards.
     let mut client = env.connect();
     assert!(client.call(Request::Snapshot(Empty {})).is_ok());
     service.shutdown();
@@ -138,10 +130,8 @@ fn second_client_is_refused_and_lease_frees_on_disconnect() {
         .err()
         .expect("second client refused");
     assert!(refused.contains("unauthorized"), "{refused}");
-    // The first lease is unaffected.
     assert!(first.call(Request::Snapshot(Empty {})).is_ok());
     drop(first);
-    // Reconnection obtains a new lease and an authoritative snapshot.
     let mut again = service_support::eventually("lease released", || {
         Client::connect(&env.socket(), &env.capability()).ok()
     });
@@ -161,7 +151,6 @@ fn invalid_request_keeps_the_link_and_restart_rotates_admission() {
     let old_capability = env.capability();
     let old_epoch = service.service_epoch().to_string();
     let mut client = env.connect();
-    // A snapshot request with an operation id fails the schema but keeps the link.
     let request_id = new_id();
     let frame = serde_json_frame(&request_id);
     client.write_raw(&frame);
@@ -187,14 +176,11 @@ fn invalid_request_keeps_the_link_and_restart_rotates_admission() {
     service.shutdown();
 }
 
-/// A second service sharing the runtime directory (another state directory) is refused without
-/// replacing the running service's capability: its clients keep being admitted.
 #[test]
 fn second_service_on_the_same_runtime_dir_leaves_admission_intact() {
     let env = Env::new("svc-second");
     let service = env.start(FakeLauncher::shared());
     let capability = env.capability();
-    // A live worker's gateway socket of the running service.
     let gateways = env.root.path().join("run/g");
     fs::create_dir_all(&gateways).unwrap();
     fs::set_permissions(&gateways, fs::Permissions::from_mode(0o700)).unwrap();

@@ -1,8 +1,3 @@
-//! Intent → protocol request mapping and reply → store-update mapping. Pure and GTK-free.
-//!
-//! Every intent maps to exactly one request name; the [`Context`] keeps what the reply needs but
-//! does not carry (the requested basis, path and side, the draft being deleted, ...).
-
 use lade_protocol::client::{self as wire, Rejection, ReplyData, Request};
 use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 
@@ -17,14 +12,10 @@ use crate::presentation::model::{
 use crate::presentation::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
 
-/// Newest activity page size.
 pub const ACTIVITY_PAGE: u32 = 100;
-/// Search result page size.
 pub const SEARCH_LIMIT: u32 = 100;
-/// `file.read` window (the schema maximum).
 pub const READ_WINDOW: u32 = 262_144;
 
-/// What a reply needs to be mapped back onto the presentation store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Context {
     Snapshot,
@@ -41,20 +32,15 @@ pub enum Context {
         objective_id: Option<ObjectiveId>,
         basis: Option<Basis>,
     },
-    /// `models.list` for all providers (`None`) or one provider's models.
     Models(Option<String>),
     Tree(ObjectiveId),
     Resources,
-    /// Terminal interaction for an Objective; outcomes are shown in its terminal pane.
     Terminal(ObjectiveId, &'static str),
-    /// `service.stop` (Exit / logout).
     Stop,
-    /// A mutating request. `objective_id` scopes where its outcome is shown.
     Command {
         label: &'static str,
         objective_id: Option<ObjectiveId>,
         draft_id: Option<DraftId>,
-        /// Draft ids of a feedback batch, to name stale items in a `stale_reference` rejection.
         batch: Vec<DraftId>,
     },
 }
@@ -128,7 +114,6 @@ fn limit(value: u32) -> PageLimit {
     PageLimit::parse(value.to_string()).expect("constant page limit is valid")
 }
 
-/// Parses a typed start point: `target`, or a full 40/64-hex commit id.
 pub fn start_point(start: &StartPoint) -> Result<wire::Start, Invalid> {
     match start {
         StartPoint::Target => Ok(wire::Start::Target),
@@ -149,7 +134,6 @@ pub fn start_point(start: &StartPoint) -> Result<wire::Start, Invalid> {
     }
 }
 
-/// Maps one intent to its request. `Ok(None)` for intents handled by the connection itself.
 pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
     use Intent as I;
     let mapped = match intent {
@@ -529,7 +513,6 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
     Ok(Some(mapped))
 }
 
-/// IMP-011 intents (model catalogue, session operations, profile resources, dialogs).
 fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
     use Intent as I;
     let command = |objective_id: &ObjectiveId| Context::command(intent.label(), Some(objective_id));
@@ -652,7 +635,6 @@ fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
     })
 }
 
-/// IMP-011 reply data; `true` when `data` was one of them.
 fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) -> bool {
     let updates = &mut effects.updates;
     match data {
@@ -686,7 +668,6 @@ fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) ->
                 objective_id: objective_id.clone(),
                 session,
             }));
-            // A navigation or fork changes the tree; the detail shows a rebound session.
             effects.follow_ups.push(Intent::LoadSessionTree {
                 objective_id: objective_id.clone(),
             });
@@ -720,7 +701,6 @@ fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) ->
                     }
                 ),
             }));
-            // Custom providers may have changed.
             effects
                 .follow_ups
                 .push(Intent::LoadModels { provider: None });
@@ -731,7 +711,6 @@ fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) ->
     true
 }
 
-/// What a successful reply does: store updates plus follow-up queries to issue.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Effects {
     pub updates: Vec<StoreUpdate>,
@@ -744,7 +723,6 @@ fn refresh_objective(objective_id: &ObjectiveId) -> Intent {
     }
 }
 
-/// Maps successful reply data for `context`.
 pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     let mut effects = Effects::default();
     let updates = &mut effects.updates;
@@ -769,7 +747,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
                 objectives: s.objectives.iter().map(convert::summary).collect(),
                 settings: convert::settings(&s.settings),
             });
-            // The catalogue and the profile inventory are service authority, loaded on connect.
             effects
                 .follow_ups
                 .extend([Intent::LoadModels { provider: None }, Intent::LoadResources]);
@@ -876,7 +853,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             _,
             ReplyData::ReviewFreeze(_) | ReplyData::ReviewRefresh(_) | ReplyData::ReviewApprove(_),
         ) => {
-            // The detail (candidates, approval, available actions) is the authority to show.
             if let Some(o) = context.objective_id() {
                 effects.follow_ups.push(refresh_objective(o));
             }
@@ -909,7 +885,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             | ReplyData::TerminalClose(_)
             | ReplyData::TerminalOpen(_),
         ) => {}
-        // Data that does not match its context: the reply is ignored rather than misfiled.
         (
             _,
             ReplyData::ActivityPage(_)
@@ -921,7 +896,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             | ReplyData::InputsList(_)
             | ReplyData::DraftDelete(_),
         ) => {}
-        // Handled by `compat_effects` above.
         (
             _,
             ReplyData::ModelsList(_)
@@ -942,7 +916,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     effects
 }
 
-/// The developer-facing sentence for a rejection: label, code, service detail and safe action.
 pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
     let code = convert::error_code(rejection.code);
     let mut message = format!("{label} was refused ({code})");
@@ -960,7 +933,6 @@ pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
     message
 }
 
-/// Maps a rejection for `context` onto the surface that asked.
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
     let code = convert::error_code(rejection.code).to_owned();
@@ -1030,7 +1002,6 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             if let Some(draft_id) = draft_id
                 && objective_id.is_some()
             {
-                // A refused save keeps the text locally and offers Retry beside the draft.
                 updates.push(StoreUpdate::DraftSaveFailed {
                     draft_id: draft_id.clone(),
                     message: format!("{code}: {}", rejection.detail),
@@ -1046,7 +1017,6 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                     objective_id: o.clone(),
                     status: Some(notice.clone()),
                 });
-                // Re-read the authority projection so actions show their current reasons.
                 effects.follow_ups.push(refresh_objective(o));
                 if !batch.is_empty() || draft_id.is_some() {
                     effects.follow_ups.push(Intent::LoadDrafts {

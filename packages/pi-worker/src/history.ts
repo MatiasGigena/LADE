@@ -6,7 +6,6 @@ import { record } from "./protocol.ts";
 
 export type ReplyResult = Reply["result"];
 
-/** Bounded fixture correlation; not a durable acceptance journal or permission. */
 export class RequestHistory {
   private readonly requests = new Map<Id, { operation: Id; digest: string }>();
   private readonly operations = new Map<Id, { digest: string; outcome: ReplyResult }>();

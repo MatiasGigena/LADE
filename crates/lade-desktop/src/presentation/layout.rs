@@ -1,13 +1,3 @@
-//! Responsive composition of the workbench, decided without GTK.
-//!
-//! Wide (≥ 1100 logical px): header, Objectives rail, work area and inspector side by side.
-//! Compact (< 1100 logical px, including 800 × 550 and 200 % scaling of a 1600 × 1100 screen):
-//! the same workbench, but the secondary rails become explicit region switches — one region of
-//! Objectives / work area / inspector is shown at a time below the header — and a toggle collapses
-//! the Objective details above the Change Set so the code or feedback surface stays dominant.
-//! Nothing is removed: every region stays reachable by the switches and by F6 / Shift+F6.
-
-/// Window widths (logical px) below which the compact composition applies (design.md §2).
 pub const COMPACT_WIDTH: i32 = 1100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -18,7 +8,6 @@ pub enum LayoutClass {
 }
 
 impl LayoutClass {
-    /// A width of zero or less means "not allocated yet" and keeps the wide composition.
     pub fn for_width(width: i32) -> Self {
         if width > 0 && width < COMPACT_WIDTH {
             Self::Compact
@@ -28,7 +17,6 @@ impl LayoutClass {
     }
 }
 
-/// Major regions in F6 order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Region {
     Header,
@@ -46,7 +34,6 @@ pub const REGION_ORDER: [Region; 4] = [
 ];
 
 impl Region {
-    /// Label of the compact region switch (the header has none: it is always visible).
     pub fn switch_label(self) -> &'static str {
         match self {
             Self::Header | Self::Main => "Work area",
@@ -64,7 +51,6 @@ impl Region {
     }
 }
 
-/// F6 (`forward`) / Shift+F6 target from the region holding focus (`None`: focus is elsewhere).
 pub fn next_region(current: Option<Region>, forward: bool) -> Region {
     let n = REGION_ORDER.len();
     let index = match (
@@ -79,11 +65,8 @@ pub fn next_region(current: Option<Region>, forward: bool) -> Region {
     REGION_ORDER[index]
 }
 
-/// Below this width the wide composition uses its narrower rail, inspector and file-list sizes so
-/// the work area keeps room between 1100 and 1280 logical pixels.
 pub const ROOMY_WIDTH: i32 = 1280;
 
-/// Preferred widths (logical px) of the side regions in the wide composition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WideSizes {
     pub rail: i32,
@@ -107,19 +90,14 @@ pub fn wide_sizes(width: i32) -> WideSizes {
     }
 }
 
-/// What the views show for a layout class and the compact state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Composition {
     pub rail: bool,
     pub centre: bool,
     pub inspector: bool,
-    /// The explicit region switches below the header.
     pub region_switches: bool,
-    /// The profile name beside the avatar (the avatar keeps its accessible name).
     pub profile_name: bool,
-    /// Outcome, journey and version line above the Change Set.
     pub objective_details: bool,
-    /// The toggle that collapses or expands those Objective details.
     pub details_toggle: bool,
 }
 
@@ -182,7 +160,6 @@ mod tests {
             (224, 280, 160)
         );
         assert_eq!(wide_sizes(1280), roomy);
-        // Rail 224–280 and inspector 280–360 (design.md §2).
         for size in [roomy, tight] {
             assert!((224..=280).contains(&size.rail) && (280..=360).contains(&size.inspector));
         }

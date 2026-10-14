@@ -1,6 +1,3 @@
-//! Canonical RFC 4648 §4 base64 (standard alphabet, mandatory padding, zero pad bits).
-//! Hand-written to keep the protocol crate's reviewed dependency set unchanged.
-
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn encode(bytes: &[u8]) -> String {
@@ -36,7 +33,6 @@ fn value(c: u8) -> Option<u32> {
     Some(u32::from(v))
 }
 
-/// Decodes only the canonical encoding: any other spelling of the same bytes is rejected.
 pub fn decode(text: &str) -> Option<Vec<u8>> {
     let s = text.as_bytes();
     if !s.len().is_multiple_of(4) {
@@ -57,7 +53,6 @@ pub fn decode(text: &str) -> Option<Vec<u8>> {
         }
         v <<= 6 * pad as u32;
         let bytes = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
-        // Non-canonical when discarded pad bits are set.
         if (pad == 1 && bytes[2] != 0) || (pad == 2 && bytes[1] != 0) {
             return None;
         }

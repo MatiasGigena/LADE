@@ -1,5 +1,3 @@
-//! Small widget helpers shared by the views. Styling comes only from `assets/style.css` classes.
-
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
@@ -13,11 +11,6 @@ use crate::presentation::text_bound::{
     EditGuard, EndDecision, InsertDecision, Snapshot, TextLimit,
 };
 
-/// Polite screen-reader announcement. GTK 4.14 calls a missing `announce` implementation (a
-/// NULL vfunc: segfault) when the window's accessibility context is not the AT-SPI backend, e.g.
-/// without a session bus, so other contexts are skipped; the visible text remains. With
-/// `GTK_A11Y=none` GTK creates no context at all (the binding would panic on the NULL), so that
-/// setting skips announcements before asking for one.
 pub fn announce(
     widget: &impl IsA<gtk::Accessible>,
     message: &str,
@@ -31,21 +24,13 @@ pub fn announce(
     }
 }
 
-/// Widget names starting with this prefix are stable keys used to restore focus after rebuilds.
 pub const FOCUS_KEY_PREFIX: &str = "k:";
 
-/// Spacing tokens (logical px), the only gaps the views use between widgets. The stylesheet's
-/// paddings use the same scale (`assets/style.css`, "Spacing").
 pub mod space {
-    /// Lines that belong to one item (a label and its reason, a title and its secondary line).
     pub const TIGHT: i32 = 4;
-    /// Items of a group; controls in a row.
     pub const ITEM: i32 = 8;
-    /// Groups within a section.
     pub const GROUP: i32 = 12;
-    /// Sections of a panel.
     pub const SECTION: i32 = 16;
-    /// Blocks of a page.
     pub const PAGE: i32 = 24;
 }
 
@@ -61,14 +46,12 @@ pub fn label(text: &str, classes: &[&str]) -> gtk::Label {
     label
 }
 
-/// Paths, identifiers and code must never gain inserted hyphens when wrapped.
 pub fn no_hyphens(label: &gtk::Label) {
     let attrs = gtk::pango::AttrList::new();
     attrs.insert(gtk::pango::AttrInt::new_insert_hyphens(false));
     label.set_attributes(Some(&attrs));
 }
 
-/// Single-line label that ellipsizes; the full text is available as tooltip.
 pub fn line_label(
     text: &str,
     classes: &[&str],
@@ -81,13 +64,8 @@ pub fn line_label(
     label
 }
 
-/// A multi-line input whose user edits are atomic and bounded (`presentation::text_bound`): an
-/// edit that would exceed the limit is stopped before insertion and the previous text, cursor and
-/// selection are restored, with a local error under the field. Focus stays in the field. The model
-/// receives one commit per complete user edit, never GTK's intermediate deletion.
 pub struct LimitedInput {
     pub view: gtk::TextView,
-    /// Local error area; place it right below the field.
     pub error: gtk::Box,
     what: String,
     guard: RefCell<EditGuard>,
@@ -128,7 +106,6 @@ impl LimitedInput {
             let decision = this.guard.borrow_mut().insert(&text_of(buffer), inserted);
             if let InsertDecision::Reject { attempted } = decision {
                 buffer.stop_signal_emission_by_name("insert-text");
-                // Inside a user action the error is shown once the snapshot is restored.
                 if !this.guard.borrow().in_action() {
                     this.show_rejection(attempted);
                 }
@@ -158,7 +135,6 @@ impl LimitedInput {
         input
     }
 
-    /// The field and its local error area as one unit (no extra spacing while there is no error).
     pub fn field(&self, scroll: &gtk::ScrolledWindow) -> gtk::Box {
         let unit = vbox(0);
         unit.append(scroll);
@@ -167,7 +143,6 @@ impl LimitedInput {
         unit
     }
 
-    /// Called with the complete text after each accepted user edit.
     pub fn connect_commit(&self, f: impl Fn(&str) + 'static) {
         *self.on_commit.borrow_mut() = Some(Box::new(f));
     }
@@ -176,7 +151,6 @@ impl LimitedInput {
         text_of(&self.view.buffer())
     }
 
-    /// Replaces the text from the model (no commit, no limit check: model text is bounded).
     pub fn set_text(&self, text: &str) {
         self.programmatic.set(true);
         self.view.buffer().set_text(text);
@@ -202,10 +176,6 @@ impl LimitedInput {
         );
     }
 
-    /// Restores the snapshot inside GTK's end-user-action emission. `set_text` would start an
-    /// irreversible history action, which is invalid there; a guarded delete/insert joins the
-    /// current action instead. The oriented selection is restored on idle, after the X11 PRIMARY
-    /// release caused by the deletion has been processed, and only if nothing changed meanwhile.
     fn restore(self: &Rc<Self>, buffer: &gtk::TextBuffer, snapshot: Snapshot, attempted: usize) {
         self.programmatic.set(true);
         buffer.delete(&mut buffer.start_iter(), &mut buffer.end_iter());
@@ -239,11 +209,8 @@ fn text_of(buffer: &gtk::TextBuffer) -> String {
         .to_string()
 }
 
-/// Multi-line input with a real boundary whose height stays between `min` and `max` px (the text
-/// scrolls beyond that), independent of earlier layout passes.
 pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWindow {
     view.set_wrap_mode(gtk::WrapMode::WordChar);
-    // Tab moves focus to the next control instead of inserting a tab character.
     view.set_accepts_tab(false);
     view.set_top_margin(8);
     view.set_bottom_margin(8);
@@ -261,9 +228,6 @@ pub fn bounded_text(view: &gtk::TextView, min: i32, max: i32) -> gtk::ScrolledWi
     scroll
 }
 
-/// A region viewport: vertical scrolling when the content is taller than the window, never a
-/// horizontal scrollbar, and non-overlay scrollbars (GTK's transient overlay sliders produced
-/// unallocated-snapshot warnings in the IMP-002 checkpoint and can hide content under them).
 pub fn region_scroll(child: &impl IsA<gtk::Widget>) -> gtk::ScrolledWindow {
     gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -302,8 +266,6 @@ fn string_factory(ellipsize: bool) -> gtk::SignalListItemFactory {
     factory
 }
 
-/// A drop-down whose closed button ellipsizes a long choice (full text as tooltip and in the
-/// open list), so it never widens a narrow column.
 pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
     let dropdown = gtk::DropDown::new(Some(gtk::StringList::new(choices)), None::<gtk::Expression>);
     dropdown.set_factory(Some(&string_factory(true)));
@@ -321,9 +283,6 @@ pub fn dropdown(choices: &[&str]) -> gtk::DropDown {
     dropdown
 }
 
-/// A disclosure: a quiet toggle button whose label wraps, showing or hiding `child` below it. The
-/// child stays rooted while hidden — a collapsed `GtkExpander` caused a `gtk_root_get_focus`
-/// critical during compact Tab traversal in the IMP-002 checkpoint, so it is not used.
 pub fn disclosure(
     title: &str,
     expanded: bool,
@@ -335,7 +294,6 @@ pub fn disclosure(
     let toggle = gtk::ToggleButton::new();
     toggle.add_css_class("quiet");
     toggle.add_css_class("disclosure-toggle");
-    // The whole row is the target (text left-aligned), not only the words.
     toggle.set_halign(gtk::Align::Fill);
     let text = gtk::Label::new(None);
     text.set_wrap(true);
@@ -367,7 +325,6 @@ pub fn disclosure(
     root
 }
 
-/// A label for a button that wraps instead of widening its column.
 pub fn wrapping_button(text: &str, classes: &[&str]) -> gtk::Button {
     let button = gtk::Button::new();
     let child = gtk::Label::new(Some(text));
@@ -420,7 +377,6 @@ pub fn section_title(text: &str) -> gtk::Label {
     heading(text, "section-title")
 }
 
-/// A label exposed with the heading role.
 pub fn heading(text: &str, class: &str) -> gtk::Label {
     let title = gtk::Label::builder()
         .label(text)
@@ -433,8 +389,6 @@ pub fn heading(text: &str, class: &str) -> gtk::Label {
     title
 }
 
-/// A sign followed by its (wrapping) text, never colour alone and no pill box (an Objective's
-/// status: `presentation::panel::status_line`); the accessible name is the text.
 pub fn sign_text(sign: &str, text: &str) -> gtk::Box {
     let row = hbox(6);
     row.add_css_class("status-text");
@@ -450,7 +404,6 @@ pub fn sign_text(sign: &str, text: &str) -> gtk::Box {
     row
 }
 
-/// Signed change counts "+N −M" with semantic ink (and the signs as text equivalents).
 pub fn counts(added: u64, removed: u64) -> gtk::Box {
     let row = hbox(space::ITEM);
     let add = gtk::Label::new(Some(&format!("+{added}")));
@@ -468,8 +421,6 @@ pub fn counts(added: u64, removed: u64) -> gtk::Box {
     row
 }
 
-/// An action whose availability comes only from the service projection. A disabled action keeps
-/// its place and shows the reason as visible text and tooltip; a not-offered one is hidden.
 pub fn action_row(
     text: &str,
     availability: &ActionAvailability,
@@ -502,10 +453,6 @@ pub fn action_row(
     row
 }
 
-/// A secondary action in a list (More actions): a quiet, left-aligned button with the same
-/// availability rules as [`action_row`] — a disabled one keeps its place and its reason is visible
-/// below it, in the tooltip and as accessible description; a not-offered one is hidden.
-/// `destructive` uses the destructive ink (never the primary treatment).
 pub fn list_action_row(
     text: &str,
     availability: &ActionAvailability,
@@ -539,8 +486,6 @@ pub fn list_action_row(
     row
 }
 
-/// A compact action whose disabled reason is its tooltip and accessible description, for places
-/// where a visible status line beside it already states why (the Activity header).
 pub fn compact_action(
     text: &str,
     availability: &ActionAvailability,
@@ -562,7 +507,6 @@ pub fn compact_action(
     button
 }
 
-/// Local error line near the control that failed.
 pub fn error_line(text: &str) -> gtk::Box {
     let row = hbox(space::ITEM);
     row.add_css_class("error-box");
@@ -588,7 +532,6 @@ pub fn warning_line(text: &str) -> gtk::Box {
     row
 }
 
-/// Key/value row for the inspector.
 pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     let row = hbox(space::GROUP);
     let key_label = label(key, &["meta", "field-key"]);
@@ -601,8 +544,6 @@ pub fn field(key: &str, value: &impl IsA<gtk::Widget>) -> gtk::Box {
     row
 }
 
-/// Restores focus to the same keyed widget after `rebuild` replaced the container's children, or to
-/// the container's first focusable child; never moves focus that was elsewhere.
 pub fn rebuild_preserving_focus(container: &impl IsA<gtk::Widget>, rebuild: impl FnOnce()) {
     let container = container.as_ref();
     let focused = container.root().and_then(|r| r.focus());
@@ -639,10 +580,8 @@ pub fn find_named(root: &gtk::Widget, name: &str) -> Option<gtk::Widget> {
     None
 }
 
-/// Installs Escape (from the keybinding table) to close a dialog window.
 fn install_close_shortcut(window: &gtk::Window) {
     let controller = gtk::ShortcutController::new();
-    // Fixed binding: Escape always dismisses the local dialog (see `keys`).
     let accel = keys::binding(keys::AppAction::CloseDialog).default;
     if let Some(trigger) = gtk::ShortcutTrigger::parse_string(accel) {
         let action = gtk::CallbackAction::new(|widget, _| {
@@ -656,7 +595,6 @@ fn install_close_shortcut(window: &gtk::Window) {
     window.add_controller(controller);
 }
 
-/// A modal dialog whose closing returns focus to `opener`.
 pub struct Dialog {
     pub window: gtk::Window,
     pub body: gtk::Box,
@@ -704,7 +642,6 @@ impl Dialog {
         self.show_errors(&[message.to_owned()]);
     }
 
-    /// Replaces the dialog's error area with one error line per message.
     pub fn show_errors(&self, messages: &[String]) {
         clear(&self.error);
         self.error.set_spacing(space::ITEM);
@@ -732,12 +669,10 @@ impl Dialog {
     }
 }
 
-/// Monotonic milliseconds for draft scheduling.
 pub fn monotonic_ms() -> u64 {
     u64::try_from(glib::monotonic_time() / 1000).unwrap_or(0)
 }
 
-/// Wall-clock milliseconds for relative timestamps.
 pub fn now_ms() -> i64 {
     glib::real_time() / 1000
 }

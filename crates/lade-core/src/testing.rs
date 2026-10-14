@@ -1,5 +1,3 @@
-//! Deterministic fixtures shared by unit tests.
-
 use crate::domain::execution::{ExecutionGeneration, ModelRef};
 use crate::domain::ids::{
     ApprovalId, CandidateId, CaptureId, DraftId, GitAlgorithm, GitId, InputId, ObjectiveId,
@@ -52,7 +50,6 @@ pub fn model() -> ModelRef {
     ModelRef::new("lade-fixture", "scripted").expect("fixture model")
 }
 
-/// Reference into `src/main.rs` of working capture 1, with artifact digest `digest(n)`.
 pub fn reference_at(
     n: u128,
     start: usize,
@@ -86,7 +83,6 @@ pub fn defined_objective() -> Objective {
     Objective::define(new, ts(1))
 }
 
-/// Active Objective whose first execution is ready and idle.
 pub fn active_objective() -> (Objective, ExecutionGeneration) {
     let mut objective = defined_objective();
     let generation = objective
@@ -98,7 +94,6 @@ pub fn active_objective() -> (Objective, ExecutionGeneration) {
     (objective, generation)
 }
 
-/// Active Objective whose execution was cancelled (writers excluded), ready to freeze.
 pub fn stopped_objective() -> Objective {
     let (mut objective, generation) = active_objective();
     objective.request_stop(ts(3)).expect("stop");

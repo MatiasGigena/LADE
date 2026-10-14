@@ -12,17 +12,14 @@ const client: Contract = { root: clientSchema, definitions: clientSchema.$defs }
 
 const worker: Contract = { root: workerSchema, definitions: workerSchema.$defs };
 
-/** Client contract (`contracts/v1/schema.json`). */
 export function validate(value: JsonValue): asserts value is Envelope {
   if (!matches(versioned(value), client.root, client)) throw new WireError("invalid_schema");
 }
 
-/** Worker contract (`contracts/v1/worker-schema.json`). */
 export function validateWorker(value: JsonValue): asserts value is WorkerEnvelope {
   if (!matches(versioned(value), worker.root, worker)) throw new WireError("invalid_schema");
 }
 
-/** Client-contract frame body: bounded parse, exact versions, closed schema. */
 export function decode(bytes: Uint8Array): Envelope {
   const value = boundedJson(bytes);
   validate(value);
@@ -30,7 +27,6 @@ export function decode(bytes: Uint8Array): Envelope {
   return value;
 }
 
-/** Worker-contract frame body (without its LF): bounded parse, exact versions, closed schema. */
 export function decodeWorkerFrame(bytes: Uint8Array): WorkerEnvelope {
   const value = boundedJson(bytes);
   validateWorker(value);

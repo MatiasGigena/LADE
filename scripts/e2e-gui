@@ -1,20 +1,4 @@
 #!/bin/sh
-# Drives the complete first-release loop in the real GTK client under Xvfb against a real
-# `laded serve`, with the offline `lade-fixture` model inside the real worker sandbox (enabled by the
-# test-only LADE_TEST_FIXTURE_PROVIDER=1 switch), and captures one screenshot per major step.
-#
-#   scripts/e2e-gui [OUT_DIR]     (default: docs/implementation/evidence/first-release)
-#
-# Requires: a debug build (`./scripts/cargo build --workspace --locked`), Xvfb, xdotool,
-# ImageMagick `import`, git, bubblewrap. Environment: E2E_DISPLAY (default 77),
-# E2E_KEEP=1 keeps the temporary directory.
-#
-# Fragile by nature: there is no window manager, so dialogs open at the top-left corner, and
-# controls are clicked by their position in the 1440x900 layout. Keyboard shortcuts are the
-# defaults of DEFAULT_APP_KEYBINDINGS (Ctrl+N new Objective, Ctrl+1 Workbench, Ctrl+2 Activity,
-# Ctrl+Shift+M add feedback, Ctrl+Return send); XDG_CONFIG_HOME points into the temporary
-# directory so a user's keybindings.json cannot change them. Every step that changes state is confirmed
-# from Git or the filesystem, not from pixels; the final assertions check the integration.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/docs/implementation/evidence/first-release}
@@ -22,8 +6,6 @@ DPY=:${E2E_DISPLAY:-77}
 BIN=$ROOT/target/debug
 W=1440
 H=900
-# The screen is larger than the window so the 200 % capture can hold 800x550 logical pixels; the
-# window sits at 0,0 and each capture is the window's 1440x900 region of the root window.
 SCREEN=1600x1100
 for tool in Xvfb xdotool import git bwrap; do
   command -v "$tool" >/dev/null || { echo "e2e-gui: $tool is required" >&2; exit 2; }
@@ -33,7 +15,6 @@ done
   exit 2
 }
 mkdir -p "$OUT"
-# Short paths: Unix socket addresses hold 108 bytes.
 T=$(mktemp -d /tmp/le2e.XXXXXX)
 STATE=$T/state
 RUN=$T/run
@@ -56,9 +37,6 @@ typ() { x type --delay 8 "$1"; }
 park() { x mousemove 700 880; sleep 0.5; }
 shot() { park; import -window root -crop "${W}x${H}+0+0" +repage "$OUT/e2e-$1.png"; step "screenshot e2e-$1.png"; }
 scroll_inspector() { x mousemove 1280 600; i=0; while [ $i -lt "${1:-12}" ]; do x click 5; i=$((i + 1)); done; sleep 1; }
-# Inspector buttons move with scrolling and wrapped reasons; find them by pixels
-# (scripts/e2e-find-button.py): `black` = filled primary button, else a label template in
-# scripts/e2e-templates/. reveal KIND scrolls from the top until it shows and sets BUTTON_Y.
 find_button() {
   case $1 in
     black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
@@ -66,7 +44,6 @@ find_button() {
       python3 -I "$ROOT/scripts/e2e-find-button.py" label "$ROOT/scripts/e2e-templates/$1.png" 1150 100 900 ;;
   esac
 }
-# Activity's Start agent: the filled black button in the Activity header ("X Y").
 start_button() {
   import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" box 700 1110 60 260
 }
@@ -79,7 +56,6 @@ reveal() {
     scroll_inspector 2
   done
 }
-# wait_for SECONDS DESCRIPTION COMMAND...: polls until COMMAND succeeds.
 wait_for() {
   limit=$1; what=$2; shift 2
   n=0
@@ -130,8 +106,6 @@ shot 02-new-objective
 click 469 625 2
 
 step "start the agent with the fixture model (sandboxed worker)"
-# Start agent is Activity's (Agent Session control): its black button in the Activity header,
-# found by pixels; retried on a loaded host.
 key ctrl+2
 tries=0
 until session_ready; do
@@ -164,8 +138,8 @@ click 380 180 1
 step "Workbench: Change Set shows hello.txt"
 key ctrl+1
 sleep 1
-click 1057 249 2   # Refresh the inspected capture (explicit, never silent)
-click 330 262 2    # hello.txt
+click 1057 249 2
+click 330 262 2
 shot 05-change-set
 
 step "select text, add feedback, wait until Saved"
@@ -184,7 +158,7 @@ key ctrl+Return
 wait_for 60 "hello.txt rewritten" wt_file_is hello
 sleep 3
 key ctrl+1
-click 1343 78 2    # Feedback tab
+click 1343 78 2
 shot 07-stale-batch-blocked
 
 step "remove the stale draft (explicit confirmation)"
@@ -193,8 +167,8 @@ shot 08-remove-draft-confirm
 click 359 160 2
 
 step "new draft on the current bytes, submitted as steer"
-click 1057 249 2   # Refresh
-click 330 262 2    # hello.txt
+click 1057 249 2
+click 330 262 2
 x mousemove 625 342 click --repeat 2 --delay 80 1
 sleep 1
 key ctrl+shift+m
@@ -202,10 +176,10 @@ typ "Greet warmly."
 key shift+Return
 typ "lade-fixture: write hello.txt hello there"
 sleep 3
-reveal black       # Review and submit (the Feedback tab's black button)
+reveal black
 click 1280 "$BUTTON_Y" 1
 shot 09-submit-dialog
-click 479 300 1    # Submit 1 item
+click 479 300 1
 wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
 sleep 3
 shot 10-feedback-received
@@ -215,8 +189,8 @@ shot 11-agent-revision
 key ctrl+1
 
 step "edit the intent"
-click 1175 78 1    # Overview tab
-click 1200 458 1   # Edit intent (quiet action below the intent)
+click 1175 78 1
+click 1200 458 1
 key Tab
 typ "Only touch hello.txt"
 key Tab
@@ -225,38 +199,38 @@ shot 12-edit-intent
 click 487 440 2
 
 step "freeze for review"
-reveal black       # Freeze for review (the next action)
+reveal black
 click 1280 "$BUTTON_Y" 1
 wait_for 60 "candidate commit on the Objective branch" branch_has_candidate
 sleep 3
 d=$(wt)
 [ -z "$(git -C "$d" status --porcelain)" ] || fail "objective worktree not clean after freeze"
-click 972 176 1    # inspected version: open the list ...
-key Down           # ... Candidate 1 (current)
+click 972 176 1
+key Down
 key Return
 sleep 2
-click 330 262 2    # hello.txt in the frozen candidate
+click 330 262 2
 shot 13-frozen
 
 step "Evidence: service-observed check"
-click 1258 78 1    # Evidence tab
+click 1258 78 1
 click 1280 442 0.3
 typ 'sh -c "test -f hello.txt"'
-click 1280 490 8   # Run check
+click 1280 490 8
 shot 14-check-passed
 
 step "approve the candidate"
-click 1175 78 1    # Overview tab
-reveal black       # Approve Candidate 1 (checks passed: no override needed)
+click 1175 78 1
+reveal black
 shot 15-approve-ready
 click 1280 "$BUTTON_Y" 3
-reveal black       # Integrate into main
+reveal black
 shot 16-approved
 
 step "protected integration into main"
-click 1280 "$BUTTON_Y" 1   # Integrate into main
+click 1280 "$BUTTON_Y" 1
 shot 17-integrate-confirm
-key Tab            # Cancel has focus; Tab reaches the confirm button
+key Tab
 key Return
 wait_for 60 "squash commit on main" main_integrated
 sleep 3
@@ -271,13 +245,13 @@ step "verify the integration with Git"
 [ -z "$(git -C "$REPO" status --porcelain)" ] || fail "main checkout not clean"
 
 step "clean up branch and worktree"
-click 1280 "$BUTTON_Y" 1   # Clean up branch and worktree
+click 1280 "$BUTTON_Y" 1
 shot 19-cleanup-confirm
-key Tab            # Cancel has focus; Tab reaches Clean up
+key Tab
 key Return
 wait_for 60 "branch and worktree removed" cleaned_up
 sleep 2
-x mousemove 120 139 click 1   # expand the archive
+x mousemove 120 139 click 1
 sleep 1
 shot 20-cleaned-up
 git -C "$REPO" for-each-ref --format='%(refname)' refs/lade/retain/ | grep -q candidate- ||
@@ -288,7 +262,7 @@ x windowsize "$WID" 1280 800
 sleep 2
 park
 import -window "$WID" "$OUT/e2e-21-workbench-1280.png"
-click 1020 166 1   # open More actions (collapsed by default): every other action with its reason
+click 1020 166 1
 park
 import -window "$WID" "$OUT/e2e-22-inspector-actions-1280.png"
 step "screenshots e2e-21-workbench-1280.png e2e-22-inspector-actions-1280.png"

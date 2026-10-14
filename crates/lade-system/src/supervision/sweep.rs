@@ -1,17 +1,3 @@
-//! Pidfiles for launched sandboxes and the startup sweep of stale ones.
-//!
-//! Each launch records `worker-<objective>-<generation>.pid` (a contained terminal:
-//! `terminal-<objective>-<terminal>.pid`) in the run directory: one line
-//! `<pid> <starttime>` per process to kill (the outer bwrap, then the sandbox's PID-namespace
-//! init once known). `starttime` is field 22 of `/proc/<pid>/stat` (clock ticks since boot), so
-//! a recycled pid never matches. Launches write the pidfile (and place the sandbox in its cgroup)
-//! while the sandbox's launch gate is still closed ([`record_sandbox`]), so the sandboxed program
-//! never runs unrecorded while the supervisor lives. The service calls [`sweep_stale`] at
-//! startup, before any launch, to kill sandboxes that survived a previous service — recorded
-//! ones by pidfile, and every sandbox of this run directory by its command-line marker
-//! ([`sandbox_marker`]), including one whose supervisor died after opening the gate but before
-//! bwrap armed its parent-death signals — and to remove their gateway sockets and pidfiles.
-
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
@@ -25,7 +11,6 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::sandbox::{CgroupLeaf, find_program};
 
-/// One recorded process identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PidRecord {
     pub pid: u32,
@@ -33,37 +18,31 @@ pub struct PidRecord {
 }
 
 impl PidRecord {
-    /// The identity of a currently existing process (`None` if gone or a zombie).
     pub fn of(pid: u32) -> Option<Self> {
         let (state, start_time) = proc_stat(pid)?;
         (state != 'Z' && state != 'X').then_some(Self { pid, start_time })
     }
 
-    /// True while the same (non-zombie) process still exists.
     pub fn is_alive(&self) -> bool {
         Self::of(self.pid).is_some_and(|now| now == *self)
     }
 }
 
-/// `(state, starttime)` from `/proc/<pid>/stat`.
 fn proc_stat(pid: u32) -> Option<(char, u64)> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = &stat[stat.rfind(')')? + 1..];
     let mut fields = rest.split_ascii_whitespace();
     let state = fields.next()?.chars().next()?;
-    // Fields after the state start at field 4 (ppid); starttime is field 22.
     let start_time = fields.nth(18)?.parse().ok()?;
     Some((state, start_time))
 }
 
-/// Parent pid from `/proc/<pid>/stat` (field 4).
 pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rest = &stat[stat.rfind(')')? + 1..];
     rest.split_ascii_whitespace().nth(1)?.parse().ok()
 }
 
-/// Live direct children of `pid` (by scanning `/proc`).
 pub(crate) fn children_of(pid: u32) -> Vec<u32> {
     let Ok(entries) = fs::read_dir("/proc") else {
         return Vec::new();
@@ -75,7 +54,6 @@ pub(crate) fn children_of(pid: u32) -> Vec<u32> {
         .collect()
 }
 
-/// Atomically write a pidfile (mode 0600).
 pub fn write_pidfile(path: &Path, records: &[PidRecord]) -> io::Result<()> {
     let tmp = path.with_extension("pid.tmp");
     let mut file = fs::OpenOptions::new()
@@ -91,14 +69,8 @@ pub fn write_pidfile(path: &Path, records: &[PidRecord]) -> io::Result<()> {
     fs::rename(&tmp, path)
 }
 
-/// How long a launch waits for bwrap to fork the sandbox's PID-namespace init.
 const INIT_DISCOVERY: Duration = Duration::from_secs(5);
 
-/// Records a sandbox spawned with a closed launch gate: writes `pidfile` with the outer process,
-/// waits for bwrap's fork (the PID-namespace init, which waits on the gate), moves both into
-/// `leaf` when given, then rewrites the pidfile with both. The caller opens the gate afterwards,
-/// so the sandboxed program never runs unrecorded or outside its cgroup. Returns the init
-/// (`None` when the sandbox already ended). `ended` reports whether the outer process exited.
 pub(crate) fn record_sandbox(
     pidfile: &Path,
     pid: u32,
@@ -106,7 +78,7 @@ pub(crate) fn record_sandbox(
     ended: impl Fn() -> bool,
 ) -> io::Result<Option<PidRecord>> {
     let Some(outer) = PidRecord::of(pid) else {
-        return Ok(None); // already exited; the monitor reports it
+        return Ok(None);
     };
     write_pidfile(pidfile, &[outer])?;
     let Some(init) = discover_init(pid, &ended)? else {
@@ -119,8 +91,6 @@ pub(crate) fn record_sandbox(
     Ok(Some(init))
 }
 
-/// Moves a sandbox spawned with a closed launch gate (outer process `pid` and bwrap's fork)
-/// into `leaf` before the gate opens.
 pub fn place_sandbox(pid: u32, leaf: &CgroupLeaf, ended: impl Fn() -> bool) -> io::Result<()> {
     match discover_init(pid, &ended)? {
         Some(init) => place(leaf, pid, init.pid),
@@ -147,8 +117,6 @@ fn discover_init(pid: u32, ended: &impl Fn() -> bool) -> io::Result<Option<PidRe
     }
 }
 
-/// While the gate is closed the sandbox is the outer process and its init (no further children
-/// yet; any that exist are moved too).
 fn place(leaf: &CgroupLeaf, outer: u32, init: u32) -> io::Result<()> {
     let members = || [outer, init].into_iter().chain(children_of(init));
     for member in members() {
@@ -161,7 +129,6 @@ fn place(leaf: &CgroupLeaf, outer: u32, init: u32) -> io::Result<()> {
     }
 }
 
-/// Parse a pidfile; malformed lines are ignored.
 pub fn read_pidfile(path: &Path) -> io::Result<Vec<PidRecord>> {
     let text = fs::read_to_string(path)?;
     Ok(text
@@ -177,7 +144,6 @@ pub fn read_pidfile(path: &Path) -> io::Result<Vec<PidRecord>> {
         .collect())
 }
 
-/// `SIGKILL` one recorded process if its identity still matches. Returns whether it was sent.
 pub(crate) fn kill_record(record: &PidRecord) -> bool {
     if !record.is_alive() {
         return false;
@@ -195,9 +161,6 @@ pub(crate) fn kill_record(record: &PidRecord) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// The marker of every sandbox started for `run_dir` (see `SandboxSpec::marker`):
-/// `LADE_SANDBOX_<16 hex of SHA-256 of the canonical run directory>`. One state directory has one
-/// service (its lock), so a marker never matches another instance's sandboxes.
 pub fn sandbox_marker(run_dir: &Path) -> String {
     let canonical = fs::canonicalize(run_dir).unwrap_or_else(|_| run_dir.to_path_buf());
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
@@ -205,10 +168,6 @@ pub fn sandbox_marker(run_dir: &Path) -> String {
     format!("LADE_SANDBOX_{hex}")
 }
 
-/// Live processes of this user whose command line carries `marker` as one whole argument: the
-/// outer `prlimit`/`bwrap` of a sandbox and bwrap's own forks (the PID-namespace init among
-/// them). A sandboxed program cannot appear here unless it forges the marker, which only gets
-/// its own processes killed.
 fn marked(marker: &str) -> Vec<u32> {
     let uid = rustix::process::geteuid().as_raw();
     let me = std::process::id();
@@ -227,8 +186,6 @@ fn marked(marker: &str) -> Vec<u32> {
         .collect()
 }
 
-/// `SIGKILL`s every process carrying `marker` (see [`sandbox_marker`]) until none is left or 3 s
-/// passed; returns the pids it signalled.
 pub fn kill_marked(marker: &str) -> Vec<u32> {
     let mut killed = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -250,21 +207,14 @@ pub fn kill_marked(marker: &str) -> Vec<u32> {
     }
 }
 
-/// What [`sweep_stale`] did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SweepReport {
-    /// Processes killed because pid and start time still matched a pidfile.
     pub killed: Vec<u32>,
-    /// Recorded processes that were gone or whose start time no longer matched (left alone).
     pub skipped: Vec<u32>,
     pub removed_pidfiles: usize,
     pub removed_sockets: usize,
 }
 
-/// Kill processes recorded in `run_dir`'s worker and terminal pidfiles whose identity still
-/// matches, then remove those pidfiles and the gateway sockets there. Must only run while no
-/// launcher or terminal is using `run_dir` (service startup). A missing `run_dir` is an empty
-/// sweep.
 pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     let mut report = SweepReport::default();
     let entries = match fs::read_dir(run_dir) {
@@ -285,13 +235,10 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
         }
     }
     let mut killed = Vec::new();
-    // Every sandbox started for this run directory carries its marker, recorded or not (a
-    // supervisor that died before writing the pidfile): kill those first.
     for pid in kill_marked(&sandbox_marker(run_dir)) {
         report.killed.push(pid);
     }
     for path in &pidfiles {
-        // Namespace init (killing it ends the whole PID namespace) before the outer bwrap.
         for record in read_pidfile(path).unwrap_or_default().iter().rev() {
             if kill_record(record) {
                 report.killed.push(record.pid);
@@ -318,8 +265,6 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     Ok(report)
 }
 
-/// Remove every gateway socket (`*.sock`) left in `socket_dir` (`$RUNTIME/g`) by a previous
-/// instance. Must only run while no launcher is using it (service startup). Returns the count.
 pub fn sweep_sockets(socket_dir: &Path) -> io::Result<usize> {
     let entries = match fs::read_dir(socket_dir) {
         Ok(entries) => entries,

@@ -1,7 +1,3 @@
-//! Read-only inspection: Change Sets, file pages, structured diffs, search and activity pages.
-//! Git reads run on the pool; every byte served by `file.read`/`diff.get` is also retained in the
-//! artifact store so feedback references point at durable content.
-
 use std::sync::Arc;
 
 use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId};
@@ -33,7 +29,6 @@ const MAX_DIFF_TEXT: usize = 640 * 1024;
 const MAX_PAGE_JSON: usize = 900 * 1024;
 const MAX_ACTIVITY_BYTES: usize = 768 * 1024;
 
-/// Two trees to compare plus labels.
 #[derive(Clone)]
 struct Resolved {
     old: GitId,
@@ -46,7 +41,6 @@ struct Resolved {
 
 enum Basis2 {
     Ready(Box<Resolved>),
-    /// The working basis has no capture yet; take one first.
     NeedsCapture,
 }
 
@@ -60,7 +54,6 @@ fn wire_status(status: git::ChangeStatus) -> ChangeStatus {
     }
 }
 
-/// Why parts of a Change Set are not fully represented (bounded to the schema's 64 notices).
 fn content_notices(skipped: &[git::RepoPath], filtered: &[git::RepoPath]) -> Vec<ContentNotice> {
     let mut notices: Vec<ContentNotice> = skipped
         .iter()
@@ -137,7 +130,6 @@ fn json_cost(text: &str) -> usize {
         .sum()
 }
 
-/// One page of a whole file (already retained as an artifact).
 fn file_page(
     bytes: &[u8],
     digest: Digest,
@@ -185,10 +177,6 @@ fn file_page(
     })
 }
 
-/// One chunk of a file above the whole-file bound, read from its (whole-file) artifact. The
-/// file is binary when its first 8000 bytes hold a NUL; otherwise each chunk must be UTF-8 (cut
-/// back to a character boundary at its end), and a chunk that is not is refused rather than
-/// leaving a gap in the text.
 fn chunk_page(
     artifacts: &ArtifactStore,
     digest: &ArtifactDigest,
@@ -214,7 +202,6 @@ fn chunk_page(
         }
         let valid = match std::str::from_utf8(&page.data) {
             Ok(text) => text,
-            // An incomplete character at the end continues in the next chunk.
             Err(e) if e.error_len().is_none() => {
                 std::str::from_utf8(&page.data[..e.valid_up_to()]).map_err(|_| invalid("utf-8"))?
             }
@@ -550,7 +537,6 @@ impl Service {
         Ok(self.ws_of(st)?.repo.clone())
     }
 
-    /// Runs `work` on the pool once the basis is resolved, capturing the worktree first if needed.
     fn query_on_basis(
         &mut self,
         ctx: ReqCtx,
@@ -649,7 +635,6 @@ impl Service {
         )
     }
 
-    /// The `changes.list` reply for a just-registered working capture.
     pub(crate) fn working_change_list(
         &mut self,
         oid: ObjectiveId,

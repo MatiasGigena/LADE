@@ -1,15 +1,10 @@
-//! Validator for the closed JSON-Schema subset emitted by `scripts/generate-schema.py`.
-//! Anything outside the subset fails closed.
 use crate::{MAX_CHUNK, WireError};
 use serde_json::Value;
 use std::sync::LazyLock;
 
-/// Which checked-in schema a frame is validated against.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Contract {
-    /// `contracts/v1/schema.json`: client <-> service.
     Client,
-    /// `contracts/v1/worker-schema.json`: service <-> worker.
     Worker,
 }
 
@@ -72,14 +67,13 @@ fn matches(value: &Value, schema: &Value, root: &Value) -> bool {
                 return false;
             };
             let Some(max) = length(schema, "maxItems") else {
-                return false; // Unbounded arrays are not part of the subset.
+                return false;
             };
             items.len() <= max
                 && items.len() >= length(schema, "minItems").unwrap_or(0)
                 && items.iter().all(|v| matches(v, &schema["items"], root))
         }
         Some("string") => value.as_str().is_some_and(|s| {
-            // JSON-Schema lengths count Unicode code points, not bytes or UTF-16 units.
             let count = || s.chars().count();
             length(schema, "minLength").is_none_or(|min| count() >= min)
                 && length(schema, "maxLength").is_none_or(|max| count() <= max)
@@ -89,7 +83,7 @@ fn matches(value: &Value, schema: &Value, root: &Value) -> bool {
                     .is_none_or(|kind| format(s, kind))
         }),
         Some("boolean") => value.is_boolean(),
-        _ => false, // Unsupported schema constructs fail closed.
+        _ => false,
     }
 }
 
@@ -104,7 +98,6 @@ fn canonical_decimal(s: &str) -> Option<u64> {
     s.parse::<u64>().ok()
 }
 
-/// `YYYY-MM-DDTHH:MM:SS.mmmZ`, years 1970..=9999, real calendar dates, no leap seconds.
 pub(crate) fn timestamp_parts(s: &str) -> Option<[u32; 7]> {
     let b = s.as_bytes();
     if b.len() != 24 {

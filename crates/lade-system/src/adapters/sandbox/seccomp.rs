@@ -1,25 +1,3 @@
-//! The seccomp filter of every sandbox: a small, reviewed denylist compiled to a classic BPF
-//! program in Rust (no libseccomp, no `unsafe`) and handed to bubblewrap's `--seccomp FD`, which
-//! installs it (with `PR_SET_NO_NEW_PRIVS`) as the last step before executing the sandboxed
-//! program, after its own namespace and mount setup.
-//!
-//! Policy (x86_64 and aarch64; other architectures get no program, so the sandbox is unavailable):
-//!
-//! - a foreign architecture (for example i386 `int 0x80` on x86_64) kills the process; x32
-//!   system calls fail with `EPERM`;
-//! - [`DENIED`] system calls fail with `EPERM`: kernel modules and kexec, mounts and the new
-//!   mount API, `pivot_root`, keyrings, `bpf`, `perf_event_open`, `userfaultfd`,
-//!   `open_by_handle_at`, swap, `reboot` and `setns`;
-//! - `clone`/`unshare` with any namespace flag fail with `EPERM`; `clone3` fails with `ENOSYS`
-//!   (its flags live in memory a filter cannot read; C libraries then fall back to `clone`);
-//! - `personality` other than `PER_LINUX` or the query value fails with `EPERM` (no ASLR
-//!   disabling or legacy personalities);
-//! - `ioctl` `TIOCSTI` and `TIOCLINUX` fail with `EPERM` (no terminal input injection);
-//! - everything else is allowed.
-//!
-//! `ptrace` is not filtered: a filter cannot tell children from other processes, and the PID
-//! namespace already limits targets to the sandbox's own processes (plus Yama, when enabled).
-
 const LD_W_ABS: u16 = 0x20;
 const JEQ_K: u16 = 0x15;
 const JGE_K: u16 = 0x35;
@@ -32,16 +10,12 @@ const RET_KILL_PROCESS: u32 = 0x8000_0000;
 const EPERM: u32 = 1;
 const ENOSYS: u32 = 38;
 
-/// `struct seccomp_data` offsets: `nr`, `arch`, then `args[i]` (low 32 bits on little-endian).
 const OFFSET_NR: u32 = 0;
 const OFFSET_ARCH: u32 = 4;
 const fn arg_low(index: u32) -> u32 {
     16 + 8 * index
 }
 
-/// Namespace flags of `clone`/`unshare` (`CLONE_NEWNS`, `NEWCGROUP`, `NEWUTS`, `NEWIPC`,
-/// `NEWUSER`, `NEWPID`, `NEWNET`). `clone`'s low byte is the exit signal, so `CLONE_NEWTIME`
-/// (0x80) is checked for `unshare` only.
 const CLONE_NAMESPACES: u32 = 0x7e02_0000;
 const CLONE_NEWTIME: u32 = 0x80;
 const PER_LINUX: u32 = 0;
@@ -51,7 +25,6 @@ const TIOCLINUX: u32 = 0x541c;
 
 struct Arch {
     audit: u32,
-    /// x32 system calls (`__X32_SYSCALL_BIT`) share x86_64's audit architecture.
     x32_bit: Option<u32>,
     clone: u32,
     clone3: u32,
@@ -142,7 +115,6 @@ const ARCH: Option<Arch> = Some(Arch {
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const ARCH: Option<Arch> = None;
 
-/// Names of the system calls that always fail with `EPERM` on this architecture.
 pub fn denied() -> Vec<&'static str> {
     ARCH.as_ref()
         .map(|arch| arch.denied.iter().map(|(name, _)| *name).collect())
@@ -181,7 +153,6 @@ impl Asm {
         self.op(LD_W_ABS, offset, Target::Next, Target::Next);
     }
 
-    /// `if A == k goto target`.
     fn jeq(&mut self, k: u32, target: Target) {
         self.op(JEQ_K, k, target, Target::Next);
     }
@@ -199,8 +170,6 @@ impl Asm {
         self.labels[label] = Some(self.insns.len());
     }
 
-    /// Resolves jumps (the shared return instructions come last) and encodes
-    /// `struct sock_filter` in native byte order.
     fn finish(mut self) -> Vec<u8> {
         let returns = [
             (Target::Allow, RET_ALLOW),
@@ -236,8 +205,6 @@ impl Asm {
     }
 }
 
-/// The compiled filter for this architecture (a `struct sock_filter` array), or `None` where
-/// LADE has no reviewed system-call table.
 pub fn program() -> Option<Vec<u8>> {
     let arch = ARCH.as_ref()?;
     if cfg!(target_endian = "big") {
@@ -298,7 +265,6 @@ mod tests {
         args: [u64; 6],
     }
 
-    /// A minimal classic-BPF interpreter for the instructions the program uses.
     fn run(program: &[u8], data: &Data) -> u32 {
         let insns: Vec<(u16, u8, u8, u32)> = program
             .as_chunks::<8>()
@@ -362,11 +328,9 @@ mod tests {
         for (_, nr) in arch.denied {
             assert_eq!(call(arch, *nr, [0; 6]), eperm);
         }
-        // read (0 on x86_64, 63 on aarch64) and write are allowed.
         assert_eq!(call(arch, 0, [0; 6]), RET_ALLOW);
         assert_eq!(call(arch, 63, [0; 6]), RET_ALLOW);
         assert_eq!(call(arch, arch.clone3, [0; 6]), RET_ERRNO | ENOSYS);
-        // fork/thread creation versus new namespaces.
         assert_eq!(call(arch, arch.clone, [0x11, 0, 0, 0, 0, 0]), RET_ALLOW);
         assert_eq!(
             call(arch, arch.clone, [0x003d_0f00, 0, 0, 0, 0, 0]),
@@ -391,7 +355,6 @@ mod tests {
             call(arch, arch.personality, [0x0040_0000, 0, 0, 0, 0, 0]),
             eperm
         );
-        // ioctl's request is an unsigned int: only the low word counts.
         assert_eq!(call(arch, arch.ioctl, [0, 0x5412, 0, 0, 0, 0]), eperm);
         assert_eq!(
             call(arch, arch.ioctl, [0, 0x1_0000_5412, 0, 0, 0, 0]),

@@ -1,32 +1,18 @@
-//! Typed domain rejections. Every variant maps onto exactly one protocol `ErrorCode`.
-
 use core::fmt;
 
 use crate::domain::ids::DraftId;
 
-/// A rejected domain transition or use case.
-///
-/// The protocol codes `version_mismatch` and `replay_expired` are transport/admission concerns and are never
-/// produced by the domain, so they have no variant here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DomainError {
     Unauthorized,
     StaleService,
-    /// The destination session or its association revision is not the current one.
     StaleAssociation,
-    /// A worker fact or command names an execution generation that is not current.
     StaleExecution,
-    /// At least one feedback item no longer matches the current content; the whole batch is blocked.
-    StaleReference {
-        drafts: Vec<DraftId>,
-    },
-    /// The named candidate is not the current candidate.
+    StaleReference { drafts: Vec<DraftId> },
     StaleCandidate,
-    /// The Integration Target moved away from the commit a candidate or approval is bound to.
     StaleTarget,
     InvalidLifecycle(&'static str),
     UnsupportedContent,
-    /// Stored state is corrupt or could not be recorded; nothing was accepted.
     DurabilityFailure(&'static str),
     PermissionDenied,
     LimitReached(&'static str),
@@ -35,13 +21,11 @@ pub enum DomainError {
     DuplicateConflict,
     NotFound(&'static str),
     InvalidRequest(&'static str),
-    /// Optimistic revision mismatch or another state conflict.
     Conflict(&'static str),
     ExecutionUnavailable,
 }
 
 impl DomainError {
-    /// Stable snake_case protocol error code.
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
@@ -66,8 +50,6 @@ impl DomainError {
         }
     }
 
-    /// Short, source-free explanation suitable for a reply `detail` (always far below 512 characters for
-    /// static reasons; stale draft lists are the caller's to bound).
     pub fn detail(&self) -> String {
         match self {
             Self::StaleReference { drafts } => {

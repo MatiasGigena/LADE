@@ -1,7 +1,3 @@
-//! Contained terminal (IMP-012): a real PTY owned by the test (as by the service) with the shell
-//! in the real bubblewrap sandbox. Requires bubblewrap/prlimit and a working sandbox; each test
-//! prints a skip notice otherwise.
-
 mod adapters_support;
 
 use std::fs;
@@ -58,8 +54,6 @@ impl Fixture {
     }
 }
 
-/// Drains output until it contains `needle` (the echoed command line never does: tests print
-/// computed markers such as `M_$((40+2))`).
 fn read_until(terminal: &Terminal, seen: &mut String, needle: &str) {
     let deadline = Instant::now() + TIMEOUT;
     while !seen.contains(needle) {
@@ -80,7 +74,6 @@ fn run(terminal: &Terminal, line: &str, needle: &str) -> String {
     seen
 }
 
-/// Live, non-zombie processes running exactly `sleep <marker>`.
 fn sleepers(marker: &str) -> usize {
     let expected = format!("sleep\0{marker}\0").into_bytes();
     fs::read_dir("/proc")
@@ -118,14 +111,11 @@ fn shell_runs_on_a_pty_inside_the_sandbox_with_worker_quotas() {
         "[ -t 0 ] && [ -t 1 ] && echo TTY_$((40+2))",
         "TTY_42",
     );
-    // Quotas: the prlimit values of the worker limits apply to the shell and its children.
     run(
         &terminal,
         "echo L_$(ulimit -n)_$(ulimit -u)_$(( $(ulimit -v) / 1048576 ))G",
         "L_1024_512_4G",
     );
-    // Grants: no credentials, no network interfaces besides loopback, the Objective worktree as
-    // the working directory, LADE's terminal environment only.
     let out = run(
         &terminal,
         "echo C_${ANTHROPIC_API_KEY:-none}_$(ls /sys/class/net 2>/dev/null | tr -d '\\n')_${LADE_TERMINAL}_${HOME}_$(pwd | sed 's,.*/,,')",
@@ -136,19 +126,16 @@ fn shell_runs_on_a_pty_inside_the_sandbox_with_worker_quotas() {
             || out.contains("C_none__read_write_/tmp_worktree"),
         "{out:?}"
     );
-    // Job control: the PTY is the shell's controlling terminal.
     run(
         &terminal,
         "sleep 30 & kill %1 && echo JOB_$((1+1))",
         "JOB_2",
     );
-    // Writes land in the worktree.
     run(&terminal, "echo hello > made.txt && echo W_$((2+3))", "W_5");
     assert_eq!(
         fs::read_to_string(fx.worktree().join("made.txt")).unwrap(),
         "hello\n"
     );
-    // Outside the binds nothing is visible.
     let host = fx.root.path().display().to_string();
     run(
         &terminal,
@@ -167,8 +154,6 @@ fn seccomp_refuses_terminal_input_injection_and_pwd_is_the_shells_own() {
         return;
     }
     let terminal = fx.open(true);
-    // TIOCSTI on the shell's own PTY: EPERM (1) from the filter; without it the kernel either
-    // injects (success) or, with dev.tty.legacy_tiocsti=0, refuses with EIO (5).
     let out = run(
         &terminal,
         "python3 -I -c 'import fcntl, termios\ntry:\n    fcntl.ioctl(0, termios.TIOCSTI, b\" \"); print(\"TI_\" + \"ok\")\nexcept OSError as e:\n    print(\"TI_%d_\" % e.errno)'",
@@ -185,7 +170,6 @@ fn seccomp_refuses_terminal_input_injection_and_pwd_is_the_shells_own() {
         seen.contains("TI_1_"),
         "TIOCSTI was not refused with EPERM: {seen:?}"
     );
-    // The shell sets its own PWD; bwrap's export was removed before it started.
     run(
         &terminal,
         "echo P_$((6*7))_$(pwd | sed 's,.*/,,')",
@@ -220,7 +204,6 @@ fn kill_ends_detached_descendants_and_removes_the_pidfile() {
     };
     let mut terminal = fx.open(true);
     let marker = format!("{}.{}", 7000 + std::process::id() % 1000, 31);
-    // A setsid'ed, double-forked daemon that would outlive a plain process-group kill.
     run(
         &terminal,
         &format!("(setsid nohup sleep {marker} >/dev/null 2>&1 &) ; echo D_$((6+6))"),
@@ -290,7 +273,6 @@ fn output_flood_stays_bounded_and_counts_dropped_bytes() {
     terminal
         .write(b"stty -echo; tr '\\0' x < /dev/zero\n")
         .unwrap();
-    // Nobody drains for a while: the ring fills, then discards the oldest bytes.
     let mut total = 0usize;
     let mut dropped = 0u64;
     let deadline = Instant::now() + TIMEOUT;
@@ -303,7 +285,6 @@ fn output_flood_stays_bounded_and_counts_dropped_bytes() {
         dropped += drained.dropped;
     }
     assert!(total > 0);
-    // ^C reaches the foreground job through the controlling terminal; the shell survives.
     terminal.write(b"\x03").unwrap();
     let mut seen = String::new();
     terminal.write(b"stty echo; echo AFTER_$((9+9))\n").unwrap();

@@ -1,6 +1,3 @@
-//! Startup sweep: kills recorded sandboxes whose identity still matches and leaves recycled
-//! pids alone. Requires bubblewrap/prlimit (skips otherwise).
-
 mod adapters_support;
 
 use std::fs;
@@ -31,8 +28,6 @@ fn child_of(parent: u32) -> Option<u32> {
         .find(|pid| stat_fields(*pid).is_some_and(|f| f[1] == parent.to_string()))
 }
 
-/// Live, non-zombie `sleep` processes running exactly `sleep <marker>`. The comm check excludes
-/// prlimit/bwrap, whose own command lines also end with `sleep <marker>`.
 fn sleepers(marker: &str) -> usize {
     let expected = format!("sleep\0{marker}\0").into_bytes();
     fs::read_dir("/proc")
@@ -92,7 +87,6 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     write_pidfile(&pidfile, &records).unwrap();
     assert_eq!(read_pidfile(&pidfile).unwrap(), records);
 
-    // A pidfile naming a live process with a different start time (pid reuse) is ignored.
     let mut bystander = Command::new("sleep").arg("30").spawn().unwrap();
     let real = PidRecord::of(bystander.id()).unwrap();
     write_pidfile(
@@ -107,8 +101,6 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     fs::write(run.join("unrelated.txt"), "").unwrap();
 
     let report = sweep_stale(&run).unwrap();
-    // The namespace init is killed first; on a loaded host bwrap can exit before the sweep reaches
-    // it (then it is skipped as gone). Either way the recorded sandbox is killed.
     assert!(
         report.killed.contains(&outer) || report.killed.contains(&init),
         "{report:?}"
@@ -130,7 +122,6 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     );
 }
 
-/// The sandbox command as one shell command line.
 fn shell_line(cmd: &SandboxCommand) -> String {
     let quote = |arg: &std::ffi::OsStr| {
         format!(
@@ -145,12 +136,6 @@ fn shell_line(cmd: &SandboxCommand) -> String {
         .join(" ")
 }
 
-/// Forced supervisor-loss races: a stand-in supervisor (`sh`) spawns the sandbox and is killed
-/// in the same instant, before any pidfile exists and usually before bwrap armed its
-/// parent-death signal. In half the runs the launch gate was never opened (the supervisor died
-/// before recording the sandbox): those sandboxes end by themselves without running anything.
-/// In the other half the gate was opened, so the program may keep running unsupervised: the
-/// startup sweep finds those by their marker. Afterwards nothing survives.
 #[test]
 fn forced_supervisor_loss_races_leave_no_survivors() {
     const RUNS: usize = 40;
@@ -191,7 +176,6 @@ fn forced_supervisor_loss_races_leave_no_survivors() {
         }
         let _ = supervisor.wait();
     }
-    // Let every orphaned sandbox get past its setup.
     thread::sleep(Duration::from_millis(1500));
     let alive: Vec<usize> = (0..RUNS)
         .filter(|i| sleepers(&sleep_marker(*i)) > 0)

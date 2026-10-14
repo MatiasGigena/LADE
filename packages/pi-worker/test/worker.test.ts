@@ -61,7 +61,6 @@ test("a write directive runs the real write tool in cwd and streams activity", (
   assert.ok(assistant.some(line => line.includes("1 of 1 tool call(s) succeeded")));
   assert.deepEqual(userTexts(worker, mark), ["Please create the file.\nlade-fixture: write notes/hello.txt Hello\\nWorld"]);
 
-  // Deltas reconstruct the authoritative text of their item.
   for (const item of items.filter(entry => entry.role === "assistant")) {
     const deltas = worker.frames.filter(frame => frame.kind === "activity.delta" && frame.item_id === item.item_id).map(frame => text(frame.append_text)).join("");
     assert.equal(deltas, item.text);

@@ -1,5 +1,4 @@
 #!/bin/sh
-# Explicit developer action only. No sudo, profile edits or host service setup.
 set -eu
 cd "$(dirname "$0")/.."
 test "$(uname -sm)" = "Linux x86_64" || { echo 'blocked: supported build host is Linux x86_64' >&2; exit 78; }
