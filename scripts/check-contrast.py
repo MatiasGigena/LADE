@@ -46,6 +46,18 @@ for number, line in enumerate(css.splitlines(), 1):
     if not line.startswith('@define-color') and re.search(r'#[0-9A-Fa-f]{3,8}\b|rgba?\(', line):
         errors.append(f'style.css:{number}: colour literal outside @define-color: {line.strip()}')
 
+# A token pair only holds if the ink is drawn at full opacity. A rule that sets a token colour
+# must not dim it, and rules for GTK's placeholder node must reset opacity to 1 because themes
+# dim placeholders (Mint-Y-Aqua rendered @ink_metadata at about 1.9:1).
+for match in re.finditer(r'([^{}]+)\{([^{}]*)\}', css):
+    selector, body = ' '.join(match.group(1).split()), match.group(2)
+    number = css.count('\n', 0, match.start(2)) + 1
+    opacity = re.search(r'(?<![-\w])opacity:\s*([\d.]+)', body)
+    if opacity and float(opacity.group(1)) < 1 and re.search(r'(?<![-\w])color:\s*@\w+', body):
+        errors.append(f'style.css:{number}: {selector} dims its token colour with opacity {opacity.group(1)}')
+    if re.search(r'(?<![-.\w])placeholder\b', selector) and (not opacity or float(opacity.group(1)) != 1):
+        errors.append(f'style.css:{number}: {selector} must set opacity: 1 (themes dim placeholders)')
+
 
 def composite(fg, bg):
     alpha = fg[3]
