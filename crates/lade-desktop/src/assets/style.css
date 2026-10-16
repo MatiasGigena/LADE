@@ -163,7 +163,8 @@ scrolledwindow.text-input textview, scrolledwindow.text-input textview > text {
   color: @ink_primary;
 }
 entry > image { color: @ink_metadata; }
-entry > text > placeholder { color: @ink_metadata; }
+entry > text > placeholder, spinbutton > text > placeholder,
+entry:focus-within > text > placeholder { color: @ink_metadata; opacity: 1; }
 
 dropdown > button, dropdown > .dropdown, menubutton > button {
   border: 1px solid @border_control;
