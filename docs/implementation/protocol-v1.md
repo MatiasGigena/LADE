@@ -73,7 +73,8 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `file.read` | query | `FileReadQuery` | `FileContent` |
 | `diff.get` | query | `DiffGetQuery` | `FileDiff` |
 | `search` | query | `SearchQuery` | `SearchResults` |
-| `drafts.list` / `inputs.list` | query | `ObjectiveSelector` | `DraftList` / `InputList` |
+| `drafts.list` | query | `DraftsListQuery` | `DraftList` |
+| `inputs.list` | query | `InputsListQuery` | `InputList` |
 | `operation.get` | query | `OperationGetQuery` | `OperationStatus {state, outcome?: {name, result}}` |
 | `workspace.open` | command | `WorkspaceOpenCommand` | `Workspace` |
 | `objective.create` | command | `ObjectiveCreateCommand` | `ObjectiveDetail` |
@@ -168,6 +169,33 @@ raw bytes used by feedback references.
 ### Error semantics
 
 `ErrorCode` keeps the IMP-001 codes and adds `not_found`, `invalid_request`, `conflict`, `execution_unavailable`; `SafeAction` is unchanged. A frame that parses as bounded JSON with exact versions and whose body is a `request` with a valid `request_id`, but fails the schema (unknown name, invalid payload, wrong `operation_id` presence), is answered with an unnamed or named `invalid_request` rejection and the link stays open — `decode_client_frame` returns that `request_id` for exactly this case. Every other decode failure (framing, JSON, version, non-request schema failure) closes the link. `auth` failure closes the link without a reply. `detail` never carries source, prompt or secret content.
+
+### Draft and input pages
+
+`DraftsListQuery {objective_id, limit, after?: DraftCursor}` reads drafts in ascending
+`(created_at, draft_id)` order. `DraftCursor {created_at: Timestamp, draft_id: Id}` uses the draft's
+immutable creation time and UUID; comparison is exclusive, so deleting the cursor's draft does not
+invalidate traversal. `InputsListQuery {objective_id, limit, after?: Counter}` reads inputs in ascending
+durable acceptance-sequence order; the sequence is the cursor, including when acceptance timestamps tie.
+Omit `after` for the first page. `limit` uses `PageLimit` (`1..=200`).
+
+`DraftList {drafts, next_after?: DraftCursor}` and `InputList {inputs, next_after?: Counter}` contain at
+most `limit` full records and must fit the encoded frame and JSON-value budgets. The service can return
+fewer records to meet the byte bound. When records remain, `next_after` identifies the last emitted
+record and advances strictly beyond the request cursor; a continuation page is never empty. Omission
+of `next_after` completes the traversal. No records are silently skipped to fit a page, and paging
+imposes no limit on the number of durable drafts or inputs. An existing record that cannot fit even
+alone produces an explicit rejection while its durable content remains intact.
+
+The desktop accumulates a complete traversal before publishing the authoritative list or reconciling
+absent drafts. It applies events, command outcomes and confirmed draft deletions in connection order
+while loading, and ignores replies from a replaced traversal. Only the final successful page releases
+saves waiting for draft reconciliation. A failed traversal or disconnect preserves the current list
+and local text; a subsequent traversal starts with `after` omitted.
+
+Before committing a draft save, the service checks that the resulting record can be sent in its save
+reply, a one-record page with a continuation cursor, its `draft.changed` event, and the recovered
+`operation.get` outcome. An unrepresentable save is rejected before changing durable content.
 
 ### Duplicate operations
 

@@ -713,6 +713,7 @@ fn query_replies_carry_their_request_context() {
                 new_start: Counter::new(1),
                 new_lines: Counter::new(1),
                 lines: vec![wire::DiffLine {
+                    no_newline: true,
                     kind: wire::DiffLineKind::Add,
                     text: "hi".into(),
                     old_no: None,
@@ -733,6 +734,7 @@ fn query_replies_carry_their_request_context() {
     assert_eq!(diff.basis, Basis::Working);
     assert_eq!(diff.hunks[0].lines[0].kind, view::DiffLineKind::Add);
     assert_eq!(diff.hunks[0].lines[0].new_byte_start, Some(0));
+    assert!(diff.hunks[0].lines[0].no_newline);
 
     let page = reply_effects(
         &Context::File(oid(), Basis::Working, path.clone(), Side::New),

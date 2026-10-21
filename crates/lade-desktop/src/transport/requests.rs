@@ -251,11 +251,19 @@ fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             Context::File(objective_id.clone(), basis.clone(), path.clone(), *side),
         ),
         I::LoadDrafts { objective_id } => (
-            Request::DraftsList(selector(objective_id)?),
+            Request::DraftsList(wire::DraftsListQuery {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                limit: limit(200),
+                after: None,
+            }),
             Context::Drafts(objective_id.clone()),
         ),
         I::LoadInputs { objective_id } => (
-            Request::InputsList(selector(objective_id)?),
+            Request::InputsList(wire::InputsListQuery {
+                objective_id: id(objective_id.as_str(), "objective id")?,
+                limit: limit(200),
+                after: None,
+            }),
             Context::Inputs(objective_id.clone()),
         ),
         I::Search {

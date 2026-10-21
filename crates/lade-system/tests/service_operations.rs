@@ -4,11 +4,11 @@ use std::fs;
 
 use lade_protocol::client::{
     ActionName, Badge, Basis, DeliveryState, DraftDeleteCommand, DraftRevision, DraftSaveCommand,
-    Empty, ErrorCode, ExecutionState, FeedbackSubmitCommand, ObjectiveCreateCommand,
-    ObjectiveSelector, OperationGetQuery, OperationState, Outcome, Reference, ReferenceVersion,
-    ReplyData, Request, Side, Start,
+    DraftsListQuery, Empty, ErrorCode, ExecutionState, FeedbackSubmitCommand, InputsListQuery,
+    ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, OperationState, Outcome,
+    Reference, ReferenceVersion, ReplyData, Request, Side, Start,
 };
-use lade_protocol::types::{Counter, DeliveryMode, Digest, Id, WirePath};
+use lade_protocol::types::{Counter, DeliveryMode, Digest, Id, PageLimit, WirePath};
 use service_support::*;
 
 #[test]
@@ -247,8 +247,10 @@ fn restart_makes_unacknowledged_dispatch_uncertain() {
             },
         ))
         .unwrap();
-    let inputs = |client: &mut Client| match client.call(Request::InputsList(ObjectiveSelector {
+    let inputs = |client: &mut Client| match client.call(Request::InputsList(InputsListQuery {
         objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
     })) {
         Ok(ReplyData::InputsList(list)) => list.inputs,
         other => panic!("{other:?}"),
@@ -407,14 +409,18 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
         "{}",
         rejected.detail
     );
-    match client.call(Request::InputsList(ObjectiveSelector {
+    match client.call(Request::InputsList(InputsListQuery {
         objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
     })) {
         Ok(ReplyData::InputsList(list)) => assert!(list.inputs.is_empty()),
         other => panic!("{other:?}"),
     }
-    match client.call(Request::DraftsList(ObjectiveSelector {
+    match client.call(Request::DraftsList(DraftsListQuery {
         objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
     })) {
         Ok(ReplyData::DraftsList(list)) => {
             assert_eq!(list.drafts.len(), 2);
@@ -441,8 +447,10 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     };
     assert!(accepted.text_preview.contains("greet properly v2"));
     eventually("delivery received", || {
-        match client.call(Request::InputsList(ObjectiveSelector {
+        match client.call(Request::InputsList(InputsListQuery {
             objective_id: objective.clone(),
+            limit: PageLimit::parse("200").unwrap(),
+            after: None,
         })) {
             Ok(ReplyData::InputsList(list)) => (list.inputs.len() == 1
                 && list.inputs[0].delivery == DeliveryState::Received)

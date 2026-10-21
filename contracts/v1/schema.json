@@ -639,6 +639,32 @@
       "required": ["objective_id"],
       "properties": {"objective_id": {"$ref": "#/$defs/Id"}}
     },
+    "DraftCursor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["created_at", "draft_id"],
+      "properties": {"created_at": {"$ref": "#/$defs/Timestamp"}, "draft_id": {"$ref": "#/$defs/Id"}}
+    },
+    "DraftsListQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "limit"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "limit": {"$ref": "#/$defs/PageLimit"},
+        "after": {"$ref": "#/$defs/DraftCursor"}
+      }
+    },
+    "InputsListQuery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "limit"],
+      "properties": {
+        "objective_id": {"$ref": "#/$defs/Id"},
+        "limit": {"$ref": "#/$defs/PageLimit"},
+        "after": {"$ref": "#/$defs/Counter"}
+      }
+    },
     "ActivityPageQuery": {
       "type": "object",
       "additionalProperties": false,
@@ -905,13 +931,19 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["drafts"],
-      "properties": {"drafts": {"type": "array", "items": {"$ref": "#/$defs/Draft"}, "maxItems": 512}}
+      "properties": {
+        "drafts": {"type": "array", "items": {"$ref": "#/$defs/Draft"}, "maxItems": 200},
+        "next_after": {"$ref": "#/$defs/DraftCursor"}
+      }
     },
     "InputList": {
       "type": "object",
       "additionalProperties": false,
       "required": ["inputs"],
-      "properties": {"inputs": {"type": "array", "items": {"$ref": "#/$defs/InputSummary"}, "maxItems": 512}}
+      "properties": {
+        "inputs": {"type": "array", "items": {"$ref": "#/$defs/InputSummary"}, "maxItems": 200},
+        "next_after": {"$ref": "#/$defs/Counter"}
+      }
     },
     "OperationStatus": {
       "type": "object",
@@ -1322,7 +1354,7 @@
             "kind": {"const": "request"},
             "request_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "drafts.list"},
-            "payload": {"$ref": "#/$defs/ObjectiveSelector"}
+            "payload": {"$ref": "#/$defs/DraftsListQuery"}
           }
         },
         {
@@ -1333,7 +1365,7 @@
             "kind": {"const": "request"},
             "request_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "inputs.list"},
-            "payload": {"$ref": "#/$defs/ObjectiveSelector"}
+            "payload": {"$ref": "#/$defs/InputsListQuery"}
           }
         },
         {

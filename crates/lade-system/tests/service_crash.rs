@@ -7,13 +7,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::client::{
-    ApprovalState, Badge, Basis, DeliveryState, ExecutionState, InputSummary, Lifecycle,
-    MessageSendCommand, ObjectiveCleanupCommand, ObjectiveSelector, OperationGetQuery,
+    ApprovalState, Badge, Basis, DeliveryState, ExecutionState, InputSummary, InputsListQuery,
+    Lifecycle, MessageSendCommand, ObjectiveCleanupCommand, ObjectiveSelector, OperationGetQuery,
     OperationState, OperationStatus, ReplyData, Request, RequestFrame, ReviewApproveCommand,
     ReviewIntegrateCommand, ReviewVerifyCommand, TerminalInputCommand, TerminalOpenCommand,
     VerificationState,
 };
-use lade_protocol::types::{Counter, DeliveryMode, Id};
+use lade_protocol::types::{Counter, DeliveryMode, Id, PageLimit};
 use service_support::*;
 
 fn send_op(client: &mut Client, request: Request) -> Id {
@@ -51,8 +51,10 @@ fn message(text: &str, objective: &Id) -> Request {
 }
 
 fn inputs(client: &mut Client, objective: &Id) -> Vec<InputSummary> {
-    match client.call(Request::InputsList(ObjectiveSelector {
+    match client.call(Request::InputsList(InputsListQuery {
         objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
     })) {
         Ok(ReplyData::InputsList(list)) => list.inputs,
         other => panic!("inputs.list: {other:?}"),

@@ -153,8 +153,8 @@ requests! {
     FileRead = "file.read", false, FileReadQuery => FileContent;
     DiffGet = "diff.get", false, DiffGetQuery => FileDiff;
     Search = "search", false, SearchQuery => SearchResults;
-    DraftsList = "drafts.list", false, ObjectiveSelector => DraftList;
-    InputsList = "inputs.list", false, ObjectiveSelector => InputList;
+    DraftsList = "drafts.list", false, DraftsListQuery => DraftList;
+    InputsList = "inputs.list", false, InputsListQuery => InputList;
     OperationGet = "operation.get", false, OperationGetQuery => OperationStatus;
     WorkspaceOpen = "workspace.open", true, WorkspaceOpenCommand => Workspace;
     ObjectiveCreate = "objective.create", true, ObjectiveCreateCommand => Box<ObjectiveDetail>;
@@ -1075,6 +1075,22 @@ wire_struct!(SearchResult {
 });
 
 wire_struct!(ObjectiveSelector { objective_id: Id });
+wire_struct!(DraftCursor {
+    created_at: Timestamp,
+    draft_id: Id,
+});
+wire_struct!(DraftsListQuery {
+    objective_id: Id,
+    limit: PageLimit,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<DraftCursor>,
+});
+wire_struct!(InputsListQuery {
+    objective_id: Id,
+    limit: PageLimit,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    after: Option<Counter>,
+});
 wire_struct!(ActivityPageQuery {
     objective_id: Id,
     limit: PageLimit,
@@ -1240,9 +1256,15 @@ wire_struct!(SearchResults {
     results: Vec<SearchResult>,
     truncated: bool,
 });
-wire_struct!(DraftList { drafts: Vec<Draft> });
+wire_struct!(DraftList {
+    drafts: Vec<Draft>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_after: Option<DraftCursor>,
+});
 wire_struct!(InputList {
-    inputs: Vec<InputSummary>
+    inputs: Vec<InputSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_after: Option<Counter>,
 });
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

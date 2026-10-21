@@ -14,13 +14,15 @@ use lade_core::domain::inspection::{
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
 use lade_core::domain::review::{IntegrationPlan, Review};
 use lade_protocol::client::{
-    DraftDeleteCommand, DraftList, DraftSaveCommand, Empty, ErrorCode, Event,
-    FeedbackSubmitCommand, InputList, MessageSendCommand, ObjectiveCreateCommand,
-    ObjectiveSelector, OperationGetQuery, OperationState, OperationStatus, Rejection, ReplyData,
-    Request, SafeAction, SettingsUpdateCommand, SnapshotData, Start, UpdateIntentCommand,
-    WorkspaceOpenCommand,
+    ClientBody, ClientEnvelope, Draft as WireDraft, DraftCursor, DraftDeleteCommand, DraftList,
+    DraftSaveCommand, DraftState as WireDraftState, DraftsListQuery, Empty, ErrorCode, Event,
+    EventFrame, FeedbackSubmitCommand, InputList, InputsListQuery, MessageSendCommand,
+    ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, OperationState, OperationStatus,
+    Outcome, Rejection, Reply, ReplyData, Request, SafeAction, SettingsUpdateCommand, SnapshotData,
+    Start, UpdateIntentCommand, WorkspaceOpenCommand,
 };
 use lade_protocol::types::Id;
+use lade_protocol::{Framing, MAX_FRAME, encode};
 
 use crate::adapters::artifacts::ArtifactDigest;
 use crate::adapters::git;
@@ -28,7 +30,7 @@ use crate::storage::{self, CaptureRow, ObjectiveRow, WorkspaceRow};
 
 use super::convert::{
     conflict, core_reference, counter, domain_rejection, durability, from_wire_git, git_rejection,
-    invalid, new_uuid, not_found, now_ms, parse_uuid, rejection, wire_id,
+    invalid, new_uuid, not_found, now_ms, parse_uuid, rejection, wire_id, wire_ts,
 };
 use super::jobs::{self, CaptureInput, CaptureOut};
 use super::project::{core_mode, wire_draft, wire_input};
@@ -113,6 +115,23 @@ const SNAPSHOT_OBJECTIVES: usize = 400;
 const SNAPSHOT_BRANCHES: usize = 64;
 const REPLY_BRANCHES: usize = 256;
 
+fn reply_json_len(request_id: &Id, data: ReplyData) -> usize {
+    serde_json::to_vec(&ClientEnvelope::new(ClientBody::Reply(Reply::ok(
+        request_id.clone(),
+        data,
+    ))))
+    .expect("reply fields are serializable")
+    .len()
+}
+
+fn history_too_large() -> Rejection {
+    rejection(
+        ErrorCode::LimitReached,
+        SafeAction::None,
+        "This saved record exceeds the reply limit and cannot be shown.",
+    )
+}
+
 pub(crate) fn sql<T>(result: rusqlite::Result<T>) -> Result<T, Rejection> {
     result.map_err(|_| durability("LADE couldn't record this, so nothing was changed. Try again."))
 }
@@ -175,34 +194,8 @@ impl Service {
                     ReplyData::ObjectiveGet(Box::new(self.detail_of(&st)))
                 })
             }
-            Request::DraftsList(ObjectiveSelector { objective_id }) => {
-                self.objective_id(&objective_id).map(|oid| {
-                    let st = &self.objectives[&oid];
-                    let drafts = st
-                        .drafts
-                        .iter()
-                        .rev()
-                        .take(512)
-                        .rev()
-                        .map(|d| wire_draft(st, d))
-                        .collect();
-                    ReplyData::DraftsList(DraftList { drafts })
-                })
-            }
-            Request::InputsList(ObjectiveSelector { objective_id }) => {
-                self.objective_id(&objective_id).map(|oid| {
-                    let st = &self.objectives[&oid];
-                    let inputs = st
-                        .inputs
-                        .iter()
-                        .rev()
-                        .take(512)
-                        .rev()
-                        .map(|(_, i)| wire_input(i))
-                        .collect();
-                    ReplyData::InputsList(InputList { inputs })
-                })
-            }
+            Request::DraftsList(query) => self.drafts_list(&ctx.request_id, &query),
+            Request::InputsList(query) => self.inputs_list(&ctx.request_id, &query),
             Request::OperationGet(query) => self.operation_get(&query),
             Request::ActivityPage(query) => self.activity_page(&query),
             Request::ChangesList(query) => return self.changes_list(ctx, query),
@@ -376,6 +369,159 @@ impl Service {
             objectives,
             settings: self.settings.clone(),
         })
+    }
+
+    fn drafts_list(
+        &self,
+        request_id: &Id,
+        query: &DraftsListQuery,
+    ) -> Result<ReplyData, Rejection> {
+        let st = self.obj(self.objective_id(&query.objective_id)?)?;
+        let after = query
+            .after
+            .as_ref()
+            .map(|cursor| {
+                parse_uuid(&cursor.draft_id)
+                    .map(|id| (cursor.created_at.unix_ms(), DraftId::new(id)))
+            })
+            .transpose()?;
+        let mut eligible: Vec<_> = st
+            .drafts
+            .iter()
+            .filter(|draft| {
+                after.is_none_or(|key| (draft.record().created_at.unix_ms(), draft.id()) > key)
+            })
+            .collect();
+        eligible.sort_by_key(|draft| (draft.record().created_at.unix_ms(), draft.id()));
+        let mut drafts = Vec::new();
+        let mut content_bytes = 0;
+        let mut last = None;
+        for (index, draft) in eligible
+            .iter()
+            .enumerate()
+            .take(query.limit.value() as usize)
+        {
+            let wire = wire_draft(st, draft);
+            let cursor = DraftCursor {
+                created_at: wire_ts(draft.record().created_at.unix_ms()),
+                draft_id: wire.draft_id.clone(),
+            };
+            let more = index + 1 < eligible.len();
+            let overhead = reply_json_len(
+                request_id,
+                ReplyData::DraftsList(DraftList {
+                    drafts: Vec::new(),
+                    next_after: more.then_some(cursor.clone()),
+                }),
+            );
+            let next_content = content_bytes
+                + usize::from(!drafts.is_empty())
+                + serde_json::to_vec(&wire)
+                    .expect("draft fields are serializable")
+                    .len();
+            if overhead + next_content > MAX_FRAME {
+                break;
+            }
+            drafts.push(wire);
+            content_bytes = next_content;
+            last = Some(cursor);
+        }
+        if drafts.is_empty() && !eligible.is_empty() {
+            return Err(history_too_large());
+        }
+        let next_after = (drafts.len() < eligible.len()).then_some(last).flatten();
+        Ok(ReplyData::DraftsList(DraftList { drafts, next_after }))
+    }
+
+    fn inputs_list(
+        &self,
+        request_id: &Id,
+        query: &InputsListQuery,
+    ) -> Result<ReplyData, Rejection> {
+        let st = self.obj(self.objective_id(&query.objective_id)?)?;
+        let after = query.after.as_ref().map_or(0, |cursor| cursor.value());
+        let mut eligible: Vec<_> = st.inputs.iter().filter(|(seq, _)| *seq > after).collect();
+        eligible.sort_by_key(|(seq, _)| *seq);
+        let mut inputs = Vec::new();
+        let mut content_bytes = 0;
+        let mut last = None;
+        for (index, (seq, input)) in eligible
+            .iter()
+            .enumerate()
+            .take(query.limit.value() as usize)
+        {
+            let wire = wire_input(input);
+            let cursor = counter(*seq);
+            let more = index + 1 < eligible.len();
+            let overhead = reply_json_len(
+                request_id,
+                ReplyData::InputsList(InputList {
+                    inputs: Vec::new(),
+                    next_after: more.then_some(cursor.clone()),
+                }),
+            );
+            let next_content = content_bytes
+                + usize::from(!inputs.is_empty())
+                + serde_json::to_vec(&wire)
+                    .expect("input fields are serializable")
+                    .len();
+            if overhead + next_content > MAX_FRAME {
+                break;
+            }
+            inputs.push(wire);
+            content_bytes = next_content;
+            last = Some(cursor);
+        }
+        if inputs.is_empty() && !eligible.is_empty() {
+            return Err(history_too_large());
+        }
+        let next_after = (inputs.len() < eligible.len()).then_some(last).flatten();
+        Ok(ReplyData::InputsList(InputList { inputs, next_after }))
+    }
+
+    fn check_draft_representation(
+        &self,
+        request_id: &Id,
+        mut draft: WireDraft,
+        cursor: DraftCursor,
+    ) -> Result<(), Rejection> {
+        draft.revision = counter(u64::MAX);
+        draft.state = WireDraftState::Submitted;
+        draft.input_id = Some(request_id.clone());
+        draft.stale = false;
+        let fits_reply = |data| {
+            encode(
+                &ClientEnvelope::new(ClientBody::Reply(Reply::ok(request_id.clone(), data))),
+                Framing::Client,
+            )
+            .is_ok()
+        };
+        let fits = fits_reply(ReplyData::DraftSave(draft.clone()))
+            && fits_reply(ReplyData::DraftsList(DraftList {
+                drafts: vec![draft.clone()],
+                next_after: Some(cursor),
+            }))
+            && fits_reply(ReplyData::OperationGet(OperationStatus {
+                state: OperationState::Completed,
+                outcome: Some(Outcome::Ok(Box::new(ReplyData::DraftSave(draft.clone())))),
+            }))
+            && encode(
+                &ClientEnvelope::new(ClientBody::Event(EventFrame {
+                    service_epoch: self.epoch.clone(),
+                    sequence: counter(u64::MAX),
+                    event: Event::DraftChanged(draft),
+                })),
+                Framing::Client,
+            )
+            .is_ok();
+        if !fits {
+            return Err(rejection(
+                ErrorCode::LimitReached,
+                SafeAction::None,
+                "This draft is too large to save. Shorten the comment or selection and try again.",
+            ));
+        }
+        Ok(())
     }
 
     fn operation_get(&self, query: &OperationGetQuery) -> Result<ReplyData, Rejection> {
@@ -656,6 +802,14 @@ impl Service {
         }
         st.draft_stale.insert(draft_id, false);
         let wire = wire_draft(&st, &draft);
+        self.check_draft_representation(
+            &ctx.request_id,
+            wire.clone(),
+            DraftCursor {
+                created_at: wire_ts(draft.record().created_at.unix_ms()),
+                draft_id: wire.draft_id.clone(),
+            },
+        )?;
         let data = ReplyData::DraftSave(wire.clone());
         match fault::operation("draft.save") {
             Some(Fault::Refuse) => {

@@ -348,3 +348,78 @@ fn oversized_declared_client_length_fails_before_allocation() {
         Err(TransportError::Wire(WireError("frame_size")))
     ));
 }
+
+#[test]
+fn record_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
+    for name in ["drafts.list", "inputs.list"] {
+        let draft = name == "drafts.list";
+        let field = if draft { "body" } else { "text_preview" };
+        let records: Vec<Value> = (0..if draft { 2 } else { 200 })
+            .map(|n| {
+                if draft {
+                    json!({
+                        "draft_id":id(1000+n),"objective_id":id(2),"destination_session_id":id(3),
+                        "body":"","revision":"1","state":"unsent","stale":false,
+                        "reference":{"artifact_digest":"a".repeat(64),"path":{"b64":"YQ==","display":"a"},
+                            "version":{"kind":"working","capture_id":id(4)},"side":"new",
+                            "byte_start":"0","byte_end":"1","selected_text":"a"}
+                    })
+                } else {
+                    json!({
+                        "input_id":id(1000+n),"objective_id":id(2),"operation_id":id(3),
+                        "mode":"prompt","text_preview":"","accepted_at":"2026-10-10T12:34:56.789Z",
+                        "delivery":"queued"
+                    })
+                }
+            })
+            .collect();
+        let data = if draft {
+            json!({"drafts":records,"next_after":{"created_at":"2026-10-10T12:34:56.789Z","draft_id":id(1001)}})
+        } else {
+            json!({"inputs":records,"next_after":"200"})
+        };
+        let mut page = json!({"protocol":1,"bundle":lade_protocol::BUNDLE,
+            "body":{"kind":"reply","request_id":id(1),"name":name,"result":{"status":"ok","data":data}}});
+        let mut remaining = MAX_FRAME - serde_json::to_vec(&page).unwrap().len();
+        let records = page["body"]["result"]["data"][if draft { "drafts" } else { "inputs" }]
+            .as_array_mut()
+            .unwrap();
+        for record in records {
+            let max = if draft { 256 * 1024 } else { 1024 };
+            let controls = max.min(remaining / 6);
+            let ascii = (max - controls).min(remaining - controls * 6);
+            record[field] = json!(format!("{}{}", "\u{1}".repeat(controls), "a".repeat(ascii)));
+            remaining -= controls * 6 + ascii;
+        }
+        assert_eq!(remaining, 0);
+        let bytes = serde_json::to_vec(&page).unwrap();
+        assert_eq!(bytes.len(), MAX_FRAME);
+        let mut decoded = decode_client(&bytes).unwrap();
+        assert_eq!(
+            encode(&decoded, Framing::Client).unwrap().len(),
+            MAX_FRAME + 4
+        );
+        let ClientBody::Reply(Reply {
+            result: ReplyResult::Ok(data),
+            ..
+        }) = &mut decoded.body
+        else {
+            panic!("expected a record page")
+        };
+        match data.as_mut() {
+            ReplyData::DraftsList(page) => page.drafts.last_mut().unwrap().body.push('a'),
+            ReplyData::InputsList(page) => page.inputs.last_mut().unwrap().text_preview.push('a'),
+            _ => panic!("expected a record page"),
+        }
+        assert_eq!(
+            encode(&decoded, Framing::Client).unwrap_err().0,
+            "frame_size"
+        );
+        assert_eq!(
+            decode_client(&serde_json::to_vec(&decoded).unwrap())
+                .unwrap_err()
+                .0,
+            "frame_size"
+        );
+    }
+}

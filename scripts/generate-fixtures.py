@@ -219,6 +219,29 @@ page = requests['activity.page']
 for value, expected in [('1', 'ok'), ('200', 'ok'), ('0', 'invalid_schema'), ('201', 'invalid_schema'),
                         ('050', 'invalid_schema'), (50, 'invalid_schema')]:
     frame(f'page-limit-{value!r}', edit(page, ['payload', 'limit'], value), expected)
+draft_query = requests['drafts.list']
+draft_cursor = dict(created_at='2026-10-10T12:34:56.789Z', draft_id=uid(30))
+frame('drafts-page-first', edit(draft_query, ['payload', 'after'], DELETE))
+frame('drafts-page-after', edit(draft_query, ['payload', 'after'], draft_cursor))
+for label, cursor in [
+        ('missing-time', dict(draft_id=uid(30))),
+        ('invalid-time', dict(draft_cursor, created_at='2026-02-29T00:00:00.000Z')),
+        ('invalid-id', dict(draft_cursor, draft_id='00000000-0000-0000-0000-000000000000')),
+        ('extra-field', dict(draft_cursor, offset='1')),
+        ('null', None), ('counter', '1')]:
+    frame(f'drafts-page-cursor-{label}', edit(draft_query, ['payload', 'after'], cursor), 'invalid_schema')
+input_query = requests['inputs.list']
+for label, cursor, expected in [
+        ('zero', '0', 'ok'), ('max', '18446744073709551615', 'ok'),
+        ('leading-zero', '01', 'invalid_schema'), ('overflow', '18446744073709551616', 'invalid_schema'),
+        ('negative', '-1', 'invalid_schema'), ('number', 1, 'invalid_schema'),
+        ('draft-cursor', draft_cursor, 'invalid_schema')]:
+    frame(f'inputs-page-cursor-{label}', edit(input_query, ['payload', 'after'], cursor), expected)
+for name, field, definition in [('drafts.list', 'drafts', 'Draft'), ('inputs.list', 'inputs', 'InputSummary')]:
+    entry = sample({'$ref': '#/$defs/' + definition}, 'client', False)
+    for count, expected in [(200, 'ok'), (201, 'invalid_schema')]:
+        frame(f'{name}-page-count-{count}', dict(kind='reply', request_id=uid(4), name=name,
+              result=dict(status='ok', data={field: [entry] * count})), expected)
 read = requests['file.read']
 for value, expected in [('262144', 'ok'), ('262145', 'invalid_schema'), ('524288', 'invalid_schema')]:
     frame(f'read-limit-{value}', edit(read, ['payload', 'limit'], value), expected)

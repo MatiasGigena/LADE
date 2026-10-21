@@ -2,17 +2,22 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use lade_protocol::client::{
-    Event, EventFrame, OperationGetQuery, OperationState, OperationStatus, Outcome, Rejection,
-    Reply, ReplyData, ReplyResult, Request, RequestFrame,
+    DraftCursor, ErrorCode, Event, EventFrame, OperationGetQuery, OperationState, OperationStatus,
+    Outcome, Rejection, Reply, ReplyData, ReplyResult, Request, RequestFrame, SafeAction,
 };
-use lade_protocol::types::Id;
+use lade_protocol::types::{Counter, Id};
 
 use super::convert;
 use super::requests::{self, Context, Effects};
 use crate::presentation::compat::CompatUpdate;
 use crate::presentation::intents::Intent;
-use crate::presentation::model::{ConnectionState, NoticeLevel, ObjectiveId, ServiceNotice};
+use crate::presentation::model::{
+    ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, ObjectiveId, ServiceNotice,
+};
 use crate::presentation::store::StoreUpdate;
+
+mod pages;
+use pages::Pages;
 
 const MAX_DEFERRED_QUERIES: usize = 64;
 const MAX_RECHECKS: u32 = 60;
@@ -70,6 +75,8 @@ pub struct Core {
     activity_loaded: HashSet<ObjectiveId>,
     drafts_reconciled: HashSet<ObjectiveId>,
     drafts_requested: HashSet<ObjectiveId>,
+    draft_pages: HashMap<ObjectiveId, Pages<DraftId, Draft, DraftCursor>>,
+    input_pages: HashMap<ObjectiveId, Pages<InputId, InputSummary, Counter>>,
     deferred_saves: Vec<(ObjectiveId, Operation)>,
     deferred_queries: Vec<Intent>,
     open_on_connect: Option<PathBuf>,
@@ -91,6 +98,8 @@ impl Core {
             activity_loaded: HashSet::new(),
             drafts_reconciled: HashSet::new(),
             drafts_requested: HashSet::new(),
+            draft_pages: HashMap::new(),
+            input_pages: HashMap::new(),
             deferred_saves: Vec::new(),
             deferred_queries: Vec::new(),
             open_on_connect: open,
@@ -158,12 +167,6 @@ impl Core {
         ))
     }
 
-    fn drafts_pending(&self, objective_id: &ObjectiveId) -> bool {
-        self.pending.values().any(|p| {
-            matches!(p, Pending::Query { context: Context::Drafts(o), .. } if o == objective_id)
-        })
-    }
-
     pub fn submit(&mut self, intent: Intent) -> Step {
         let mut step = Step::default();
         let (request, context) = match requests::request(&intent) {
@@ -221,6 +224,11 @@ impl Core {
             return step;
         }
         if !mutating {
+            if matches!(&context, Context::Drafts(o) if self.draft_pages.contains_key(o))
+                || matches!(&context, Context::Inputs(o) if self.input_pages.contains_key(o))
+            {
+                return step;
+            }
             match &intent {
                 Intent::LoadObjective { objective_id } => self.focused = Some(objective_id.clone()),
                 Intent::LoadActivity {
@@ -234,7 +242,20 @@ impl Core {
                 }
                 _ => {}
             }
-            step.frames.push(self.query(Some(intent), request, context));
+            let frame = self.query(Some(intent), request, context.clone());
+            match context {
+                Context::Drafts(o) => {
+                    self.draft_pages
+                        .insert(o.clone(), Pages::new(frame.request_id.clone()));
+                    self.drafts_reconciled.remove(&o);
+                }
+                Context::Inputs(o) => {
+                    self.input_pages
+                        .insert(o, Pages::new(frame.request_id.clone()));
+                }
+                _ => {}
+            }
+            step.frames.push(frame);
             return step;
         }
         let operation = Operation {
@@ -246,7 +267,7 @@ impl Core {
         if let Intent::SaveDraft { objective_id, .. } = &intent
             && !self.drafts_reconciled.contains(objective_id)
         {
-            if !self.drafts_pending(objective_id) {
+            if !self.draft_pages.contains_key(objective_id) {
                 step.extend(self.submit(Intent::LoadDrafts {
                     objective_id: objective_id.clone(),
                 }));
@@ -355,11 +376,17 @@ impl Core {
                 Pending::Query {
                     intent: Some(intent),
                     ..
-                } => self.remember_query(&intent),
+                } => {
+                    if !intent.is_terminal() {
+                        self.remember_query(&intent);
+                    }
+                }
                 Pending::Query { intent: None, .. } => {}
             }
         }
         self.deferred_saves.clear();
+        self.draft_pages.clear();
+        self.input_pages.clear();
     }
 
     pub fn on_reply(&mut self, reply: Reply) -> Step {
@@ -367,44 +394,241 @@ impl Core {
             return Step::default();
         };
         match pending {
+            Pending::Query {
+                context: Context::Drafts(o),
+                ..
+            } => self.draft_page(o, reply.request_id, reply.result),
+            Pending::Query {
+                context: Context::Inputs(o),
+                ..
+            } => self.input_page(o, reply.request_id, reply.result),
             Pending::Query { context, .. } => self.settle(&context, reply.result),
             Pending::Command(operation) => self.settle(&operation.context, reply.result),
             Pending::Recover(operation) => self.recovered(operation, reply.result),
         }
     }
 
+    fn invalid_page(&mut self, context: &Context) -> Step {
+        self.settle(
+            context,
+            ReplyResult::Rejected {
+                name: None,
+                rejection: Rejection::new(
+                    ErrorCode::InvalidRequest,
+                    SafeAction::None,
+                    "The service returned an invalid history page. Refresh to try again.",
+                ),
+            },
+        )
+    }
+
+    fn draft_page(
+        &mut self,
+        objective_id: ObjectiveId,
+        request_id: Id,
+        result: ReplyResult,
+    ) -> Step {
+        if !self
+            .draft_pages
+            .get(&objective_id)
+            .is_some_and(|p| p.request_id == request_id)
+        {
+            return Step::default();
+        }
+        let mut pages = self
+            .draft_pages
+            .remove(&objective_id)
+            .expect("checked active page");
+        let context = Context::Drafts(objective_id.clone());
+        let data = match result {
+            ReplyResult::Ok(data) => match *data {
+                ReplyData::DraftsList(data) => data,
+                _ => return self.invalid_page(&context),
+            },
+            rejected => return self.settle(&context, rejected),
+        };
+        if data
+            .drafts
+            .iter()
+            .any(|draft| draft.objective_id.as_str() != objective_id.as_str())
+        {
+            return self.invalid_page(&context);
+        }
+        if let Some(next) = &data.next_after {
+            let advances = pages.after.as_ref().is_none_or(|after| {
+                (&next.created_at, &next.draft_id) > (&after.created_at, &after.draft_id)
+            });
+            if !advances
+                || data
+                    .drafts
+                    .last()
+                    .is_none_or(|draft| draft.draft_id != next.draft_id)
+            {
+                return self.invalid_page(&context);
+            }
+        }
+        pages.page(
+            data.drafts
+                .iter()
+                .map(convert::draft)
+                .map(|draft| (draft.draft_id.clone(), draft)),
+        );
+        if let Some(next) = data.next_after {
+            let intent = Intent::LoadDrafts {
+                objective_id: objective_id.clone(),
+            };
+            let (mut request, _) = requests::request(&intent)
+                .expect("validated objective")
+                .expect("load query");
+            let Request::DraftsList(query) = &mut request else {
+                unreachable!()
+            };
+            query.after = Some(next.clone());
+            let frame = self.query(Some(intent), request, context);
+            pages.request_id = frame.request_id.clone();
+            pages.after = Some(next);
+            self.draft_pages.insert(objective_id, pages);
+            return Step {
+                updates: Vec::new(),
+                frames: vec![frame],
+            };
+        }
+        let mut step = Step {
+            updates: vec![StoreUpdate::Drafts {
+                objective_id: objective_id.clone(),
+                drafts: pages.complete(),
+            }],
+            frames: Vec::new(),
+        };
+        self.finish_drafts(&objective_id, None, &mut step);
+        step
+    }
+
+    fn input_page(
+        &mut self,
+        objective_id: ObjectiveId,
+        request_id: Id,
+        result: ReplyResult,
+    ) -> Step {
+        if !self
+            .input_pages
+            .get(&objective_id)
+            .is_some_and(|p| p.request_id == request_id)
+        {
+            return Step::default();
+        }
+        let mut pages = self
+            .input_pages
+            .remove(&objective_id)
+            .expect("checked active page");
+        let context = Context::Inputs(objective_id.clone());
+        let data = match result {
+            ReplyResult::Ok(data) => match *data {
+                ReplyData::InputsList(data) => data,
+                _ => return self.invalid_page(&context),
+            },
+            rejected => return self.settle(&context, rejected),
+        };
+        if data
+            .inputs
+            .iter()
+            .any(|input| input.objective_id.as_str() != objective_id.as_str())
+        {
+            return self.invalid_page(&context);
+        }
+        if let Some(next) = &data.next_after
+            && (data.inputs.is_empty()
+                || next.value() <= pages.after.as_ref().map_or(0, Counter::value))
+        {
+            return self.invalid_page(&context);
+        }
+        pages.page(
+            data.inputs
+                .iter()
+                .map(convert::input)
+                .map(|input| (input.input_id.clone(), input)),
+        );
+        if let Some(next) = data.next_after {
+            let intent = Intent::LoadInputs {
+                objective_id: objective_id.clone(),
+            };
+            let (mut request, _) = requests::request(&intent)
+                .expect("validated objective")
+                .expect("load query");
+            let Request::InputsList(query) = &mut request else {
+                unreachable!()
+            };
+            query.after = Some(next.clone());
+            let frame = self.query(Some(intent), request, context);
+            pages.request_id = frame.request_id.clone();
+            pages.after = Some(next);
+            self.input_pages.insert(objective_id, pages);
+            return Step {
+                updates: Vec::new(),
+                frames: vec![frame],
+            };
+        }
+        Step {
+            updates: vec![StoreUpdate::Inputs {
+                objective_id,
+                inputs: pages.complete(),
+            }],
+            frames: Vec::new(),
+        }
+    }
+
     fn settle(&mut self, context: &Context, result: ReplyResult) -> Step {
-        let effects = match result {
+        let (effects, rejected) = match result {
             ReplyResult::Ok(data) => {
                 let data = *data;
                 if let ReplyData::Snapshot(snapshot) = &data {
                     self.snapshot_in_flight = false;
                     self.last_sequence = Some(snapshot.sequence.value());
                 }
-                requests::reply_effects(context, data)
+                (requests::reply_effects(context, data), None)
             }
             ReplyResult::Rejected { rejection, .. } => {
                 if matches!(context, Context::Snapshot) {
                     self.snapshot_in_flight = false;
                 }
-                requests::rejection_effects(context, &rejection)
+                (
+                    requests::rejection_effects(context, &rejection),
+                    Some(rejection),
+                )
             }
         };
         let mut step = self.apply_effects(effects);
         if let Context::Drafts(objective_id) = context {
-            self.drafts_reconciled.insert(objective_id.clone());
-            let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deferred_saves)
-                .into_iter()
-                .partition(|(o, _)| o == objective_id);
-            self.deferred_saves = waiting;
-            for (_, operation) in ready {
-                step.frames.push(self.send_command(operation));
-            }
+            self.finish_drafts(objective_id, rejected.as_ref(), &mut step);
         }
         step
     }
 
+    fn finish_drafts(
+        &mut self,
+        objective_id: &ObjectiveId,
+        rejected: Option<&Rejection>,
+        step: &mut Step,
+    ) {
+        if rejected.is_none() {
+            self.drafts_reconciled.insert(objective_id.clone());
+        }
+        let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.deferred_saves)
+            .into_iter()
+            .partition(|(o, _)| o == objective_id);
+        self.deferred_saves = waiting;
+        for (_, operation) in ready {
+            match rejected {
+                Some(rejection) => step
+                    .updates
+                    .extend(requests::rejection_effects(&operation.context, rejection).updates),
+                None => step.frames.push(self.send_command(operation)),
+            }
+        }
+    }
+
     fn apply_effects(&mut self, effects: Effects) -> Step {
+        self.observe_updates(&effects.updates);
         let mut step = Step {
             updates: effects.updates,
             frames: Vec::new(),
@@ -413,6 +637,67 @@ impl Core {
             step.extend(self.submit(intent));
         }
         step
+    }
+
+    fn observe_updates(&mut self, updates: &[StoreUpdate]) {
+        for update in updates {
+            match update {
+                StoreUpdate::DraftChanged(draft) => {
+                    if let Some(pages) = self.draft_pages.get_mut(&draft.objective_id) {
+                        pages.change(draft.draft_id.clone(), draft.clone());
+                    }
+                }
+                StoreUpdate::DraftDeleted { draft_id } => {
+                    for pages in self.draft_pages.values_mut() {
+                        pages.remove(draft_id.clone());
+                    }
+                }
+                StoreUpdate::InputChanged {
+                    objective_id,
+                    input,
+                } => {
+                    if let Some(pages) = self.input_pages.get_mut(objective_id) {
+                        pages.change(input.input_id.clone(), input.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn settle_recovered(&mut self, context: &Context, data: ReplyData) -> Step {
+        let refresh = match &data {
+            ReplyData::DraftSave(draft) => vec![Intent::LoadDrafts {
+                objective_id: ObjectiveId::new(draft.objective_id.as_str()),
+            }],
+            ReplyData::DraftDelete(_) => self
+                .drafts_requested
+                .iter()
+                .map(|objective_id| Intent::LoadDrafts {
+                    objective_id: objective_id.clone(),
+                })
+                .collect(),
+            ReplyData::MessageSend(input) | ReplyData::FeedbackSubmit(input) => {
+                vec![Intent::LoadInputs {
+                    objective_id: ObjectiveId::new(input.objective_id.as_str()),
+                }]
+            }
+            _ => return self.settle(context, ReplyResult::Ok(Box::new(data))),
+        };
+        let mut effects = requests::reply_effects(context, data);
+        // An operation outcome contains the record as it was when the command
+        // completed. Current pages/events may already contain newer metadata,
+        // even at the same draft revision. Reconcile from current service state.
+        effects.updates.retain(|update| {
+            !matches!(
+                update,
+                StoreUpdate::DraftChanged(_)
+                    | StoreUpdate::DraftDeleted { .. }
+                    | StoreUpdate::InputChanged { .. }
+            )
+        });
+        effects.follow_ups.extend(refresh);
+        self.apply_effects(effects)
     }
 
     fn recovered(&mut self, mut operation: Operation, result: ReplyResult) -> Step {
@@ -436,7 +721,7 @@ impl Core {
         };
         match outcome {
             Some(Outcome::Ok(data)) => {
-                let mut step = self.settle(&operation.context, ReplyResult::Ok(data));
+                let mut step = self.settle_recovered(&operation.context, *data);
                 step.updates.push(StoreUpdate::Notice(notice(
                     NoticeLevel::Info,
                     "operation_recovered",
@@ -524,6 +809,32 @@ impl Core {
 
     pub fn unsendable(&mut self, request_id: &Id, rejection: &Rejection) -> Step {
         let context = match self.pending.remove(request_id) {
+            Some(Pending::Query {
+                context: Context::Drafts(o),
+                ..
+            }) => {
+                return self.draft_page(
+                    o,
+                    request_id.clone(),
+                    ReplyResult::Rejected {
+                        name: None,
+                        rejection: rejection.clone(),
+                    },
+                );
+            }
+            Some(Pending::Query {
+                context: Context::Inputs(o),
+                ..
+            }) => {
+                return self.input_page(
+                    o,
+                    request_id.clone(),
+                    ReplyResult::Rejected {
+                        name: None,
+                        rejection: rejection.clone(),
+                    },
+                );
+            }
             Some(Pending::Query { context, .. }) => context,
             Some(Pending::Command(operation) | Pending::Recover(operation)) => operation.context,
             None => return Step::default(),
@@ -558,7 +869,9 @@ impl Core {
         if !resync && let Some(last) = self.last_sequence.as_mut() {
             *last = sequence;
         }
-        step.updates.extend(event_updates(frame.event));
+        let updates = event_updates(frame.event);
+        self.observe_updates(&updates);
+        step.updates.extend(updates);
         if resync {
             step.extend(self.resync());
         }
@@ -567,8 +880,17 @@ impl Core {
 
     fn resync(&mut self) -> Step {
         let mut step = Step::default();
+        let mut queries = self.focused_queries();
+        for (objective_id, pages) in self.draft_pages.drain() {
+            self.pending.remove(&pages.request_id);
+            queries.push(Intent::LoadDrafts { objective_id });
+        }
+        for (objective_id, pages) in self.input_pages.drain() {
+            self.pending.remove(&pages.request_id);
+            queries.push(Intent::LoadInputs { objective_id });
+        }
         step.frames.extend(self.snapshot());
-        for intent in self.focused_queries() {
+        for intent in queries {
             step.extend(self.submit(intent));
         }
         if let Some(o) = &self.focused {

@@ -7,7 +7,7 @@ import { createWorkerDecoder, Decoder, encode, encodeWorkerBody } from "../src/f
 import type { WorkerBody } from "../src/dto.ts";
 import { RequestHistory } from "../src/history.ts";
 import { boundedJson, WireError, MAX_FRAME, MAX_NODES } from "../src/json.ts";
-import type { JsonValue } from "../src/json.ts";
+import type { JsonObject, JsonValue } from "../src/json.ts";
 
 function id(n: number): string { return `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`; }
 
@@ -126,4 +126,52 @@ test("a trailing or dangling array comma is invalid_json even when the node budg
   assert.throws(() => boundedJson(Buffer.from(`[${body}, ]`)), { code: "invalid_json" });
   assert.throws(() => boundedJson(Buffer.from(`[${body},`)), { code: "invalid_json" });
   assert.throws(() => boundedJson(Buffer.from(`[${body},0]`)), { code: "limit_reached" });
+});
+
+test("draft and input pages round-trip at the exact frame bound and reject one byte over", () => {
+  for (const name of ["drafts.list", "inputs.list"] as const) {
+    const draft = name === "drafts.list";
+    const field = draft ? "body" : "text_preview";
+
+    const records: JsonObject[] = Array.from({ length: draft ? 2 : 200 }, (_, n) => draft ? {
+      draft_id: id(1000 + n), objective_id: id(2), destination_session_id: id(3), body: "", revision: "1", state: "unsent", stale: false,
+      reference: { artifact_digest: "a".repeat(64), path: { b64: "YQ==", display: "a" }, version: { kind: "working", capture_id: id(4) }, side: "new", byte_start: "0", byte_end: "1", selected_text: "a" },
+    } : {
+      input_id: id(1000 + n), objective_id: id(2), operation_id: id(3), mode: "prompt", text_preview: "", accepted_at: "2026-10-10T12:34:56.789Z", delivery: "queued",
+    });
+
+    const data: JsonObject = draft ? { drafts: records, next_after: { created_at: "2026-10-10T12:34:56.789Z", draft_id: id(1001) } } : { inputs: records, next_after: "200" };
+    const page: JsonObject = { protocol: 1, bundle: BUNDLE, body: { kind: "reply", request_id: id(1), name, result: { status: "ok", data } } };
+    let remaining = MAX_FRAME - Buffer.byteLength(JSON.stringify(page));
+
+    for (const record of records) {
+      const max = draft ? 256 * 1024 : 1024;
+      const controls = Math.min(max, Math.floor(remaining / 6));
+      const ascii = Math.min(max - controls, remaining - controls * 6);
+      record[field] = "\u0001".repeat(controls) + "a".repeat(ascii);
+      remaining -= controls * 6 + ascii;
+    }
+
+    assert.equal(remaining, 0);
+    const bytes = Buffer.from(JSON.stringify(page));
+    assert.equal(bytes.length, MAX_FRAME);
+    const decoded = decode(bytes);
+    assert.equal(encode(decoded, "client").length, MAX_FRAME + 4);
+    assert.ok(decoded.body.kind === "reply" && "name" in decoded.body);
+
+    if (decoded.body.name === "drafts.list") {
+      assert.ok(decoded.body.result.status === "ok");
+      const last = decoded.body.result.data.drafts.at(-1);
+      assert.ok(last);
+      last.body += "a";
+    } else if (decoded.body.name === "inputs.list") {
+      assert.ok(decoded.body.result.status === "ok");
+      const last = decoded.body.result.data.inputs.at(-1);
+      assert.ok(last);
+      last.text_preview += "a";
+    } else assert.fail("expected a record page");
+
+    assert.throws(() => encode(decoded, "client"), { code: "frame_size" });
+    assert.throws(() => decode(Buffer.from(JSON.stringify(decoded))), { code: "frame_size" });
+  }
 });

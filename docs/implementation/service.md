@@ -221,6 +221,14 @@ raw blob, computed from the blob for files ≤ 16 MiB within a 64 MiB budget per
 `inputs.list`; `operation.get` (journal state: `unknown`, `pending`, `completed`, `uncertain`, with the recorded
 outcome).
 
+`drafts.list` and `inputs.list` take `limit` (1–200) and an optional `after` cursor. Every page is
+bounded by the complete encoded reply, including its envelope and next cursor; `next_after` is
+returned only when another record remains. Drafts use the ascending immutable pair
+`(created_at, draft_id)`, so equal timestamps and a deleted cursor anchor do not skip the remaining
+drafts. Inputs use their durable acceptance sequence in ascending order. Clients follow the chain
+to retrieve the whole history; there is no 512-record retrieval ceiling or truncation of record text.
+An existing record that cannot fit even by itself is refused explicitly rather than omitted.
+
 Commands (all journaled; a duplicate `operation_id` with the same canonical digest returns the recorded reply without
 re-executing, a different digest is `duplicate_conflict`, a duplicate while pending is `conflict`/`query_operation`;
 a reused `request_id` with different content is `duplicate_conflict`):
@@ -242,7 +250,11 @@ a reused `request_id` with different content is `duplicate_conflict`):
   observed exit moves the execution to `cancelled`.
 - `message.send`: durable acceptance (`accept_message`) then ordered dispatch.
 - `draft.save` / `draft.delete`: core CAS; the reference's capture/candidate must belong to the Objective and its
-  artifact must exist with the selected bytes at the selected range.
+  artifact must exist with the selected bytes at the selected range. Before saving, the service proves that the
+  prospective draft fits its saved reply, one-record history page with a cursor, `draft.changed` event and
+  recovered `operation.get` outcome. This includes the larger future submitted shape and maximum revision/event
+  counters. An unrepresentable draft is rejected `limit_reached` before changing the saved draft; its previous
+  durable text remains available. The bound comes from the existing 1 MiB wire frame, not an aggregate draft quota.
 - `feedback.submit`: association/lifecycle/revisions checked, then a fresh capture recomputes the stale rule for
   every item against current content (new side: working tree; old side: target commit). Any stale item rejects the
   whole batch `stale_reference` listing the stale draft ids; otherwise acceptance, submitted drafts and outcome are
