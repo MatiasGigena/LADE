@@ -35,7 +35,7 @@ image = Image.open(Path(sys.argv[1])).convert('RGB')
 samples = []
 for spec in sys.argv[2:]:
     x, y, w, h = (int(v) for v in spec.split(','))
-    if w <= 0 or h <= 0 or x + w > image.width or y + h > image.height:
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > image.width or y + h > image.height:
         sys.exit(f'region {spec} is outside the {image.width}x{image.height} capture')
     region = image.crop((x, y, x + w, y + h))
     pixels = list(region.get_flattened_data() if hasattr(region, 'get_flattened_data') else region.getdata())
