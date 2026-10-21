@@ -3,7 +3,7 @@ mod adapters_support;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -34,12 +34,12 @@ impl FakeSecretTool {
     fn new(tag: &str) -> Self {
         let tmp = TempDir::new(tag);
         let program = tmp.path().join("secret-tool");
-        fs::copy(
+        // Avoid writable executable descriptors racing concurrent test process launches.
+        symlink(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-secret-tool"),
             &program,
         )
         .unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
         fs::create_dir(tmp.path().join("store")).unwrap();
         Self { tmp }
     }
