@@ -24,7 +24,10 @@ use super::convert::{
 use super::state::{ObjState, WsState};
 
 const SUMMARY_OUTCOME_CHARS: usize = 512;
-const DETAIL_LIST_MAX: usize = 64;
+pub(super) const DETAIL_LIST_MAX: usize = 64;
+// At most one of failed/missing verification evidence applies. The remaining
+// compatible badges total seven, including unsent drafts and execution state.
+pub(super) const MAX_SUMMARY_BADGES: usize = 7;
 pub const NO_CHANGES_TO_FREEZE: &str =
     "There are no changes to freeze. Complete without changes instead.";
 pub const VERIFICATION_SANDBOX_UNAVAILABLE: &str =
@@ -166,7 +169,7 @@ pub fn wire_candidate(candidate: &Candidate) -> CandidateSummary {
 }
 
 pub fn wire_verification(st: &ObjState, verification: &Verification) -> VerificationSummary {
-    VerificationSummary {
+    super::detail_budget::budget_verification(VerificationSummary {
         verification_id: wire_id(verification.id.uuid()),
         objective_id: wire_id(st.objective().id().uuid()),
         candidate_id: wire_id(verification.candidate_id.uuid()),
@@ -192,7 +195,7 @@ pub fn wire_verification(st: &ObjState, verification: &Verification) -> Verifica
             .and_then(|c| u64::try_from(c).ok())
             .map(counter),
         ended_at: verification.ended_at.map(|t| wire_ts(t.unix_ms())),
-    }
+    })
 }
 
 pub fn wire_approval(approval: &Approval) -> ApprovalSummary {
@@ -396,7 +399,7 @@ impl Service {
             branch: record.integration_target.as_str().to_string(),
             commit: wire_git(target.unwrap_or(&record.start_commit)),
         };
-        ObjectiveDetail {
+        self.budget_detail(ObjectiveDetail {
             objective_id: summary.objective_id,
             workspace_id: summary.workspace_id,
             title: summary.title,
@@ -432,7 +435,7 @@ impl Service {
             session,
             approval,
             history_deleted: st.row.history_deleted.then_some(true),
-        }
+        })
     }
 
     fn actions(&self, st: &ObjState, target: Option<&GitId>) -> Vec<AvailableAction> {
@@ -743,11 +746,14 @@ impl Service {
     }
 
     pub(crate) fn wire_workspace(&self, ws: &WsState, max_branches: usize) -> Workspace {
-        let mut branches: Vec<String> = ws
-            .repo
-            .list_branches()
-            .map(|b| b.into_iter().map(|b| b.name).collect())
-            .unwrap_or_default();
+        let mut branches: Vec<String> = if max_branches == 0 {
+            Vec::new()
+        } else {
+            ws.repo
+                .list_branches()
+                .map(|b| b.into_iter().map(|b| b.name).collect())
+                .unwrap_or_default()
+        };
         branches.retain(|b| !b.starts_with("lade/verify/") && !b.is_empty() && b.len() <= 255);
         if let Some(default) = &ws.default_branch
             && let Some(index) = branches.iter().position(|b| b == default)

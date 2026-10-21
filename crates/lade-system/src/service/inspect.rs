@@ -3,20 +3,21 @@ use std::sync::Arc;
 use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId};
 use lade_protocol::client::{
     ActivityPage, ActivityPageQuery, Basis, ChangeList, ChangeStatus, ChangedFile,
-    ChangesListQuery, ContentNotice, ContentNoticeKind, DiffGetQuery, DiffHunk, DiffLine,
-    DiffLineKind, FileContent, FileDiff, FileEncoding, FileReadQuery, Rejection, ReplyData,
-    Request, SearchQuery, SearchResult, SearchResultKind, SearchResults, SearchScope, Side,
-    TargetRef,
+    ChangesListQuery, ClientBody, ClientEnvelope, ContentNotice, ContentNoticeKind, DiffGetQuery,
+    DiffHunk, DiffLine, DiffLineKind, ErrorCode, FileContent, FileDiff, FileEncoding,
+    FileReadQuery, Rejection, Reply, ReplyData, Request, SafeAction, SearchQuery, SearchResult,
+    SearchResultKind, SearchResults, SearchScope, Side, TargetRef,
 };
 use lade_protocol::types::Digest;
+use lade_protocol::{Framing, encode};
 
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore, MAX_ARTIFACT_PAGE};
 use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::{self, CaptureRow};
 
 use super::convert::{
-    adapter_git, counter, invalid, not_found, parse_uuid, preview, repo_path, wire_git, wire_id,
-    wire_path,
+    adapter_git, counter, invalid, not_found, parse_uuid, preview, rejection, repo_path, wire_git,
+    wire_id, wire_path,
 };
 use super::execution::wire_activity;
 use super::handlers::{CapturePurpose, Pending, sql};
@@ -95,29 +96,61 @@ fn change_list(
     filtered: &[git::RepoPath],
     notices: Vec<ContentNotice>,
 ) -> ChangeList {
-    ChangeList {
+    let mut list = ChangeList {
         basis_label: preview(&resolved.label, 256),
         target: resolved.target.clone(),
-        files: files
-            .iter()
-            .take(MAX_FILES)
-            .map(|f| ChangedFile {
-                path: wire_path(f.path.as_bytes()),
-                status: wire_status(f.status),
-                added: counter(f.added),
-                removed: counter(f.removed),
-                binary: f.binary,
-                old_path: f.old_path.as_ref().map(|p| wire_path(p.as_bytes())),
-                filtered: filtered.contains(&f.path).then_some(true),
-            })
-            .collect(),
-        truncated: files.len() > MAX_FILES,
+        files: Vec::new(),
+        truncated: false,
         total_added: counter(files.iter().map(|f| f.added).sum()),
         total_removed: counter(files.iter().map(|f| f.removed).sum()),
         capture_id: resolved.capture_id.map(|c| wire_id(c.uuid())),
         candidate_id: resolved.candidate_id.map(|c| wire_id(c.uuid())),
-        notices: (!notices.is_empty()).then_some(notices),
+        notices: None,
+    };
+    let mut remaining = MAX_PAGE_JSON
+        - serde_json::to_vec(&list)
+            .expect("change list fields are serializable")
+            .len()
+        - 16; // Optional notices field and array delimiters.
+    let mut kept_notices = Vec::new();
+    for notice in notices {
+        let cost = serde_json::to_vec(&notice)
+            .expect("content notice fields are serializable")
+            .len()
+            + 1;
+        if cost > remaining {
+            list.truncated = true;
+            break;
+        }
+        remaining -= cost;
+        kept_notices.push(notice);
     }
+    list.notices = (!kept_notices.is_empty()).then_some(kept_notices);
+    for file in files.iter().take(MAX_FILES) {
+        let file = ChangedFile {
+            path: wire_path(file.path.as_bytes()),
+            status: wire_status(file.status),
+            added: counter(file.added),
+            removed: counter(file.removed),
+            binary: file.binary,
+            old_path: file
+                .old_path
+                .as_ref()
+                .map(|path| wire_path(path.as_bytes())),
+            filtered: filtered.contains(&file.path).then_some(true),
+        };
+        let cost = serde_json::to_vec(&file)
+            .expect("changed file fields are serializable")
+            .len()
+            + 1;
+        if cost > remaining {
+            break;
+        }
+        remaining -= cost;
+        list.files.push(file);
+    }
+    list.truncated |= list.files.len() < files.len();
+    list
 }
 
 fn capture_label(capture: &CaptureRow) -> String {
@@ -380,7 +413,7 @@ fn search_tree(
     let git_err = |e: git::GitError| super::convert::git_rejection(&e);
     let (results, truncated) = match query.scope {
         SearchScope::Files => {
-            let needle = query.query.to_lowercase().into_bytes();
+            let needle = query.query.as_bytes().to_ascii_lowercase();
             let entries = repo
                 .ls_tree(&adapter_git(tree), None, true)
                 .map_err(git_err)?;
@@ -447,11 +480,28 @@ fn search_tree(
         SearchScope::Files => "file paths",
         _ => "file contents",
     };
-    Ok(ReplyData::Search(SearchResults {
+    let mut page = SearchResults {
         scope_label: preview(&format!("{scope} in {label}"), 256),
-        results,
+        results: Vec::new(),
         truncated,
-    }))
+    };
+    let mut remaining = MAX_PAGE_JSON
+        - serde_json::to_vec(&page)
+            .expect("search result fields are serializable")
+            .len();
+    for result in results {
+        let cost = serde_json::to_vec(&result)
+            .expect("search result fields are serializable")
+            .len()
+            + 1;
+        if cost > remaining {
+            page.truncated = true;
+            break;
+        }
+        remaining -= cost;
+        page.results.push(result);
+    }
+    Ok(ReplyData::Search(page))
 }
 
 impl Service {
@@ -787,22 +837,191 @@ impl Service {
         ))?;
         let mut budget = MAX_ACTIVITY_BYTES;
         let mut items = Vec::new();
-        for mut row in rows.into_iter().rev() {
+        let mut rows = rows.into_iter().rev().peekable();
+        while let Some(mut row) = rows.next() {
             if let Some((text, truncated)) = self.live_text(&row.item_id) {
                 row.text = text.to_string();
                 row.truncated = truncated;
             }
-            let cost = json_cost(&row.text) + json_cost(&row.title) + 256;
+            let Some(item) = wire_activity(&row) else {
+                continue;
+            };
+            let cost = serde_json::to_vec(&item)
+                .expect("activity fields are serializable")
+                .len()
+                + 1;
             if cost > budget {
+                if items.is_empty() {
+                    let page = ActivityPage {
+                        items: vec![item],
+                        has_more: has_more || rows.peek().is_some(),
+                    };
+                    encode(
+                        &ClientEnvelope::new(ClientBody::Reply(Reply::ok(
+                            query.objective_id.clone(),
+                            ReplyData::ActivityPage(page.clone()),
+                        ))),
+                        Framing::Client,
+                    )
+                    .map_err(|_| {
+                        rejection(
+                            ErrorCode::LimitReached,
+                            SafeAction::None,
+                            "This activity item exceeds the reply limit and cannot be shown.",
+                        )
+                    })?;
+                    return Ok(ReplyData::ActivityPage(page));
+                }
                 has_more = true;
                 break;
             }
             budget -= cost;
-            if let Some(item) = wire_activity(&row) {
-                items.push(item);
-            }
+            items.push(item);
         }
         items.reverse();
         Ok(ReplyData::ActivityPage(ActivityPage { items, has_more }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lade_core::domain::ids::GitAlgorithm;
+    use lade_protocol::client::{ClientBody, ClientEnvelope, Reply};
+    use lade_protocol::types::{Id, PageLimit};
+
+    #[test]
+    fn change_lists_with_long_renamed_paths_fit_the_wire_frame() {
+        let target = GitId::new(GitAlgorithm::Sha1, &"a".repeat(40)).unwrap();
+        let resolved = Resolved {
+            old: target.clone(),
+            new: target.clone(),
+            label: "candidate 1".into(),
+            target: TargetRef {
+                branch: "main".into(),
+                commit: wire_git(&target),
+            },
+            capture_id: None,
+            candidate_id: None,
+        };
+        for component in [
+            b"long-directory".to_vec(),
+            [b'"', b'\\', b'\n', 0xff].repeat(3),
+        ] {
+            let mut prefix = component;
+            prefix.push(b'/');
+            let prefix = prefix.repeat(200);
+            let path = |name: String| {
+                let mut bytes = prefix.clone();
+                bytes.extend_from_slice(name.as_bytes());
+                git::RepoPath::new(bytes).unwrap()
+            };
+            let files: Vec<git::ChangedFile> = (0..MAX_FILES)
+                .map(|index| git::ChangedFile {
+                    path: path(format!("new-{index}")),
+                    old_path: Some(path(format!("old-{index}"))),
+                    status: git::ChangeStatus::Renamed { similarity: 100 },
+                    old_mode: 0o100644,
+                    new_mode: 0o100644,
+                    old_id: None,
+                    new_id: None,
+                    added: 2,
+                    removed: 1,
+                    binary: false,
+                })
+                .collect();
+            let notices = content_notices(
+                &files
+                    .iter()
+                    .take(64)
+                    .map(|file| file.path.clone())
+                    .collect::<Vec<_>>(),
+                &[],
+            );
+            for notices in [Vec::new(), notices] {
+                let list = change_list(&resolved, &files, &[], notices);
+                let reply = ClientEnvelope::new(ClientBody::Reply(Reply::ok(
+                    Id::from_random_bytes([1; 16]),
+                    ReplyData::ChangesList(list.clone()),
+                )));
+                lade_protocol::encode(&reply, lade_protocol::Framing::Client)
+                    .expect("long paths must yield a bounded change list");
+                assert!(!list.files.is_empty());
+                assert!(list.truncated);
+                assert_eq!(list.total_added.value(), (MAX_FILES * 2) as u64);
+                assert_eq!(list.total_removed.value(), MAX_FILES as u64);
+            }
+        }
+    }
+
+    #[test]
+    fn file_and_content_searches_with_long_paths_fit_the_wire_frame() {
+        let tmp = adapters_support::TempDir::new("search-long-paths");
+        let dir = adapters_support::init_repo(tmp.path(), "sha1");
+        let prefix = "long-directory/".repeat(200);
+        std::fs::create_dir_all(dir.join(&prefix)).unwrap();
+        for index in 0..200 {
+            std::fs::write(dir.join(format!("{prefix}file-{index:03}")), "needle\n").unwrap();
+        }
+        let commit = adapters_support::commit_all(&dir, "long paths");
+        let repo = Repository::open(&dir).unwrap();
+        let tree = GitId::new(GitAlgorithm::Sha1, &commit).unwrap();
+        for (scope, query) in [
+            (SearchScope::Files, "file"),
+            (SearchScope::Content, "needle"),
+        ] {
+            let query = SearchQuery {
+                workspace_id: Id::from_random_bytes([1; 16]),
+                scope,
+                query: query.into(),
+                limit: PageLimit::parse("200").unwrap(),
+                objective_id: None,
+                basis: None,
+            };
+            let data = search_tree(&repo, &tree, &query, "start commit").unwrap();
+            let reply = ClientEnvelope::new(ClientBody::Reply(Reply::ok(
+                Id::from_random_bytes([2; 16]),
+                data.clone(),
+            )));
+            lade_protocol::encode(&reply, lade_protocol::Framing::Client)
+                .expect("long paths must yield bounded search results");
+            let ReplyData::Search(found) = data else {
+                panic!("expected search results")
+            };
+            assert!(!found.results.is_empty());
+            assert!(found.truncated);
+            assert_eq!(
+                found.results[0].path.as_ref().unwrap().as_bytes(),
+                format!("{prefix}file-000").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn file_search_preserves_non_ascii_query_bytes() {
+        let tmp = adapters_support::TempDir::new("search-non-ascii");
+        let dir = adapters_support::init_repo(tmp.path(), "sha1");
+        std::fs::write(dir.join("ÉCOLE.rs"), "text\n").unwrap();
+        let commit = adapters_support::commit_all(&dir, "unicode file name");
+        let repo = Repository::open(&dir).unwrap();
+        let tree = GitId::new(GitAlgorithm::Sha1, &commit).unwrap();
+        let query = SearchQuery {
+            workspace_id: Id::from_random_bytes([1; 16]),
+            scope: SearchScope::Files,
+            query: "École.RS".into(),
+            limit: PageLimit::parse("10").unwrap(),
+            objective_id: None,
+            basis: None,
+        };
+        let ReplyData::Search(found) = search_tree(&repo, &tree, &query, "start commit").unwrap()
+        else {
+            panic!("expected search results")
+        };
+        assert_eq!(found.results.len(), 1);
+        assert_eq!(
+            found.results[0].path.as_ref().unwrap().as_bytes(),
+            "ÉCOLE.rs".as_bytes()
+        );
+        assert!(!found.truncated);
     }
 }

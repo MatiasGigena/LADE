@@ -1,5 +1,6 @@
 mod compat;
 pub mod convert;
+mod detail_budget;
 mod execution;
 mod handlers;
 mod inspect;

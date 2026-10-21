@@ -205,7 +205,9 @@ Every request name in protocol-v1 is implemented.
 Queries: `snapshot` (≤ 64 workspaces with ≤ 64 branches each, ≤ 400 most recent objective summaries with the outcome
 clipped to 512 chars, settings, current sequence); `objective.get` (detail with a freshly resolved target commit,
 the latest ≤ 64 candidates/verifications and `available_actions`); `activity.page` (items before `seq`, newest last,
-≤ 768 KiB of text per page, live streamed text included); `changes.list` (working: a fresh capture; candidate:
+normally ≤ 768 KiB of serialized activity records per page, including escaped tool names and live streamed
+text; a single larger record is returned if its complete reply fits the hard wire limits, otherwise it is
+refused explicitly instead of returning an empty continuation); `changes.list` (working: a fresh capture; candidate:
 candidate tree vs its base target commit; since: tree vs tree; changed files whose `filter` attribute names a driver
 carry `filtered`, and `notices` name nested repositories left out of the capture and filtered/LFS content);
 `file.read` and `diff.get` (working uses the latest capture, or captures first; whole file bytes ≤ 64 MiB are
@@ -221,6 +223,21 @@ raw blob, computed from the blob for files ≤ 16 MiB within a 64 MiB budget per
 `inputs.list`; `operation.get` (journal state: `unknown`, `pending`, `completed`, `uncertain`, with the recorded
 outcome).
 
+Snapshot previews spend the remaining encoded byte and JSON-node capacity after retaining every
+projected Workspace and Objective row and the exact Settings. Outcome/reason previews and branch
+previews may therefore be shorter than their count bounds; each Workspace retains its first actual
+branch when any exists so the New Objective selector still has a valid target. `settings.update`, `objective.create`
+and `workspace.open` check the prospective minimum representation before committing; the check
+reserves later counters, reasons and compatible badges, and the 400 largest mandatory Objective
+summary shapes across durable history plus one maximum-length branch label per Workspace so later
+recency/branch changes remain loadable. Refusals derive
+from the existing wire limits rather than another fixed creation or settings quota.
+
+Objective details retain the full intent and every projected candidate/verification row. Verification
+command and output-tail previews share the remaining encoded byte/node budget; shortened text or
+argv previews set `truncated`, while stored execution argv and output are unchanged. The same preview
+bound applies to individual verification replies, events and recovered outcomes.
+
 `drafts.list` and `inputs.list` take `limit` (1–200) and an optional `after` cursor. Every page is
 bounded by the complete encoded reply, including its envelope and next cursor; `next_after` is
 returned only when another record remains. Drafts use the ascending immutable pair
@@ -235,7 +252,11 @@ a reused `request_id` with different content is `duplicate_conflict`):
 
 - `workspace.open`: `Repository::open` (top level, non-bare, supported Git); idempotent per canonical path.
 - `objective.create`: target branch must exist; start = target tip or an explicit commit of the repository.
-- `objective.update_intent`: core CAS on `intent_revision`.
+- `objective.update_intent`: core CAS on `intent_revision`. Both intent mutations prove that the prospective
+  full intent fits direct replies, the detail event and recovered `operation.get` outcomes before committing.
+  The reserve includes maximum counters, optional session/approval metadata and the existing bounded history
+  rows, so later lifecycle/session/history growth cannot hide an admitted intent. A refusal leaves the prior
+  durable intent and revision intact.
 - `execution.start` / `execution.resume`: after the core transition is checked, the launcher's `preflight(provider)`
   (sandbox probe, egress policy, credentials) runs; a failure rejects synchronously with `execution_unavailable`
   (detail names missing credential variables, never values; a failed sandbox probe reads "LADE can't run agents on

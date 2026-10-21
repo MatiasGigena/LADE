@@ -18,8 +18,8 @@ use lade_protocol::client::{
     DraftSaveCommand, DraftState as WireDraftState, DraftsListQuery, Empty, ErrorCode, Event,
     EventFrame, FeedbackSubmitCommand, InputList, InputsListQuery, MessageSendCommand,
     ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, OperationState, OperationStatus,
-    Outcome, Rejection, Reply, ReplyData, Request, SafeAction, SettingsUpdateCommand, SnapshotData,
-    Start, UpdateIntentCommand, WorkspaceOpenCommand,
+    Outcome, Rejection, Reply, ReplyData, Request, SafeAction, Settings, SettingsUpdateCommand,
+    SnapshotData, Start, UpdateIntentCommand, WorkspaceOpenCommand,
 };
 use lade_protocol::types::Id;
 use lade_protocol::{Framing, MAX_FRAME, encode};
@@ -111,7 +111,7 @@ pub(crate) enum CapturePurpose {
     DispatchCheck(InputId),
 }
 
-const SNAPSHOT_OBJECTIVES: usize = 400;
+pub(super) const SNAPSHOT_OBJECTIVES: usize = 400;
 const SNAPSHOT_BRANCHES: usize = 64;
 const REPLY_BRANCHES: usize = 256;
 
@@ -349,26 +349,47 @@ impl Service {
     }
 
     fn snapshot(&self) -> ReplyData {
-        let workspaces = self
-            .workspaces
-            .values()
+        ReplyData::Snapshot(self.budget_snapshot(self.snapshot_data(
+            &self.settings,
+            None,
+            None,
+            SNAPSHOT_BRANCHES,
+        )))
+    }
+
+    pub(crate) fn snapshot_data(
+        &self,
+        settings: &Settings,
+        objective: Option<&ObjState>,
+        workspace: Option<&WsState>,
+        max_branches: usize,
+    ) -> SnapshotData {
+        let mut workspace_states: Vec<_> = self.workspaces.values().chain(workspace).collect();
+        workspace_states.sort_by_key(|ws| ws.id);
+        let workspaces = workspace_states
+            .into_iter()
             .take(64)
-            .map(|ws| self.wire_workspace(ws, SNAPSHOT_BRANCHES))
+            .map(|ws| self.wire_workspace(ws, max_branches))
             .collect();
-        let mut states: Vec<&ObjState> = self.objectives.values().collect();
-        states.sort_by_key(|st| std::cmp::Reverse(st.objective().record().updated_at));
+        let mut states: Vec<&ObjState> = self.objectives.values().chain(objective).collect();
+        states.sort_by_key(|st| {
+            (
+                std::cmp::Reverse(st.objective().record().updated_at),
+                st.objective().id(),
+            )
+        });
         let objectives = states
             .into_iter()
             .take(SNAPSHOT_OBJECTIVES)
             .map(|st| self.summary(st))
             .collect();
-        ReplyData::Snapshot(SnapshotData {
+        SnapshotData {
             service_epoch: self.epoch.clone(),
             sequence: counter(self.sequence),
             workspaces,
             objectives,
-            settings: self.settings.clone(),
-        })
+            settings: settings.clone(),
+        }
     }
 
     fn drafts_list(
@@ -558,8 +579,8 @@ impl Service {
                 self.wire_workspace(existing, REPLY_BRANCHES),
             ));
         }
-        let row = match sql(storage::workspace_by_path(self.store.conn(), &top))? {
-            Some(row) => row,
+        let (row, fresh) = match sql(storage::workspace_by_path(self.store.conn(), &top))? {
+            Some(row) => (row, false),
             None => {
                 let row = WorkspaceRow {
                     id: WorkspaceId::new(new_uuid()),
@@ -571,17 +592,20 @@ impl Service {
                     default_branch: repo.head_branch().ok().flatten(),
                     opened_at: now_ms(),
                 };
-                sql(storage::insert_workspace(self.store.conn(), &row))?;
-                row
+                (row, true)
             }
         };
         let ws = WsState {
             id: row.id,
             repo,
             path: top,
-            name: row.name,
-            default_branch: row.default_branch,
+            name: row.name.clone(),
+            default_branch: row.default_branch.clone(),
         };
+        self.check_snapshot_representation(&self.settings, None, Some(&ws))?;
+        if fresh {
+            sql(storage::insert_workspace(self.store.conn(), &row))?;
+        }
         let reply = self.wire_workspace(&ws, REPLY_BRANCHES);
         self.workspaces.insert(ws.id, ws);
         Ok(ReplyData::WorkspaceOpen(reply))
@@ -660,7 +684,10 @@ impl Service {
             capture: None,
             tails: HashMap::new(),
         };
-        let data = ReplyData::ObjectiveCreate(Box::new(self.detail_of(&st)));
+        let detail = self.detail_of(&st);
+        self.check_intent_representation(&detail)?;
+        self.check_snapshot_representation(&self.settings, Some(&st), None)?;
+        let data = ReplyData::ObjectiveCreate(Box::new(detail));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
         Ok(data)
@@ -688,7 +715,9 @@ impl Service {
                 lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
             )
             .map_err(domain)?;
-        let data = ReplyData::ObjectiveUpdateIntent(Box::new(self.detail_of(&st)));
+        let detail = self.detail_of(&st);
+        self.check_intent_representation(&detail)?;
+        let data = ReplyData::ObjectiveUpdateIntent(Box::new(detail));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
         Ok(data)
@@ -718,6 +747,7 @@ impl Service {
             settings.verification_commands = commands;
         }
         let data = ReplyData::SettingsUpdate(settings.clone());
+        self.check_snapshot_representation(&settings, None, None)?;
         self.commit(Some(ctx), Some(&data), |tx| {
             storage::save_settings(tx, &settings)
         })?;
