@@ -600,9 +600,16 @@ impl Controller {
         drop(objective);
     }
 
-    pub fn delete_draft(&self, draft_id: &DraftId) {
+    pub fn delete_draft(&self, draft_id: &DraftId) -> Result<(), String> {
         let durable = self.store.update(|s| {
-            let revision = s.draft_mut(draft_id).map(|e| e.durable_revision());
+            let revision = match s
+                .draft_mut(draft_id)
+                .map(|e| e.removal_revision())
+                .transpose()
+            {
+                Ok(revision) => revision,
+                Err(reason) => return (Err(reason), Vec::new()),
+            };
             match revision {
                 Some(0) => {
                     let mut changes = Vec::new();
@@ -613,17 +620,18 @@ impl Controller {
                             changes.push(Change::Drafts(objective.clone()));
                         }
                     }
-                    (None, changes)
+                    (Ok(None), changes)
                 }
-                other => (other, Vec::new()),
+                other => (Ok(other), Vec::new()),
             }
-        });
+        })?;
         if let Some(expected_revision) = durable {
             self.emit(Intent::DeleteDraft {
                 draft_id: draft_id.clone(),
                 expected_revision,
             });
         }
+        Ok(())
     }
 
     pub fn set_feedback_mode(&self, mode: DeliveryMode) {
@@ -1848,5 +1856,78 @@ mod tests {
                 ..
             }]
         ));
+    }
+
+    #[test]
+    fn draft_removal_waits_for_its_first_save_to_prevent_resurrection() {
+        use crate::presentation::model::{Draft, DraftState};
+        use crate::presentation::store::StoreUpdate;
+        let (controller, sink) = setup();
+        let objective_id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+        let draft_id = DraftId::new("new-draft");
+        controller.select_objective(&objective_id);
+        controller.store.update(|state| {
+            let template = state.drafts[&objective_id][0].clone();
+            let editor = DraftEditor::new_local(
+                draft_id.clone(),
+                objective_id.clone(),
+                template.destination_session_id,
+                template.reference,
+            );
+            state.drafts.get_mut(&objective_id).unwrap().push(editor);
+            ((), Vec::new())
+        });
+        controller.edit_draft(&draft_id, "Do not resurrect this draft", 1_000);
+        controller.poll_drafts(1_300);
+        let saved = {
+            let state = controller.store.state();
+            let editor = state.drafts[&objective_id]
+                .iter()
+                .find(|draft| draft.draft_id == draft_id)
+                .unwrap();
+            Draft {
+                draft_id: draft_id.clone(),
+                objective_id: objective_id.clone(),
+                destination_session_id: editor.destination_session_id.clone(),
+                reference: editor.reference.clone(),
+                body: editor.body.clone(),
+                revision: 1,
+                state: DraftState::Unsent,
+                stale: false,
+                input_id: None,
+            }
+        };
+        sink.intents.borrow_mut().clear();
+        assert!(controller.delete_draft(&draft_id).is_err());
+        assert_eq!(
+            controller.store.state().drafts[&objective_id]
+                .iter()
+                .filter(|draft| draft.draft_id == draft_id)
+                .map(|draft| draft.body.clone())
+                .collect::<Vec<_>>(),
+            ["Do not resurrect this draft"],
+            "a refused removal preserves the editor and its text"
+        );
+        controller.store.apply(StoreUpdate::DraftChanged(saved));
+        assert_eq!(
+            controller.store.state().drafts[&objective_id]
+                .iter()
+                .filter(|draft| draft.draft_id == draft_id)
+                .map(|draft| draft.body.clone())
+                .collect::<Vec<_>>(),
+            ["Do not resurrect this draft"],
+            "the acknowledgement keeps exactly one editor"
+        );
+        assert!(sink.intents.borrow().is_empty());
+        controller
+            .delete_draft(&draft_id)
+            .expect("save acknowledged");
+        assert_eq!(
+            sink.intents.borrow().as_slice(),
+            [Intent::DeleteDraft {
+                draft_id,
+                expected_revision: 1,
+            }]
+        );
     }
 }

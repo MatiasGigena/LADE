@@ -996,10 +996,7 @@ impl Inspector {
                 ),
                 "Remove draft",
                 true,
-                move || {
-                    controller.delete_draft(&id);
-                    Ok(())
-                },
+                move || controller.delete_draft(&id),
             );
         });
         w.actions.append(&delete);

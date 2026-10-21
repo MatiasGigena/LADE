@@ -602,7 +602,8 @@ impl App {
         if let Some(timer) = self.close_timer.borrow_mut().take() {
             timer.remove();
         }
-        if let Some(dialog) = self.loss_dialog.borrow_mut().take() {
+        let dialog = self.loss_dialog.borrow_mut().take();
+        if let Some(dialog) = dialog {
             dialog.close();
         }
         match after {
@@ -1034,5 +1035,67 @@ impl App {
         {
             self.focus_region(shown);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presentation::intents::RecordingSink;
+    use crate::presentation::store::PresentationState;
+    use crate::presentation::test_fixture;
+
+    #[test]
+    #[ignore = "requires a graphical display"]
+    fn discarding_unsaved_feedback_closes_its_confirmation_without_reentrant_borrows() {
+        gtk::test_synced(|| {
+            let application = gtk::Application::builder()
+                .application_id("dev.lade.Desktop.CloseTest")
+                .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
+                .build();
+            application
+                .register(None::<&gtk::gio::Cancellable>)
+                .unwrap();
+            let mut state = PresentationState::default();
+            for update in test_fixture::fixture_updates() {
+                state.apply(update);
+            }
+            state.connection = ConnectionState::Disconnected {
+                reason: "test disconnect".into(),
+            };
+            let app = App::new(
+                &application,
+                Store::new(state),
+                Rc::new(RecordingSink::default()),
+            );
+            app.controller.edit_draft(
+                &DraftId::new(test_fixture::SAVED_DRAFT),
+                "Unsaved feedback before closing",
+                1_000,
+            );
+            assert!(!app.guard_unsaved(CloseAfter::Window));
+            let confirmation = app.loss_dialog.borrow().clone().expect("loss confirmation");
+            assert!(confirmation.is_visible());
+            let mut widgets = vec![confirmation.clone().upcast::<gtk::Widget>()];
+            let mut discarded = false;
+            while let Some(widget) = widgets.pop() {
+                if let Some(button) = widget.downcast_ref::<gtk::Button>()
+                    && button.label().as_deref() == Some("Close and discard unsaved text")
+                {
+                    button.emit_clicked();
+                    discarded = true;
+                    break;
+                }
+                let mut child = widget.first_child();
+                while let Some(widget) = child {
+                    child = widget.next_sibling();
+                    widgets.push(widget);
+                }
+            }
+            assert!(discarded, "discard action was available");
+            assert!(app.loss_dialog.borrow().is_none());
+            assert!(!confirmation.is_visible());
+            assert!(app.close_confirmed.get());
+        });
     }
 }

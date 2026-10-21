@@ -120,6 +120,18 @@ impl DraftEditor {
         self.durable_revision
     }
 
+    pub fn removal_revision(&self) -> Result<u64, &'static str> {
+        if self.in_flight.is_some() {
+            return Err("Wait for the draft save to finish, then remove it again.");
+        }
+        if self.awaiting_reconcile {
+            return Err(
+                "Reconnect and wait for the draft save to be checked, then remove it again.",
+            );
+        }
+        Ok(self.durable_revision)
+    }
+
     fn dirty(&self) -> bool {
         let pending = self.in_flight.as_ref().map_or(0, |f| f.generation);
         self.edit_generation > self.saved_generation.max(pending)
@@ -422,10 +434,13 @@ mod tests {
     fn disconnected_edits_are_not_saved_and_reconcile_on_reconnect() {
         let mut e = editor();
         e.edit("x", 0);
+        assert_eq!(e.removal_revision(), Ok(0), "no save was attempted");
         assert!(e.poll(300, false).is_none());
         assert_eq!(e.status(false), SaveStatus::Disconnected);
         let request = e.poll(400, true).unwrap();
+        assert!(e.removal_revision().is_err(), "the save is in flight");
         e.connection_lost();
+        assert!(e.removal_revision().is_err(), "the save outcome is unknown");
         assert_eq!(e.status(false), SaveStatus::Disconnected);
         assert!(
             e.poll(5_000, true).is_none(),
@@ -433,6 +448,11 @@ mod tests {
         );
         e.acknowledge(&durable(&request.body, 1));
         assert_eq!(e.status(true), SaveStatus::Saved { revision: 1 });
+        assert_eq!(
+            e.removal_revision(),
+            Ok(1),
+            "delete the reconciled revision"
+        );
     }
 
     #[test]
