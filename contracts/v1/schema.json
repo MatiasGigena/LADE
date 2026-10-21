@@ -595,10 +595,11 @@
     "DiffLine": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind", "text"],
+      "required": ["kind", "text", "no_newline"],
       "properties": {
         "kind": {"enum": ["context", "add", "del"]},
         "text": {"type": "string"},
+        "no_newline": {"type": "boolean"},
         "old_no": {"$ref": "#/$defs/Counter"},
         "new_no": {"$ref": "#/$defs/Counter"},
         "old_byte_start": {"$ref": "#/$defs/Counter"},

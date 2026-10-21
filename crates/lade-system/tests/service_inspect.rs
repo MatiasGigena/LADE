@@ -207,6 +207,46 @@ fn a_moved_target_creates_a_fresh_working_capture_and_old_side() {
 }
 
 #[test]
+fn diff_lines_distinguish_final_bare_cr_from_crlf() {
+    let env = Env::new("svc-diff-terminators");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    let objective = create_objective(&mut client, &ws.workspace_id, "Line endings").objective_id;
+    start_execution(&mut client, &objective);
+    wait_state(&mut client, &objective, ExecutionState::Idle);
+    let wt = worktree(&env, &objective);
+    for (path, text, no_newline) in [
+        ("bare-cr.txt", "abc\r", true),
+        ("crlf.txt", "abc\r\n", false),
+        ("README", "abc\r", true),
+    ] {
+        fs::write(wt.join(path), text).unwrap();
+        changes(&mut client, &objective, Basis::Working);
+        let ReplyData::DiffGet(diff) = client
+            .call(Request::DiffGet(DiffGetQuery {
+                objective_id: objective.clone(),
+                basis: Basis::Working,
+                path: WirePath::from_bytes(path.as_bytes().to_vec()).unwrap(),
+            }))
+            .unwrap()
+        else {
+            panic!("expected diff")
+        };
+        let added = diff
+            .hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .find(|line| line.kind == DiffLineKind::Add)
+            .unwrap();
+        assert_eq!(added.text, "abc\r", "{path}");
+        assert_eq!(added.no_newline, no_newline, "{path}");
+    }
+    drop(client);
+    service.shutdown();
+}
+
+#[test]
 fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     let env = Env::new("svc-large");
     let line = "0123456789 abcdefghij ÄÖÜ ünïcödé text line for the large file test\n";

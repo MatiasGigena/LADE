@@ -1040,6 +1040,7 @@ wire_struct!(DraftRevision {
 wire_struct!(DiffLine {
     kind: DiffLineKind,
     text: String,
+    no_newline: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     old_no: Option<Counter>,
     #[serde(skip_serializing_if = "Option::is_none")]

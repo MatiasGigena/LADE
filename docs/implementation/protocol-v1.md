@@ -159,6 +159,12 @@ All optional fields, so older peers' frames stay valid and an older client simpl
   deletion of a cleaned-up Objective's retention refs and branch. `confirm_history_loss` must be `true` (otherwise
   `invalid_request`); it is never sent by the service or client on its own.
 
+Every `DiffLine` includes the required boolean `no_newline`, preserving Git's missing-final-newline
+marker. `text` excludes the line's LF and preserves its CR bytes. Thus `text: "line\r"` with
+`no_newline: false` represents a CRLF line, while the same text with `no_newline: true` ends in a bare
+CR. The inspection surface hides the CR of a CRLF ending and exposes a bare CR without changing the
+raw bytes used by feedback references.
+
 ### Error semantics
 
 `ErrorCode` keeps the IMP-001 codes and adds `not_found`, `invalid_request`, `conflict`, `execution_unavailable`; `SafeAction` is unchanged. A frame that parses as bounded JSON with exact versions and whose body is a `request` with a valid `request_id`, but fails the schema (unknown name, invalid payload, wrong `operation_id` presence), is answered with an unnamed or named `invalid_request` rejection and the link stays open — `decode_client_frame` returns that `request_id` for exactly this case. Every other decode failure (framing, JSON, version, non-request schema failure) closes the link. `auth` failure closes the link without a reply. `detail` never carries source, prompt or secret content.

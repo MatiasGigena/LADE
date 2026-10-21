@@ -222,6 +222,17 @@ for value, expected in [('1', 'ok'), ('200', 'ok'), ('0', 'invalid_schema'), ('2
 read = requests['file.read']
 for value, expected in [('262144', 'ok'), ('262145', 'invalid_schema'), ('524288', 'invalid_schema')]:
     frame(f'read-limit-{value}', edit(read, ['payload', 'limit'], value), expected)
+diff_line = dict(kind='add', text='line\r', no_newline=False, new_no='1', new_byte_start='0')
+diff_reply = dict(kind='reply', request_id=uid(4), name='diff.get', result=dict(status='ok', data=dict(
+    binary=False, hunks=[dict(old_start='0', old_lines='0', new_start='1', new_lines='1', lines=[diff_line])],
+    truncated=False)))
+for label, text, no_newline in [('crlf', 'line\r', False), ('final-bare-cr', 'line\r', True),
+                                ('final-without-newline', 'line', True)]:
+    line = dict(diff_line, text=text, no_newline=no_newline)
+    frame(f'diff-line-{label}', edit(diff_reply, ['result', 'data', 'hunks', 0, 'lines', 0], line))
+for label, value in [('missing', DELETE), ('string', 'true'), ('number', 1), ('null', None)]:
+    frame(f'diff-line-no-newline-{label}', edit(diff_reply,
+          ['result', 'data', 'hunks', 0, 'lines', 0, 'no_newline'], value), 'invalid_schema')
 changes = requests['changes.list']
 frame('basis-candidate', edit(changes, ['payload', 'basis'], dict(kind='candidate', candidate_id=uid(30))))
 frame('basis-since-incomplete', edit(changes, ['payload', 'basis'], dict(kind='since', from_candidate_id=uid(30))),

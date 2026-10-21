@@ -32,8 +32,9 @@ impl ViewLine {
         numbers: (Option<u64>, Option<u64>),
         starts: (Option<u64>, Option<u64>),
         hunk: Option<usize>,
+        has_newline: bool,
     ) -> Self {
-        let (display, char_bytes) = display_text(source);
+        let (display, char_bytes) = display_text(source, has_newline);
         Self {
             kind,
             display,
@@ -86,10 +87,10 @@ impl ViewLine {
     }
 }
 
-pub fn display_text(source: &str) -> (String, Vec<usize>) {
+pub fn display_text(source: &str, has_newline: bool) -> (String, Vec<usize>) {
     let mut display = String::with_capacity(source.len());
     let mut map = Vec::with_capacity(source.len() + 1);
-    let crlf_cr = source.ends_with('\r').then(|| source.len() - 1);
+    let crlf_cr = (has_newline && source.ends_with('\r')).then(|| source.len() - 1);
     for (byte, ch) in source.char_indices() {
         if Some(byte) == crlf_cr {
             break;
@@ -124,6 +125,7 @@ pub fn diff_lines(diff: &FileDiff) -> Vec<ViewLine> {
                 (line.old_no, line.new_no),
                 (line.old_byte_start, line.new_byte_start),
                 Some(index),
+                !line.no_newline,
             ));
         }
     }
@@ -138,6 +140,7 @@ pub fn file_lines(content: &FileContent) -> Vec<ViewLine> {
     if text.ends_with('\n') {
         lines.pop();
     }
+    let line_count = lines.len();
     for (index, source) in lines.into_iter().enumerate() {
         let number = Some(index as u64 + 1);
         let (numbers, starts) = match content.side {
@@ -150,6 +153,7 @@ pub fn file_lines(content: &FileContent) -> Vec<ViewLine> {
             numbers,
             starts,
             None,
+            index + 1 < line_count || text.ends_with('\n'),
         ));
         start += source.len() as u64 + 1;
     }
@@ -393,6 +397,19 @@ mod tests {
     }
 
     #[test]
+    fn a_final_bare_carriage_return_is_visible_and_selectable_without_a_newline() {
+        let text = "abc\r";
+        let lines = file(text);
+        assert_eq!(lines[0].display, format!("abc{CR_SYMBOL}"));
+        let selected = select(text, TextPos::new(0, 0), TextPos::new(0, 4));
+        assert_eq!(selected.selected_text, text);
+        assert_eq!((selected.start, selected.end), (0, 4));
+        let crlf = file("abc\r\n");
+        assert_eq!(crlf[0].display, "abc");
+        assert_eq!(crlf[0].byte_at(3), 3);
+    }
+
+    #[test]
     fn tabs_are_single_characters() {
         let text = "\t\tlet x = 1;\n";
         let m = select(text, TextPos::new(0, 2), TextPos::new(0, 5));
@@ -424,6 +441,7 @@ mod tests {
         new: Option<(u64, u64)>,
     ) -> DiffLine {
         DiffLine {
+            no_newline: false,
             kind,
             old_no: old.map(|o| o.0),
             new_no: new.map(|n| n.0),
@@ -478,6 +496,45 @@ mod tests {
         assert_eq!(m.side, Side::New);
         assert_eq!((m.start, m.end), (0, 8));
         assert_eq!(m.selected_text, "a\nnew é");
+    }
+
+    #[test]
+    fn diff_terminator_metadata_distinguishes_a_final_bare_cr_from_crlf() {
+        for (kind, side) in [
+            (DiffLineKind::Add, Side::New),
+            (DiffLineKind::Del, Side::Old),
+        ] {
+            for no_newline in [false, true] {
+                let mut diff = diff();
+                diff.hunks.truncate(1);
+                let mut source = line(
+                    kind,
+                    "abc\r",
+                    (side == Side::Old).then_some((1, 0)),
+                    (side == Side::New).then_some((1, 0)),
+                );
+                source.no_newline = no_newline;
+                diff.hunks[0].lines = vec![source];
+                let lines = diff_lines(&diff);
+                let end = if no_newline { 4 } else { 3 };
+                assert_eq!(
+                    lines[1].display,
+                    if no_newline {
+                        format!("abc{CR_SYMBOL}")
+                    } else {
+                        "abc".into()
+                    }
+                );
+                let mapped =
+                    map_selection(&lines, TextPos::new(1, 0), TextPos::new(1, end)).unwrap();
+                assert_eq!(mapped.side, side);
+                assert_eq!((mapped.start, mapped.end), (0, end as u64));
+                assert_eq!(mapped.selected_text, &"abc\r"[..end]);
+                if no_newline {
+                    assert_eq!(position_at(&lines, side, 4), Some(TextPos::new(1, 4)));
+                }
+            }
+        }
     }
 
     #[test]

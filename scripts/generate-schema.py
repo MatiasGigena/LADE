@@ -197,7 +197,7 @@ client.update({
                          'delivery': enum('queued', 'dispatched', 'received', 'uncertain', 'blocked')},
                         {'blocked_reason': ref('ShortText')}),
     'DraftRevision': obj({'draft_id': ID, 'revision': COUNTER}),
-    'DiffLine': obj({'kind': enum('context', 'add', 'del'), 'text': string()},
+    'DiffLine': obj({'kind': enum('context', 'add', 'del'), 'text': string(), 'no_newline': BOOL},
                     {'old_no': COUNTER, 'new_no': COUNTER, 'old_byte_start': COUNTER, 'new_byte_start': COUNTER}),
     'DiffHunk': obj({'old_start': COUNTER, 'old_lines': COUNTER, 'new_start': COUNTER, 'new_lines': COUNTER,
                      'lines': array(ref('DiffLine'), 1024)}),

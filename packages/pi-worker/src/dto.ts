@@ -117,7 +117,7 @@ export type InputSummary = { "input_id": Id; "objective_id": Id; "operation_id":
 
 export type DraftRevision = { "draft_id": Id; "revision": Counter };
 
-export type DiffLine = { "kind": "context" | "add" | "del"; "text": string; "old_no"?: Counter; "new_no"?: Counter; "old_byte_start"?: Counter; "new_byte_start"?: Counter };
+export type DiffLine = { "kind": "context" | "add" | "del"; "text": string; "no_newline": boolean; "old_no"?: Counter; "new_no"?: Counter; "old_byte_start"?: Counter; "new_byte_start"?: Counter };
 
 export type DiffHunk = { "old_start": Counter; "old_lines": Counter; "new_start": Counter; "new_lines": Counter; "lines": DiffLine[] };
 

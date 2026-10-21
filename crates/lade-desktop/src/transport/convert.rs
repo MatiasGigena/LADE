@@ -533,6 +533,7 @@ pub fn file_diff(
                     .lines
                     .iter()
                     .map(|l| view::DiffLine {
+                        no_newline: l.no_newline,
                         kind: match l.kind {
                             wire::DiffLineKind::Context => view::DiffLineKind::Context,
                             wire::DiffLineKind::Add => view::DiffLineKind::Add,

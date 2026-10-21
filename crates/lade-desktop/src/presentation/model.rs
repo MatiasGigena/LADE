@@ -532,6 +532,7 @@ pub struct DiffLine {
     pub text: String,
     pub new_byte_start: Option<u64>,
     pub old_byte_start: Option<u64>,
+    pub no_newline: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

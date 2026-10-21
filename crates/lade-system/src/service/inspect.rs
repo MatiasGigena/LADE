@@ -334,6 +334,7 @@ fn read_diff(
             lines_left -= 1;
             text_left -= cost;
             lines.push(DiffLine {
+                no_newline: line.no_newline,
                 kind: match line.kind {
                     LineKind::Context => DiffLineKind::Context,
                     LineKind::Add => DiffLineKind::Add,
