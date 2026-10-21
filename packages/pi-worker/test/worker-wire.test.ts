@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { test } from "node:test";
+import type { AssistantMessage } from "../src/worker/pi-ai.ts";
 import { ActivityMapper, boundText, MAX_ITEM_BYTES, safeMessage } from "../src/worker/activity.ts";
 import { StdioChannel } from "../src/worker/channel.ts";
 import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
@@ -9,7 +10,7 @@ import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
 import type { InboundBody, OutboundBody } from "../src/worker/wire.ts";
 import type { JsonObject } from "../src/json.ts";
-import { parseId } from "../src/protocol.ts";
+import { decodeWorkerFrame, newId, parseId } from "../src/protocol.ts";
 
 const ID = parseId("00000000-0000-4000-8000-000000000001");
 
@@ -63,6 +64,81 @@ test("item text is bounded by bytes, UTF-8 boundaries and the encoded frame size
   assert.ok(encodeOutbound({ kind: "activity.item", item_id: ID, role: "tool", title: "t", text: control.text, is_error: false, truncated: true }).length < 1024 * 1024);
   assert.equal(boundText("\uD800").text, "�", "lone surrogates are normalised before JSON encoding");
   assert.equal(safeMessage(`401: key sk-${"a".repeat(40)}\nrest`), "401: key [redacted] rest");
+});
+
+test("streamed text is normalized and bounded before frame encoding", () => {
+  const message: AssistantMessage = {
+    role: "assistant", content: [], api: "test", provider: "test", model: "test", stopReason: "pending", timestamp: 0,
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  };
+
+  for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_BYTES)]) {
+    const sent: OutboundBody[] = [];
+    const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
+    assert.doesNotThrow(() => mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } }));
+    const streamed = sent.find(body => body.kind === "activity.delta");
+    assert.ok(streamed?.kind === "activity.delta");
+    assert.equal(streamed.append_text, boundText(delta).text);
+  }
+
+  const sent: OutboundBody[] = [];
+  const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
+
+  for (const delta of ["before \uD83D", "\uDE00 after"]) mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } });
+  const completed: AssistantMessage = { ...message, content: [{ type: "text", text: "before 😀 after" }], stopReason: "stop" };
+  mapper.handle({ type: "message_end", message: completed });
+  const deltas = sent.flatMap(body => body.kind === "activity.delta" ? [body] : []);
+  const final = sent.at(-1);
+  assert.equal(deltas.map(body => body.append_text).join(""), "before 😀 after");
+  assert.ok(final?.kind === "activity.item");
+  assert.equal(final.text, "before 😀 after");
+  assert.ok(deltas.every(body => body.item_id === final.item_id));
+});
+
+test("delta coalescing keeps control-heavy text within the frame bound", async () => {
+  const drains = new EventEmitter();
+  const written: string[] = [];
+  let full = true;
+
+  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
+
+ return !full; }, drains);
+
+  const running = channel.send({ kind: "turn.state", state: "running" });
+  const first = channel.send({ kind: "activity.delta", item_id: ID, append_text: "\u0001".repeat(60 * 1024) });
+  const second = channel.send({ kind: "activity.delta", item_id: ID, append_text: "\u0001".repeat(130 * 1024) });
+  full = false;
+  drains.emit("drain");
+  await assert.doesNotReject(Promise.all([running, first, second]));
+  assert.equal(written.length, 3);
+});
+
+test("coalesced output below the queue budget retains every delta", async () => {
+  const drains = new EventEmitter();
+  let full = true;
+  let retained = "";
+
+  const channel = new StdioChannel(Readable.from([]), bytes => {
+    const frame = decodeWorkerFrame(bytes.subarray(0, -1));
+
+    if (frame.body.kind === "activity.delta") retained += frame.body.append_text;
+
+    return !full;
+  }, drains);
+
+  const pending = [channel.send({ kind: "turn.state", state: "running" })];
+  const delta = "x".repeat(1024);
+  let itemId = ID;
+
+  for (let n = 0; n < 3800; n++) {
+    if (n % 190 === 0) itemId = newId();
+    pending.push(channel.send({ kind: "activity.delta", item_id: itemId, append_text: delta }));
+  }
+
+  full = false;
+  drains.emit("drain");
+  await Promise.all(pending);
+  assert.equal(retained.length, 3800 * delta.length);
 });
 
 test("outbound writes wait for drain and coalesce deltas", async () => {

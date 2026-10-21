@@ -31,8 +31,8 @@ export class StdioChannel implements WorkerChannel {
     const last = this.queue.at(-1);
 
     if (body.kind === "activity.delta") {
-      if (last?.kind === "activity.delta" && last.item_id === body.item_id && Buffer.byteLength(last.append_text) < MAX_COALESCED_DELTA) {
-        last.append_text += body.append_text; this.queued += weight(body);
+      if (last?.kind === "activity.delta" && last.item_id === body.item_id && Buffer.byteLength(last.append_text) + Buffer.byteLength(body.append_text) <= MAX_COALESCED_DELTA) {
+        last.append_text += body.append_text; this.queued += Buffer.byteLength(body.append_text);
 
         return this.flush();
       }

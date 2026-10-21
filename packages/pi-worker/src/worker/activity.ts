@@ -175,6 +175,8 @@ export class ActivityMapper {
     if (text.length > 0 && isHighSurrogate(text.charCodeAt(text.length - 1))) { block.carry = text.slice(-1); text = text.slice(0, -1); }
 
     if (block.capped || text.length === 0) return;
+    const bounded = boundText(text);
+    text = bounded.text;
     const size = Buffer.byteLength(text);
 
     if (block.sent + size > MAX_ITEM_BYTES) { block.capped = true;
@@ -182,6 +184,7 @@ export class ActivityMapper {
  return; }
 
     block.sent += size;
+    block.capped = bounded.truncated;
     this.send({ kind: "activity.delta", item_id: block.itemId, append_text: text });
   }
 
