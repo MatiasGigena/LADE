@@ -44,12 +44,17 @@ export function tunnel(socketPath: string, authority: string): Promise<Socket> {
       head = Buffer.concat([head, chunk]);
       const end = head.indexOf("\r\n\r\n");
 
-      if (end < 0) {
-        if (head.length > MAX_CONNECT_RESPONSE) fail(new GatewayError("gateway_protocol", "oversized CONNECT response"));
+      if ((end < 0 ? head.length : end + 4) > MAX_CONNECT_RESPONSE) {
+        fail(new GatewayError("gateway_protocol", "oversized CONNECT response"));
 
         return;
       }
 
+      if (end < 0) {
+        return;
+      }
+
+      socket.pause();
       detach();
       const status = /^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString("latin1"))?.[1];
 
@@ -97,7 +102,7 @@ class GatewayHttpAgent extends http.Agent {
 
   override createConnection(options: ClientRequestArgs, callback: Connected): undefined {
     tunnel(this.socketPath, authorityOf(hostOf(options), options.port ?? 80)).then(
-      socket => callback(null, socket),
+      socket => { callback(null, socket); socket.resume(); },
       (error: Error) => callback(error),
     );
   }

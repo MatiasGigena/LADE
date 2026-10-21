@@ -73,6 +73,26 @@ const gateway = createNetServer(client => {
       return;
     }
 
+    if (authority.startsWith("oversized.")) {
+      client.end(`HTTP/1.1 200 Connection Established\r\nX-Pad: ${"x".repeat(17 * 1024)}\r\n\r\n`);
+
+      return;
+    }
+
+    if (authority.startsWith("limit.") || authority.startsWith("over-limit.")) {
+      const prefix = "HTTP/1.1 200 Connection Established\r\nX-Pad: ";
+      const size = 16 * 1024 + (authority.startsWith("over-limit.") ? 1 : 0);
+      client.end(`${prefix}${"x".repeat(size - Buffer.byteLength(prefix) - 4)}\r\n\r\n`);
+
+      return;
+    }
+
+    if (authority.startsWith("payload.")) {
+      client.end(`HTTP/1.1 200 Connection Established\r\n\r\n${"x".repeat(20 * 1024)}`);
+
+      return;
+    }
+
     const upstream = connect({ host: "127.0.0.1", port: portOf(origin) }, () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       client.pipe(upstream); upstream.pipe(client);
@@ -150,6 +170,31 @@ test("WebSocket connections are tunnelled through the gateway", async () => {
 test("a refused tunnel fails the request", async () => {
   await assert.rejects(tunnel(socketPath, "refused.lade.test:443"), { code: "gateway_refused" });
   await assert.rejects(tunnel(socketPath, "bad host:443"), { code: "gateway_target" });
+});
+
+test("a complete oversized CONNECT header is refused", async () => {
+  await assert.rejects(tunnel(socketPath, "oversized.lade.test:443").then(socket => {
+    socket.destroy();
+
+    return socket;
+  }), { code: "gateway_protocol" });
+  const exact = await tunnel(socketPath, "limit.lade.test:443");
+  exact.destroy();
+  await assert.rejects(tunnel(socketPath, "over-limit.lade.test:443").then(socket => {
+    socket.destroy();
+
+    return socket;
+  }), { code: "gateway_protocol" });
+});
+
+test("CONNECT preserves tunneled payload arriving with the response header", async () => {
+  const socket = await tunnel(socketPath, "payload.lade.test:443");
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of socket) chunks.push(chunk);
+  const payload = Buffer.concat(chunks);
+  assert.equal(payload.length, 20 * 1024);
+  assert.equal(payload.equals(Buffer.alloc(20 * 1024, "x")), true);
 });
 
 test("without a gateway socket every connection fails with a clear reason", async () => {
