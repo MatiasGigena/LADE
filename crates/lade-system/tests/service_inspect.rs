@@ -4,11 +4,11 @@ use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 
 use lade_protocol::client::{
-    ActionName, ApprovalState, Basis, ContentNoticeKind, DraftRevision, DraftSaveCommand,
-    ErrorCode, ExecutionState, FeedbackSubmitCommand, FileEncoding, FileReadQuery, Lifecycle,
-    ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand, ObjectiveSelector, Reference,
-    ReferenceVersion, ReplyData, Request, ReviewApproveCommand, ReviewIntegrateCommand,
-    SearchQuery, SearchScope, Side,
+    ActionName, ApprovalState, Basis, ContentNoticeKind, DiffGetQuery, DiffLineKind, DraftRevision,
+    DraftSaveCommand, ErrorCode, ExecutionState, FeedbackSubmitCommand, FileEncoding,
+    FileReadQuery, Lifecycle, ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand,
+    ObjectiveSelector, Reference, ReferenceVersion, ReplyData, Request, ReviewApproveCommand,
+    ReviewIntegrateCommand, SearchQuery, SearchScope, Side,
 };
 use lade_protocol::types::{Counter, DeliveryMode, Id, PageLimit, ReadLimit, WirePath};
 use service_support::*;
@@ -145,6 +145,63 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
     let file = read_file(&mut client, &objective, Basis::Working, "notes.txt");
     let retained = file.text.unwrap().into_bytes();
     assert_eq!(&retained[start as usize..start as usize + 6], b"Needle");
+    drop(client);
+    service.shutdown();
+}
+
+#[test]
+fn a_moved_target_creates_a_fresh_working_capture_and_old_side() {
+    let env = Env::new("svc-capture-target");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    let objective = create_objective(&mut client, &ws.workspace_id, "Target context").objective_id;
+    start_execution(&mut client, &objective);
+    wait_state(&mut client, &objective, ExecutionState::Idle);
+    let before = changes(&mut client, &objective, Basis::Working);
+    assert_eq!(
+        changes(&mut client, &objective, Basis::Working).capture_id,
+        before.capture_id
+    );
+    fs::write(env.repo.join("README"), "hello\ntarget update\n").unwrap();
+    let updated = commit_all(&env.repo, "move the target");
+    let after = changes(&mut client, &objective, Basis::Working);
+    assert_eq!(after.target.commit.hex(), updated);
+    let old_side = client
+        .call(Request::FileRead(FileReadQuery {
+            objective_id: objective.clone(),
+            basis: Basis::Working,
+            path: WirePath::from_bytes(b"README".to_vec()).unwrap(),
+            side: Side::Old,
+            offset: Counter::new(0),
+            limit: ReadLimit::parse("1024").unwrap(),
+        }))
+        .unwrap();
+    let ReplyData::FileRead(old_side) = old_side else {
+        panic!("expected file content")
+    };
+    assert_eq!(old_side.text.as_deref(), Some("hello\ntarget update\n"));
+    assert_ne!(before.capture_id, after.capture_id);
+    assert_eq!(after.total_removed.value(), 1);
+    let diff = client
+        .call(Request::DiffGet(DiffGetQuery {
+            objective_id: objective.clone(),
+            basis: Basis::Working,
+            path: WirePath::from_bytes(b"README".to_vec()).unwrap(),
+        }))
+        .unwrap();
+    let ReplyData::DiffGet(diff) = diff else {
+        panic!("expected diff")
+    };
+    assert!(
+        diff.hunks
+            .iter()
+            .flat_map(|hunk| &hunk.lines)
+            .any(|line| line.kind == DiffLineKind::Del && line.text == "target update")
+    );
+    let repeated = changes(&mut client, &objective, Basis::Working);
+    assert_eq!(repeated.capture_id, after.capture_id);
+    assert_eq!(repeated.total_removed, after.total_removed);
     drop(client);
     service.shutdown();
 }

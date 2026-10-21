@@ -300,7 +300,7 @@ pub struct CaptureInput {
     pub scratch: PathBuf,
     pub target_branch: String,
     pub capture_id: CaptureId,
-    pub latest: Option<(CaptureId, GitId)>,
+    pub latest: Option<(CaptureId, GitId, GitId)>,
     pub drafts: Vec<(DraftId, Reference)>,
 }
 
@@ -331,7 +331,11 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
         .map_err(|e| git_err(&e))?;
     let filtered = filtered_paths(repo, &captured.tree, &files)?;
     let (capture_id, reused) = match &input.latest {
-        Some((id, latest)) if *latest == tree => (*id, true),
+        Some((id, latest_tree, latest_target))
+            if *latest_tree == tree && *latest_target == target =>
+        {
+            (*id, true)
+        }
         _ => {
             repo.retain(
                 &format!("capture-{}", input.capture_id),

@@ -929,7 +929,10 @@ impl Service {
                 .as_str()
                 .to_string(),
             capture_id: CaptureId::new(new_uuid()),
-            latest: st.capture.as_ref().map(|c| (c.id, c.tree.clone())),
+            latest: st
+                .capture
+                .as_ref()
+                .map(|c| (c.id, c.tree.clone(), c.target_commit.clone())),
             drafts,
         })
     }
@@ -974,22 +977,23 @@ impl Service {
         oid: ObjectiveId,
         out: &CaptureOut,
     ) -> Result<CaptureRow, Rejection> {
-        let st = self.obj(oid)?;
-        let row = match (&st.capture, out.reused) {
-            (Some(existing), true) => existing.clone(),
-            _ => {
-                let row = CaptureRow {
-                    id: out.capture_id,
-                    objective_id: oid,
-                    tree: out.tree.clone(),
-                    target_commit: out.target.clone(),
-                    counts: jobs::counts(&out.files),
-                    retention_ref: format!("refs/lade/retain/capture-{}", out.capture_id),
-                    created_at: now_ms(),
-                };
-                sql(storage::insert_capture(self.store.conn(), &row))?;
-                row
-            }
+        self.obj(oid)?;
+        let row = if out.reused {
+            sql(storage::load_capture(self.store.conn(), out.capture_id))?
+                .filter(|row| row.objective_id == oid)
+                .ok_or_else(|| not_found("capture"))?
+        } else {
+            let row = CaptureRow {
+                id: out.capture_id,
+                objective_id: oid,
+                tree: out.tree.clone(),
+                target_commit: out.target.clone(),
+                counts: jobs::counts(&out.files),
+                retention_ref: format!("refs/lade/retain/capture-{}", out.capture_id),
+                created_at: now_ms(),
+            };
+            sql(storage::insert_capture(self.store.conn(), &row))?;
+            row
         };
         let mut changed_drafts = Vec::new();
         let st = self
@@ -1073,3 +1077,7 @@ fn input_reply(
         _ => ReplyData::MessageSend(summary),
     }
 }
+
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod tests;

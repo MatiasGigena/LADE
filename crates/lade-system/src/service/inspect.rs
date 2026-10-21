@@ -29,6 +29,10 @@ const MAX_DIFF_TEXT: usize = 640 * 1024;
 const MAX_PAGE_JSON: usize = 900 * 1024;
 const MAX_ACTIVITY_BYTES: usize = 768 * 1024;
 
+#[cfg(test)]
+#[path = "../../tests/adapters_support/mod.rs"]
+pub(super) mod adapters_support;
+
 #[derive(Clone)]
 struct Resolved {
     old: GitId,
