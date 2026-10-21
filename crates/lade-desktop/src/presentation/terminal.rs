@@ -307,7 +307,9 @@ impl Screen {
         };
         let last_col = self.cols - 1;
         let last_row = self.rows - 1;
-        self.wrap_pending = false;
+        if command != 'm' {
+            self.wrap_pending = false;
+        }
         match command {
             'A' => {
                 self.row = self
@@ -750,6 +752,15 @@ mod tests {
         assert_eq!(s.screen_lines()[0], "abef");
         let s = screen("one\r\ntwo\x1b[2J\x1b[H!");
         assert_eq!(s.screen_lines()[..2], ["!", ""]);
+    }
+
+    #[test]
+    fn a_colour_reset_at_the_right_margin_preserves_pending_wrap() {
+        let mut s = Screen::new(20, 5);
+        s.feed(&"x".repeat(20));
+        s.feed("\x1b[0mY");
+        assert_eq!(s.screen_lines()[..2], ["x".repeat(20), "Y".into()]);
+        assert_eq!(s.cursor(), (1, 1));
     }
 
     #[test]
