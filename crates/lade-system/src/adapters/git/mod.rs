@@ -741,14 +741,15 @@ pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
 pub fn validate_refname(name: &str) -> Result<()> {
     let valid = name.starts_with("refs/")
         && name.len() <= 1024
-        && name.bytes().all(|b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'+' | b'=')
+        && !name.bytes().any(|b| {
+            b <= b' ' || b == 0x7f || matches!(b, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\')
         })
+        && !name.ends_with('.')
         && !name.contains("..")
         && !name.contains("@{")
-        && name.split('/').all(|c| {
-            !c.is_empty() && !c.starts_with('.') && !c.ends_with('.') && !c.ends_with(".lock")
-        });
+        && name
+            .split('/')
+            .all(|c| !c.is_empty() && !c.starts_with('.') && !c.ends_with(".lock"));
     if valid {
         Ok(())
     } else {

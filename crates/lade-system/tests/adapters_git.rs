@@ -10,7 +10,7 @@ use adapters_support::{TempDir, commit_all, git, git_os, init_repo, status};
 use lade_system::adapters::git::{
     ChangeStatus, CommitSpec, GitError, GitId, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
     ObjectFormat, RepoPath, Repository, STDERR_LIMIT, SquashRequest, TargetBusyReason, Worktree,
-    escape_branch_name, unescape_branch_name,
+    escape_branch_name, unescape_branch_name, validate_branch_name, validate_refname,
 };
 
 fn path(bytes: &[u8]) -> RepoPath {
@@ -628,6 +628,69 @@ fn integrate_into_branch_not_checked_out() {
     assert_eq!(status(&dir), status_before);
     assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
     let _ = &f.tmp;
+}
+
+#[test]
+fn integrate_into_valid_utf8_target_branches() {
+    let f = integration_fixture("int-utf8");
+    let dir = f.main_dir();
+    for branch in [
+        "feature/mañana",
+        "release/v1@candidate",
+        "fix/(parser)",
+        "fix./parser",
+    ] {
+        git(&dir, &["branch", branch, f.target.hex()]);
+        let listed = f.repo.list_branches().unwrap();
+        assert!(listed.iter().any(|entry| entry.name == branch));
+        let refname = format!("refs/heads/{branch}");
+        assert_eq!(
+            f.repo.resolve_ref(&refname).unwrap(),
+            Some(f.target.clone())
+        );
+        assert_eq!(f.repo.resolve_commit(&refname).unwrap(), f.target);
+
+        let outcome = f.repo.integrate_squash(&f.request(branch)).unwrap();
+        assert_eq!(f.repo.resolve_ref(&refname).unwrap(), Some(outcome.commit));
+        assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
+    }
+}
+
+#[test]
+fn ref_validation_rejects_revision_syntax_and_invalid_git_names() {
+    for name in [
+        "refs/heads/main~1",
+        "refs/heads/main^{}",
+        "refs/heads/main:path",
+        "refs/heads/main@{0}",
+        "refs/heads/a..b",
+        "refs/heads/a b",
+        "refs/heads/a\nb",
+        "refs/heads/a\0b",
+        "refs/heads/a\u{7f}b",
+        "refs/heads/a?b",
+        "refs/heads/a*b",
+        "refs/heads/a[b",
+        "refs/heads/a\\b",
+        "refs/heads/.hidden",
+        "refs/heads/a.lock",
+        "refs/heads/a.lock/b",
+        "refs/heads/a/",
+        "refs/heads/a.",
+        "refs//heads/a",
+        "--help",
+    ] {
+        assert!(
+            matches!(validate_refname(name), Err(GitError::InvalidRefName)),
+            "{name:?}"
+        );
+    }
+    for name in ["-option", "HEAD", "main~1", "main@{0}"] {
+        assert!(
+            matches!(validate_branch_name(name), Err(GitError::InvalidRefName)),
+            "{name:?}"
+        );
+    }
 }
 
 #[test]
