@@ -83,8 +83,8 @@ pub fn wide_sizes(width: i32) -> WideSizes {
         }
     } else {
         WideSizes {
-            rail: 248,
-            inspector: 320,
+            rail: 264,
+            inspector: 344,
             file_list: 192,
         }
     }
@@ -152,7 +152,7 @@ mod tests {
         let roomy = wide_sizes(1440);
         assert_eq!(
             (roomy.rail, roomy.inspector, roomy.file_list),
-            (248, 320, 192)
+            (264, 344, 192)
         );
         let tight = wide_sizes(1100);
         assert_eq!(

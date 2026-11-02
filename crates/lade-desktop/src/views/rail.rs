@@ -37,7 +37,7 @@ impl Rail {
         set_accessible_label(&new_button, "New Objective");
         heading_row.append(&new_button);
         outer.append(&heading_row);
-        let content = vbox(space::SECTION);
+        let content = vbox(space::PAGE);
         outer.append(&content);
         let root = widgets::region_scroll(&outer);
         root.add_css_class("rail-scroll");

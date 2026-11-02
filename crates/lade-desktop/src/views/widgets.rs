@@ -32,6 +32,7 @@ pub mod space {
     pub const GROUP: i32 = 12;
     pub const SECTION: i32 = 16;
     pub const PAGE: i32 = 24;
+    pub const REGION: i32 = 32;
 }
 
 pub fn label(text: &str, classes: &[&str]) -> gtk::Label {

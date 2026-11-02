@@ -56,7 +56,7 @@ pub struct Inspector {
 }
 
 fn page(name: &str) -> (gtk::ScrolledWindow, gtk::Box) {
-    let content = vbox(space::PAGE);
+    let content = vbox(space::REGION);
     content.add_css_class("inspector-page");
     let scroll = widgets::region_scroll(&content);
     scroll.set_propagate_natural_width(false);
@@ -360,7 +360,10 @@ impl Inspector {
         ] {
             let block = vbox(space::TIGHT);
             block.append(&label(key, &["meta"]));
-            block.append(&label(if value.is_empty() { "—" } else { value }, &[]));
+            block.append(&label(
+                if value.is_empty() { "—" } else { value },
+                &["prose"],
+            ));
             intent.append(&block);
         }
         intent.append(&label(

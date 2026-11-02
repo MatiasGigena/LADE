@@ -189,8 +189,8 @@ impl Viewer {
         view.set_show_line_numbers(false);
         view.set_highlight_current_line(false);
         view.set_tab_width(4);
-        view.set_pixels_above_lines(2);
-        view.set_pixels_below_lines(2);
+        view.set_pixels_above_lines(3);
+        view.set_pixels_below_lines(3);
         view.set_left_margin(8);
         view.set_wrap_mode(gtk::WrapMode::None);
         view.add_css_class("code-view");

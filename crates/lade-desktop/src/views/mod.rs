@@ -188,7 +188,7 @@ impl App {
         paned.set_resize_start_child(false);
         paned.set_shrink_start_child(true);
         paned.set_shrink_end_child(false);
-        paned.set_position(248);
+        paned.set_position(264);
         paned.set_wide_handle(false);
         paned.connect_position_notify(|p| {
             let clamped = p.position().clamp(224, 280);
