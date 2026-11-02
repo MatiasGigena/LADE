@@ -320,7 +320,6 @@ impl Workbench {
                     let connector = gtk::Box::new(gtk::Orientation::Horizontal, 0);
                     connector.add_css_class("journey-connector");
                     connector.set_valign(gtk::Align::Center);
-                    connector.set_hexpand(true);
                     journey.append(&connector);
                 }
                 let item = hbox(space::ITEM);

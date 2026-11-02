@@ -384,7 +384,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .journey-dot.upcoming { border-color: @ink_optional; background-color: @surface; }
 .journey-label { color: @ink_secondary; font-size: 13px; }
 .journey-label.current { color: @ink_primary; font-weight: 600; }
-.journey-connector { min-height: 1px; min-width: 12px; background-color: @journey_connector; }
+.journey-connector { min-height: 1px; min-width: 24px; background-color: @journey_connector; }
 
 .basis-selector > button { min-width: 220px; }
 .version-line { padding: 0; }
