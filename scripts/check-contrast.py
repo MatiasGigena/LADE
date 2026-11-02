@@ -112,11 +112,12 @@ for attribute, value in re.findall(r'(foreground|background)="([^"]+)"', scheme)
 syntax_inks = sorted(set(re.findall(r'foreground="(\w+)"', scheme)))
 
 TEXT, NON_TEXT = 4.5, 3.0
-text_fills = ['surface', 'fill_hover', 'fill_selected', 'fill_band', 'fill_inset', 'fill_user']
+text_fills = ['surface', 'fill_hover', 'fill_selected', 'fill_band', 'fill_inset', 'fill_user', 'canvas',
+              ['canvas', 'fill_hover'], 'fill_track']
 pairs = []
 for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']:
     for fill in text_fills:
-        pairs.append((ink, [fill], TEXT, 'text'))
+        pairs.append((ink, fill if isinstance(fill, list) else [fill], TEXT, 'text'))
 pairs += [
     ('add_ink', ['add_fill'], TEXT, 'text'),
     ('add_ink', ['surface'], TEXT, 'text'),
@@ -143,6 +144,8 @@ pairs += [
     ('border_control', ['fill_selected'], NON_TEXT, 'control boundary'),
     ('focus_ring', ['surface'], NON_TEXT, 'focus outline'),
     ('focus_ring', ['fill_band'], NON_TEXT, 'focus outline'),
+    ('focus_ring', ['canvas'], NON_TEXT, 'focus outline'),
+    ('border_control', ['canvas'], NON_TEXT, 'control boundary'),
     ('focus_ring', ['fill_selected'], NON_TEXT, 'focus outline'),
     ('focus_ring', ['warn_fill'], NON_TEXT, 'focus outline'),
     ('focus_ring', ['del_fill'], NON_TEXT, 'focus outline'),

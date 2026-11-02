@@ -5,7 +5,7 @@
 @define-color ink_metadata rgba(0, 0, 0, 0.56);
 @define-color ink_optional rgba(0, 0, 0, 0.44);
 @define-color border_separator rgba(0, 0, 0, 0.10);
-@define-color border_control rgba(0, 0, 0, 0.56);
+@define-color border_control rgba(0, 0, 0, 0.44);
 @define-color fill_hover rgba(0, 0, 0, 0.05);
 @define-color fill_selected rgba(0, 0, 0, 0.09);
 @define-color focus_ring #000000;
@@ -24,6 +24,11 @@
 @define-color scrollbar_slider rgba(0, 0, 0, 0.28);
 @define-color scrollbar_slider_hover rgba(0, 0, 0, 0.44);
 @define-color shadow_popover rgba(0, 0, 0, 0.12);
+@define-color shadow_soft rgba(0, 0, 0, 0.06);
+@define-color shadow_sheet rgba(0, 0, 0, 0.08);
+@define-color border_soft rgba(0, 0, 0, 0.12);
+@define-color canvas #F3F3F3;
+@define-color fill_track rgba(0, 0, 0, 0.06);
 @define-color fill_band #F5F5F5;
 @define-color fill_inset #F7F7F7;
 @define-color fill_user #FAFAFA;
@@ -32,11 +37,24 @@
 @define-color syntax_constant #5B3A82;
 
 
-window, window.background, .lade-root, dialog, stack, notebook > stack, scrolledwindow,
+window, window.background, dialog, stack, notebook > stack, scrolledwindow,
 viewport, list, listview {
   background-color: @surface;
   color: @ink_primary;
 }
+window.lade-window, window.lade-window.background, .lade-root, .lade-root > stack,
+.rail-scroll, .rail-scroll > viewport, .rail-scroll list {
+  background-color: @canvas;
+}
+
+.sheet {
+  background-color: @surface;
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft, 0 8px 24px @shadow_sheet;
+}
+.centre-region.sheet { margin: 0 6px 12px 0; }
+notebook.inspector.sheet { margin: 0 12px 12px 6px; }
+.compact .centre-region.sheet, .compact notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 
 label { color: inherit; }
 label:disabled { color: @ink_metadata; }
@@ -86,27 +104,29 @@ entry > text > selection:focus-within {
 button {
   min-height: 26px;
   padding: 4px 12px;
-  border-radius: 6px;
-  border: 1px solid @border_control;
+  border-radius: 8px;
+  border: 1px solid @border_soft;
   background-color: @surface;
   background-image: none;
-  box-shadow: none;
+  box-shadow: 0 1px 2px @shadow_soft;
   color: @ink_primary;
   font-weight: 500;
   text-shadow: none;
   -gtk-icon-shadow: none;
 }
-button:hover { background-color: @fill_hover; }
-button:active, button:checked { background-color: @fill_selected; }
+button:hover { background-color: @fill_band; }
+button:active, button:checked { background-color: @fill_selected; box-shadow: none; }
 button:disabled {
   color: @ink_metadata;
   border-color: @border_disabled;
   background-color: @surface;
+  box-shadow: none;
 }
 button.primary {
   background-color: @ink_primary;
   border-color: @ink_primary;
   color: @surface;
+  box-shadow: 0 1px 2px @shadow_popover, 0 4px 12px @shadow_sheet;
 }
 button.primary label { color: @surface; }
 button.primary:hover { background-color: @primary_hover; }
@@ -130,6 +150,7 @@ button.destructive:disabled, button.destructive:disabled label {
 button.quiet, button.icon-button {
   border-color: transparent;
   background-color: transparent;
+  box-shadow: none;
 }
 button.quiet:hover, button.icon-button:hover { background-color: @fill_hover; }
 button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
@@ -142,13 +163,14 @@ menubutton.icon-button > button {
   padding: 0;
   border-color: transparent;
   background-color: transparent;
+  box-shadow: none;
 }
 menubutton.icon-button > button:hover { background-color: @fill_hover; }
 menubutton.icon-button > button:checked { background-color: @fill_selected; }
 
 entry, scrolledwindow.text-input, spinbutton {
   min-height: 34px;
-  border-radius: 6px;
+  border-radius: 8px;
   border: 1px solid @border_control;
   background-color: @surface;
   background-image: none;
@@ -167,11 +189,12 @@ entry > text > placeholder, spinbutton > text > placeholder,
 entry:focus-within > text > placeholder { color: @ink_metadata; opacity: 1; }
 
 dropdown > button, dropdown > .dropdown, menubutton > button {
-  border: 1px solid @border_control;
-  border-radius: 6px;
+  border: 1px solid @border_soft;
+  border-radius: 8px;
   background-color: @surface;
+  box-shadow: 0 1px 2px @shadow_soft;
 }
-columnview > header > button { border-color: transparent; border-radius: 0; background-color: transparent; }
+columnview > header > button { border-color: transparent; border-radius: 0; background-color: transparent; box-shadow: none; }
 columnview > header > button:hover { background-color: @fill_hover; }
 dropdown > button stack { background-color: transparent; }
 
@@ -189,13 +212,14 @@ checkbutton check:checked { background-color: @ink_primary; border-color: @ink_p
 popover > contents {
   background-color: @surface;
   color: @ink_primary;
-  border-radius: 8px;
-  border: 1px solid @border_separator;
-  box-shadow: 0 6px 20px @shadow_popover;
+  border-radius: 12px;
+  border: 1px solid @border_soft;
+  box-shadow: 0 2px 6px @shadow_soft, 0 16px 40px @shadow_popover;
   padding: 12px;
 }
 popover > arrow { background-color: @surface; border-color: @border_separator; }
-popover.menu > contents { padding: 4px; }
+popover.menu > contents { padding: 6px; }
+popover modelbutton, popover row { border-radius: 6px; }
 popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
 popover row:selected { background-color: @fill_selected; color: @ink_primary; }
 
@@ -229,12 +253,9 @@ scrollbar slider:hover { background-color: @scrollbar_slider_hover; }
 paned.horizontal > separator {
   min-width: 1px;
   background-color: transparent;
-  background-image: image(@border_separator);
-  background-size: 1px 1px;
-  background-repeat: repeat-y;
-  background-position: left;
-  margin: 0 -8px 0 0;
-  padding: 0 8px 0 0;
+  background-image: none;
+  margin: 0 -6px;
+  padding: 0 6px;
   box-shadow: none;
 }
 separator.region-divider { background-color: @border_separator; min-width: 1px; }
@@ -255,10 +276,9 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 
 
 .lade-header {
-  min-height: 56px;
+  min-height: 60px;
   padding: 0 20px;
-  border-bottom: 1px solid @border_separator;
-  background-color: @surface;
+  background-color: @canvas;
 }
 .brand { min-width: 0; }
 .compact .lade-header { padding: 0 12px; }
@@ -281,15 +301,16 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 .nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
 .connection { font-size: 13px; }
 .search {
-  border: 1px solid @border_control;
-  border-radius: 6px;
+  border: 1px solid @border_soft;
+  border-radius: 8px;
   background-color: @surface;
+  box-shadow: 0 1px 2px @shadow_soft;
 }
 .search:focus-within { border-color: @focus_ring; box-shadow: inset 0 0 0 1px @focus_ring; }
 .search entry, .search entry:focus-within {
   min-height: 34px;
   border: none;
-  border-radius: 6px 0 0 6px;
+  border-radius: 8px 0 0 8px;
   background-color: transparent;
   box-shadow: none;
 }
@@ -298,7 +319,7 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   min-height: 34px;
   padding: 0 8px;
   border: none;
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 8px 8px 0;
   background-color: transparent;
   box-shadow: none;
 }
@@ -312,31 +333,33 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   min-width: 32px;
   min-height: 32px;
   border-radius: 9999px;
-  background-color: @fill_selected;
+  background-color: @surface;
+  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft;
   font-size: 13px;
   font-weight: 600;
 }
 .profile-name { font-weight: 500; }
 
 .notice-bar {
-  padding: 8px 20px;
-  background-color: @fill_band;
-  border-bottom: 1px solid @border_separator;
+  padding: 8px 16px;
+  margin: 0 12px 8px 12px;
+  border-radius: 10px;
+  background-color: @surface;
+  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft;
 }
 .notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
 
 .region-bar {
-  padding: 8px 12px;
-  border-bottom: 1px solid @border_separator;
-  background-color: @surface;
+  padding: 0 8px 8px 8px;
+  background-color: @canvas;
 }
 .region-bar .segmented button { min-height: 26px; padding: 4px 12px; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 
 
-.rail { padding: 16px 12px; }
+.rail { padding: 8px 12px 16px 12px; }
 .rail .section-title, .rail .group-heading { margin-left: 12px; }
 .rail .group-heading { margin-bottom: 2px; }
 .rail .archive > button.disclosure-toggle { margin-left: 4px; }
@@ -349,7 +372,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   background-color: transparent;
 }
 .objective-list > row {
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 8px 12px;
   margin: 0;
   background-color: transparent;
@@ -357,7 +380,11 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   border: none;
 }
 .objective-list > row:hover { background-color: @fill_hover; }
-.objective-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
+.objective-list > row:selected {
+  background-color: @surface;
+  color: @ink_primary;
+  box-shadow: 0 0 0 1px @border_soft, 0 1px 3px @shadow_sheet;
+}
 .objective-list > row:selected .objective-title { font-weight: 600; }
 .objective-title { font-weight: 500; }
 
@@ -390,7 +417,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .version-line { padding: 0; }
 
 .file-list > row {
-  border-radius: 6px;
+  border-radius: 8px;
   padding: 6px 10px;
   margin: 0 0 2px 0;
   min-height: 32px;
@@ -402,7 +429,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .file-row .numeric { font-size: 12px; }
 .file-directory { font-size: 12px; }
 
-.viewer { border: 1px solid @border_separator; border-radius: 6px; }
+.viewer { border: 1px solid @border_soft; border-radius: 10px; }
 .viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
 .viewer-path { font-weight: 500; }
 .selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
@@ -510,7 +537,7 @@ image.info-sign { color: @ink_metadata; }
 .composer { border-top: 1px solid @border_separator; padding-top: 12px; }
 
 
-window.lade-dialog { background-color: @surface; border-radius: 8px; }
+window.lade-dialog { background-color: @surface; border-radius: 12px; }
 .dialog-content { padding: 24px; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .limited-error > .error-box { margin-top: 4px; }
@@ -518,7 +545,7 @@ window.lade-dialog { background-color: @surface; border-radius: 8px; }
 
 .terminal-pane { padding: 24px; }
 .compact .terminal-pane { padding: 16px; }
-.terminal-frame { border: 1px solid @border_separator; border-radius: 6px; }
+.terminal-frame { border: 1px solid @border_soft; border-radius: 10px; }
 textview.terminal-view, textview.terminal-view > text {
   background-color: @surface;
   color: @ink_primary;

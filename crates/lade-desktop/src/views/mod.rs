@@ -166,8 +166,13 @@ impl App {
         let centre_region = widgets::region_scroll(&centre);
         centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
         centre_region.set_hexpand(true);
+        centre_region.add_css_class("centre-region");
+        centre_region.add_css_class("sheet");
+        centre_region.set_overflow(gtk::Overflow::Hidden);
         widgets::set_accessible_label(&centre_region, "Main work area");
         inspector.root.set_hexpand(false);
+        inspector.root.add_css_class("sheet");
+        inspector.root.set_overflow(gtk::Overflow::Hidden);
         widgets::set_accessible_label(&inspector.root, "Inspector");
         let right = gtk::Paned::new(gtk::Orientation::Horizontal);
         right.set_start_child(Some(&centre_region));
