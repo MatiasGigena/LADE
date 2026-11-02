@@ -331,6 +331,9 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 
 
 .rail { padding: 16px 12px; }
+.rail .section-title, .rail .group-heading { margin-left: 12px; }
+.rail .group-heading { margin-bottom: 2px; }
+.rail .archive > button.disclosure-toggle { margin-left: 4px; }
 .rail button.icon-button:focus:focus-visible {
   outline: none;
   border-color: @focus_ring;
@@ -349,8 +352,8 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 }
 .objective-list > row:hover { background-color: @fill_hover; }
 .objective-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
-.objective-list > row:selected .objective-title { font-weight: 700; }
-.objective-title { font-weight: 600; }
+.objective-list > row:selected .objective-title { font-weight: 600; }
+.objective-title { font-weight: 500; }
 
 .status-sign { font-weight: 700; }
 
