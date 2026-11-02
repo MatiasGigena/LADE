@@ -147,7 +147,7 @@ menubutton.icon-button > button:hover { box-shadow: inset 0 0 0 1px @ink_primary
 entry, scrolledwindow.text-input, spinbutton {
   min-height: 34px;
   border-radius: 8px;
-  border: 1px solid @border_control;
+  border: 1px solid transparent;
   background-color: @surface;
   background-image: none;
   box-shadow: none;
@@ -239,7 +239,7 @@ paned.horizontal > separator {
 .empty-block { padding: 40px; }
 
 .inline-message { border-radius: 6px; padding: 8px 12px; }
-.inline-message.message-info { box-shadow: inset 0 0 0 1px @ink_primary; color: @ink_primary; }
+.inline-message.message-info { color: @ink_primary; }
 .inline-message.message-warning { background-color: @warn_fill; color: @warn_ink; }
 .inline-message.message-error { background-color: @del_fill; color: @del_ink; }
 .inline-message .message-sign { font-weight: 700; }
@@ -288,7 +288,6 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   min-height: 32px;
   border-radius: 9999px;
   background-color: @surface;
-  box-shadow: inset 0 0 0 1px @ink_primary;
   font-size: 13px;
   font-weight: 600;
 }
@@ -299,7 +298,6 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   margin: 0 12px 8px 12px;
   border-radius: 10px;
   background-color: @surface;
-  box-shadow: inset 0 0 0 1px @ink_primary;
 }
 .notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
@@ -379,17 +377,12 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .file-row .numeric { font-size: 12px; }
 .file-directory { font-size: 12px; }
 
-.viewer { border: 1px solid @border_control; border-radius: 10px; }
-.viewer-toolbar { padding: 8px 12px; }
+.viewer-toolbar { padding: 0 0 8px 0; }
 .viewer-path { font-weight: 500; }
 .selection-line { padding: 6px 12px; }
 .viewer-message { padding: 24px; }
-.viewer-footer { padding: 8px 12px; }
-.segmented {
-  border-radius: 10px;
-  padding: 2px;
-  box-shadow: inset 0 0 0 1px @ink_primary;
-}
+.viewer-footer { padding: 8px 0 0 0; }
+.segmented { border-radius: 10px; }
 .segmented button {
   min-height: 24px;
   padding: 3px 12px;
@@ -429,11 +422,7 @@ notebook.inspector, notebook.inspector > header {
   box-shadow: none;
 }
 notebook.inspector > header { padding: 20px 24px 4px 24px; }
-notebook.inspector > header > tabs {
-  border-radius: 10px;
-  padding: 2px;
-  box-shadow: inset 0 0 0 1px @ink_primary;
-}
+notebook.inspector > header > tabs { border-radius: 10px; }
 notebook.inspector > header > tabs > tab {
   padding: 4px 12px;
   margin: 0;
@@ -459,27 +448,12 @@ notebook.inspector > stack { background-color: @surface; }
 .field-key { min-width: 88px; }
 image.info-sign { color: @ink_metadata; }
 .evidence-row { padding: 12px 0; }
-.output {
-  box-shadow: inset 0 0 0 1px @ink_primary;
-  border-radius: 6px;
-  padding: 8px;
-  margin-top: 4px;
-}
+.output { margin-top: 4px; }
 
-.draft {
-  padding: 12px;
-  border-radius: 12px;
-  background-color: @surface;
-  box-shadow: inset 0 0 0 1px @ink_primary;
-}
+.draft { padding: 12px 0; }
 .draft-reference { font-weight: 500; }
 .draft button.destructive-quiet { margin-left: -12px; }
-.excerpt {
-  box-shadow: inset 0 0 0 1px @ink_primary;
-  border-radius: 6px;
-  padding: 8px;
-  color: @ink_secondary;
-}
+.excerpt { color: @ink_secondary; }
 .save-state.save-failed { color: @del_ink; font-weight: 600; }
 .save-state.save-warning { color: @warn_ink; font-weight: 600; }
 .save-state.save-ok { color: @add_ink; }
@@ -515,9 +489,6 @@ image.info-sign { color: @ink_metadata; }
   color: @surface;
 }
 .transcript .bubble label { color: @surface; }
-.transcript > row.from-tool, .transcript > row.from-system, .transcript > row.from-thinking {
-  box-shadow: inset 0 0 0 1px @ink_primary;
-}
 .role { font-size: 13px; }
 .activity-text { margin-top: 2px; }
 .composer {
@@ -545,7 +516,6 @@ window.lade-dialog { background-color: @surface; border-radius: 12px; }
 
 .terminal-pane { padding: 32px; }
 .compact .terminal-pane { padding: 16px; }
-.terminal-frame { border: 1px solid @border_control; border-radius: 10px; }
 textview.terminal-view, textview.terminal-view > text {
   background-color: @surface;
   color: @ink_primary;
