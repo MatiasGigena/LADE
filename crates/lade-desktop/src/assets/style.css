@@ -27,9 +27,9 @@ viewport, list, listview, textview, textview > text {
   color: @ink_primary;
 }
 
-.centre-region.sheet { margin: 0 6px 12px 0; }
+.centre-region.sheet { margin: 0 0 12px 0; }
 .centre-region.sheet.alone { margin-right: 12px; }
-notebook.inspector.sheet { margin: 0 12px 12px 6px; }
+notebook.inspector.sheet { margin: 0 12px 12px 0; }
 .compact .centre-region.sheet, .compact notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 
 label { color: inherit; }
@@ -363,7 +363,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .journey-dot.upcoming { border-color: @ink_primary; background-color: @surface; }
 .journey-label { color: @ink_secondary; font-size: 13px; }
 .journey-label.current { color: @ink_primary; font-weight: 600; }
-.journey-connector { min-height: 1px; min-width: 24px; background-color: @ink_optional; }
+.journey-connector { min-height: 1px; min-width: 12px; background-color: @ink_optional; }
 
 .basis-selector > button { min-width: 220px; }
 .version-line { padding: 0; }
