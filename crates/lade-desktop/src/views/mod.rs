@@ -12,6 +12,9 @@ mod viewer;
 mod widgets;
 mod workbench;
 
+#[cfg(test)]
+mod capture_tests;
+
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
