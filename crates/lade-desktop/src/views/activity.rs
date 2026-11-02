@@ -805,6 +805,15 @@ impl Activity {
         let text = label(&item.text, &classes);
         text.set_selectable(true);
         text.set_focusable(false);
+        text.set_natural_wrap_mode(gtk::NaturalWrapMode::None);
+        if item.role == ActivityRole::User {
+            text.set_max_width_chars(64);
+            content.add_css_class("bubble");
+            content.set_halign(gtk::Align::End);
+        } else if item.role != ActivityRole::Tool {
+            text.set_max_width_chars(88);
+            text.set_halign(gtk::Align::Start);
+        }
         content.append(&text);
         if item.truncated {
             content.append(&widgets::warning_line(
