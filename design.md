@@ -37,14 +37,14 @@ Units below are logical pixels at 100% scaling. They are initial layout targets;
 
 | Region | Proposed wide-layout geometry | Treatment |
 | --- | --- | --- |
-| Header | 60 high, 20 horizontal inset, 16 between groups | On the canvas; no divider. Navigation is a segmented pill control |
-| Objectives | 248 wide, adjustable approximately 224–280 | On the canvas; 12 inset; titles, group labels and the archive toggle share one text edge |
-| Main work area | Remaining width; 24 inset, 16 within related groups | White sheet, 12 radius, 12 from the window's bottom edge and 6 from the inspector sheet; dominant reading area, not a grid of unrelated cards |
-| Right inspector | 320 wide, adjustable approximately 280–360; 16 inset | White sheet beside the work area, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area sheet takes the full width |
+| Header | 64 high, 24 horizontal inset, 16 between groups | On the canvas; no divider. Navigation is a segmented pill control |
+| Objectives | 264 wide, adjustable approximately 224–280 | On the canvas; 16 inset; groups 24 apart; titles, group labels and the archive toggle share one text edge |
+| Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | White sheet, 12 radius, 12 from the window's bottom edge and 6 from the inspector sheet; dominant reading area, not a grid of unrelated cards |
+| Right inspector | 344 wide, adjustable approximately 280–360; 24 inset, sections 32 apart | White sheet beside the work area, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area sheet takes the full width |
 | Changed-file list inside center | Approximately 192 wide when center permits | Flat rows inside the sheet: file name on the first line, directory and line counts on the second |
 | Code/diff viewport | Remaining center width | White, 10 radius, hairline ring; toolbar and footer on a faint inset fill; line gutters and semantic diff fills; no shadow (it is inside a sheet) |
 
-At a 1440-wide reference window the center receives approximately 860 pixels before internal padding. Preserve relative dominance rather than the exact photographed proportions. Header groups share a vertical centerline. Keep global search beside the profile; give search approximately 280–360 pixels in the wide layout. Align titles, list text and inspector labels to their own consistent left edges; inspector tabs and the content below them start on the same edge.
+At a 1440-wide reference window the center receives approximately 820 pixels before internal padding. Preserve relative dominance rather than the exact photographed proportions. Header groups share a vertical centerline. Keep global search beside the profile; give search approximately 280–360 pixels in the wide layout. Align titles, list text and inspector labels to their own consistent left edges; inspector tabs and the content below them start on the same edge.
 
 The existing Plan/Workbench/Activity navigation is a visual reference only: display the navigation destinations defined by the accepted product contract; do not invent new pages just to reproduce labels. Treat the collaboration journey as a restrained horizontal indicator, with short labels and modest connectors, not oversized navigation cards.
 
@@ -112,6 +112,14 @@ Use available font weights honestly; do not assume every platform face has all w
 
 Spacing scale: **4, 8, 12, 16, 24, 32**. Use 4–8 within a label/value pair, 12–16 within a component and 24–32 between unrelated sections. Put a dimension on one wrapper per axis to avoid double padding.
 
+LADE favors air over density where it costs no information:
+
+- **Whitespace groups.** A title sits closer to its own metadata (4) than to the next record (12 or more); groups of records sit 24 apart, inspector sections 32. Never spread lines evenly to fill a region.
+- **Words keep their inset.** Text stays at least 12 from the edge of any row, card or field, 16–24 from a panel edge and 32 from the work area sheet's edge; carry the same inset round the bottom, not just the top.
+- **Rows breathe.** Objective rows 10 by 12 padding with 2 between; file rows 8 by 12 with 4 between; evidence rows 12 vertical; code lines 3 above and below.
+- **Running text has leading and a measure.** Read-only prose (activity, intent, empty-state bodies) uses 1.3 line height; agent and system text wrap at about 88 characters, your messages at about 64. Editable fields keep the default leading so their bounded heights still show their text.
+- **Compact gives space back first.** Below the wide layout, insets drop to 16 and rows keep their padding.
+
 Shapes: 8-pixel radius for buttons, fields, rows and segments; 10 for segmented tracks and the code viewer; 12 for sheets, cards, popovers and dialogs; 14 for the activity composer. Status labels stay sign plus text, not pills. Cards appear only where a record is a unit the person acts on (a feedback draft, the composer); lists of peers stay flat rows inside their sheet. Default control height is 36, expanding for scaled text; icon-only hit areas are at least 32 by 32. Dense file rows begin around 32 high and Objective rows expand with their content.
 
 Elevation levels, all neutral black at low alpha:
@@ -138,7 +146,7 @@ The primary action sits between levels 2 and 3 so the one next action reads firs
 | Feedback reference | Compact file/range/version label above the comment text; no oversized author avatar or decorative quote card |
 | Feedback draft | One level-1 card per draft holding reference, excerpt, comment field, save state and Remove, all on the card's text edge |
 | Feedback composer | Real input boundary, readable draft text and small save-state line; comments remain visible and do not obscure the selected code |
-| Activity transcript | No rule between items. Your turns tinted and inset from the left; tool and system output in an outlined inset block; thinking outlined; agent text plain and labelled *agent claim* |
+| Activity transcript | No rule between items; items 12 apart. Your turns are right-aligned bubbles sized to their text; tool and system output in a full-width outlined inset block; thinking outlined; agent text plain, labelled *agent claim*, wrapped at a readable measure |
 | Activity composer | One level-3 card containing the borderless input, delivery mode, hint and Send; the focus ring surrounds the whole card |
 | Dialog | In-content heading, body, and actions in a tinted footer separated by a rule; primary action last |
 | Evidence | Aligned name/result rows (candidates and checks share one shape: title, value at the right, metadata beneath), inspectable details and explicit failure/stale/missing labels; coverage displayed as a metric, not a success check |
