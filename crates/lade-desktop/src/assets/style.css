@@ -205,6 +205,12 @@ button.disclosure-toggle, button.list-action-button {
   min-height: 24px;
 }
 button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 600; }
+button.disclosure-toggle image.disclosure-chevron {
+  -gtk-icon-size: 12px;
+  min-height: 18px;
+  margin-top: 2px;
+  color: @ink_metadata;
+}
 button.disclosure-toggle:checked { background-color: transparent; }
 button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
 button.list-action-button label { font-weight: 500; }

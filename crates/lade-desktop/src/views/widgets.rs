@@ -447,21 +447,30 @@ pub fn disclosure(
     toggle.add_css_class("quiet");
     toggle.add_css_class("disclosure-toggle");
     toggle.set_halign(gtk::Align::Fill);
-    let text = gtk::Label::new(None);
+    let face = hbox(space::TIGHT);
+    let chevron = gtk::Image::from_icon_name("pan-end-symbolic");
+    chevron.add_css_class("disclosure-chevron");
+    chevron.set_valign(gtk::Align::Start);
+    face.append(&chevron);
+    let text = gtk::Label::new(Some(title));
     text.set_wrap(true);
     text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     text.set_max_width_chars(60);
     text.set_xalign(0.0);
-    toggle.set_child(Some(&text));
+    face.append(&text);
+    toggle.set_child(Some(&face));
     set_accessible_label(&toggle, title);
     set_focus_key(&toggle, &format!("disclosure:{title}"));
     let child = child.as_ref().clone();
     let render = {
-        let title = title.to_owned();
         let child = child.clone();
         move |toggle: &gtk::ToggleButton| {
             let open = toggle.is_active();
-            text.set_text(&format!("{} {title}", if open { "▾" } else { "▸" }));
+            chevron.set_icon_name(Some(if open {
+                "pan-down-symbolic"
+            } else {
+                "pan-end-symbolic"
+            }));
             child.set_visible(open);
             toggle.update_state(&[gtk::accessible::State::Expanded(Some(open))]);
         }
