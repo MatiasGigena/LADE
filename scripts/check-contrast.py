@@ -9,9 +9,9 @@ stylesheet crates/lade-desktop/src/assets/style.css. It checks that:
 - every colour of the syntax scheme (assets/code-scheme.xml) is the style.css token of the same
   name and value, and each syntax ink stays readable on the code surface, the diff fills and the
   selection overlay;
-- each specified ink/fill pair, alpha-composited onto the white surface as GTK draws it, meets
+- each specified ink/fill pair, alpha-composited onto the black surface as GTK draws it, meets
   WCAG 2.2 AA: 4.5:1 for functional text, 3:1 for required non-text indicators (control
-  boundaries, focus outline, the inverse focus ring of black buttons, journey markers).
+  boundaries, focus outline, the inverse focus ring of primary buttons, journey markers).
 
 This verifies token pairs only. It is not a rendered-surface measurement, an Orca pass or a
 blanket accessibility conformance claim; see scripts/sample-rendered-contrast.py for optional
@@ -79,7 +79,7 @@ def ratio(a, b):
 
 
 def solid(*layers):
-    """Composes token layers bottom-up onto the white surface."""
+    """Composes token layers bottom-up onto the black surface."""
     color = tokens['surface']
     for layer in layers:
         color = composite(tokens[layer] if isinstance(layer, str) else layer, color)
@@ -112,12 +112,7 @@ for attribute, value in re.findall(r'(foreground|background)="([^"]+)"', scheme)
 syntax_inks = sorted(set(re.findall(r'foreground="(\w+)"', scheme)))
 
 TEXT, NON_TEXT = 4.5, 3.0
-text_fills = ['surface', 'fill_hover', 'fill_selected', 'fill_band', 'fill_inset', 'fill_user', 'canvas',
-              ['canvas', 'fill_hover'], 'fill_track', ['canvas', 'fill_track']]
-pairs = []
-for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']:
-    for fill in text_fills:
-        pairs.append((ink, fill if isinstance(fill, list) else [fill], TEXT, 'text'))
+pairs = [(ink, ['surface'], TEXT, 'text') for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']]
 pairs += [
     ('add_ink', ['add_fill'], TEXT, 'text'),
     ('add_ink', ['surface'], TEXT, 'text'),
@@ -130,30 +125,19 @@ pairs += [
     ('ink_primary', ['add_fill', 'text_selection'], TEXT, 'text'),
     ('ink_primary', ['del_fill', 'text_selection'], TEXT, 'text'),
     ('surface', ['ink_primary'], TEXT, 'text'),
-    ('surface', ['primary_hover'], TEXT, 'text'),
-    ('surface', ['primary_pressed'], TEXT, 'text'),
     ('del_ink', ['del_fill'], TEXT, 'text'),
-    ('ink_primary', ['fill_band', 'fill_hover'], TEXT, 'text'),
-    ('warn_ink', ['warn_fill', 'fill_hover'], TEXT, 'text'),
-    ('del_ink', ['del_fill', 'fill_hover'], TEXT, 'text'),
     *[(ink, fills, TEXT, 'syntax text') for ink in syntax_inks
       for fills in (['surface'], ['add_fill'], ['del_fill'], ['text_selection'],
                     ['add_fill', 'text_selection'], ['del_fill', 'text_selection'])],
     ('border_control', ['surface'], NON_TEXT, 'control boundary'),
-    ('border_control', ['fill_hover'], NON_TEXT, 'control boundary'),
-    ('border_control', ['fill_selected'], NON_TEXT, 'control boundary'),
     ('focus_ring', ['surface'], NON_TEXT, 'focus outline'),
-    ('focus_ring', ['fill_band'], NON_TEXT, 'focus outline'),
-    ('focus_ring', ['canvas'], NON_TEXT, 'focus outline'),
-    ('border_control', ['canvas'], NON_TEXT, 'control boundary'),
-    ('focus_ring', ['fill_selected'], NON_TEXT, 'focus outline'),
     ('focus_ring', ['warn_fill'], NON_TEXT, 'focus outline'),
     ('focus_ring', ['del_fill'], NON_TEXT, 'focus outline'),
-    ('surface', ['ink_primary'], NON_TEXT, 'inverse focus ring on black buttons'),
-    ('ink_optional', ['surface'], NON_TEXT, 'upcoming journey marker'),
-    ('ink_secondary', ['surface'], NON_TEXT, 'done journey marker'),
-    ('surface', ['ink_secondary'], NON_TEXT, 'check sign on a done journey marker'),
-    ('ink_primary', ['surface'], NON_TEXT, 'icon and marker ink'),
+    ('surface', ['ink_primary'], NON_TEXT, 'inverse focus ring on primary buttons'),
+    ('ink_primary', ['surface'], NON_TEXT, 'done journey marker'),
+    ('surface', ['ink_primary'], NON_TEXT, 'check sign on a done journey marker'),
+    ('ink_primary', ['surface'], NON_TEXT, 'icon, marker and outline ink'),
+    ('surface', ['ink_primary'], TEXT, 'text on inverted selection'),
 ]
 results = []
 for ink, fills, threshold, kind in pairs:

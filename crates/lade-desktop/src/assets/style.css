@@ -1,57 +1,32 @@
 
-@define-color surface #FFFFFF;
-@define-color ink_primary #000000;
-@define-color ink_secondary rgba(0, 0, 0, 0.64);
-@define-color ink_metadata rgba(0, 0, 0, 0.56);
-@define-color ink_optional rgba(0, 0, 0, 0.44);
-@define-color border_separator rgba(0, 0, 0, 0.10);
-@define-color border_control rgba(0, 0, 0, 0.44);
-@define-color fill_hover rgba(0, 0, 0, 0.05);
-@define-color fill_selected rgba(0, 0, 0, 0.09);
-@define-color focus_ring #000000;
-@define-color scrim rgba(0, 0, 0, 0.44);
-@define-color add_ink #146C43;
-@define-color add_fill #EEF8F1;
-@define-color del_ink #B42318;
-@define-color del_fill #FFF0EF;
-@define-color warn_ink #855000;
-@define-color warn_fill #FFF6DF;
-@define-color text_selection rgba(0, 0, 0, 0.22);
-@define-color primary_hover #262626;
-@define-color primary_pressed #3A3A3A;
-@define-color border_disabled rgba(0, 0, 0, 0.20);
-@define-color journey_connector rgba(0, 0, 0, 0.18);
-@define-color scrollbar_slider rgba(0, 0, 0, 0.28);
-@define-color scrollbar_slider_hover rgba(0, 0, 0, 0.44);
-@define-color shadow_popover rgba(0, 0, 0, 0.12);
-@define-color shadow_soft rgba(0, 0, 0, 0.06);
-@define-color shadow_sheet rgba(0, 0, 0, 0.08);
-@define-color border_soft rgba(0, 0, 0, 0.12);
-@define-color canvas #F3F3F3;
-@define-color fill_track rgba(0, 0, 0, 0.06);
-@define-color fill_band #F5F5F5;
-@define-color fill_inset #F7F7F7;
-@define-color fill_user #FAFAFA;
-@define-color syntax_comment #474747;
-@define-color syntax_string #1F4E79;
-@define-color syntax_constant #5B3A82;
+@define-color surface #000000;
+@define-color ink_primary #FFFFFF;
+@define-color ink_secondary rgba(255, 255, 255, 0.72);
+@define-color ink_metadata rgba(255, 255, 255, 0.62);
+@define-color ink_optional rgba(255, 255, 255, 0.50);
+@define-color border_control #FFFFFF;
+@define-color focus_ring #FFFFFF;
+@define-color add_ink #5BD08F;
+@define-color add_fill #0D2B1B;
+@define-color del_ink #FF8A7D;
+@define-color del_fill #3A100C;
+@define-color warn_ink #F5B940;
+@define-color warn_fill #2E2108;
+@define-color text_selection rgba(255, 255, 255, 0.16);
+@define-color border_disabled rgba(255, 255, 255, 0.40);
+@define-color scrollbar_slider rgba(255, 255, 255, 0.40);
+@define-color scrollbar_slider_hover rgba(255, 255, 255, 0.60);
+@define-color syntax_comment #BDBDBD;
+@define-color syntax_string #8CC2F0;
+@define-color syntax_constant #C9A8F2;
 
 
 window, window.background, dialog, stack, notebook > stack, scrolledwindow,
-viewport, list, listview {
+viewport, list, listview, textview, textview > text {
   background-color: @surface;
   color: @ink_primary;
 }
-window.lade-window, window.lade-window.background, .lade-root, .lade-root > stack,
-.rail-scroll, .rail-scroll > viewport, .rail-scroll list {
-  background-color: @canvas;
-}
 
-.sheet {
-  background-color: @surface;
-  border-radius: 12px;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft, 0 8px 24px @shadow_sheet;
-}
 .centre-region.sheet { margin: 0 6px 12px 0; }
 .centre-region.sheet.alone { margin-right: 12px; }
 notebook.inspector.sheet { margin: 0 12px 12px 6px; }
@@ -108,17 +83,18 @@ button {
   min-height: 26px;
   padding: 4px 12px;
   border-radius: 8px;
-  border: 1px solid @border_soft;
+  border: 1px solid @border_control;
   background-color: @surface;
   background-image: none;
-  box-shadow: 0 1px 2px @shadow_soft;
+  box-shadow: none;
   color: @ink_primary;
   font-weight: 500;
   text-shadow: none;
   -gtk-icon-shadow: none;
 }
-button:hover { background-color: @fill_band; }
-button:active, button:checked { background-color: @fill_selected; box-shadow: none; }
+button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+button:active, button:checked { background-color: @ink_primary; color: @surface; box-shadow: none; }
+button:checked label { color: @surface; }
 button:disabled {
   color: @ink_metadata;
   border-color: @border_disabled;
@@ -129,11 +105,9 @@ button.primary {
   background-color: @ink_primary;
   border-color: @ink_primary;
   color: @surface;
-  box-shadow: 0 1px 2px @shadow_popover, 0 4px 12px @shadow_sheet;
 }
 button.primary label { color: @surface; }
-button.primary:hover { background-color: @primary_hover; }
-button.primary:active { background-color: @primary_pressed; }
+button.primary:hover, button.primary:active { box-shadow: inset 0 0 0 2px @surface; }
 button.primary:focus:focus-visible {
   box-shadow: inset 0 0 0 2px @surface;
   outline: 2px solid @focus_ring;
@@ -155,7 +129,7 @@ button.quiet, button.icon-button {
   background-color: transparent;
   box-shadow: none;
 }
-button.quiet:hover, button.icon-button:hover { background-color: @fill_hover; }
+button.quiet:hover, button.icon-button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
 button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
 button.destructive-quiet:hover { background-color: @del_fill; }
 button.destructive-quiet:disabled, button.destructive-quiet:disabled label { color: @ink_metadata; }
@@ -168,8 +142,7 @@ menubutton.icon-button > button {
   background-color: transparent;
   box-shadow: none;
 }
-menubutton.icon-button > button:hover { background-color: @fill_hover; }
-menubutton.icon-button > button:checked { background-color: @fill_selected; }
+menubutton.icon-button > button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
 
 entry, scrolledwindow.text-input, spinbutton {
   min-height: 34px;
@@ -192,13 +165,13 @@ entry > text > placeholder, spinbutton > text > placeholder,
 entry:focus-within > text > placeholder { color: @ink_metadata; opacity: 1; }
 
 dropdown > button, dropdown > .dropdown, menubutton > button {
-  border: 1px solid @border_soft;
+  border: 1px solid @border_control;
   border-radius: 8px;
   background-color: @surface;
-  box-shadow: 0 1px 2px @shadow_soft;
+  box-shadow: none;
 }
 columnview > header > button { border-color: transparent; border-radius: 0; background-color: transparent; box-shadow: none; }
-columnview > header > button:hover { background-color: @fill_hover; }
+columnview > header > button:hover { box-shadow: inset 0 -1px 0 @ink_primary; }
 dropdown > button stack { background-color: transparent; }
 
 checkbutton check {
@@ -216,15 +189,16 @@ popover > contents {
   background-color: @surface;
   color: @ink_primary;
   border-radius: 12px;
-  border: 1px solid @border_soft;
-  box-shadow: 0 2px 6px @shadow_soft, 0 16px 40px @shadow_popover;
+  border: 1px solid @border_control;
+  box-shadow: none;
   padding: 12px;
 }
-popover > arrow { background-color: @surface; border-color: @border_separator; }
+popover > arrow { background-color: @surface; border-color: @border_control; }
 popover.menu > contents { padding: 6px; }
 popover modelbutton, popover row { border-radius: 6px; }
-popover modelbutton:hover, popover row:hover { background-color: @fill_hover; }
-popover row:selected { background-color: @fill_selected; color: @ink_primary; }
+popover modelbutton:hover, popover row:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+popover row:selected { background-color: @ink_primary; color: @surface; }
+popover row:selected label { color: @surface; }
 
 button.disclosure-toggle, button.list-action-button {
   padding: 4px 8px;
@@ -239,14 +213,13 @@ button.disclosure-toggle image.disclosure-chevron {
   color: @ink_metadata;
 }
 button.disclosure-toggle:checked { background-color: transparent; }
-button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
 button.list-action-button label { font-weight: 500; }
 .list-action-reason { padding-bottom: 4px; }
 separator.list-separator {
-  min-height: 1px;
-  background-color: @border_separator;
-  margin-top: 8px;
-  margin-bottom: 8px;
+  min-height: 0;
+  background-color: transparent;
+  margin-top: 12px;
+  margin-bottom: 12px;
 }
 
 scrollbar { background-color: transparent; border: none; }
@@ -261,19 +234,16 @@ paned.horizontal > separator {
   padding: 0 6px;
   box-shadow: none;
 }
-separator.region-divider { background-color: @border_separator; min-width: 1px; }
 
 
 .empty-block { padding: 40px; }
 
 .inline-message { border-radius: 6px; padding: 8px 12px; }
-.inline-message.message-info { background-color: @fill_band; color: @ink_primary; }
+.inline-message.message-info { box-shadow: inset 0 0 0 1px @ink_primary; color: @ink_primary; }
 .inline-message.message-warning { background-color: @warn_fill; color: @warn_ink; }
 .inline-message.message-error { background-color: @del_fill; color: @del_ink; }
 .inline-message .message-sign { font-weight: 700; }
 .inline-message button.disclosure-toggle label, .inline-message .message-details { color: inherit; }
-.inline-message button.disclosure-toggle:hover,
-.inline-message button.disclosure-toggle:checked:hover { background-color: @fill_hover; }
 
 label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 
@@ -281,17 +251,15 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 .lade-header {
   min-height: 64px;
   padding: 0 24px;
-  background-color: @canvas;
 }
 .brand { min-width: 0; }
 .compact .lade-header { padding: 0 12px; }
 .nav button.nav-tab { padding: 4px 14px; min-height: 26px; }
 .connection { font-size: 13px; }
 .search {
-  border: 1px solid @border_soft;
+  border: 1px solid @border_control;
   border-radius: 8px;
   background-color: @surface;
-  box-shadow: 0 1px 2px @shadow_soft;
 }
 .search:focus-within { border-color: @focus_ring; box-shadow: inset 0 0 0 1px @focus_ring; }
 .search entry, .search entry:focus-within {
@@ -310,8 +278,7 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   background-color: transparent;
   box-shadow: none;
 }
-.search dropdown > button:hover { background-color: @fill_hover; }
-.search dropdown > button:focus:focus-visible { outline: none; background-color: @fill_selected; }
+.search dropdown > button:focus:focus-visible { outline: none; box-shadow: inset 0 0 0 1px @focus_ring; }
 .search-results > contents { padding: 12px; }
 .search-popover > contents { padding: 8px; }
 .result-row { padding: 4px 8px; }
@@ -321,7 +288,7 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   min-height: 32px;
   border-radius: 9999px;
   background-color: @surface;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft;
+  box-shadow: inset 0 0 0 1px @ink_primary;
   font-size: 13px;
   font-weight: 600;
 }
@@ -332,15 +299,12 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   margin: 0 12px 8px 12px;
   border-radius: 10px;
   background-color: @surface;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft;
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
 .notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
 
-.region-bar {
-  padding: 0 8px 8px 8px;
-  background-color: @canvas;
-}
+.region-bar { padding: 0 8px 8px 8px; }
 .region-bar .segmented { margin: 0 auto 0 0; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
@@ -366,12 +330,13 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   box-shadow: none;
   border: none;
 }
-.objective-list > row:hover { background-color: @fill_hover; }
-.objective-list > row:selected {
-  background-color: @surface;
-  color: @ink_primary;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 3px @shadow_sheet;
+.objective-list > row:hover, .file-list > row:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+.objective-list > row:selected, .file-list > row:selected {
+  background-color: @ink_primary;
+  color: @surface;
+  box-shadow: none;
 }
+.objective-list > row:selected label, .file-list > row:selected label { color: @surface; }
 .objective-list > row:selected .objective-title { font-weight: 600; }
 .objective-title { font-weight: 500; }
 
@@ -393,12 +358,12 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   font-weight: 700;
   padding: 0;
 }
-.journey-dot.done { background-color: @ink_secondary; border-color: transparent; color: @surface; }
+.journey-dot.done { background-color: @ink_primary; border-color: transparent; color: @surface; }
 .journey-dot.current { background-color: @ink_primary; border-color: @ink_primary; }
-.journey-dot.upcoming { border-color: @ink_optional; background-color: @surface; }
+.journey-dot.upcoming { border-color: @ink_primary; background-color: @surface; }
 .journey-label { color: @ink_secondary; font-size: 13px; }
 .journey-label.current { color: @ink_primary; font-weight: 600; }
-.journey-connector { min-height: 1px; min-width: 24px; background-color: @journey_connector; }
+.journey-connector { min-height: 1px; min-width: 24px; background-color: @ink_optional; }
 
 .basis-selector > button { min-width: 220px; }
 .version-line { padding: 0; }
@@ -409,33 +374,21 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   margin: 0 0 4px 0;
   min-height: 32px;
 }
-.file-list > row:hover { background-color: @fill_hover; }
-.file-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
 .file-status { color: @ink_metadata; font-weight: 600; min-width: 12px; }
 .file-name { font-size: 13px; font-weight: 500; }
 .file-row .numeric { font-size: 12px; }
 .file-directory { font-size: 12px; }
 
-.viewer { border: 1px solid @border_soft; border-radius: 10px; }
-.viewer-toolbar {
-  padding: 8px 12px;
-  border-bottom: 1px solid @border_separator;
-  background-color: @fill_inset;
-  border-radius: 10px 10px 0 0;
-}
+.viewer { border: 1px solid @border_control; border-radius: 10px; }
+.viewer-toolbar { padding: 8px 12px; }
 .viewer-path { font-weight: 500; }
-.selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
+.selection-line { padding: 6px 12px; }
 .viewer-message { padding: 24px; }
-.viewer-footer {
-  padding: 8px 12px;
-  border-top: 1px solid @border_separator;
-  background-color: @fill_inset;
-  border-radius: 0 0 10px 10px;
-}
+.viewer-footer { padding: 8px 12px; }
 .segmented {
-  background-color: @fill_track;
   border-radius: 10px;
   padding: 2px;
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
 .segmented button {
   min-height: 24px;
@@ -447,12 +400,11 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   color: @ink_secondary;
   font-weight: 500;
 }
-.segmented button:hover { background-color: @fill_hover; color: @ink_primary; }
+.segmented button:hover { box-shadow: none; color: @ink_primary; }
 .segmented button:checked {
-  background-color: @surface;
-  border-color: @border_soft;
-  box-shadow: 0 1px 3px @shadow_sheet;
-  color: @ink_primary;
+  background-color: @ink_primary;
+  border-color: @ink_primary;
+  color: @surface;
   font-weight: 600;
 }
 .segmented button:focus:focus-visible { outline-offset: 0; }
@@ -466,7 +418,6 @@ textview.code-view, textview.code-view > text {
 textview.code-view border.left, textview.code-view gutter {
   background-color: @surface;
   color: @ink_metadata;
-  border-right: 1px solid @border_separator;
 }
 .gutter-number { color: @ink_metadata; font-family: monospace; font-size: 13px; }
 .gutter-sign { font-family: monospace; font-size: 13px; }
@@ -479,9 +430,9 @@ notebook.inspector, notebook.inspector > header {
 }
 notebook.inspector > header { padding: 20px 24px 4px 24px; }
 notebook.inspector > header > tabs {
-  background-color: @fill_track;
   border-radius: 10px;
   padding: 2px;
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
 notebook.inspector > header > tabs > tab {
   padding: 4px 12px;
@@ -495,21 +446,21 @@ notebook.inspector > header > tabs > tab {
   font-weight: 500;
   outline-offset: 0;
 }
-notebook.inspector > header > tabs > tab:hover { color: @ink_primary; background-color: @fill_hover; }
+notebook.inspector > header > tabs > tab:hover { color: @ink_primary; }
 notebook.inspector > header > tabs > tab:checked {
-  color: @ink_primary;
-  background-color: @surface;
-  border-color: @border_soft;
-  box-shadow: 0 1px 3px @shadow_sheet;
+  color: @surface;
+  background-color: @ink_primary;
+  border-color: @ink_primary;
   font-weight: 600;
 }
+notebook.inspector > header > tabs > tab:checked label { color: @surface; }
 notebook.inspector > stack { background-color: @surface; }
 .inspector-page { padding: 20px 24px 32px 24px; }
 .field-key { min-width: 88px; }
 image.info-sign { color: @ink_metadata; }
-.evidence-row { padding: 12px 0; border-bottom: 1px solid @border_separator; }
+.evidence-row { padding: 12px 0; }
 .output {
-  background-color: @fill_inset;
+  box-shadow: inset 0 0 0 1px @ink_primary;
   border-radius: 6px;
   padding: 8px;
   margin-top: 4px;
@@ -519,12 +470,12 @@ image.info-sign { color: @ink_metadata; }
   padding: 12px;
   border-radius: 12px;
   background-color: @surface;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 3px @shadow_soft;
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
 .draft-reference { font-weight: 500; }
 .draft button.destructive-quiet { margin-left: -12px; }
 .excerpt {
-  background-color: @fill_inset;
+  box-shadow: inset 0 0 0 1px @ink_primary;
   border-radius: 6px;
   padding: 8px;
   color: @ink_secondary;
@@ -548,11 +499,7 @@ image.info-sign { color: @ink_metadata; }
 
 
 .activity { padding: 32px 32px 24px 32px; }
-.agent-setup {
-  border: 1px solid @border_separator;
-  border-radius: 8px;
-  padding: 16px;
-}
+.agent-setup { padding: 16px 0; }
 .transcript > row.activity-item {
   padding: 10px 14px;
   margin: 0 0 12px 0;
@@ -564,14 +511,13 @@ image.info-sign { color: @ink_metadata; }
 .transcript .bubble {
   padding: 10px 14px;
   border-radius: 14px 14px 4px 14px;
-  background-color: @fill_band;
+  background-color: @ink_primary;
+  color: @surface;
 }
-.transcript > row.from-tool, .transcript > row.from-system {
-  background-color: @fill_inset;
-  box-shadow: inset 0 0 0 1px @border_separator;
+.transcript .bubble label { color: @surface; }
+.transcript > row.from-tool, .transcript > row.from-system, .transcript > row.from-thinking {
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
-.transcript > row.from-tool:hover, .transcript > row.from-system:hover { background-color: @fill_inset; }
-.transcript > row.from-thinking { box-shadow: inset 0 0 0 1px @border_separator; }
 .role { font-size: 13px; }
 .activity-text { margin-top: 2px; }
 .composer {
@@ -579,11 +525,9 @@ image.info-sign { color: @ink_metadata; }
   padding: 10px 12px 10px 12px;
   border-radius: 14px;
   background-color: @surface;
-  box-shadow: 0 0 0 1px @border_soft, 0 1px 2px @shadow_soft, 0 8px 24px @shadow_sheet;
+  box-shadow: inset 0 0 0 1px @ink_primary;
 }
-.composer:focus-within {
-  box-shadow: 0 0 0 2px @focus_ring, 0 1px 2px @shadow_soft, 0 8px 24px @shadow_sheet;
-}
+.composer:focus-within { box-shadow: inset 0 0 0 2px @focus_ring; }
 .composer scrolledwindow.text-input, .composer scrolledwindow.text-input:focus-within {
   border-color: transparent;
   box-shadow: none;
@@ -593,20 +537,15 @@ image.info-sign { color: @ink_metadata; }
 window.lade-dialog { background-color: @surface; border-radius: 12px; }
 .dialog-content { padding: 24px 24px 20px 24px; }
 .dialog-title { font-size: 18px; font-weight: 600; }
-.dialog-footer {
-  padding: 12px 24px;
-  border-top: 1px solid @border_separator;
-  background-color: @fill_band;
-  border-radius: 0 0 12px 12px;
-}
+.dialog-footer { padding: 4px 24px 24px 24px; }
 .field-label { font-size: 13px; font-weight: 500; color: @ink_secondary; }
-.confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
+.confirm-item { padding: 8px 0; }
 .limited-error > .error-box { margin-top: 4px; }
 
 
 .terminal-pane { padding: 32px; }
 .compact .terminal-pane { padding: 16px; }
-.terminal-frame { border: 1px solid @border_soft; border-radius: 10px; }
+.terminal-frame { border: 1px solid @border_control; border-radius: 10px; }
 textview.terminal-view, textview.terminal-view > text {
   background-color: @surface;
   color: @ink_primary;

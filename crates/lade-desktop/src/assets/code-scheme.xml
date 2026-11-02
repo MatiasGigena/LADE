@@ -2,9 +2,9 @@
 <style-scheme id="lade-code" name="LADE code" version="1.0">
   <description>Restrained syntax colours from the LADE visual tokens.</description>
 
-  <color name="syntax_comment" value="#474747"/>
-  <color name="syntax_string" value="#1F4E79"/>
-  <color name="syntax_constant" value="#5B3A82"/>
+  <color name="syntax_comment" value="#BDBDBD"/>
+  <color name="syntax_string" value="#8CC2F0"/>
+  <color name="syntax_constant" value="#C9A8F2"/>
 
   <style name="def:comment" foreground="syntax_comment" italic="true"/>
   <style name="def:shebang" foreground="syntax_comment" italic="true"/>

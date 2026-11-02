@@ -654,7 +654,7 @@ mod tests {
                 "{name} = {value} parses as a colour"
             );
         }
-        assert_eq!(token("add_ink"), "#146C43");
+        assert_eq!(token("add_ink"), "#5BD08F");
         assert_eq!(token("missing_token"), "black");
     }
 }
