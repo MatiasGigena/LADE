@@ -491,6 +491,7 @@ image.info-sign { color: @ink_metadata; }
   color: @surface;
 }
 .transcript .bubble label { color: @surface; }
+.transcript .bubble label > selection { background-color: @surface; color: @ink_primary; }
 .role { font-size: 13px; }
 .activity-text { margin-top: 2px; }
 .composer {
