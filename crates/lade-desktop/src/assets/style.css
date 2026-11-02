@@ -42,6 +42,8 @@ label:disabled { color: @ink_metadata; }
 row:focus:focus-visible, textview:focus:focus-visible, label:focus:focus-visible {
   outline-offset: -2px;
 }
+.objective-list > row:selected:focus:focus-visible, .file-list > row:selected:focus:focus-visible,
+popover row:selected:focus:focus-visible { outline-color: @surface; }
 label.objective-heading:focus:focus-visible { outline-offset: 4px; border-radius: 4px; }
 entry:focus-within, spinbutton:focus-within, scrolledwindow.text-input:focus-within {
   outline: none;
