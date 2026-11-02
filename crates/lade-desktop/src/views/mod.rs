@@ -856,6 +856,8 @@ impl App {
         }
         if changes.contains(&Change::Layout) {
             self.render_layout();
+        } else if changes.contains(&Change::Selection) {
+            self.sync_inspector();
         }
         if changes.iter().any(|c| {
             matches!(
@@ -993,6 +995,41 @@ impl App {
         self.controller.set_layout_width(width);
     }
 
+    /// Without a selected Objective the wide inspector would be an empty column.
+    fn inspector_has_content(&self) -> bool {
+        let state = self.store.state();
+        state.ui.layout == LayoutClass::Compact || state.ui.selected.is_some()
+    }
+
+    fn sync_inspector(&self) {
+        let (class, region, details) = {
+            let state = self.store.state();
+            (
+                state.ui.layout,
+                state.ui.compact_region,
+                state.ui.compact_details,
+            )
+        };
+        let shown =
+            layout::composition(class, region, details).inspector && self.inspector_has_content();
+        if shown == self.inspector.root.is_visible() {
+            return;
+        }
+        self.show_inspector(shown);
+        if shown && class != LayoutClass::Compact {
+            self.place_wide_panes();
+        }
+    }
+
+    fn show_inspector(&self, shown: bool) {
+        self.inspector.root.set_visible(shown);
+        if shown {
+            self.centre_region.remove_css_class("alone");
+        } else {
+            self.centre_region.add_css_class("alone");
+        }
+    }
+
     fn place_wide_panes(&self) {
         let sizes = self.sizes.get();
         self.paned.set_position(sizes.rail);
@@ -1000,6 +1037,7 @@ impl App {
         let inspector = sizes.inspector;
         glib::idle_add_local_once(move || {
             right.set_position(right.max_position() - inspector);
+            right.queue_resize();
         });
     }
 
@@ -1016,7 +1054,7 @@ impl App {
         let focus_region = self.focused_region();
         self.rail.root.set_visible(c.rail);
         self.centre_region.set_visible(c.centre);
-        self.inspector.root.set_visible(c.inspector);
+        self.show_inspector(c.inspector && self.inspector_has_content());
         self.right.set_visible(c.centre || c.inspector);
         self.region_bar.set_visible(c.region_switches);
         self.header.set_compact(c.compact_header);

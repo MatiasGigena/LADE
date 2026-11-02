@@ -261,10 +261,16 @@ impl Workbench {
         self.none.append(&if board_empty {
             first_objective_state(&self.controller)
         } else {
+            let create = widgets::button("New Objective", &[]);
+            set_focus_key(&create, "centre:new-objective");
+            create.set_sensitive(connected);
+            let opener = self.controller.clone();
+            create.connect_clicked(move |b| dialogs::new_objective(b, &opener));
             widgets::empty_state(
                 "Select an Objective",
-                "Choose one from Objectives to inspect its Change Set, evidence and feedback.",
-                None,
+                "Choose one from Objectives to inspect its Change Set, evidence and feedback, \
+                 or start a new one.",
+                Some(&create),
                 None,
             )
         });
