@@ -41,7 +41,7 @@ Units below are logical pixels at 100% scaling. They are initial layout targets;
 | Header | 64 high, 24 horizontal inset, 16 between groups | On the black field; no divider. Navigation is a segmented control |
 | Objectives | 264 wide, adjustable approximately 224–280 | On the black field; 16 inset; groups 24 apart; titles, group labels and the archive toggle share one text edge |
 | Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | No outline or fill of its own; 12 from the window's bottom edge and 6 from the inspector; dominant reading area, not a grid of unrelated cards |
-| Right inspector | 344 wide, adjustable approximately 280–360; 24 inset, sections 32 apart | Beside the work area with no rule between them, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area takes the full width |
+| Right inspector | 344 wide, adjustable approximately 280–360; 20 inset, sections 32 apart; at the tight 280 width the tabs and their padding must still fit | Beside the work area with no rule between them, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area takes the full width |
 | Changed-file list inside center | Approximately 192 wide when center permits | Flat rows: file name on the first line, directory and line counts on the second |
 | Code/diff viewport | Remaining center width | No edge; path toolbar, gutters and footer unruled and unfilled, aligned to the work area's text edge; semantic diff fills only |
 
