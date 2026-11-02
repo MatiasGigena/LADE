@@ -17,7 +17,7 @@ use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
 
 fn labelled(name: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let unit = vbox(space::TIGHT);
-    unit.append(&label(name, &["meta"]));
+    unit.append(&label(name, &["field-label"]));
     unit.append(control);
     unit
 }

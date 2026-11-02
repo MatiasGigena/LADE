@@ -268,7 +268,7 @@ pub fn text_field(
 ) -> gtk::Box {
     let unit = vbox(space::TIGHT);
     unit.add_css_class("text-field");
-    unit.append(&label(label_text, &["meta"]));
+    unit.append(&label(label_text, &["field-label"]));
     set_accessible_label(view, label_text);
     unit.append(&placeholder_text(view, placeholder, min, max));
     unit
@@ -784,14 +784,22 @@ impl Dialog {
             .build();
         window.set_transient_for(parent.as_ref());
         window.add_css_class("lade-dialog");
-        let outer = vbox(space::SECTION);
-        outer.add_css_class("dialog-content");
+        let outer = vbox(0);
+        let content = vbox(space::SECTION);
+        content.add_css_class("dialog-content");
+        content.set_vexpand(true);
+        content.append(&heading(title, "dialog-title"));
         let body = vbox(space::GROUP);
-        outer.append(&body);
+        content.append(&body);
         let error = vbox(0);
-        outer.append(&error);
+        content.append(&error);
+        outer.append(&content);
         let buttons = hbox(space::ITEM);
-        buttons.set_halign(gtk::Align::End);
+        buttons.add_css_class("dialog-footer");
+        buttons.set_halign(gtk::Align::Fill);
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        buttons.append(&spacer);
         outer.append(&buttons);
         window.set_child(Some(&outer));
         install_close_shortcut(&window);

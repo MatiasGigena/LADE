@@ -569,7 +569,15 @@ image.info-sign { color: @ink_metadata; }
 
 
 window.lade-dialog { background-color: @surface; border-radius: 12px; }
-.dialog-content { padding: 24px; }
+.dialog-content { padding: 24px 24px 20px 24px; }
+.dialog-title { font-size: 18px; font-weight: 600; }
+.dialog-footer {
+  padding: 12px 24px;
+  border-top: 1px solid @border_separator;
+  background-color: @fill_band;
+  border-radius: 0 0 12px 12px;
+}
+.field-label { font-size: 13px; font-weight: 500; color: @ink_secondary; }
 .confirm-item { padding: 8px 0; border-bottom: 1px solid @border_separator; }
 .limited-error > .error-box { margin-top: 4px; }
 
