@@ -578,16 +578,29 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     symbol_label.set_valign(gtk::Align::Start);
     symbol_label.set_tooltip_text(Some(status));
     content.append(&symbol_label);
-    let text = vbox(space::TIGHT);
-    let path = label(&file.path.display, &["file-name"]);
-    text.append(&path);
+    let text = vbox(0);
+    text.set_hexpand(true);
+    let (directory, name) = match file.path.display.rsplit_once('/') {
+        Some((directory, name)) => (Some(directory), name),
+        None => (None, file.path.display.as_str()),
+    };
+    text.append(&label(name, &["file-name"]));
+    let second = hbox(space::ITEM);
+    let directory = widgets::line_label(
+        directory.unwrap_or_default(),
+        &["meta", "file-directory"],
+        gtk::pango::EllipsizeMode::Start,
+    );
+    directory.set_tooltip_text(None);
+    directory.set_hexpand(true);
+    second.append(&directory);
     let detail = if file.binary {
-        let l = label("binary", &["meta"]);
-        l.upcast::<gtk::Widget>()
+        label("binary", &["meta"]).upcast::<gtk::Widget>()
     } else {
         widgets::counts(file.added, file.removed).upcast::<gtk::Widget>()
     };
-    text.append(&detail);
+    second.append(&detail);
+    text.append(&second);
     if file.filtered {
         text.append(&label("filtered (LFS) — raw bytes, unsupported", &["meta"]));
     }

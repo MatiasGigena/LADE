@@ -391,14 +391,16 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 
 .file-list > row {
   border-radius: 6px;
-  padding: 8px 12px;
-  margin: 0 0 4px 0;
+  padding: 6px 10px;
+  margin: 0 0 2px 0;
   min-height: 32px;
 }
 .file-list > row:hover { background-color: @fill_hover; }
 .file-list > row:selected { background-color: @fill_selected; color: @ink_primary; }
 .file-status { color: @ink_metadata; font-weight: 600; min-width: 12px; }
-.file-name { font-size: 13px; }
+.file-name { font-size: 13px; font-weight: 500; }
+.file-row .numeric { font-size: 12px; }
+.file-directory { font-size: 12px; }
 
 .viewer { border: 1px solid @border_separator; border-radius: 6px; }
 .viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
