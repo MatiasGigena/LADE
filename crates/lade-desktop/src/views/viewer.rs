@@ -160,20 +160,20 @@ impl Viewer {
         buffer.set_highlight_matching_brackets(false);
         buffer.set_style_scheme(code_scheme().as_ref());
         let table = buffer.tag_table();
-        for (name, fill) in [
-            ("add", "add_fill"),
-            ("del", "del_fill"),
-            ("sep", "fill_band"),
-        ] {
-            let tag = gtk::TextTag::builder()
-                .name(name)
-                .paragraph_background(token(fill))
-                .build();
-            if name == "sep" {
-                tag.set_foreground(Some(token("ink_metadata")));
-            }
-            table.add(&tag);
+        for (name, fill) in [("add", "add_fill"), ("del", "del_fill")] {
+            table.add(
+                &gtk::TextTag::builder()
+                    .name(name)
+                    .paragraph_background(token(fill))
+                    .build(),
+            );
         }
+        table.add(
+            &gtk::TextTag::builder()
+                .name("sep")
+                .foreground(token("ink_metadata"))
+                .build(),
+        );
         buffer.connect_highlight_updated(|buffer, _, _| {
             let table = buffer.tag_table();
             if let Some(sep) = table.lookup("sep")
@@ -646,14 +646,7 @@ mod tests {
 
     #[test]
     fn diff_colours_are_the_stylesheet_tokens() {
-        for name in [
-            "add_ink",
-            "del_ink",
-            "add_fill",
-            "del_fill",
-            "fill_band",
-            "ink_metadata",
-        ] {
+        for name in ["add_ink", "del_ink", "add_fill", "del_fill", "ink_metadata"] {
             let value = token(name);
             assert_ne!(value, "black", "{name} is a style.css token");
             assert!(

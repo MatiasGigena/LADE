@@ -97,9 +97,10 @@ pub struct Header {
 }
 
 fn draw_mark(area: &gtk::DrawingArea) {
-    area.set_draw_func(|_, cr, width, height| {
+    area.set_draw_func(|area, cr, width, height| {
         let (w, h) = (f64::from(width), f64::from(height));
-        cr.set_source_rgb(0.0, 0.0, 0.0);
+        let ink = area.color();
+        cr.set_source_rgb(ink.red().into(), ink.green().into(), ink.blue().into());
         cr.set_line_join(gtk::cairo::LineJoin::Miter);
         cr.set_line_width(2.4);
         cr.move_to(w / 2.0, 2.0);
