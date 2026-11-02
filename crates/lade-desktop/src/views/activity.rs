@@ -770,9 +770,13 @@ impl Activity {
         let row = gtk::ListBoxRow::new();
         row.set_activatable(false);
         row.add_css_class("activity-item");
-        if item.role == ActivityRole::User {
-            row.add_css_class("from-user");
-        }
+        row.add_css_class(match item.role {
+            ActivityRole::User => "from-user",
+            ActivityRole::Assistant => "from-agent",
+            ActivityRole::Thinking => "from-thinking",
+            ActivityRole::Tool => "from-tool",
+            ActivityRole::System => "from-system",
+        });
         let content = vbox(space::TIGHT);
         let meta = hbox(space::ITEM);
         let role = format::role_label(item.role, item.tool_name.as_deref());
