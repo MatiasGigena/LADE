@@ -88,10 +88,11 @@ entry > text > selection:focus-within {
 }
 
 
-.wordmark { font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
-.objective-heading, .empty-title { font-size: 24px; font-weight: 600; }
-.section-title, .empty-heading, .popover-heading { font-size: 16px; font-weight: 600; }
-.group-heading { font-size: 13px; font-weight: 600; color: @ink_metadata; }
+.wordmark { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+.objective-heading, .empty-title { font-size: 28px; font-weight: 700; letter-spacing: -0.4px; }
+.section-title, .empty-heading, .popover-heading { font-size: 16px; font-weight: 600; letter-spacing: -0.1px; }
+.empty-heading { font-size: 18px; }
+.group-heading { font-size: 12px; font-weight: 600; letter-spacing: 0.3px; color: @ink_metadata; }
 .meta { font-size: 13px; color: @ink_metadata; }
 .secondary { color: @ink_secondary; }
 .strong { font-weight: 600; }
@@ -415,11 +416,21 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .file-directory { font-size: 12px; }
 
 .viewer { border: 1px solid @border_soft; border-radius: 10px; }
-.viewer-toolbar { padding: 8px 12px; border-bottom: 1px solid @border_separator; }
+.viewer-toolbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid @border_separator;
+  background-color: @fill_inset;
+  border-radius: 10px 10px 0 0;
+}
 .viewer-path { font-weight: 500; }
 .selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
 .viewer-message { padding: 24px; }
-.viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
+.viewer-footer {
+  padding: 8px 12px;
+  border-top: 1px solid @border_separator;
+  background-color: @fill_inset;
+  border-radius: 0 0 10px 10px;
+}
 .segmented {
   background-color: @fill_track;
   border-radius: 10px;
