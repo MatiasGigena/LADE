@@ -439,8 +439,8 @@ notebook.inspector > header {
   border-bottom: 1px solid @border_separator;
 }
 notebook.inspector > header > tabs > tab {
-  padding: 14px 2px 12px 2px;
-  margin: 0 16px 0 0;
+  padding: 14px 0 12px 0;
+  margin: 0 20px 0 0;
   min-height: 0;
   border: none;
   background-color: transparent;

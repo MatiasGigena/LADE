@@ -213,7 +213,7 @@ impl Header {
         let search_entry = gtk::SearchEntry::builder()
             .placeholder_text(search_placeholder(SCOPES[0]))
             .width_chars(12)
-            .max_width_chars(34)
+            .max_width_chars(24)
             .build();
         search_entry.set_hexpand(false);
         set_accessible_label(&search_entry, "Global search");
