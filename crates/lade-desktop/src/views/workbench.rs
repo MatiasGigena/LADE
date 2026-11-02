@@ -420,6 +420,7 @@ impl Workbench {
         widgets::clear(&self.change_heading);
         widgets::clear(&self.version);
         widgets::clear(&self.files_status);
+        self.files_status.set_visible(false);
         widgets::clear(&self.no_changes);
         self.no_changes.set_visible(false);
         self.body.set_visible(true);
@@ -443,12 +444,14 @@ impl Workbench {
         self.change_heading.append(&title);
         match &changes {
             Load::NotLoaded | Load::Loading => {
+                self.files_status.set_visible(true);
                 self.files_status
                     .append(&label("Loading Change Set…", &["meta"]));
                 return;
             }
             Load::Failed(message) => {
                 // A plain sentence ("Couldn't load Change Set. …"), never an error code.
+                self.files_status.set_visible(true);
                 self.files_status
                     .append(&inline_message(MessageKind::Error, message, None));
                 let retry = widgets::button("Retry", &[]);
