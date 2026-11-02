@@ -552,16 +552,22 @@ impl Inspector {
         for c in &sorted {
             let row = vbox(space::TIGHT);
             row.add_css_class("evidence-row");
-            row.append(&label(
+            let title_line = hbox(space::ITEM);
+            let title = label(
                 &format!(
                     "Candidate {} · {}",
                     c.ordinal,
                     format::candidate_status(c.status)
                 ),
                 &["strong"],
-            ));
-            let detail_line = hbox(space::ITEM);
-            detail_line.append(&label(
+            );
+            title.set_hexpand(true);
+            title_line.append(&title);
+            let counts = widgets::counts(c.added, c.removed);
+            counts.set_valign(gtk::Align::Center);
+            title_line.append(&counts);
+            row.append(&title_line);
+            row.append(&label(
                 &format!(
                     "{} on {}@{} · {} file{}",
                     c.commit.short(),
@@ -570,10 +576,8 @@ impl Inspector {
                     c.files,
                     if c.files == 1 { "" } else { "s" }
                 ),
-                &["meta", "mono"],
+                &["meta"],
             ));
-            detail_line.append(&widgets::counts(c.added, c.removed));
-            row.append(&detail_line);
             if c.base_target_commit != detail.integration_target.commit
                 && c.status == CandidateStatus::Current
             {
