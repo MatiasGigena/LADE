@@ -514,8 +514,14 @@ image.info-sign { color: @ink_metadata; }
   margin-top: 4px;
 }
 
-.draft { padding: 12px 0 16px 0; border-bottom: 1px solid @border_separator; }
+.draft {
+  padding: 12px;
+  border-radius: 12px;
+  background-color: @surface;
+  box-shadow: 0 0 0 1px @border_soft, 0 1px 3px @shadow_soft;
+}
 .draft-reference { font-weight: 500; }
+.draft button.destructive-quiet { margin-left: -12px; }
 .excerpt {
   background-color: @fill_inset;
   border-radius: 6px;
