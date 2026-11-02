@@ -1,6 +1,6 @@
 # LADE visual specification
 
-Status: visual implementation specification for review, based on the approved workbench and explicit developer corrections. Composition, neutral styling and removals are accepted. The **elevated neutral** revision (section 1, *Visual language*) replaces the original flat, divider-separated chrome with a canvas, raised sheets and soft shadows while keeping the color palette unchanged. Numerical dimensions and semantic color pairs below are **proposed implementation tokens**, not measurements extracted from the perspective mockup or already validated GTK rendering.
+Status: visual implementation specification for review, based on the approved workbench and explicit developer corrections. Composition, neutral styling and removals are accepted. The **black monochrome** revision (section 1, *Visual language*) replaces the light, gray-tiered chrome with one black field, white ink and inverted selections; the semantic diff and status hues keep their meaning, retuned for a dark ground. Numerical dimensions and semantic color pairs below are **proposed implementation tokens**, not measurements extracted from the perspective mockup or already validated GTK rendering.
 
 This document covers appearance only. It does not define lifecycle transitions, keyboard commands, permissions, IPC, storage or when actions become available. Those belong to the [workflow](docs/product/first-release-workflow.md), [UI interaction contracts](docs/product/ui-principles.md#interaction-and-accessibility-contracts), [architecture](architecture.md) and [implementation spec](docs/implementation/spec.md).
 
@@ -12,21 +12,21 @@ Use the [supplied Scandinavian skill](docs/product/assets/scandinavian-design.tx
 
 For this specification the final approved image in the conversation was visually inspected and the existing repository reference path/blob metadata checked. No claim of a fresh byte-for-byte download comparison, rendered GTK implementation or runtime visual/accessibility pass is made.
 
-### Visual language: elevated neutral
+### Visual language: black monochrome
 
-The palette stays exactly what it was: white, black, the neutral alpha ladder and the three semantic content pairs. What changed is how surfaces are built from it.
+LADE is drawn in two colors: a black surface and white ink. There are no gray surfaces, fills or tracks and no shadows. The three semantic content pairs (addition, deletion, warning) and the restrained syntax inks are the only hues.
 
-- **Canvas and sheets.** The window is a light neutral canvas. The header and the Objectives rail sit directly on it; the main work area and the inspector are white sheets with a 12-pixel radius, a hairline ring and a soft two-layer shadow. Regions are separated by the gap between sheets, not by 1-pixel rules.
-- **Depth carries state.** Raised means selected or active: the selected Objective is a white card on the canvas, the active segment of a segmented control is a white pill on a gray track, a primary action casts a slightly deeper shadow than a secondary one. Hover is a flat neutral fill and never adds elevation.
-- **One segmented control.** Navigation, inspector tabs, the Diff/Full file switch and the compact region switcher share one control: a gray track with the active item raised as a white pill.
-- **Soft controls.** Buttons and dropdowns use an 8-pixel radius, a light ring and a hairline shadow. Text fields keep a 3:1 boundary because their edge is what identifies them.
-- **Shadows are elevation, not decoration.** Every shadow is neutral black at low alpha and belongs to one of the elevation levels in section 4. No colored glows, gradients, textures or glass.
+- **One field.** The header, Objectives rail, work area and inspector all sit on the same black surface. Regions are separated by space and alignment alone: no rules, outlines or tinted panels mark where one region ends and the next begins.
+- **Selection inverts.** The selected Objective, the selected file, the active segment and the checked toggle are white with black text. Hover adds a 1-pixel white ring and never changes the fill. Keyboard focus is a 2-pixel white outline.
+- **Lines belong to things you act on.** A 1-pixel white edge marks controls and the units inside a region: buttons, fields, dropdowns, search, segmented tracks, the code viewer, the terminal, feedback drafts and their excerpts, tool output and the composer. Never a divider between sections, rows or a toolbar and its content.
+- **One segmented control.** Navigation, inspector tabs, the Diff/Full file switch and the compact region switcher share one outlined track with the active item inverted.
+- **Text keeps its ladder.** Secondary text, metadata and optional glyphs stay white at reduced alpha; that is typographic hierarchy, not a surface. No gradients, textures, glows or glass.
 
 ### Non-negotiable visual corrections
 
 - Header branding is the existing mark and **LADE**, with no subtitle.
 - No greetings, motivational copy, slogans or functionless cards. No bottom-left filler panel.
-- Objective rows have **no lateral border, inset stripe, pseudo-stripe, shadow rail or colored accent bar**. Hover is neutral light gray. The selected row's elevation is an even ring and shadow on all sides, never a one-sided edge.
+- Objective rows have **no lateral border, inset stripe, pseudo-stripe, shadow rail or colored accent bar**. Hover is an even white ring. The selected row is inverted on all sides, never a one-sided edge.
 - Profile is one circular avatar and **Matias Gigena**, vertically centered together. Use the supplied avatar or an existing labelled placeholder; do not invent a portrait or make sign-in part of this layout.
 - Keep comments, code references, evidence, error explanations and visible state. They are functional content, not ornament.
 - Preserve code/diff and state meaning through text, signs and appropriate semantic colors. Neutral chrome does not mean neutralizing all content.
@@ -37,12 +37,12 @@ Units below are logical pixels at 100% scaling. They are initial layout targets;
 
 | Region | Proposed wide-layout geometry | Treatment |
 | --- | --- | --- |
-| Header | 64 high, 24 horizontal inset, 16 between groups | On the canvas; no divider. Navigation is a segmented pill control |
-| Objectives | 264 wide, adjustable approximately 224–280 | On the canvas; 16 inset; groups 24 apart; titles, group labels and the archive toggle share one text edge |
-| Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | White sheet, 12 radius, 12 from the window's bottom edge and 6 from the inspector sheet; dominant reading area, not a grid of unrelated cards |
-| Right inspector | 344 wide, adjustable approximately 280–360; 24 inset, sections 32 apart | White sheet beside the work area, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area sheet takes the full width |
-| Changed-file list inside center | Approximately 192 wide when center permits | Flat rows inside the sheet: file name on the first line, directory and line counts on the second |
-| Code/diff viewport | Remaining center width | White, 10 radius, hairline ring; toolbar and footer on a faint inset fill; line gutters and semantic diff fills; no shadow (it is inside a sheet) |
+| Header | 64 high, 24 horizontal inset, 16 between groups | On the black field; no divider. Navigation is a segmented control |
+| Objectives | 264 wide, adjustable approximately 224–280 | On the black field; 16 inset; groups 24 apart; titles, group labels and the archive toggle share one text edge |
+| Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | No outline or fill of its own; 12 from the window's bottom edge and 6 from the inspector; dominant reading area, not a grid of unrelated cards |
+| Right inspector | 344 wide, adjustable approximately 280–360; 24 inset, sections 32 apart | Beside the work area with no rule between them, 12 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area takes the full width |
+| Changed-file list inside center | Approximately 192 wide when center permits | Flat rows: file name on the first line, directory and line counts on the second |
+| Code/diff viewport | Remaining center width | Black, 10 radius, 1-pixel white edge; toolbar, gutters and footer unruled and unfilled; semantic diff fills only |
 
 At a 1440-wide reference window the center receives approximately 820 pixels before internal padding. Preserve relative dominance rather than the exact photographed proportions. Header groups share a vertical centerline. Keep global search beside the profile; give search approximately 280–360 pixels in the wide layout. Align titles, list text and inspector labels to their own consistent left edges; inspector tabs and the content below them start on the same edge.
 
@@ -50,46 +50,38 @@ The existing Plan/Workbench/Activity navigation is a visual reference only: disp
 
 ### Narrow and scaled layouts
 
-At roughly 1100 logical pixels and below, use a compact version of the same workbench: reduce rail widths, present secondary rails in accessible collapsible/drawer surfaces, and keep the active code or feedback surface dominant. The compact region switcher is the same segmented pill control as navigation, on the canvas; the visible region is one sheet with 8-pixel gutters. At approximately 800 by 550 logical pixels, do not insist on three simultaneous fixed-width columns. Search remains reachable; the profile does not push navigation offscreen.
+At roughly 1100 logical pixels and below, use a compact version of the same workbench: reduce rail widths, present secondary rails in accessible collapsible/drawer surfaces, and keep the active code or feedback surface dominant. The compact region switcher is the same segmented control as navigation; the visible region keeps 8-pixel gutters. At approximately 800 by 550 logical pixels, do not insist on three simultaneous fixed-width columns. Search remains reachable; the profile does not push navigation offscreen.
 
 These are proposed responsive compositions, not a mobile-support promise. Do not remove functionality, shrink text below the type scale, clip actions or shrink the whole application with a visual transform. Let document content scroll within its viewport; allow deliberate horizontal scrolling for code. Long labels wrap or truncate with a way to inspect the full value under the functional contract. At 200% text/UI scaling, controls and focus must remain visible.
 
 ## 3. Color tokens
 
-Define semantic token names centrally; do not scatter visually similar gray literals across components. Set alpha on the color, not on a parent widget and all its descendants. The neutral ladder derives from the supplied skill; functional metadata uses a stronger rung than its optional 44% example.
+Define semantic token names centrally; do not scatter color literals across components. Set alpha on the color, not on a parent widget and all its descendants. There are no gray surface or fill tokens: anything that needs a fill uses surface, ink or a semantic pair.
 
 | Token | Proposed value | Use |
 | --- | --- | --- |
-| surface | `#FFFFFF` | Sheets, cards, popovers, dialogs and raised selections |
-| canvas | `#F3F3F3` | Window ground behind the header, rail and sheets |
-| ink.primary | `#000000` | Main text, important labels and icons |
-| ink.secondary | `rgba(0,0,0,0.64)` | Descriptions, readable supporting text |
-| ink.metadata | `rgba(0,0,0,0.56)` | Functional metadata; test on every actual fill |
-| ink.optional | `rgba(0,0,0,0.44)` | Optional glyphs only, not important small text |
-| border.separator | `rgba(0,0,0,0.10)` | Rules inside a sheet (evidence rows, toolbars), never the sole control/focus affordance |
-| border.soft | `rgba(0,0,0,0.12)` | Hairline ring of sheets, cards, buttons, dropdowns and the raised segment |
-| border.control | `rgba(0,0,0,0.44)` | Required text-field/checkbox boundary; at least 3:1 on every fill it sits on |
-| fill.track | `rgba(0,0,0,0.06)` | Track of segmented controls |
-| fill.hover | `rgba(0,0,0,0.05)` | Rows and quiet buttons |
-| fill.selected / pressed | `rgba(0,0,0,0.09)` | Selected rows and press feedback |
-| focus | `#000000` | At least 2-pixel full outline, 2-pixel offset where space permits |
-| primary fill / ink | `#000000` / `#FFFFFF` | Available primary action |
-| scrim | `rgba(0,0,0,0.44)` | Actual modal elevation only |
-| shadow.soft | `rgba(0,0,0,0.06)` | Hairline contact shadow (controls, cards) |
-| shadow.sheet | `rgba(0,0,0,0.08)` | Ambient shadow of sheets, the raised segment and the selected Objective |
-| shadow.popover | `rgba(0,0,0,0.12)` | Ambient shadow of popovers and the primary action |
+| surface | `#000000` | The whole window: header, rail, work area, inspector, popovers, dialogs; text on inverted selections |
+| ink.primary | `#FFFFFF` | Main text, icons, outlines of controls and units, inverted selections, primary action fill |
+| ink.secondary | `rgba(255,255,255,0.72)` | Descriptions, readable supporting text |
+| ink.metadata | `rgba(255,255,255,0.62)` | Functional metadata; test on every actual fill |
+| ink.optional | `rgba(255,255,255,0.50)` | Optional glyphs and journey connectors only, not important small text |
+| border.control | `#FFFFFF` | Edge of buttons, fields, dropdowns, search, the code viewer and terminal |
+| border.disabled | `rgba(255,255,255,0.40)` | Edge of a disabled control |
+| focus | `#FFFFFF` | At least 2-pixel full outline, 2-pixel offset where space permits |
+| primary fill / ink | `#FFFFFF` / `#000000` | Available primary action |
+| text selection | `rgba(255,255,255,0.16)` | Selected text, including over diff fills |
 
-White text needs an appropriate inverse focus treatment on black buttons. A selected Objective is raised as a white card plus text weight/state; keyboard focus uses the full outline. Selection, hover and focus must not collapse into the same appearance. A region divider is permitted; an Objective-side accent is not.
+Black text on a white primary button needs an inverse focus treatment. A selected Objective is inverted plus semibold; keyboard focus uses the full outline. Selection, hover and focus must not collapse into the same appearance. Region dividers are not used; an Objective-side accent is never.
 
 ### Semantic content candidates
 
 | Meaning | Proposed ink / background | Redundant visible encoding |
 | --- | --- | --- |
-| Addition / passed result | `#146C43` / `#EEF8F1` | `+` for diff lines; text/check for results |
-| Deletion / error | `#B42318` / `#FFF0EF` | `−` for diff lines; text/error sign |
-| Warning / stale context | `#855000` / `#FFF6DF` | Explicit label and warning sign |
+| Addition / passed result | `#5BD08F` / `#0D2B1B` | `+` for diff lines; text/check for results |
+| Deletion / error | `#FF8A7D` / `#3A100C` | `−` for diff lines; text/error sign |
+| Warning / stale context | `#F5B940` / `#2E2108` | Explicit label and warning sign |
 
-These are narrow semantic exceptions, not colored panel chrome. Syntax highlighting may encode syntax; restrict weight and saturation so it does not compete with feedback selections or diff signs. Never use only color to distinguish added/deleted text, failure, focus or an active control. Actual rendered contrast and theme interactions must be checked; passing computed color pairs is not full accessibility conformance.
+These are narrow semantic exceptions, not colored panel chrome. Syntax inks are `#BDBDBD` comments, `#8CC2F0` strings and `#C9A8F2` constants, each at least 4.5:1 on the code surface, both diff fills and the selection overlay. Syntax highlighting may encode syntax; restrict weight and saturation so it does not compete with feedback selections or diff signs. Never use only color to distinguish added/deleted text, failure, focus or an active control. Actual rendered contrast and theme interactions must be checked; passing computed color pairs is not full accessibility conformance.
 
 ## 4. Typography, spacing and shape
 
@@ -115,42 +107,40 @@ Spacing scale: **4, 8, 12, 16, 24, 32**. Use 4–8 within a label/value pair, 12
 LADE favors air over density where it costs no information:
 
 - **Whitespace groups.** A title sits closer to its own metadata (4) than to the next record (12 or more); groups of records sit 24 apart, inspector sections 32. Never spread lines evenly to fill a region.
-- **Words keep their inset.** Text stays at least 12 from the edge of any row, card or field, 16–24 from a panel edge and 32 from the work area sheet's edge; carry the same inset round the bottom, not just the top.
+- **Words keep their inset.** Text stays at least 12 from the edge of any row, card or field, 16–24 from a panel edge and 32 from the work area's edge; carry the same inset round the bottom, not just the top.
 - **Rows breathe.** Objective rows 10 by 12 padding with 2 between; file rows 8 by 12 with 4 between; evidence rows 12 vertical; code lines 3 above and below.
 - **Running text has leading and a measure.** Read-only prose (activity, intent, empty-state bodies) uses 1.3 line height; agent and system text wrap at about 88 characters, your messages at about 64. Editable fields keep the default leading so their bounded heights still show their text.
 - **Compact gives space back first.** Below the wide layout, insets drop to 16 and rows keep their padding.
 
-Shapes: 8-pixel radius for buttons, fields, rows and segments; 10 for segmented tracks and the code viewer; 12 for sheets, cards, popovers and dialogs; 14 for the activity composer. Status labels stay sign plus text, not pills. Cards appear only where a record is a unit the person acts on (a feedback draft, the composer); lists of peers stay flat rows inside their sheet. Default control height is 36, expanding for scaled text; icon-only hit areas are at least 32 by 32. Dense file rows begin around 32 high and Objective rows expand with their content.
+Shapes: 8-pixel radius for buttons, fields, rows and segments; 10 for segmented tracks and the code viewer; 12 for cards, popovers and dialogs; 14 for the activity composer. Status labels stay sign plus text, not pills. Cards appear only where a record is a unit the person acts on (a feedback draft, the composer); lists of peers stay flat, unruled rows. Default control height is 36, expanding for scaled text; icon-only hit areas are at least 32 by 32. Dense file rows begin around 32 high and Objective rows expand with their content.
 
-Elevation levels, all neutral black at low alpha:
+There is no elevation. State is carried by three treatments, in this order of strength:
 
-| Level | Shadow | Used by |
+| Treatment | Drawing | Used by |
 | --- | --- | --- |
-| 0 — flat | none | Rows, quiet buttons, hover, anything inside the code viewer |
-| 1 — contact | 1-pixel ring `border.soft` + `0 1px 2px shadow.soft` | Buttons, dropdowns, search, avatar, feedback drafts |
-| 2 — raised | ring + `0 1px 3px shadow.sheet` | Selected Objective, active segment |
-| 3 — sheet | ring + `0 1px 2px shadow.soft` + `0 8px 24px shadow.sheet` | Work area and inspector sheets, activity composer |
-| 4 — floating | ring + `0 2px 6px shadow.soft` + `0 16px 40px shadow.popover` | Popovers, menus; dialogs use the window manager's own |
+| Inverted | White fill, black text | Selected Objective and file, active segment and tab, checked toggle, your activity messages, the primary action |
+| Edged | 1-pixel white edge on black | Controls, the code viewer, terminal, drafts, excerpts, tool and system output, thinking, the composer, popovers, info messages |
+| Plain | Black, no edge | Regions, rows, quiet buttons, agent text |
 
-The primary action sits between levels 2 and 3 so the one next action reads first. No gradients, textures, colored glows or glass. Disabled and pressed controls drop to level 0.
+Hover adds a 1-pixel white ring to a plain or edged item and never changes its fill. Disabled controls use the disabled edge and metadata ink.
 
 ## 5. Component appearance
 
 | Component | Visual contract |
 | --- | --- |
-| Objective row | Title, brief description and compact state grouped together; borderless on the canvas; unselected titles medium weight; selected raised as a white card with semibold title; no lateral rule |
-| Header/search | On the canvas; clear but quiet brand; navigation as one segmented pill control; search a white level-1 field beside the aligned avatar/name group; no account greeting |
-| Tabs and modes | One segmented control: gray track, transparent peers in secondary ink, the active one a raised white pill in primary ink and semibold. Inspector tabs split the panel width evenly |
-| File list | Flat rows; file name first, directory dimmed below with change counts right-aligned beside it; full path in tooltip and accessible name; active fill; symbols distinguish file changes |
+| Objective row | Title, brief description and compact state grouped together; borderless; unselected titles medium weight; selected inverted with a semibold title; no lateral rule |
+| Header/search | On the black field; the mark drawn in ink; navigation as one segmented control; search an edged field beside the aligned avatar/name group; no account greeting |
+| Tabs and modes | One segmented control: an edged track, peers in secondary ink, the active one inverted and semibold. Inspector tabs split the panel width evenly |
+| File list | Flat rows; file name first, directory dimmed below with change counts right-aligned beside it; full path in tooltip and accessible name; selected row inverted; symbols distinguish file changes |
 | Code/diff | Stable line-number/sign gutters, monospaced alignment, restrained syntax; semantically colored changed lines; selection remains visible over diff fill |
 | Feedback reference | Compact file/range/version label above the comment text; no oversized author avatar or decorative quote card |
-| Feedback draft | One level-1 card per draft holding reference, excerpt, comment field, save state and Remove, all on the card's text edge |
+| Feedback draft | One edged card per draft holding reference, excerpt, comment field, save state and Remove, all on the card's text edge |
 | Feedback composer | Real input boundary, readable draft text and small save-state line; comments remain visible and do not obscure the selected code |
-| Activity transcript | No rule between items; items 12 apart. Your turns are right-aligned bubbles sized to their text; tool and system output in a full-width outlined inset block; thinking outlined; agent text plain, labelled *agent claim*, wrapped at a readable measure |
-| Activity composer | One level-3 card containing the borderless input, delivery mode, hint and Send; the focus ring surrounds the whole card |
-| Dialog | In-content heading, body, and actions in a tinted footer separated by a rule; primary action last |
+| Activity transcript | No rule between items; items 12 apart. Your turns are right-aligned inverted bubbles sized to their text; tool and system output in a full-width edged block; thinking edged; agent text plain, labelled *agent claim*, wrapped at a readable measure |
+| Activity composer | One edged card containing the borderless input, delivery mode, hint and Send; the focus ring surrounds the whole card |
+| Dialog | In-content heading, body, and actions at the bottom right with no rule or tint above them; primary action last |
 | Evidence | Aligned name/result rows (candidates and checks share one shape: title, value at the right, metadata beneath), inspectable details and explicit failure/stale/missing labels; coverage displayed as a metric, not a success check |
-| Primary/secondary actions | Black/white primary; quiet secondary with adequate affordance; consistent dimensions; no permanently emphasized unavailable Integrate |
+| Primary/secondary actions | White primary with black text; quiet secondary with adequate affordance; consistent dimensions; no permanently emphasized unavailable Integrate |
 | Error/warning | Readable local message near the relevant control; semantic sign and text; preserve room for correction rather than toast-only styling |
 | Empty/loading | Functional heading or progress plus the relevant action (Select an Objective offers New Objective); no empty side columns, illustrations, motivational copy or perpetual decorative animation |
 | Disclosure | Theme chevron in metadata ink beside a semibold secondary label; no text triangles |
@@ -170,7 +160,7 @@ Default to no animation for typing, selection, frequent navigation or status str
 
 IMP-002 establishes the initial native component visual sheet; later integrated screens reuse it. The sheet must include the workbench, Objective list, file/diff selection, feedback, evidence and action group with realistic long text and all relevant states.
 
-Capture the actual GTK application at 1440 by 900 and 1280 by 800 logical pixels, a compact window, and the supported desktop's real 200% text/UI scaling. The ignored `capture_fixture_views` test renders populated fixture views at 1440 by 900 and 800 by 550 into `LADE_CAPTURE_DIR` for before/after comparison; it does not replace the scaled and assistive-technology passes. These are review fixtures, not certified minimum hardware requirements. Review label/avatar vertical alignment, matched control dimensions, panel proportions, neutral grays, readable small text, full focus outlines, shadows that match their elevation level and are not clipped, and the absence of lateral Objective accents.
+Capture the actual GTK application at 1440 by 900 and 1280 by 800 logical pixels, a compact window, and the supported desktop's real 200% text/UI scaling. The ignored `capture_fixture_views` test renders populated fixture views at 1440 by 900 and 800 by 550 into `LADE_CAPTURE_DIR` for before/after comparison; it does not replace the scaled and assistive-technology passes. These are review fixtures, not certified minimum hardware requirements. Review label/avatar vertical alignment, matched control dimensions, panel proportions, the absence of gray surfaces and section rules, readable small text, full focus outlines, edges only on controls and units, and the absence of lateral Objective accents.
 
 Measure text contrast against actual composed surfaces: normal functional text at least 4.5:1, eligible large text 3:1, and required non-text indicators/control boundaries 3:1 under the accepted accessibility contract. Compare source/diff signs and selection in combination. Check actual hover/focus/pressed rendering, not declarations alone. The full keyboard/Orca acceptance belongs to the functional checklist, not a claim made by screenshots.
 
