@@ -113,7 +113,7 @@ syntax_inks = sorted(set(re.findall(r'foreground="(\w+)"', scheme)))
 
 TEXT, NON_TEXT = 4.5, 3.0
 text_fills = ['surface', 'fill_hover', 'fill_selected', 'fill_band', 'fill_inset', 'fill_user', 'canvas',
-              ['canvas', 'fill_hover'], 'fill_track']
+              ['canvas', 'fill_hover'], 'fill_track', ['canvas', 'fill_track']]
 pairs = []
 for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']:
     for fill in text_fills:
@@ -153,7 +153,7 @@ pairs += [
     ('ink_optional', ['surface'], NON_TEXT, 'upcoming journey marker'),
     ('ink_secondary', ['surface'], NON_TEXT, 'done journey marker'),
     ('surface', ['ink_secondary'], NON_TEXT, 'check sign on a done journey marker'),
-    ('ink_primary', ['surface'], NON_TEXT, 'checked tab / nav underline'),
+    ('ink_primary', ['surface'], NON_TEXT, 'icon and marker ink'),
 ]
 results = []
 for ink, fills, threshold, kind in pairs:

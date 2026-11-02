@@ -88,6 +88,9 @@ impl Inspector {
         root.append_page(&overview_scroll, Some(&gtk::Label::new(Some("Overview"))));
         root.append_page(&evidence_scroll, Some(&gtk::Label::new(Some("Evidence"))));
         root.append_page(&feedback_scroll, Some(&gtk::Label::new(Some("Feedback"))));
+        for scroll in [&overview_scroll, &evidence_scroll, &feedback_scroll] {
+            root.page(scroll).set_tab_expand(true);
+        }
 
         let drafts_heading = vbox(space::TIGHT);
         feedback.append(&drafts_heading);

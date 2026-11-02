@@ -282,23 +282,7 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 }
 .brand { min-width: 0; }
 .compact .lade-header { padding: 0 12px; }
-.nav button.nav-tab {
-  border: none;
-  border-radius: 0;
-  background-color: transparent;
-  padding: 0 4px;
-  min-height: 54px;
-  color: @ink_secondary;
-  font-weight: 500;
-  box-shadow: none;
-}
-.nav button.nav-tab:hover { color: @ink_primary; background-color: transparent; }
-.nav button.nav-tab:checked {
-  color: @ink_primary;
-  background-color: transparent;
-  box-shadow: inset 0 -2px @ink_primary;
-}
-.nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
+.nav button.nav-tab { padding: 4px 14px; min-height: 26px; }
 .connection { font-size: 13px; }
 .search {
   border: 1px solid @border_soft;
@@ -354,7 +338,7 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
   padding: 0 8px 8px 8px;
   background-color: @canvas;
 }
-.region-bar .segmented button { min-height: 26px; padding: 4px 12px; }
+.region-bar .segmented { margin: 0 auto 0 0; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 
@@ -435,11 +419,30 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .selection-line { padding: 6px 12px; border-top: 1px solid @border_separator; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 12px; border-top: 1px solid @border_separator; }
-.segmented button { border-radius: 0; min-height: 24px; padding: 4px 12px; }
-.segmented button:first-child { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
-.segmented button:last-child { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
-.segmented button:not(:first-child) { border-left-width: 0; }
-.segmented button:checked { background-color: @fill_selected; font-weight: 600; }
+.segmented {
+  background-color: @fill_track;
+  border-radius: 10px;
+  padding: 2px;
+}
+.segmented button {
+  min-height: 24px;
+  padding: 3px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: transparent;
+  box-shadow: none;
+  color: @ink_secondary;
+  font-weight: 500;
+}
+.segmented button:hover { background-color: @fill_hover; color: @ink_primary; }
+.segmented button:checked {
+  background-color: @surface;
+  border-color: @border_soft;
+  box-shadow: 0 1px 3px @shadow_sheet;
+  color: @ink_primary;
+  font-weight: 600;
+}
+.segmented button:focus:focus-visible { outline-offset: 0; }
 
 textview.code-view, textview.code-view > text {
   background-color: @surface;
@@ -461,25 +464,31 @@ notebook.inspector, notebook.inspector > header {
   border: none;
   box-shadow: none;
 }
-notebook.inspector > header {
-  padding: 0 16px;
-  border-bottom: 1px solid @border_separator;
+notebook.inspector > header { padding: 16px 16px 4px 16px; }
+notebook.inspector > header > tabs {
+  background-color: @fill_track;
+  border-radius: 10px;
+  padding: 2px;
 }
 notebook.inspector > header > tabs > tab {
-  padding: 14px 0 12px 0;
-  margin: 0 20px 0 0;
-  min-height: 0;
-  border: none;
+  padding: 4px 12px;
+  margin: 0;
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background-color: transparent;
   box-shadow: none;
   color: @ink_secondary;
   font-weight: 500;
-  outline-offset: -2px;
+  outline-offset: 0;
 }
-notebook.inspector > header > tabs > tab:hover { color: @ink_primary; box-shadow: none; }
+notebook.inspector > header > tabs > tab:hover { color: @ink_primary; background-color: @fill_hover; }
 notebook.inspector > header > tabs > tab:checked {
   color: @ink_primary;
-  box-shadow: inset 0 -2px @ink_primary;
+  background-color: @surface;
+  border-color: @border_soft;
+  box-shadow: 0 1px 3px @shadow_sheet;
+  font-weight: 600;
 }
 notebook.inspector > stack { background-color: @surface; }
 .inspector-page { padding: 16px 16px 24px 16px; }

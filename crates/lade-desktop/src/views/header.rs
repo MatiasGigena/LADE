@@ -177,9 +177,11 @@ impl Header {
         brand.append(&wordmark);
         root.append(&brand);
 
-        let nav = hbox(space::PAGE);
+        let nav = hbox(0);
         nav.add_css_class("nav");
-        nav.set_margin_start(2 * space::PAGE);
+        nav.add_css_class("segmented");
+        nav.set_valign(gtk::Align::Center);
+        nav.set_margin_start(space::PAGE);
         let workbench_tab = gtk::ToggleButton::with_label("Workbench");
         let activity_tab = gtk::ToggleButton::with_label("Activity");
         activity_tab.set_group(Some(&workbench_tab));
@@ -448,13 +450,8 @@ impl Header {
         }
         self.root
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
-        self.nav.set_margin_start(if compact {
-            space::ITEM
-        } else {
-            2 * space::PAGE
-        });
         self.nav
-            .set_spacing(if compact { space::SECTION } else { space::PAGE });
+            .set_margin_start(if compact { space::ITEM } else { space::PAGE });
         let (from, to) = if compact {
             (&self.search_slot, &self.search_holder)
         } else {
