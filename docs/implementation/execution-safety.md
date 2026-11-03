@@ -98,7 +98,7 @@ Two minimal changes to the WP-C sandbox adapter were needed:
 ## Limits (§7)
 
 All values are constants in `crates/lade-system/src/adapters/sandbox/limits.rs`, the single place to change them;
-they are proposed implementation defaults and their approval is Matias's decision (#14).
+they are proposed implementation defaults and their approval is the maintainer's decision (#14).
 
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |
@@ -386,7 +386,7 @@ accepted by issue #8): the Secret Service protects the key **at rest**, not insi
 
 Interactive OAuth logins and refresh-token custody are **restricted**, not implemented: who runs the login (a
 trusted helper outside the sandbox, never a Workspace extension), who refreshes, where a rotated refresh token is
-kept, and how a refresh races a running worker are an open product decision for Matias (#43). Until then a pi OAuth
+kept, and how a refresh races a running worker are an open product decision for the maintainer (#43). Until then a pi OAuth
 provider (Claude Pro/Max login, ChatGPT Plus/Pro, GitHub Copilot, xAI, OpenRouter OAuth, Radius) would have to keep
 its refresh token in the sandbox's pi auth store, readable and replaceable by every tool, and its refresh requests
 would go to identity hosts outside the provider's reviewed egress policy. Subscription access that pi accepts as a

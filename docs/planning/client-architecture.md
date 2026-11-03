@@ -1,6 +1,6 @@
 # Selected graphical client: GTK4 native
 
-**Status: approved decision, not production authorization.** Matias explicitly selected **“Yes—select GTK4 native”** after reviewing the minimal comparison and styling implications. [Accepted decision in #13](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698434718). This supersedes the earlier provisional recommendation, not its evidence limitations.
+**Status: approved decision, not production authorization.** The maintainer explicitly selected **“Yes—select GTK4 native”** after reviewing the minimal comparison and styling implications. [Accepted decision in #13](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698434718). This supersedes the earlier provisional recommendation, not its evidence limitations.
 
 ## Decision
 
@@ -28,9 +28,9 @@ The earlier [SDK seam](https://github.com/MatiasGigena/LADE/issues/13#issuecomme
 
 ## Open and exact next step
 
-[#13's planning decision is resolved](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698708894). After selecting GTK4, Matias explicitly approved the [provisional engineering targets and I/R evidence handoff](performance-budgets.md). The service/worker allocations, actual presentation and complete accessibility remain unverified; target acceptance is not production authorization.
+[#13's planning decision is resolved](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698708894). After selecting GTK4, the maintainer explicitly approved the [provisional engineering targets and I/R evidence handoff](performance-budgets.md). The service/worker allocations, actual presentation and complete accessibility remain unverified; target acceptance is not production authorization.
 
-**#14's release-boundary handoff is now accepted**, not another client bake-off. The [published resolution](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043) ratifies exact context retention, strict-stale batches, draft/save/close behavior, minimum comparison, diagnostics/storage/resource policies, comprehension evaluation and all [implementation/release gate ownership](implementation-readiness.md). Matias approved closing #14 and the #1 decision map without authorizing production implementation.
+**#14's release-boundary handoff is now accepted**, not another client bake-off. The [published resolution](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043) ratifies exact context retention, strict-stale batches, draft/save/close behavior, minimum comparison, diagnostics/storage/resource policies, comprehension evaluation and all [implementation/release gate ownership](implementation-readiness.md). The maintainer approved closing #14 and the #1 decision map without authorizing production implementation.
 
 Next is separately authorized implementation planning: instantiate concrete protocols/defaults before each code boundary, including approved and enforced hard limits before untrusted execution. The first GTK4 component increment must establish native text/diff, keyboard/Orca/scale feasibility before committing to the rich control; integrated/load/installed validation follows at its explicit boundary. No runtime gate is passed by planning closure.
 

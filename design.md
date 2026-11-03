@@ -6,11 +6,11 @@ This document covers appearance only. It does not define lifecycle transitions, 
 
 ## 1. Reference and visual priorities
 
-Canonical reference: [approved workbench PNG](docs/product/assets/lade-approved-workbench.png). Preserve the app composition, not the monitor, office, plants, photographic lighting or background slogans. It is a conceptual reference, not a working-application screenshot. No new logo or personal photograph is introduced here.
+Reference: the approved conceptual workbench composition described in [UI principles](docs/product/ui-principles.md#reference-and-adaptation). Preserve the app composition, not the monitor, office, plants, photographic lighting or background slogans of the concept. It was a conceptual reference, not a working-application screenshot. No new logo or personal photograph is introduced here.
 
-Use the [supplied Scandinavian skill](docs/product/assets/scandinavian-design.txt) through its [LADE-specific application and exceptions](docs/product/ui-principles.md#application-and-explicit-exceptions): comprehension, task completion and useful density come before decorative restraint. A native operational surface is not an editorial landing page. The source's dark, mobile and marketing examples do not create additional LADE deliverables.
+Apply Scandinavian-style restraint through its [LADE-specific application and exceptions](docs/product/ui-principles.md#application-and-explicit-exceptions): comprehension, task completion and useful density come before decorative restraint. A native operational surface is not an editorial landing page. Generic dark, mobile and marketing examples do not create additional LADE deliverables.
 
-For this specification the final approved image in the conversation was visually inspected and the existing repository reference path/blob metadata checked. No claim of a fresh byte-for-byte download comparison, rendered GTK implementation or runtime visual/accessibility pass is made.
+This specification makes no claim of a rendered GTK implementation or runtime visual/accessibility pass.
 
 ### Visual language: black monochrome
 
@@ -28,7 +28,7 @@ LADE is drawn in two colors: a black surface and white ink. There are no gray su
 - Header branding is the existing mark and **LADE**, with no subtitle.
 - No greetings, motivational copy, slogans or functionless cards. No bottom-left filler panel.
 - Objective rows have **no lateral border, inset stripe, pseudo-stripe, shadow rail or colored accent bar**. Hover is an even white ring. The selected row is inverted on all sides, never a one-sided edge.
-- Profile is one circular avatar and **Matias Gigena**, vertically centered together. Use the supplied avatar or an existing labelled placeholder; do not invent a portrait or make sign-in part of this layout.
+- Profile is one circular placeholder avatar and the local user's display name, vertically centered together. The name comes from the system account (real name, falling back to the login name). Do not invent a portrait or make sign-in part of this layout.
 - Keep comments, code references, evidence, error explanations and visible state. They are functional content, not ornament.
 - Preserve code/diff and state meaning through text, signs and appropriate semantic colors. Neutral chrome does not mean neutralizing all content.
 
@@ -101,7 +101,7 @@ Use the platform sans-serif family for UI and a platform monospace for code. Do 
 | Code and diff | 13 monospace / 400 | About 20; aligned gutters and selection |
 | Brand wordmark | 20 / 700, +1 tracking | Keep existing mark/name relationship |
 
-Use available font weights honestly; do not assume every platform face has all weights. These dense-app values deliberately adapt the skill's editorial defaults. Respect user text scaling, rather than clipping to fixed heights. No 9–11 pixel functional metadata to force a screenshot fit.
+Use available font weights honestly; do not assume every platform face has all weights. These dense-app values deliberately adapt the guideline's editorial defaults. Respect user text scaling, rather than clipping to fixed heights. No 9–11 pixel functional metadata to force a screenshot fit.
 
 Spacing scale: **4, 8, 12, 16, 24, 32**. Use 4–8 within a label/value pair, 12–16 within a component and 24–32 between unrelated sections. Put a dimension on one wrapper per axis to avoid double padding.
 

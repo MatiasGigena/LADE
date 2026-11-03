@@ -150,7 +150,7 @@ installation; and `scripts/test-install [--bundle DIR [--allowed-signers FILE]]`
   `VERSION`, regenerates `MANIFEST.sha256` and writes `MANIFEST.sha256.sig` with `ssh-keygen -Y sign -n
   lade-release` (OpenSSH ≥ 8.2; Mint's `openssh-client`). The installer verifies it with `ssh-keygen -Y
   find-principals` / `-Y verify` against an allowed-signers trust root. No key is shipped: the release key, its
-  custody and the trust bootstrap (how users obtain and pin the public key) are pending Matias's decision. Tests use
+  custody and the trust bootstrap (how users obtain and pin the public key) are pending the maintainer's decision. Tests use
   throwaway keys generated in `scripts/test-install`; CI generates one per run and signs the real bundle with it.
 - **Node runtime**: `--with-node DIR` copies `DIR/bin/node` (must report exactly the pinned version), its `LICENSE`
   and a `VERSION` into `lib/lade/node/`; the bundle smoke test then runs the worker with it. Size impact: the Node

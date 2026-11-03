@@ -14,6 +14,8 @@ Installed paths:
 - `packages/pi-worker/tools/oxlint/anti-slop/shared/`
 - `packages/pi-worker/tools/oxlint/anti-slop/vendor/`
 
+License: MIT, copyright (c) 2026 Dillon Mulroy; the upstream `LICENSE` is copied to `packages/pi-worker/tools/oxlint/anti-slop/LICENSE`.
+
 Intentional deviations:
 
 - The pristine plugin source is unchanged.

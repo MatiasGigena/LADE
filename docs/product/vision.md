@@ -45,7 +45,7 @@ This exercise is an **accepted release obligation**, not observed product eviden
 - Universal code review, perfect semantic re-anchoring, IDE parity or advanced semantic navigation by default.
 - Remote execution, multi-repository Workspaces, real-time multi-user collaboration, mandatory cloud services or accounts.
 - Redesigning pi's agent loop, reducing provider/authentication support, an unsandboxed shortcut, or additional supported platforms.
-- Graphical package management and ports of particular personal extensions (deferred by #6); public licensing/contribution governance during private solo development.
+- Graphical package management and ports of particular personal extensions (deferred by #6).
 
 ## Reading order and status
 

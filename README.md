@@ -1,23 +1,63 @@
 # LADE
 
-Delegate implementation without delegating understanding or acceptance of the system.
+**Delegate implementation without delegating understanding or acceptance of the system.**
 
-LADE is a local-first Linux Agentic Development Environment centered on Objectives and their resulting work.
+LADE is a local-first Linux Agentic Development Environment: a native GTK4 desktop application in which you define
+an **Objective**, let a coding agent work on it in an isolated Git worktree, and then inspect, correct, verify and
+accept the result yourself. Generating a plausible patch is not the hard part; understanding what it does and
+deciding whether it belongs in your system is. LADE keeps those decisions with the developer: the agent's claims are
+never treated as approval or verification, and nothing reaches your branches without an explicit action. It targets
+one developer, one Linux machine and one Git repository per Workspace, with concurrent Objectives isolated from each
+other. Vocabulary is defined in [CONTEXT.md](CONTEXT.md); the rationale is in the [product vision](docs/product/vision.md).
 
-**Status:** the first-release collaboration loop is implemented — the authoritative `laded` service (SQLite store, admission, operation journal, restart recovery), sandboxed pi Agent Sessions (bubblewrap, egress gateway, scoped credentials), byte-exact inspection and versioned feedback, freeze/verify/approve and squash integration, and the native GTK4 workbench — together with a checksummed per-user bundle and installer. Its evidence comes from the **development host** (integration tests with disposable repositories and the offline `lade-fixture` model, run by `./scripts/verify` and CI); it has **not** been validated as an installed release on the supported Mint host, with live providers, or for accessibility. It is not yet a release: the remaining gates (resource limits and quotas, signing, pi compatibility, terminal, load, Orca/scaling, the comprehension exercise and Matias's go/no-go) are listed in [limitations](docs/implementation/limitations.md) and [acceptance status](docs/implementation/acceptance-status.md).
+## Features
 
-## Start here
+- **Objectives and worktrees.** Each Objective has a title, intent (outcome, constraints, acceptance criteria) and
+  an Integration Target branch; its work happens on a `lade/<id>` branch in a worktree under LADE's data directory,
+  never in your checkout.
+- **Sandboxed agents.** Agent Sessions run the [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
+  coding agent (pinned 0.85.1) inside a bubblewrap sandbox that can write only the Objective's worktree and session
+  directory. Network access goes only to the selected provider's API host through an egress gateway. If the sandbox
+  cannot be created, execution is refused; there is no unsandboxed fallback.
+- **Read-only inspection.** Diff and full-file views of the Change Set, search across Objectives, paths and content,
+  and comparison between candidate revisions. There is no embedded editor.
+- **Contextual Feedback.** Select exact text in a diff or file, draft feedback, and submit a batch to the identified
+  Agent Session. A batch whose referenced text has changed is refused as stale.
+- **Freeze, verify, approve, integrate.** Freeze an immutable candidate, run checks in a sandboxed disposable copy,
+  approve against the exact candidate and target commit, then integrate as one squash commit. LADE never stashes,
+  resets or force-updates.
+- **Durable service.** The `laded` per-user service owns all state (SQLite), accepts every input durably before
+  delivering it, and recovers after restarts without silently resuming interrupted work.
+- **Contained terminal** per Objective (same sandbox, no network, no API keys), and **credentials** from your
+  keyring (Secret Service), the service environment or a `0600` credentials file.
+- **Per-user install** from a checksummed bundle, with optional signature verification, rollback and a systemd user
+  unit.
 
-- [CONTEXT.md](CONTEXT.md) — domain vocabulary and first-release boundary.
-- [Product vision](docs/product/vision.md) — authority, understanding and intervention.
-- [First-release workflow](docs/product/first-release-workflow.md) — inspection, versioned feedback, revisions, review and explicit integration.
-- [UI principles](docs/product/ui-principles.md) — approved visual direction, original image and supplied skill text, operational-desktop adaptation and interaction/accessibility obligations.
-- [Implementation readiness](docs/planning/implementation-readiness.md) — decisions, evidence from other branches, acceptance matrix, blockers and next increments.
-- [Decision map #1](https://github.com/MatiasGigena/LADE/issues/1) — canonical planning map and issue history.
+## Status
+
+**Pre-release.** The whole Objective workflow is implemented and exercised by integration tests on a development
+host, using disposable repositories and an offline test model (`./scripts/verify` and CI). It has **not** been
+validated as an installed release on the supported platform, with live model providers, or for accessibility (Orca).
+There is no official release, no release signing key and no update channel yet. Read
+[known limitations](docs/implementation/limitations.md) and [acceptance status](docs/implementation/acceptance-status.md)
+before using LADE on work that matters.
+
+## Requirements
+
+- Supported target: Linux Mint 22.3 / Cinnamon / X11 / x86_64. Ubuntu 24.04 works for development; CI runs on it but
+  does not certify the supported platform.
+- Runtime: bubblewrap with working unprivileged user namespaces, `prlimit` (util-linux), Git ≥ 2.38, Node.js 22,
+  GTK ≥ 4.14 and GtkSourceView ≥ 5.12. Optional: `libsecret-tools` to keep provider keys in your keyring.
+- Building from source additionally needs Python 3.11+, curl, `sha256sum`, a C compiler/linker, pkg-config and the
+  GTK4/GtkSourceView development headers. The Rust toolchain (1.98.1) is installed locally by a script; Node 22.23.1
+  and npm 10.9.8 are the tested versions. See [build.md](docs/implementation/build.md).
+- An API key for a supported model provider (Anthropic, OpenAI, Google, OpenRouter, Mistral, Groq and others; see the
+  [user guide](docs/user-guide.md#5-choose-a-model-and-provide-credentials)). Interactive subscription logins (OAuth),
+  AWS Bedrock and Vertex are not supported.
 
 ## Quick start
 
-Build from source on Linux x86_64 (prerequisites and pinned versions: [build.md](docs/implementation/build.md)):
+Build from source:
 
 ```sh
 ./scripts/bootstrap-rust                                     # pinned Rust toolchain into .tools/
@@ -27,26 +67,50 @@ npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
 ./target/debug/lade-desktop                                  # the workbench
 ```
 
-Or build a bundle and install it per user (no sudo; checks bubblewrap, Git ≥ 2.38, Node 22, GTK 4.14 and GtkSourceView 5.12):
+Or build a bundle and install it per user (no sudo; the installer checks bubblewrap, Git ≥ 2.38, Node 22, GTK 4.14
+and GtkSourceView 5.12):
 
 ```sh
 ./scripts/bundle && ./scripts/install --enable               # ~/.local, user unit lade.service
 ```
 
-Then read the [user guide](docs/user-guide.md) (install, credentials, the Objective workflow, data locations, troubleshooting) and the [known limitations](docs/implementation/limitations.md).
+Store a provider key, then open LADE from the applications menu or run `lade-desktop`:
 
-## Build and contracts
+```sh
+laded credentials set anthropic                              # reads the key from stdin into your keyring
+```
 
-See [build and test instructions](docs/implementation/build.md), the [wire protocol v1](docs/implementation/protocol-v1.md), the [service](docs/implementation/service.md), [execution safety](docs/implementation/execution-safety.md), the [pi worker](docs/implementation/worker.md) and the [remaining release gates](docs/implementation/limitations.md).
+The [user guide](docs/user-guide.md) covers installation, credentials, the Objective workflow, data locations and
+troubleshooting.
 
-## Implementation blueprint
+## Documentation
 
-- [System architecture](architecture.md) — modular Rust core, layers, adapters, ownership and design patterns.
-- [Visual specification](design.md) — workbench appearance and proposed native visual tokens only.
-- [Implementation spec and backlog](docs/implementation/spec.md) — concrete first-boundary proposals, 16 issue-ready increments, dependencies and A01–A24 coverage.
+| Document | Contents |
+| --- | --- |
+| [User guide](docs/user-guide.md) | Install, credentials, the Objective workflow, keyboard, data locations, troubleshooting |
+| [CONTEXT.md](CONTEXT.md) | Domain vocabulary |
+| [Product vision](docs/product/vision.md) | Thesis, principles and non-goals |
+| [Architecture](architecture.md) | Rust core, layers, adapters, ownership |
+| [Design](design.md) | Workbench visual specification |
+| [Wire protocol v1](docs/implementation/protocol-v1.md) | Client/service and service/worker protocol |
+| [Service](docs/implementation/service.md) | `laded`: storage, admission, operations, recovery |
+| [Execution safety](docs/implementation/execution-safety.md) | Sandbox, egress gateway, credentials, terminal |
+| [pi worker](docs/implementation/worker.md) | The Node worker hosting pi Agent Sessions |
+| [Build and test](docs/implementation/build.md) | Toolchain, verification, bundle and install |
+| [Known limitations](docs/implementation/limitations.md) | What is not enforced or validated yet |
 
-The architectural direction and backlog are approved/published. Current implementation coverage and outstanding release requirements are tracked in [acceptance status](docs/implementation/acceptance-status.md). Documentation alone does not authorize additional production work or change accepted product policies.
+## Contributing
 
-The first release has no embedded editor or TODE dependency. Historical editor research/prototypes remain evidence of earlier exploration, not current gates. Rust remains the authoritative System Layer, pi the Intelligence Layer, and the graphical client presentation only. [GTK4 native is the selected graphical client](docs/planning/client-architecture.md), preserving the approved visual direction. [Provisional performance targets and the validation handoff](docs/planning/performance-budgets.md) are accepted. Production measurements, complete native/accessibility validation and production authorization remain open; accepted targets are not runtime guarantees.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and pull requests are welcome on
+[GitHub](https://github.com/MatiasGigena/LADE).
 
-[Product/architecture planning is decision-complete](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043), with #14/#1 closure approved. Concrete protocols/defaults and all unperformed implementation/release gates remain assigned prerequisites, not proven capabilities. No production implementation or promotion of a prototype is authorized by planning closure. See [AGENTS.md](AGENTS.md) for repository working conventions.
+## Security
+
+Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), not in public issues.
+
+## License
+
+MIT; see [LICENSE](LICENSE). Vendored and bundled third-party components keep their own licenses, for example
+[pi-coding-agent](vendor/pi-coding-agent/upstream/LICENSE) and the
+[anti-slop Oxlint rules](packages/pi-worker/tools/oxlint/anti-slop/LICENSE). A built bundle lists every shipped Rust
+crate, npm package and the bundled Node with its license in `share/doc/lade/THIRD_PARTY.md`.

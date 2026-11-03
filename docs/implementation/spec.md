@@ -25,7 +25,7 @@ The execution backlog is published in [IMP-MAP #21: Deliver the first credible L
 
 The authoritative stable-key-to-GitHub mapping and native dependency graph live in #21; do not duplicate that mapping here. Search all issue states before any future split or tracker maintenance, reuse matching stable keys and read back native links. Do not infer issue numbers, silently change existing dependencies, recreate the closed planning issues or let backlog publication authorize production work.
 
-The implementation driver produces evidence; Matias approves consequential defaults, changes to accepted contracts, product acceptance and release go/no-go. Work in an isolated branch per reviewable increment. Do not merge prototype branches wholesale. New native production components are built against the accepted contracts, not by promoting permissive fixture brokers.
+The implementation driver produces evidence; the maintainer approves consequential defaults, changes to accepted contracts, product acceptance and release go/no-go. Work in an isolated branch per reviewable increment. Do not merge prototype branches wholesale. New native production components are built against the accepted contracts, not by promoting permissive fixture brokers.
 
 ## 3. Initial technical contract proposal
 
@@ -105,7 +105,7 @@ Define typed errors for unauthorized caller, stale service/association/execution
 
 The accepted [performance/transport budgets](../planning/performance-budgets.md) are the only runtime target table. Their fixture-derived targets are not observed production performance, kill thresholds or permission to reduce pi compatibility. Four workers is a measurement point, not a product concurrency limit. First-slice and concurrency issues use the exact reference workloads, accounting, repeats, latency definitions and soak criterion from that document.
 
-Hard execution CPU/memory/process-thread/writable-storage limits, capture/spool/history reserves and diagnostic rotation defaults remain explicit approval gates. IMP-004/006 proposes finite defaults with units, aggregate accounting, mechanism and exhaustion tests; Matias approves before the affected boundary or untrusted execution. An unspecified quota or disk monitor alone does not satisfy hard storage enforcement. Do not substitute cgroups for disk quotas, automatically expand limits, or delete retained history under pressure.
+Hard execution CPU/memory/process-thread/writable-storage limits, capture/spool/history reserves and diagnostic rotation defaults remain explicit approval gates. IMP-004/006 proposes finite defaults with units, aggregate accounting, mechanism and exhaustion tests; the maintainer approves before the affected boundary or untrusted execution. An unspecified quota or disk monitor alone does not satisfy hard storage enforcement. Do not substitute cgroups for disk quotas, automatically expand limits, or delete retained history under pressure.
 
 ## 4. Backlog and dependency graph
 
@@ -196,7 +196,7 @@ The fields below, this spec's common Definition of Done and the linked A-rows fo
 
 **Outcome:** service-controlled scratch execution cannot escape its scope or retain authority after the service is lost.
 
-**Scope:** lazy worktree creation, systemd/delegated cgroup arrangement, pinned namespace/seccomp launcher, filesystem/FD/environment restrictions, mediated development Git operations and per-Objective/aggregate resource accounting. Driver proposes hard CPU/memory/process-thread/storage defaults and an actually enforceable disk-quota mechanism for the supported installation; Matias approves before untrusted launch. No unsandboxed fallback or global host-security disablement.
+**Scope:** lazy worktree creation, systemd/delegated cgroup arrangement, pinned namespace/seccomp launcher, filesystem/FD/environment restrictions, mediated development Git operations and per-Objective/aggregate resource accounting. Driver proposes hard CPU/memory/process-thread/storage defaults and an actually enforceable disk-quota mechanism for the supported installation; the maintainer approves before untrusted launch. No unsandboxed fallback or global host-security disablement.
 
 **Acceptance:** direct Node/subprocess/symlink/FD/host-socket and protected-ref attempts are denied. Daemonizing descendants terminate on supervisor loss. Missing controllers/namespace/quota prerequisites block execution. Revocation accounts for open handles; limit exhaustion is visible, never automatic restart or quota expansion. Common Git metadata is not writable; repository helpers cannot execute with broker authority. Cancellation preserves work but cannot claim stop while relevant descendants still run.
 
@@ -299,7 +299,7 @@ The fields below, this spec's common Definition of Done and the linked A-rows fo
 
 **Acceptance:** record correct acceptance, explanation of effects/verification limits, context reconstruction and correction iterations. A missed defect or false acceptance is investigated, corrected and repeated; speed does not mask failure. Record learning/order limitations, not a claim of universal productivity improvement.
 
-**Evidence:** task definitions, baseline, observation protocol, debrief and explicit Matias acceptance. **A coverage:** A01/A23 with A02–A08 supporting flows. **Excluded:** invented speedup thresholds, agent-count/line-count success metrics and unapproved telemetry.
+**Evidence:** task definitions, baseline, observation protocol, debrief and explicit maintainer acceptance. **A coverage:** A01/A23 with A02–A08 supporting flows. **Excluded:** invented speedup thresholds, agent-count/line-count success metrics and unapproved telemetry.
 
 <a id="imp-016"></a>
 ### IMP-016 — Assemble installed release evidence and obtain go/no-go
@@ -308,7 +308,7 @@ The fields below, this spec's common Definition of Done and the linked A-rows fo
 
 **Scope:** consolidate A01–A24 evidence at the exact signed candidate, rerun critical installed flows and confirm backlog completion/dependency state. Distinguish documentation, fixture, integrated and installed evidence. Record remaining limitations and any separately approved contract revisions.
 
-**Acceptance:** all applicable rows have evidence, responsible driver and disposition; no security, durability, accessibility, provider or comprehension failure is waived by a passing happy path. Budgets use the accepted method, not prototype proxies. Matias records release go/no-go. No issue closure is interpreted as proof without its artifacts.
+**Acceptance:** all applicable rows have evidence, responsible driver and disposition; no security, durability, accessibility, provider or comprehension failure is waived by a passing happy path. Budgets use the accepted method, not prototype proxies. The maintainer records release go/no-go. No issue closure is interpreted as proof without its artifacts.
 
 **Evidence:** release manifest, acceptance report linked to all source commits/runs, supported-host records and explicit decision. **A coverage:** A01–A24. **Excluded:** autonomous release, remote deployment or self-granted authorization.
 
@@ -349,7 +349,7 @@ Every implementation PR states the stable issue key, exact scope, source decisio
 
 No unrelated edits, real credentials, personal source text or raw provider transcripts in evidence. Diagnostics redaction and artifact permissions apply to testing output too. A failed prerequisite produces an explicit blocked state. Document unexecuted tests; never upgrade a fixture result into installed conformance.
 
-Update the owning contract when its implementation changes; do not fork another spec into an issue comment. UI changes update visual tokens centrally and retain actual native captures. New durable stores, frameworks, security exceptions, APIs or dependencies need a concrete reason and review, not a generic claim of cleanliness. Product-policy changes require Matias; a supported implementation detail can be accepted in its owning technical PR.
+Update the owning contract when its implementation changes; do not fork another spec into an issue comment. UI changes update visual tokens centrally and retain actual native captures. New durable stores, frameworks, security exceptions, APIs or dependencies need a concrete reason and review, not a generic claim of cleanliness. Product-policy changes require the maintainer; a supported implementation detail can be accepted in its owning technical PR.
 
 Execution map #21 holds the real issue mapping and native dependency links. Keep that mapping there rather than adding a second separately maintained backlog to this document. Before choosing work, read the current issue and dependencies. Further splitting is allowed only for a genuinely reviewable result with explicit acceptance; do not create a task for every folder.
 

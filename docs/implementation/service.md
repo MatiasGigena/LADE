@@ -364,7 +364,7 @@ because an enforced limit was reached; its failure reason starts with `limit_rea
 ## Resource limits (IMP-006)
 
 Every value is a constant in `crates/lade-system/src/adapters/sandbox/limits.rs` (the §7 proposals; approving or
-changing them is Matias's decision). Enforcement per sandbox is described in
+changing them is the maintainer's decision). Enforcement per sandbox is described in
 [execution-safety.md](execution-safety.md#limits-7); the service adds two things:
 
 - **Writable-storage monitor (§7, 2 GiB).** Every 5 s (`STORAGE_CHECK_INTERVAL`) one pool job measures, for each live
@@ -455,7 +455,7 @@ JSON object `{ts, pid, source, line}` to `$STATE/logs/laded.log`. Rotation is by
 pass 1 MiB the files shift (`laded.log` → `.1` … `.3`, the oldest is deleted), so the logs never exceed 4 MiB. The
 log is opened lazily, only once the state directory exists as a private directory of the service user; a log
 write failure never stops stderr forwarding. These numeric bounds are the implementation driver's proposal under the
-#14 policy and still need Matias's approval.
+#14 policy and still need the maintainer's approval.
 
 Redaction (#14: credentials, prompts, source and tool-output bodies are excluded by default; redaction is tested,
 not infallible): `NAME=value`, `"name": "value"` and `name: value` where the name contains `KEY`, `TOKEN`,
@@ -613,7 +613,7 @@ go to the ignored `evidence-local/imp-013/` directory by default.
 
 ## Known gaps
 
-- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending Matias's approval
+- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending the maintainer's approval
   (#14); a secret in an unusual shape can pass redaction. Lines written to stderr while the log file is unavailable
   (state directory not yet created) reach only the journal.
 

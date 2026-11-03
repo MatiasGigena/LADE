@@ -178,7 +178,7 @@ The architectural style is settled for this handoff. The following are bounded i
 | Native text/diff and terminal composition | GtkSourceView 5 / service-owned PTY with VTE candidates; validate in IMP-002 / IMP-012 |
 | Wire/schema identity encoding and request limits below aggregate caps | Initial examples in spec; ratify/generated-schema checks in IMP-001 before IPC code |
 | Artifact/database ordering, storage reserves and migrations | Above proposal; concrete fault matrix in IMP-003/004 before those effects |
-| Hard process, CPU, memory and writable-storage defaults/mechanism | Driver proposes and Matias approves in IMP-006 before untrusted launch |
+| Hard process, CPU, memory and writable-storage defaults/mechanism | Driver proposes and the maintainer approves in IMP-006 before untrusted launch |
 | Checked-out target integration and recovery | Bounded Git protocol review in IMP-009 before target mutation |
 
 Document a significant implementation tradeoff beside its owning contract, or in a focused ADR when it changes an architectural boundary. Do not manufacture a catalogue of patterns or ADRs. Changes to accepted product/security policies need explicit approval; completing an engineering detail does not.
