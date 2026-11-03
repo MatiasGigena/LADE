@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -434,17 +435,96 @@ pub fn edit_intent(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) 
 }
 
 pub fn open_workspace(window: &gtk::Window, controller: &Rc<Controller>) {
-    let dialog = gtk::FileDialog::builder()
-        .title("Open a Git repository")
-        .accept_label("Open")
-        .modal(true)
+    let dialog = Rc::new(Dialog::new(window, "Open a Git repository", 560));
+    dialog.body.append(&label(
+        "Open the repository folder containing .git, not the .git folder itself. The repository needs at least one commit.",
+        &["secondary"],
+    ));
+    let path = gtk::Entry::builder()
+        .placeholder_text("/path/to/repository")
+        .hexpand(true)
         .build();
-    let controller = controller.clone();
-    dialog.select_folder(Some(window), None::<&gio::Cancellable>, move |result| {
-        if let Ok(Some(path)) = result.map(|f| f.path()) {
-            controller.open_workspace(path);
-        }
+    set_accessible_label(&path, "Repository folder");
+    dialog
+        .body
+        .append(&labelled("Repository folder (full path)", &path));
+    // Keep the exact filesystem path returned by Browse, including non-UTF-8 names.
+    let selected: Rc<RefCell<Option<PathBuf>>> = Rc::default();
+    let selection = selected.clone();
+    path.connect_changed(move |_| {
+        selection.borrow_mut().take();
     });
+    dialog.add_cancel();
+    let browse = dialog.add_button("Browse…", &[]);
+    let parent = dialog.window.clone();
+    let entry = path.clone();
+    let selection = selected.clone();
+    browse.connect_clicked(move |_| {
+        let chooser = gtk::FileDialog::builder()
+            .title("Choose the repository folder")
+            .accept_label("Choose folder")
+            .modal(true)
+            .build();
+        let entry = entry.clone();
+        let selection = selection.clone();
+        chooser.select_folder(Some(&parent), None::<&gio::Cancellable>, move |result| {
+            if let Ok(Some(folder)) = result.map(|f| f.path()) {
+                entry.set_text(&folder.to_string_lossy());
+                *selection.borrow_mut() = Some(folder);
+            }
+        });
+    });
+    let open = dialog.add_button("Open repository", &["primary"]);
+    let button = open.clone();
+    path.connect_activate(move |_| button.emit_clicked());
+    let entry = path.clone();
+    let shown = dialog.clone();
+    let controller = controller.clone();
+    open.connect_clicked(move |_| {
+        let folder = selected
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(entry.text().trim()));
+        if !folder.is_absolute() {
+            shown.show_error("Enter the full repository folder path, or choose Browse.");
+            entry.grab_focus();
+            return;
+        }
+        controller.open_workspace(folder);
+        shown.window.close();
+    });
+    dialog.present();
+    path.grab_focus();
+}
+
+pub fn costs_and_data(opener: &impl IsA<gtk::Widget>) {
+    let dialog = Dialog::new(opener, "Costs and data", 560);
+    for (title, text) in [
+        (
+            "Provider costs and terms",
+            "Live models use your provider account. Its billing, usage limits, terms and privacy policy apply. LADE does not estimate or cap provider charges.",
+        ),
+        (
+            "What is shared",
+            "The agent sends your instructions, repository content it reads and tool results to the selected model provider. Review that provider's terms and privacy policy before starting. Agent tools can read the provider credentials released into their sandbox.",
+        ),
+        (
+            "What stays on this machine",
+            "LADE stores Objectives, messages, feedback drafts and captured changes locally. Work happens in an isolated branch and worktree. Integration into your target branch requires your separate approval and action.",
+        ),
+        (
+            "Supported sign-in",
+            "An existing pi ChatGPT login cannot be used by this build of LADE. Subscription sign-in and token refresh are not supported. Use a supported provider's API key, or the offline fixture only when running a test harness.",
+        ),
+    ] {
+        dialog.body.append(&widgets::section_title(title));
+        dialog.body.append(&label(text, &[]));
+    }
+    let close = dialog.add_button("Close", &["primary"]);
+    let window = dialog.window.clone();
+    close.connect_clicked(move |_| window.close());
+    dialog.present();
+    close.grab_focus();
 }
 
 pub fn shortcuts(

@@ -153,7 +153,7 @@ export function installGateway(socketPath: string): void {
   const connector: buildConnector.connector = (options, callback) => {
     const port = options.port || (options.protocol === "https:" ? "443" : "80");
 
-    tunnel(socketPath, `${options.hostname}:${port}`).then(socket => {
+    tunnel(socketPath, authorityOf(options.hostname, port)).then(socket => {
       if (options.protocol === "https:") tls({ ...options, httpSocket: socket }, callback);
       else callback(null, socket);
     }, (error: Error) => callback(error, null));

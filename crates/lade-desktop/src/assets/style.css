@@ -366,6 +366,7 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .journey-connector { min-height: 1px; min-width: 12px; background-color: @ink_optional; }
 
 .basis-selector > button { min-width: 220px; }
+.narrow .basis-selector > button { min-width: 0; }
 .version-line { padding: 0; }
 
 .file-list > row {

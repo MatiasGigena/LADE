@@ -408,7 +408,7 @@ export class SessionHost {
   }
 }
 
-export function deliver(session: AgentSession, input: DeliverBody, onRunError: (error: Error) => void): Promise<void> {
+export function deliver(session: AgentSession, input: DeliverBody, onRunError: (error: Error) => void, active: () => boolean = () => true): Promise<void> {
   if (session.isStreaming) return input.mode === "steer" ? session.steer(input.text) : session.followUp(input.text);
   const space = input.text.indexOf(" ");
   const name = input.text.startsWith("/") ? input.text.slice(1, space < 0 ? undefined : space) : undefined;
@@ -425,9 +425,12 @@ export function deliver(session: AgentSession, input: DeliverBody, onRunError: (
     session.prompt(input.text, {
       expandPromptTemplates: true,
       source: "rpc",
-      preflightResult: ok => { accepted = ok;
+      preflightResult: ok => {
+        if (ok && !active()) throw new Error("input delivery was cancelled");
+        accepted = ok;
 
- if (ok) resolve(); },
+        if (ok) resolve();
+      },
     }).then(() => resolve(), (error: Error) => {
       if (accepted) onRunError(error);
       else reject(error);

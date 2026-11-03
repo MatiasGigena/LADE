@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
+use std::io::Read as _;
 use std::net::IpAddr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -82,16 +83,30 @@ fn walk(root: &Path, dir: &Path, depth: usize, files: &mut Vec<Vec<u8>>) -> Resu
     Ok(())
 }
 
+fn read_extension_file(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let unreadable = |e: io::Error| format!("unreadable: {}", e.kind());
+    let file = fs::File::open(path).map_err(unreadable)?;
+    if file.metadata().map_err(unreadable)?.len() > limit {
+        return Err("extension is too large".into());
+    }
+    let mut bytes = Vec::new();
+    // Cap the read too: the file can grow after its metadata was checked.
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > limit {
+        return Err("extension is too large".into());
+    }
+    Ok(bytes)
+}
+
 pub fn extension_hash(path: &Path) -> Result<String, String> {
     let meta = fs::symlink_metadata(path).map_err(|e| format!("unreadable: {}", e.kind()))?;
     if meta.file_type().is_symlink() {
         return Err("extension is a symbolic link".into());
     }
     if meta.is_file() {
-        if meta.len() > MAX_EXTENSION_BYTES {
-            return Err("extension is too large".into());
-        }
-        let bytes = fs::read(path).map_err(|e| format!("unreadable: {}", e.kind()))?;
+        let bytes = read_extension_file(path, MAX_EXTENSION_BYTES)?;
         return Ok(sha256(&bytes));
     }
     if !meta.is_dir() {
@@ -104,11 +119,8 @@ pub fn extension_hash(path: &Path) -> Result<String, String> {
     let mut total = 0u64;
     for rel in files {
         let file = path.join(std::ffi::OsStr::from_bytes(&rel));
-        let bytes = fs::read(&file).map_err(|e| format!("unreadable: {}", e.kind()))?;
+        let bytes = read_extension_file(&file, MAX_EXTENSION_BYTES - total)?;
         total += bytes.len() as u64;
-        if total > MAX_EXTENSION_BYTES {
-            return Err("extension is too large".into());
-        }
         manifest.update(sha256(&bytes).as_bytes());
         manifest.update(b"  ");
         manifest.update(&rel);

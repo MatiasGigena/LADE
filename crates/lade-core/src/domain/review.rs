@@ -299,14 +299,15 @@ impl Review {
     }
 
     pub fn evidence(&self, candidate_id: CandidateId) -> Evidence {
+        if self.verifications.iter().any(|verification| {
+            verification.candidate_id == candidate_id
+                && verification.outcome == VerificationOutcome::Running
+        }) {
+            return Evidence::Running;
+        }
         let latest = self.latest_verifications(candidate_id);
         if latest.is_empty() {
             Evidence::Missing
-        } else if latest
-            .iter()
-            .any(|v| v.outcome == VerificationOutcome::Running)
-        {
-            Evidence::Running
         } else if latest
             .iter()
             .all(|v| v.outcome == VerificationOutcome::Passed)
@@ -1094,6 +1095,63 @@ mod tests {
             Err(DomainError::NotFound("candidate"))
         );
         assert_eq!(objective.lifecycle(), Lifecycle::Frozen);
+    }
+
+    #[test]
+    fn a_newer_passing_run_does_not_hide_an_older_running_check() {
+        let (mut objective, mut review, target) = frozen();
+        review
+            .start_verification(
+                &objective,
+                NewVerification {
+                    id: verification_id(1),
+                    candidate_id: candidate_id(1),
+                    argv: vec!["cargo".into(), "test".into()],
+                    cwd_label: "verification copy".into(),
+                },
+                ts(11),
+            )
+            .expect("first check starts");
+        verify(
+            &mut review,
+            &objective,
+            2,
+            &["cargo", "test"],
+            VerificationEnd::Exited { code: 0 },
+        );
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Running);
+        let before = objective.clone();
+        assert_eq!(
+            review.approve(
+                &mut objective,
+                approve_cmd(1, 1, &target, Some("override")),
+                &target,
+                ts(13),
+            ),
+            Err(DomainError::Conflict(
+                "Wait for the running check to finish."
+            ))
+        );
+        assert_eq!(objective, before);
+        assert!(review.approvals().is_empty());
+        review
+            .finish_verification(
+                verification_id(1),
+                VerificationEnd::Exited { code: 1 },
+                None,
+                false,
+                ts(14),
+            )
+            .expect("older check finishes");
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Passed);
+        review
+            .approve(
+                &mut objective,
+                approve_cmd(1, 1, &target, None),
+                &target,
+                ts(15),
+            )
+            .expect("latest completed run permits approval");
     }
 
     #[test]

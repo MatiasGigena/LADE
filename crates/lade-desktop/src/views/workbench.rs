@@ -53,6 +53,7 @@ pub struct Workbench {
     basis: gtk::DropDown,
     bases: RefCell<Vec<Basis>>,
     change_heading: gtk::Box,
+    change_row: gtk::Box,
     version: gtk::Box,
     files: gtk::ListBox,
     file_paths: RefCell<Vec<RepoPath>>,
@@ -65,6 +66,8 @@ pub struct Workbench {
     details_widgets: RefCell<Vec<gtk::Widget>>,
     show_details: Cell<bool>,
     compact: Cell<bool>,
+    narrow: Cell<bool>,
+    file_list_width: Cell<i32>,
     compact_status: RefCell<Option<gtk::Widget>>,
 }
 
@@ -142,6 +145,7 @@ impl Workbench {
             basis,
             bases: RefCell::new(vec![Basis::Working]),
             change_heading,
+            change_row,
             version,
             files,
             file_paths: RefCell::new(Vec::new()),
@@ -154,6 +158,8 @@ impl Workbench {
             details_widgets: RefCell::new(Vec::new()),
             show_details: Cell::new(true),
             compact: Cell::new(false),
+            narrow: Cell::new(false),
+            file_list_width: Cell::new(192),
             compact_status: RefCell::new(None),
         });
         workbench.connect();
@@ -277,7 +283,35 @@ impl Workbench {
     }
 
     pub fn set_file_list_width(&self, width: i32) {
-        self.files_scroll.set_size_request(width, -1);
+        self.file_list_width.set(width);
+        if !self.narrow.get() {
+            self.files_scroll.set_size_request(width, -1);
+        }
+    }
+
+    pub fn set_narrow(&self, narrow: bool) {
+        if self.narrow.replace(narrow) == narrow {
+            return;
+        }
+        self.body.set_orientation(if narrow {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        self.change_row.set_orientation(if narrow {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        self.files_scroll.set_vexpand(!narrow);
+        self.files_scroll.set_size_request(
+            if narrow {
+                -1
+            } else {
+                self.file_list_width.get()
+            },
+            if narrow { 96 } else { -1 },
+        );
     }
 
     fn render_heading(&self) {
@@ -447,6 +481,7 @@ impl Workbench {
         drop(state);
 
         let title = widgets::section_title("Change Set");
+        title.set_wrap(false);
         self.change_heading.append(&title);
         match &changes {
             Load::NotLoaded | Load::Loading => {
@@ -536,6 +571,10 @@ impl Workbench {
         if list.files.is_empty() {
             // One empty state in place of the file list and the viewer (no toolbar, no frame).
             let (title, body) = match ui.basis {
+                Basis::Working if working_updated => (
+                    "New edits are ready to inspect",
+                    "This capture has no changes. Choose Refresh above to inspect the latest edits.",
+                ),
                 Basis::Working => ("No changes yet", "The agent's edits appear here."),
                 Basis::Candidate { .. } => (
                     "No changes",

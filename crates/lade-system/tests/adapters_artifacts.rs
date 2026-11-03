@@ -94,6 +94,10 @@ fn verification_detects_corruption() {
         store.read_all(&digest, 1024, false).unwrap(),
         b"tampered bytes"
     );
+    assert!(
+        matches!(store.put(b"original bytes"), Err(ArtifactError::Corrupt)),
+        "put must not confirm publication of a corrupt pre-existing artifact"
+    );
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -169,6 +173,51 @@ fn injected_faults_leave_prior_artifacts_and_no_partial_publication() {
             healthy.put(payload).unwrap(),
             new,
             "{fault:?}: retry succeeds"
+        );
+    }
+}
+
+struct SyncDirFault {
+    parent: bool,
+}
+
+impl ArtifactIo for SyncDirFault {
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        if (dir.file_name().unwrap() == "sha256") == self.parent {
+            return Err(io::Error::other("injected directory fsync failure"));
+        }
+        File::open(dir)?.sync_all()
+    }
+}
+
+#[test]
+fn publication_retries_do_not_bypass_directory_sync_failures() {
+    for parent in [true, false] {
+        let tmp = TempDir::new("artifact-directory-sync");
+        let root = tmp.path().join("artifacts");
+        let tmp_dir = tmp.path().join("tmp");
+        let faulty =
+            ArtifactStore::with_io(&root, &tmp_dir, Box::new(SyncDirFault { parent })).unwrap();
+        let payload = b"durable artifact";
+        for attempt in 1..=2 {
+            assert!(
+                matches!(
+                    faulty.put(payload),
+                    Err(ArtifactError::Io {
+                        stage: "sync_dir",
+                        ..
+                    })
+                ),
+                "attempt {attempt} bypassed failed fsync (parent={parent})"
+            );
+        }
+        let healthy = ArtifactStore::open(&root, &tmp_dir).unwrap();
+        assert_eq!(healthy.put(payload).unwrap(), ArtifactDigest::of(payload));
+        assert_eq!(
+            healthy
+                .read_all(&ArtifactDigest::of(payload), 1024, true)
+                .unwrap(),
+            payload
         );
     }
 }

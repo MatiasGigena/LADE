@@ -156,7 +156,10 @@ pub(crate) fn before_migration(
         .open(&path)
         .map_err(io_err("create backup"))?;
     let written = conn
-        .execute("VACUUM INTO ?1", [path.to_string_lossy().as_ref()])
+        .execute(
+            "VACUUM INTO CAST(?1 AS TEXT)",
+            [path.as_os_str().as_encoded_bytes()],
+        )
         .map_err(sql_err)
         .and_then(|_| {
             File::open(&path)
@@ -309,7 +312,8 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
     fs::rename(&db, &kept).map_err(io_err("keep the newer database"))?;
     for suffix in ["-wal", "-shm"] {
         let side = state.join(format!("{DATABASE}{suffix}"));
-        let kept_side = PathBuf::from(format!("{}{suffix}", kept.display()));
+        let mut kept_side = kept.as_os_str().to_os_string();
+        kept_side.push(suffix);
         match fs::rename(&side, &kept_side) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}

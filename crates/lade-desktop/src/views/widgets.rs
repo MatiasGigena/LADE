@@ -771,16 +771,19 @@ pub struct Dialog {
     pub body: gtk::Box,
     pub buttons: gtk::Box,
     pub error: gtk::Box,
+    scroll: gtk::ScrolledWindow,
 }
 
 impl Dialog {
     pub fn new(opener: &impl IsA<gtk::Widget>, title: &str, width: i32) -> Self {
         let opener = opener.as_ref().clone();
         let parent = opener.root().and_then(|r| r.downcast::<gtk::Window>().ok());
+        let available_width = parent.as_ref().map_or(width, |w| (w.width() - 32).max(280));
+        let available_height = parent.as_ref().map_or(800, |w| w.height().max(320));
         let window = gtk::Window::builder()
             .modal(true)
             .title(title)
-            .default_width(width)
+            .default_width(width.min(available_width))
             .resizable(true)
             .build();
         window.set_transient_for(parent.as_ref());
@@ -788,13 +791,20 @@ impl Dialog {
         let outer = vbox(0);
         let content = vbox(space::SECTION);
         content.add_css_class("dialog-content");
-        content.set_vexpand(true);
         content.append(&heading(title, "dialog-title"));
+        let error = vbox(0);
+        error.set_visible(false);
+        content.append(&error);
         let body = vbox(space::GROUP);
         content.append(&body);
-        let error = vbox(0);
-        content.append(&error);
-        outer.append(&content);
+        let scroll = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height((available_height - 144).max(160))
+            .vexpand(true)
+            .child(&content)
+            .build();
+        outer.append(&scroll);
         let buttons = hbox(space::ITEM);
         buttons.add_css_class("dialog-footer");
         buttons.set_halign(gtk::Align::Fill);
@@ -813,6 +823,7 @@ impl Dialog {
             body,
             buttons,
             error,
+            scroll,
         }
     }
 
@@ -822,10 +833,18 @@ impl Dialog {
 
     pub fn show_errors(&self, messages: &[String]) {
         clear(&self.error);
+        self.error.set_visible(!messages.is_empty());
         self.error.set_spacing(space::ITEM);
         for message in messages {
             self.error.append(&error_line(message));
         }
+        let scroll = self.scroll.clone();
+        glib::idle_add_local_once(move || scroll.vadjustment().set_value(0.0));
+        announce(
+            &self.window,
+            &messages.join(" "),
+            gtk::AccessibleAnnouncementPriority::Medium,
+        );
     }
 
     pub fn add_cancel(&self) -> gtk::Button {
@@ -838,6 +857,11 @@ impl Dialog {
 
     pub fn add_button(&self, text: &str, classes: &[&str]) -> gtk::Button {
         let b = button(text, classes);
+        if let Some(label) = b.child().and_downcast::<gtk::Label>() {
+            label.set_wrap(true);
+            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            no_hyphens(&label);
+        }
         self.buttons.append(&b);
         b
     }

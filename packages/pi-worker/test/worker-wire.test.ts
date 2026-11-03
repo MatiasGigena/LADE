@@ -209,6 +209,22 @@ test("select answers map back to the full option and an empty choice is refused"
   assert.equal(sent.length, 1, "no unencodable dialog request is sent");
 });
 
+test("select options that share a clipped prefix remain separately selectable", async () => {
+  const sent: OutboundBody[] = [];
+  const ui = new UiBridge(body => { sent.push(body); }, () => {});
+  const common = "o".repeat(600);
+  const options = [`${common} first`, `${common} second`];
+  const chosen = ui.context().select("pick", options);
+  const request = sent.at(-1);
+  assert.ok(request?.kind === "ui.request" && request.prompt.kind === "select");
+  assert.equal(new Set(request.prompt.options).size, 2, "clipping must not merge distinct choices");
+  const shown = request.prompt.options[1];
+  assert.ok(shown !== undefined);
+  assert.doesNotThrow(() => encodeOutbound(request));
+  assert.equal(ui.respond({ kind: "ui.respond", ui_id: request.ui_id, generation: request.generation, answer: { kind: "value", value: shown } }), undefined);
+  assert.equal(await chosen, options[1]);
+});
+
 test("a tree page of long labelled entries still fits one session.result frame", () => {
   const wide = "\u6f22".repeat(300);
   const entries = Array.from({ length: MAX_TREE_ENTRIES }, (_, n) => ({ type: "message" as const, id: `e${n}`, parentId: n === 0 ? null : `e${n - 1}`, timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user" as const, content: wide, timestamp: n } }));

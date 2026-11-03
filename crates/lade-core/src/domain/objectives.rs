@@ -44,6 +44,7 @@ impl BranchName {
         let valid = !name.is_empty()
             && name.len() <= MAX_BRANCH_BYTES
             && name != "@"
+            && name != "HEAD"
             && !name.starts_with('-')
             && !name.ends_with('.')
             && !name.ends_with(".lock")
@@ -813,6 +814,16 @@ mod tests {
         ] {
             assert!(BranchName::new(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn branch_names_reject_the_reserved_head_name() {
+        assert!(matches!(
+            BranchName::new("HEAD"),
+            Err(DomainError::InvalidRequest(_))
+        ));
+        assert!(BranchName::new("feature/HEAD").is_ok());
+        assert!(BranchName::new("head").is_ok());
     }
 
     #[test]

@@ -35,21 +35,27 @@ export class UiBridge {
   private readonly send: (body: OutboundBody) => void;
   private readonly notify: Notify;
   private readonly pending = new Map<Id, Pending>();
+  private dialogOpened: (() => void) | undefined;
   private current = 1;
   constructor(send: (body: OutboundBody) => void, notify: Notify) { this.send = send; this.notify = notify; }
 
   get generation(): number { return this.current; }
 
   advance(): number {
-    for (const [id, open] of this.pending) {
-      this.pending.delete(id);
-      this.send({ kind: "ui.closed", ui_id: id, reason: "replaced" });
-      open.resolve(undefined);
-    }
-
+    this.closePending("replaced");
     this.current += 1;
 
     return this.current;
+  }
+
+  cancel(): void { this.closePending("aborted"); }
+
+  private closePending(reason: "replaced" | "aborted"): void {
+    for (const [id, open] of this.pending) {
+      this.pending.delete(id);
+      this.send({ kind: "ui.closed", ui_id: id, reason });
+      open.resolve(undefined);
+    }
   }
 
   respond(body: RespondBody): string | undefined {
@@ -65,6 +71,17 @@ export class UiBridge {
   }
 
   get open(): number { return this.pending.size; }
+
+  async runUntilDialog(run: () => Promise<void>): Promise<void> {
+    const opened = new Promise<void>(resolve => {
+      this.dialogOpened = resolve;
+
+      if (this.pending.size > 0) resolve();
+    });
+
+    try { await Promise.race([run(), opened]); }
+    finally { this.dialogOpened = undefined; }
+  }
 
   private ask(prompt: UiPrompt, options: ExtensionUIDialogOptions | undefined): Promise<UiAnswer | undefined> {
     const id = newId();
@@ -96,6 +113,7 @@ export class UiBridge {
 
       if (options?.timeout !== undefined && options.timeout > 0) timer = setTimeout(() => close("timeout"), options.timeout);
       this.send({ kind: "ui.request", ui_id: id, generation: counter(generation), prompt });
+      this.dialogOpened?.();
     });
   }
 
@@ -105,7 +123,16 @@ export class UiBridge {
     return {
       select: async (title, options, opts) => {
         if (options.length === 0) throw new Error("LADE: a select dialog needs at least one option");
-        const shown = options.slice(0, 64).map(option => prefix(option, 512));
+        let shown = options.slice(0, 64).map(option => prefix(option, 512));
+
+        if (new Set(shown).size !== shown.length) {
+          shown = shown.map((option, index) => {
+            const suffix = ` [${index + 1}]`;
+
+            return `${prefix(option, 512 - suffix.length)}${suffix}`;
+          });
+        }
+
         const answer = value(await this.ask({ kind: "select", title: prefix(title, 512), options: shown }, opts));
         const index = answer === undefined ? -1 : shown.indexOf(answer);
 

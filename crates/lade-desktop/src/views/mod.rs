@@ -3,6 +3,8 @@ pub mod bridge;
 mod dialogs;
 mod header;
 mod inspector;
+#[cfg(test)]
+mod launch_qa_tests;
 pub mod notify;
 mod rail;
 mod session;
@@ -845,6 +847,18 @@ impl App {
         {
             self.render_body();
         }
+        if changes.contains(&Change::WorkspaceOpened) {
+            let state = self.store.state();
+            if state
+                .notices
+                .last()
+                .is_some_and(|n| n.code.starts_with("workspace_open/"))
+            {
+                self.notices_seen.set(state.notices_received);
+                drop(state);
+                self.render_notice();
+            }
+        }
         if changes.contains(&Change::View) {
             self.render_centre();
         }
@@ -936,6 +950,12 @@ impl App {
             });
             self.empty.append(&button);
         }
+        if matches!(connection, ConnectionState::Connected) {
+            let help = widgets::button("Costs and data", &["quiet"]);
+            help.set_halign(gtk::Align::Start);
+            help.connect_clicked(dialogs::costs_and_data);
+            self.empty.append(&help);
+        }
         self.body.set_visible_child_name("empty");
     }
 
@@ -967,6 +987,16 @@ impl App {
         let text = widgets::label(&notice.message, &[]);
         text.set_hexpand(true);
         self.notice.append(&text);
+        if notice.code.starts_with("workspace_open/") {
+            let retry = widgets::wrapping_button("Choose repository…", &[]);
+            let weak = Rc::downgrade(self);
+            retry.connect_clicked(move |_| {
+                if let Some(app) = weak.upgrade() {
+                    dialogs::open_workspace(app.window.upcast_ref(), &app.controller);
+                }
+            });
+            self.notice.append(&retry);
+        }
         let dismiss = widgets::button("Dismiss", &["quiet"]);
         let weak = Rc::downgrade(self);
         dismiss.connect_clicked(move |_| {
@@ -993,6 +1023,21 @@ impl App {
             }
         }
         self.controller.set_layout_width(width);
+        let narrow = width > 0 && width < 600;
+        self.header.set_narrow(narrow);
+        self.workbench.set_narrow(narrow);
+        for (region, button) in &self.region_switches {
+            button.set_label(if narrow && *region == Region::Inspector {
+                "Review"
+            } else {
+                region.switch_label()
+            });
+        }
+        if narrow {
+            self.window.add_css_class("narrow");
+        } else {
+            self.window.remove_css_class("narrow");
+        }
     }
 
     /// Without a selected Objective the wide inspector would be an empty column.

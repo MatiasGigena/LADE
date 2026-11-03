@@ -32,6 +32,11 @@ const EXTENSION = `export default function (pi) {
       pi.sendUserMessage("lade-fixture: echo painted");
     },
   });
+  pi.on("input", async (event, ctx) => {
+    if (event.text !== "confirm-input") return { action: "continue" };
+    const ok = await ctx.ui.confirm("Accept input?", "Confirm before the turn starts", { timeout: 750 });
+    return { action: "transform", text: "lade-fixture: echo confirmed=" + ok };
+  });
 }
 `;
 
@@ -184,6 +189,66 @@ test("a dialog is never answered automatically: timeout closes it as a refusal",
   const closed = await worker.waitFor(frame => frame.kind === "ui.closed" && frame.ui_id === request.ui_id, mark);
   assert.equal(closed.reason, "timeout");
   await worker.waitFor(() => assistant(worker, mark).some(line => line.includes("confirmed=false")), mark);
+}));
+
+test("a dialog opened by an input handler can receive its answer before preflight finishes", () => withProfile(async worker => {
+  const mark = worker.frames.length;
+  worker.send(deliverBody("prompt", "confirm-input"));
+  const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
+  worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
+  await worker.idle(mark);
+  assert.ok(assistant(worker, mark).some(line => line.includes("confirmed=true")), "the answer must reach the input handler while it is waiting");
+  assert.equal(worker.kinds("ui.closed").some(frame => frame.ui_id === request.ui_id && frame.reason === "timeout"), false);
+}));
+
+test("inputs delivered while preflight waits for a dialog retain their order", () => withProfile(async worker => {
+  const mark = worker.frames.length;
+  worker.send(deliverBody("prompt", "confirm-input"));
+  const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
+  const later = randomUUID();
+  worker.send(deliverBody("prompt", "later input", later));
+  await worker.waitFor(frame => frame.kind === "input.received" && frame.input_id === later, mark);
+  worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
+  await worker.idle(mark);
+  const users = worker.items(mark).filter(item => item.role === "user").map(item => text(item.text));
+  assert.deepEqual(users, ["lade-fixture: echo confirmed=true", "later input"]);
+  assert.equal(worker.kinds("worker.error").length, 0);
+}));
+
+test("abort closes a preflight dialog and discards its queued input", () => withProfile(async worker => {
+  const mark = worker.frames.length;
+  worker.send(deliverBody("prompt", "confirm-input"));
+  const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
+  worker.send(deliverBody("prompt", "queued before abort"));
+  worker.send({ kind: "session.abort" });
+  worker.send(deliverBody("prompt", "after abort"));
+  await worker.idle(mark);
+  const users = worker.items(mark).filter(item => item.role === "user").map(item => text(item.text));
+  assert.deepEqual(users, ["after abort"]);
+  assert.equal(worker.kinds("ui.closed").some(frame => frame.ui_id === request.ui_id && frame.reason === "aborted"), true);
+}));
+
+test("session replacement is refused during input preflight and works after its answer", () => withProfile(async (worker, _box, found) => {
+  const mark = worker.frames.length;
+  worker.send(deliverBody("prompt", "confirm-input"));
+  const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
+  const waiting = await command(worker, { op: "reload", resources: resources(found) });
+  assert.equal(waiting.ok, false);
+  assert.match(text(waiting.message), /input delivery is in progress/);
+  worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
+  await worker.idle(mark);
+  assert.ok(assistant(worker, mark).some(line => line.includes("confirmed=true")));
+  const reloaded = await command(worker, { op: "reload", resources: resources(found) });
+  assert.equal(reloaded.ok, true, text(reloaded.message));
+}));
+
+test("shutdown closes a preflight dialog without starting its turn", () => withProfile(async worker => {
+  const mark = worker.frames.length;
+  worker.send(deliverBody("prompt", "confirm-input"));
+  const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
+  assert.equal(await worker.shutdown(), 0);
+  assert.equal(worker.kinds("ui.closed").some(frame => frame.ui_id === request.ui_id && frame.reason === "aborted"), true);
+  assert.equal(worker.items(mark).some(item => item.role === "user"), false);
 }));
 
 test("terminal-only extension UI fails explicitly", () => withProfile(async worker => {

@@ -399,6 +399,10 @@ impl Activity {
         let heading = widgets::section_title(SETUP_TITLE);
         body.append(&heading);
         body.append(&label(SETUP_NOTE, &["secondary"]));
+        let help = widgets::button("Costs and data", &["quiet"]);
+        help.set_halign(gtk::Align::Start);
+        help.connect_clicked(super::dialogs::costs_and_data);
+        body.append(&help);
         if let Some(error) = self.agent_error.borrow().as_ref() {
             body.append(&widgets::inline_message(MessageKind::Error, error, None));
         }

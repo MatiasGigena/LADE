@@ -58,6 +58,11 @@ async function serve(): Promise<void> {
   let host: SessionHost | undefined;
   const mapper = new ActivityMapper(item => { void channel.send(item); });
   const ui = new UiBridge(body => { void channel.send(body); }, (title, text, isError) => mapper.system(title, text, isError));
+  let delivery = Promise.resolve();
+  let preparing = 0;
+  let inputEpoch = 0;
+
+  function cancelInputs(): void { inputEpoch++; ui.cancel(); }
 
   try {
     for await (const body of channel.incoming()) {
@@ -92,22 +97,39 @@ async function serve(): Promise<void> {
           report("protocol_violation", "worker.start was already processed");
 
           return exit(EXIT_PROTOCOL, host);
-        case "input.deliver":
+        case "input.deliver": {
           await channel.send({ kind: "input.received", input_id: body.input_id });
+          const epoch = inputEpoch;
+          preparing++;
 
-          try {
-            await deliver(session, body, error => report("session_failed", error.message));
-          } catch (error) {
-            report("delivery_failed", error instanceof Error ? error.message : "input was rejected");
-          }
+          delivery = delivery.then(async () => {
+            try {
+              if (epoch !== inputEpoch) return;
+              await deliver(session, body, error => report("session_failed", error.message), () => epoch === inputEpoch);
+            } catch (error) {
+              if (epoch === inputEpoch) report("delivery_failed", error instanceof Error ? error.message : "input was rejected");
+            } finally {
+              preparing--;
+            }
+          });
+          await ui.runUntilDialog(() => delivery);
 
           break;
+        }
+
         case "session.abort":
+          cancelInputs();
           session.abortCompaction();
           await abort(session, cleared(mapper));
 
           break;
         case "session.command":
+          if (preparing > 0) {
+            await channel.send({ kind: "session.result", command_id: body.command_id, ok: false, message: "input delivery is in progress; answer its dialog, stop or wait for it to finish" });
+
+            break;
+          }
+
           void host.command(body).then(result => channel.send(result));
 
           break;
@@ -120,17 +142,22 @@ async function serve(): Promise<void> {
         }
 
         case "worker.shutdown":
+          cancelInputs();
+
           if (session.isStreaming) await abort(session, cleared(mapper));
 
           return exit(EXIT_OK, host);
       }
     }
 
+    cancelInputs();
+
     if (host?.session.isStreaming) await abort(host.session, cleared(mapper));
 
     return exit(EXIT_OK, host);
   } catch (error) {
     if (!(error instanceof WireError)) throw error;
+    cancelInputs();
     report("protocol_violation", `rejected inbound frame (${error.code})`);
 
     return exit(EXIT_PROTOCOL, host);

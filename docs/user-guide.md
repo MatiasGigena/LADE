@@ -140,12 +140,17 @@ Below about 1100 pixels of window width (for example 800 × 550, or a 1600 × 11
 window shows one region at a time: switch between **Objectives**, **Work area** and **Overview · Evidence ·
 Feedback** with the buttons below the header or F6. In this layout the work area also shows the Objective's status,
 and **Objective details** shows or hides the journey.
+Below 600 pixels the header navigation uses a second row, **Review** opens Overview / Evidence / Feedback,
+and the file list sits above the inspected file. Dialog content scrolls to keep its action buttons reachable.
 Text you type or paste into drafts, messages and intents is limited to 256 KiB per field (an override reason to
 2,048 characters); a paste that would exceed it is not inserted and your text stays as it was.
 
 ## 3. Open a repository (Workspace)
 
-Ctrl+O and choose the **top-level directory** of a non-bare Git repository. LADE never runs the repository's hooks
+Ctrl+O, paste the full repository folder path and choose **Open repository** (or press Enter). **Browse…** opens
+the native folder chooser and returns the selected path for confirmation. Choose the **top-level directory**
+containing `.git`, not the `.git` directory itself; the repository needs at least one commit.
+LADE never runs the repository's hooks
 (including hooks defined in configuration), filters or credential helpers, and never edits your checkout except when
 you integrate into a checked-out target branch (§7).
 
@@ -169,6 +174,12 @@ specific commit). The intent stays editable until approval. Nothing runs yet: th
 `lade/<id>` are created on the first run, under LADE's data directory, never in your checkout.
 
 ## 5. Choose a model and provide credentials
+
+**Costs and data**, on the initial screen and in **Set up the agent**, explains the provider boundary before a
+first run. Live models use your provider account and its billing, limits, terms and privacy policy. LADE does not
+estimate or cap provider charges. Instructions, repository content the agent reads and tool results are sent to
+the selected provider; Objectives, messages, drafts and captured changes are stored locally. An existing pi
+ChatGPT login cannot be reused by this build; the subscription-login restriction below still applies.
 
 Pick a model when starting execution: in Activity, **Set up the agent** shows the provider, model and thinking
 level *Start agent* will use (the first usable ones are chosen for you). Once the agent has run, change them under

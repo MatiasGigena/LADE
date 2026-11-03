@@ -67,6 +67,8 @@ pub type OpenerHandler = Rc<dyn Fn(&gtk::Widget)>;
 pub struct Header {
     pub root: gtk::Box,
     pub viewport: gtk::ScrolledWindow,
+    row: gtk::Box,
+    brand: gtk::Box,
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
     activity_tab: gtk::ToggleButton,
@@ -93,6 +95,7 @@ pub struct Header {
     on_shortcuts: RefCell<Option<OpenerHandler>>,
     on_exit: RefCell<Option<OpenerHandler>>,
     compact: Cell<bool>,
+    narrow: Cell<bool>,
     updating: Cell<bool>,
 }
 
@@ -160,9 +163,12 @@ fn menu_item(text: &str, destructive: bool) -> (gtk::Button, gtk::Label) {
 
 impl Header {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let root = hbox(space::SECTION);
+        let root = vbox(0);
         root.add_css_class("lade-header");
         set_accessible_label(&root, "Header");
+        let row = hbox(space::SECTION);
+        row.set_height_request(56);
+        root.append(&row);
 
         let brand = hbox(space::ITEM);
         brand.add_css_class("brand");
@@ -176,7 +182,7 @@ impl Header {
         let wordmark = gtk::Label::new(Some("LADE"));
         wordmark.add_css_class("wordmark");
         brand.append(&wordmark);
-        root.append(&brand);
+        row.append(&brand);
 
         let nav = hbox(0);
         nav.add_css_class("nav");
@@ -193,18 +199,18 @@ impl Header {
             nav.append(tab);
         }
         workbench_tab.set_active(true);
-        root.append(&nav);
+        row.append(&nav);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
-        root.append(&spacer);
+        row.append(&spacer);
 
         let status = label("", &["connection", "meta"]);
         status.set_wrap(false);
         status.set_ellipsize(gtk::pango::EllipsizeMode::End);
         status.set_width_chars(14);
         status.set_valign(gtk::Align::Center);
-        root.append(&status);
+        row.append(&status);
 
         let search = hbox(0);
         search.add_css_class("search");
@@ -225,14 +231,14 @@ impl Header {
         let search_slot = hbox(0);
         search_slot.set_valign(gtk::Align::Center);
         search_slot.append(&search);
-        root.append(&search_slot);
+        row.append(&search_slot);
 
         let search_popover = gtk::Popover::new();
         search_popover.add_css_class("search-popover");
         let search_holder = hbox(0);
         search_popover.set_child(Some(&search_holder));
         let search_button = icon_menu_button("system-search-symbolic", "Search", &search_popover);
-        root.append(&search_button);
+        row.append(&search_button);
 
         let popover = gtk::Popover::new();
         popover.add_css_class("search-results");
@@ -259,9 +265,9 @@ impl Header {
         popover.set_child(Some(&popover_box));
 
         let shortcuts_button = icon_button("input-keyboard-symbolic", "Keyboard shortcuts");
-        root.append(&shortcuts_button);
+        row.append(&shortcuts_button);
         let exit_button = icon_button("system-shutdown-symbolic", "Exit LADE and stop its agents");
-        root.append(&exit_button);
+        row.append(&exit_button);
 
         let menu = gtk::Popover::new();
         menu.add_css_class("header-menu");
@@ -273,22 +279,35 @@ impl Header {
         menu.set_child(Some(&menu_box));
         let menu_button =
             icon_menu_button("open-menu-symbolic", "Keyboard shortcuts and Exit", &menu);
-        root.append(&menu_button);
+        row.append(&menu_button);
 
         let profile = hbox(space::ITEM);
         profile.add_css_class("profile");
         profile.set_valign(gtk::Align::Center);
-        let avatar = gtk::Label::new(Some("MG"));
+        let real_name = gtk::glib::real_name().to_string_lossy().into_owned();
+        let display_name = if real_name.trim().is_empty() || real_name == "Unknown" {
+            gtk::glib::user_name().to_string_lossy().into_owned()
+        } else {
+            real_name
+        };
+        let initials: String = display_name
+            .split_whitespace()
+            .take(2)
+            .filter_map(|word| word.chars().next())
+            .flat_map(char::to_uppercase)
+            .collect();
+        let avatar = gtk::Label::new(Some(&initials));
         avatar.add_css_class("avatar");
         avatar.set_valign(gtk::Align::Center);
-        avatar.set_tooltip_text(Some("Placeholder avatar for Matias Gigena"));
-        set_accessible_label(&avatar, "Placeholder avatar for Matias Gigena");
+        let avatar_label = format!("Placeholder avatar for {display_name}");
+        avatar.set_tooltip_text(Some(&avatar_label));
+        set_accessible_label(&avatar, &avatar_label);
         profile.append(&avatar);
-        let name = gtk::Label::new(Some("Matias Gigena"));
+        let name = gtk::Label::new(Some(&display_name));
         name.add_css_class("profile-name");
         name.set_valign(gtk::Align::Center);
         profile.append(&name);
-        root.append(&profile);
+        row.append(&profile);
 
         let viewport = gtk::ScrolledWindow::builder()
             .child(&root)
@@ -299,6 +318,8 @@ impl Header {
         let header = Rc::new(Self {
             root,
             viewport,
+            row,
+            brand,
             controller: controller.clone(),
             workbench_tab,
             activity_tab,
@@ -325,6 +346,7 @@ impl Header {
             on_shortcuts: RefCell::new(None),
             on_exit: RefCell::new(None),
             compact: Cell::new(false),
+            narrow: Cell::new(false),
             updating: Cell::new(false),
         });
         header.connect();
@@ -449,7 +471,7 @@ impl Header {
         if self.compact.replace(compact) == compact {
             return;
         }
-        self.root
+        self.row
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
         self.nav
             .set_margin_start(if compact { space::ITEM } else { space::PAGE });
@@ -470,6 +492,32 @@ impl Header {
         self.profile_name.set_visible(!compact);
         self.status.set_width_chars(if compact { -1 } else { 14 });
         self.refresh_connection();
+    }
+
+    pub fn set_narrow(&self, narrow: bool) {
+        if self.narrow.replace(narrow) == narrow {
+            return;
+        }
+        if narrow {
+            self.row.remove(&self.nav);
+            self.root.append(&self.nav);
+            self.nav.set_margin_start(0);
+        } else {
+            self.root.remove(&self.nav);
+            self.row.insert_child_after(&self.nav, Some(&self.brand));
+            self.nav.set_margin_start(if self.compact.get() {
+                space::ITEM
+            } else {
+                2 * space::PAGE
+            });
+        }
+        self.search_entry
+            .set_width_chars(if narrow { 8 } else { 12 });
+        self.search_entry
+            .set_max_width_chars(if narrow { 18 } else { 34 });
+        if let Some(child) = self.popover.child() {
+            child.set_size_request(if narrow { 280 } else { 380 }, -1);
+        }
     }
 
     pub fn set_shortcut_hints(&self, keymap: &Keymap) {

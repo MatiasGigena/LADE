@@ -127,6 +127,14 @@ test("fetch is tunnelled through the gateway socket with HTTP CONNECT", async ()
   assert.deepEqual(authorities, [`provider.lade.test:${port}`]);
 });
 
+test("fetch brackets IPv6 literals in CONNECT tunnel targets", async () => {
+  installGateway(socketPath);
+  const port = portOf(origin);
+  const response = await fetch(`http://[::1]:${port}/v1/models`);
+  assert.equal(await response.text(), "origin saw /v1/models");
+  assert.equal(authorities.at(-1), `[::1]:${port}`);
+});
+
 function httpGet(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     http.get(url, response => {

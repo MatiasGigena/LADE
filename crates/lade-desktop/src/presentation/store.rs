@@ -154,6 +154,7 @@ pub enum ActivityChange {
 pub enum Change {
     Connection,
     Workspaces,
+    WorkspaceOpened,
     Objectives,
     Selection,
     Detail(ObjectiveId),
@@ -611,7 +612,11 @@ impl PresentationState {
                     Some(existing) => *existing = workspace,
                     None => self.workspaces.push(workspace),
                 }
-                vec![Change::Workspaces, Change::Objectives]
+                vec![
+                    Change::Workspaces,
+                    Change::WorkspaceOpened,
+                    Change::Objectives,
+                ]
             }
             StoreUpdate::ObjectiveChanged(summary) => {
                 let id = summary.objective_id.clone();

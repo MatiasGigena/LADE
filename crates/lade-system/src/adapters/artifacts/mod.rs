@@ -209,21 +209,23 @@ impl ArtifactStore {
         drop(file);
         let digest = ArtifactDigest::from_hasher(hasher);
         let dest = self.path_of(&digest);
-        if self.contains(&digest) {
-            return Ok(digest);
-        }
         let shard = dest.parent().unwrap_or(&self.objects);
         match DirBuilder::new().mode(0o700).create(shard) {
-            Ok(()) => self
-                .io
-                .sync_dir(&self.objects)
-                .map_err(io_err("sync_dir"))?,
+            Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(io_err("create_dir")(e)),
         }
+        // A previous attempt may have created this shard before its fsync failed.
+        self.io
+            .sync_dir(&self.objects)
+            .map_err(io_err("sync_dir"))?;
         match self.io.publish(&tmp_path, &dest) {
             Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(digest),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                if !self.verify(&digest)? {
+                    return Err(ArtifactError::Corrupt);
+                }
+            }
             Err(e) => return Err(io_err("publish")(e)),
         }
         self.io.sync_dir(shard).map_err(io_err("sync_dir"))?;

@@ -1050,8 +1050,22 @@ pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
 
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
-    let code = convert::error_code(rejection.code).to_owned();
+    // Scope folder-open failures so a later successful open can resolve only that notice.
+    let code = if matches!(
+        context,
+        Context::Command {
+            label: "Open workspace",
+            ..
+        }
+    ) {
+        format!("workspace_open/{}", convert::error_code(rejection.code))
+    } else {
+        convert::error_code(rejection.code).to_owned()
+    };
     let mut refused = refusal(context.label(), rejection);
+    if code.starts_with("workspace_open/") && rejection.code == wire::ErrorCode::InvalidRequest {
+        refused.message.push_str(" Choose the repository folder containing .git, not .git itself. It needs at least one commit.");
+    }
     let updates = &mut effects.updates;
     let notice = |refused: Refusal| {
         StoreUpdate::Notice(ServiceNotice {
