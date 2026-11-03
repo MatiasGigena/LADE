@@ -1,7 +1,7 @@
 # pi worker (WP-D)
 
 `packages/pi-worker/src/worker.ts` is the per-Objective Agent Session process. It drives a real pi `AgentSession`
-through the pinned `@earendil-works/pi-coding-agent@0.85.1` SDK (root exports only, no patches) and speaks the
+through the pinned `@earendil-works/pi-coding-agent@1.5.0` SDK (root exports only, no patches) and speaks the
 [worker protocol](protocol-v1.md#service--worker-worker-schemajson-jsonl) as LF-delimited JSON on stdin/stdout.
 
 ## Launch
@@ -135,15 +135,15 @@ generation closes open dialogs as `replaced`. `notify` becomes a system item. Di
 surfaces are no-ops; `custom()` and editor control throw `UnsupportedUiError`, so nothing is answered
 automatically.
 
-## SDK APIs used (0.85.1 root exports)
+## SDK APIs used (1.5.0 root exports)
 
 - `ModelRuntime.create({authPath, modelsPath: null, modelsStorePath, allowModelNetwork: false})`,
   `modelRuntime.registerProvider(id, config)`, `modelRuntime.getModel(provider, id)`.
 - `SettingsManager.inMemory({...})` (no global or project `settings.json`; `defaultProjectTrust:
   "never"`, telemetry/analytics off, one-at-a-time queues).
 - `new DefaultResourceLoader({cwd, agentDir, settingsManager, noExtensions, noSkills,
-  noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, additionalSkillPaths,
-  additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
+  noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, extensionFactories,
+  additionalSkillPaths, additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
   appendSystemPromptOverride: () => [system_note]})` + `reload()`.
 - `createAgentSessionRuntime`, `createAgentSessionFromServices`,
   `AgentSessionRuntime` (`fork`, `importFromJsonl`, `setRebindSession`, `setBeforeSessionInvalidate`,
@@ -157,10 +157,16 @@ automatically.
   resourceLoader, sessionManager, settingsManager})`.
 - `AgentSession`: `subscribe`, `prompt(text, {expandPromptTemplates, source, preflightResult})`,
   `steer`, `followUp`, `clearQueue`, `abort`, `isStreaming`, `sessionId`, `sessionFile`, `dispose`.
+  `preflightResult` reports only how an accepted prompt was dispatched; a delivery cancelled before
+  the run starts (a newer input epoch) is dropped by the worker's own `input` handler (`InputGate` in
+  `src/worker/session.ts`, passed as the only `extensionFactories` entry), which answers `handled`
+  for that `rpc` input.
 - Types: `AgentSession`, `AgentSessionEvent`, `AgentToolResult`, `ModelRuntime`.
-- From the SDK's own `@earendil-works/pi-ai@0.85.1` (the copy nested under pi-coding-agent, re-exported
-  by `src/worker/pi-ai.ts`; see [Dependencies](#dependencies)): `createAssistantMessageEventStream`,
-  `getSupportedThinkingLevels` and message/stream types.
+- From the SDK's own `@earendil-works/pi-ai@1.5.0` (the single installed copy, re-exported by
+  `src/worker/pi-ai.ts`; see [Dependencies](#dependencies)): `createAssistantMessageEventStream`,
+  `getCurrentSystemPrompt` (provider streams receive a normalized `TranscriptContext` whose system
+  prompt is in `messages`), `getSupportedThinkingLevels`, message/stream types, and
+  `normalizeContext` (dependency test only).
 - From `undici@8.12.3`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
 
 ## `lade-fixture` provider (test-only)
@@ -214,13 +220,16 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled
   `fetch`, refused tunnel, invalid authority, and the no-gateway failure.
 - `test/worker-deps.test.ts` — the dependency seam: exactly one pi-ai is locked and installed (no
-  direct dependency, no hoisted copy), pi-coding-agent and pi-agent-core resolve the package that
-  `src/worker/pi-ai.ts` re-exports, the fixture provider registered on a real `ModelRuntime` streams
-  through the SDK's own `AssistantMessageEventStream` class (same constructor as the SDK's
-  `lazyStream` wrapper), and the installed SDK is the pinned distribution: `package.json` and
-  `npm-shrinkwrap.json` hashes equal `vendor/pi-coding-agent/manifest.json`, the patch inventory is
-  empty, direct dependencies match `npm_distribution`, and the lockfile's nested tree is exactly the
-  upstream shrinkwrap (versions and integrity).
+  direct dependency, no nested copy), every locked package that depends on pi-ai (pi-coding-agent,
+  pi-agent-core, …) resolves the hoisted copy that `src/worker/pi-ai.ts` re-exports, the fixture
+  provider registered on a real `ModelRuntime` streams through the SDK's own
+  `AssistantMessageEventStream` class, and the installed SDK is the pinned distribution: its
+  `package.json` hash equals `vendor/pi-coding-agent/manifest.json`, it ships no shrinkwrap, the patch
+  inventory is empty, direct dependencies match `npm_distribution`, each exact dependency pin of the
+  SDK is locked and installed at that version where the SDK resolves it, every production package is
+  in the SDK's dependency closure, and that closure is exactly upstream's release install lock
+  (`vendor/pi-coding-agent/upstream/install-lock/package-lock.json`: names, versions, resolved URLs
+  and integrity).
 - `test/worker-compat.test.ts` — IMP-011 corpus with a disposable LADE profile: shared hash
   constants, resource precedence and untrusted repository `.pi`, single template expansion, refused
   changed extension, dialogs with generations, timeout close, explicit failure of `custom()`, reload
@@ -230,23 +239,24 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
 
 ## Dependencies
 
-Direct production dependencies: `@earendil-works/pi-coding-agent@0.85.1` and `undici@8.12.3` (gateway
-dispatcher). pi-coding-agent ships an `npm-shrinkwrap.json`, so npm installs its whole locked tree —
-pi-ai, pi-agent-core, pi-tui, the provider SDKs — nested under
-`node_modules/@earendil-works/pi-coding-agent/node_modules/` and never hoists or dedupes it. A direct
-`@earendil-works/pi-ai` dependency therefore always added a second registry copy beside the nested
-one, even at the identical version, with its transitive versions taken from our lockfile instead of
-the upstream shrinkwrap. Dropping it shrank the production install from 225 to 133 packages, 256 to
-159 MB on disk and 24.7k to 13.8k files. The worker no longer depends on pi-ai directly:
-`src/worker/pi-ai.ts` is the only module that names it, re-exporting from the nested copy's `.`
-export target (`dist/index.js`) by relative path, so the worker loads exactly the pi-ai instance the SDK
-loads. The two copies were structurally compatible before (the SDK has no `instanceof` checks on
-streams and provider registration is per `ModelRuntime`, not in a pi-ai global), so this removed no
-latent failure, but it removes a second set of module state and the risk of one appearing.
+Direct production dependencies: `@earendil-works/pi-coding-agent@1.5.0` and `undici@8.12.3` (gateway
+dispatcher; the same version the SDK pins). From 1.0 pi publishes no `npm-shrinkwrap.json`: the SDK
+tarball pins its direct dependencies exactly, and upstream pins the transitive tree in
+`packages/coding-agent/install-lock/` (the lockfile root its installer and updater use), retained
+under `vendor/pi-coding-agent/upstream/install-lock/`. npm therefore hoists and dedupes the SDK's
+tree normally; `packages/pi-worker/package-lock.json` resolves it to exactly that install lock,
+including its `protobufjs` 7.6.6 override, without an `overrides` entry of our own. (0.85.1 shipped a
+shrinkwrap, which npm installs nested and never dedupes, and which made root `overrides` ineffective
+for security fixes inside it.)
+
+The worker does not depend on pi-ai directly: `src/worker/pi-ai.ts` is the only module that names it,
+re-exporting from the hoisted copy's `.` export target (`node_modules/@earendil-works/pi-ai/dist/index.js`)
+by relative path, so the worker loads exactly the pi-ai instance the SDK loads and a direct dependency
+cannot add a second copy with transitive versions outside the upstream lock.
 `scripts/check-architecture.py` allows that relative import only from `src/worker/pi-ai.ts` and
-rejects a bare `@earendil-works/pi-ai` import anywhere in the worker. The path depends on npm's
-nested layout, which the lockfile and the upstream shrinkwrap pin and `test/worker-deps.test.ts`
-checks; an SDK upgrade must re-run that test.
+rejects a bare `@earendil-works/pi-ai` import anywhere in the worker. The path depends on npm hoisting
+pi-ai to the top level, which the lockfile pins and `test/worker-deps.test.ts` checks; an SDK upgrade
+must re-run that test.
 
 ## Limitations (v1)
 

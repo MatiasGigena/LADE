@@ -22,7 +22,7 @@ other. Vocabulary is defined in [CONTEXT.md](CONTEXT.md); the rationale is in th
   an Integration Target branch; its work happens on a `lade/<id>` branch in a worktree under LADE's data directory,
   never in your checkout.
 - **Sandboxed agents.** Agent Sessions run the [pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent)
-  coding agent (pinned 0.85.1) inside a bubblewrap sandbox that can write only the Objective's worktree and session
+  coding agent (pinned 1.5.0) inside a bubblewrap sandbox that can write only the Objective's worktree and session
   directory. Network access goes only to the selected provider's API host through an egress gateway. If the sandbox
   cannot be created, execution is refused; there is no unsandboxed fallback.
 - **Read-only inspection.** Diff and full-file views of the Change Set, search across Objectives, paths and content,

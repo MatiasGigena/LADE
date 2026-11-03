@@ -269,7 +269,7 @@ HTTP `CONNECT` proxy on the per-launch Unix socket; the worker's undici dispatch
   through the agent, a `ws://` echo through the tunnel, refusal, no network for `fetch`, `http` and `WebSocket`),
   `supervision_launcher.rs::probe_sees_only_allowlisted_env_files_and_network` (inside the sandbox a raw socket and
   Node's WebSocket without the gateway installed cannot connect).
-- WebSockets in the pinned provider contract: in pi-ai 0.85.1 only the `openai-codex-responses` API (provider
+- WebSockets in the pinned provider contract: in pi-ai 1.5.0 only the `openai-codex-responses` API (provider
   `openai-codex`, ChatGPT Plus/Pro, an interactive OAuth login and therefore restricted) opens a WebSocket, through
   `globalThis.WebSocket` (undici's after `install()`), falling back to SSE over `fetch`. No supported provider
   needs one. The `ws` package in the dependency tree is used by `@google/genai` (Live API) and `openai` (Realtime),
@@ -284,7 +284,7 @@ HTTP `CONNECT` proxy on the per-launch Unix socket; the worker's undici dispatch
   and open tunnel: revocation closes access that was already granted.
 - Diagnostics: `lade-gateway[<12 hex>-<gen>]: host:port <decision>` on stderr; never headers or payload.
 
-Default provider policies (pi provider ids from pi-ai 0.85.1; hosts are the base URLs of its built-in catalogues
+Default provider policies (pi provider ids from pi-ai 1.5.0; hosts are the base URLs of its built-in catalogues
 in `dist/providers/data/*.json`):
 
 | Provider | Host (443) | Credential variables (pi `env-api-keys.js`) |

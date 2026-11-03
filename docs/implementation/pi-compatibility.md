@@ -1,6 +1,6 @@
 # pi compatibility inventory (IMP-011)
 
-What of the pinned pi workflow (`@earendil-works/pi-coding-agent@0.85.1`) is usable through LADE, mapped from the
+What of the pinned pi workflow (`@earendil-works/pi-coding-agent@1.5.0`) is usable through LADE, mapped from the
 pi compatibility decision and the
 IMP-011 scope ([spec §5](spec.md#imp-011)). Every promise is in exactly one class:
 
@@ -124,11 +124,11 @@ provider's reviewed host.
 | --- | --- | --- | --- |
 | API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `providers.rs` tests, S [integrated]; **no live provider run** |
 | Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `providers.rs` tests [fixture]; **no live run** |
-| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT Plus/Pro (`openai-codex`), GitHub Copilot, xAI, OpenRouter OAuth, Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
-| WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 0.85.1, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
+| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT subscription login for `openai` and the legacy `openai-codex`, GitHub Copilot, xAI, OpenRouter OAuth, Kimi Code, Meta (Muse), Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
+| WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 1.5.0, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
 | Cloud credentials (Bedrock, Vertex) | Restricted | AWS profiles/keys and ADC files are not released; the Bedrock SDK's `node:http` transport bypasses the gateway | manifest |
-| Account-specific endpoints (Azure OpenAI, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
-| Other catalogue providers without a reviewed policy (ant-ling, baseten, minimax, minimax-cn, moonshotai-cn, qwen token plans, xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway.rs`/`credentials.rs`) | manifest |
+| Account-specific endpoints (Azure, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
+| Other catalogue providers without a reviewed policy (ant-ling, baseten, meta, minimax, minimax-cn, moonshotai-cn, qwen token plans, typesafe (classifier models only), xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway.rs`/`credentials.rs`) | manifest |
 | Custom providers (`models.json`) | Supported with trust rules | LADE profile `models.json`: https, or http only to local hosts; credentials only as one whole `$LADE_PROVIDER_*` variable (literal keys only for local endpoints); no `!command` values or other interpolation; no `oauth`; no redefinition of a built-in provider; egress to exactly the declared host:port (private addresses only for local endpoints) | `profile.rs` tests, S catalogue test [integrated] |
 | Graphical login / logout | Restricted | Follows from the OAuth restriction; keys are stored with `laded credentials set` (Secret Service) or in `credentials.env` | — |
 
