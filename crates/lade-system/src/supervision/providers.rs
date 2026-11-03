@@ -63,7 +63,7 @@ fn cloud(id: &str) -> Option<&'static str> {
         "google-vertex" => {
             "Application Default Credentials files are not released into the sandbox"
         }
-        "azure-openai-responses" => {
+        "azure" => {
             "the endpoint host is specific to each Azure resource; there is no reviewed per-resource egress policy"
         }
         "cloudflare-ai-gateway" | "cloudflare-workers-ai" => {

@@ -91,6 +91,7 @@ async function serve(): Promise<void> {
       }
 
       const session = host.session;
+      const gate = host.gate;
 
       switch (body.kind) {
         case "worker.start":
@@ -105,7 +106,7 @@ async function serve(): Promise<void> {
           delivery = delivery.then(async () => {
             try {
               if (epoch !== inputEpoch) return;
-              await deliver(session, body, error => report("session_failed", error.message), () => epoch === inputEpoch);
+              await deliver(session, gate, body, error => report("session_failed", error.message), () => epoch === inputEpoch);
             } catch (error) {
               if (epoch === inputEpoch) report("delivery_failed", error instanceof Error ? error.message : "input was rejected");
             } finally {

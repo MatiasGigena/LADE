@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionRuntime, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WorkerErrorCode } from "../dto.ts";
 import { counter } from "../schema.ts";
 import { prefix, safeMessage } from "./activity.ts";
@@ -113,7 +113,22 @@ function isThinking(level: string): level is ThinkingLevel {
   return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level);
 }
 
+export class InputGate {
+  private active: (() => boolean) | undefined;
+
+  readonly extension: ExtensionFactory = pi => {
+    pi.on("input", event => event.source === "rpc" && this.active?.() === false ? { action: "handled" } : { action: "continue" });
+  };
+
+  open(active: () => boolean): () => void {
+    this.active = active;
+
+    return () => { if (this.active === active) this.active = undefined; };
+  }
+}
+
 export class SessionHost {
+  readonly gate = new InputGate();
   private readonly start: StartBody;
   private readonly send: (body: OutboundBody) => void;
   private readonly ui: UiBridge;
@@ -178,7 +193,7 @@ export class SessionHost {
 
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ agentDir: dir, sessionManager, sessionStartEvent }) => {
       const cwd = start.cwd;
-      const loader = new LadeResourceLoader({ cwd, agentDir: dir, settingsManager, systemNote: start.system_note, resources: this.resources });
+      const loader = new LadeResourceLoader({ cwd, agentDir: dir, settingsManager, systemNote: start.system_note, resources: this.resources, inputGate: this.gate.extension });
       await loader.reload();
       this.loader = loader;
       const services: AgentSessionServices = { cwd, agentDir: dir, modelRuntime, settingsManager, resourceLoader: loader, diagnostics: [] };
@@ -408,30 +423,37 @@ export class SessionHost {
   }
 }
 
-export function deliver(session: AgentSession, input: DeliverBody, onRunError: (error: Error) => void, active: () => boolean = () => true): Promise<void> {
-  if (session.isStreaming) return input.mode === "steer" ? session.steer(input.text) : session.followUp(input.text);
+export async function deliver(session: AgentSession, gate: InputGate, input: DeliverBody, onRunError: (error: Error) => void, active: () => boolean = () => true): Promise<void> {
+  if (session.isStreaming) {
+    await (input.mode === "steer" ? session.steer(input.text) : session.followUp(input.text));
+
+    return;
+  }
+
   const space = input.text.indexOf(" ");
   const name = input.text.startsWith("/") ? input.text.slice(1, space < 0 ? undefined : space) : undefined;
 
   if (name !== undefined && session.extensionRunner.getCommand(name)) {
     session.prompt(input.text, { expandPromptTemplates: true, source: "rpc" }).catch((error: Error) => onRunError(error));
 
-    return Promise.resolve();
+    return;
   }
 
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     let accepted = false;
+    const close = gate.open(active);
 
     session.prompt(input.text, {
       expandPromptTemplates: true,
       source: "rpc",
-      preflightResult: ok => {
-        if (ok && !active()) throw new Error("input delivery was cancelled");
-        accepted = ok;
-
-        if (ok) resolve();
+      preflightResult: () => {
+        close();
+        accepted = true;
+        resolve();
       },
-    }).then(() => resolve(), (error: Error) => {
+    }).then(() => { close(); resolve(); }, (error: Error) => {
+      close();
+
       if (accepted) onRunError(error);
       else reject(error);
     });

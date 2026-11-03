@@ -1048,7 +1048,7 @@ fn compat_replies_and_events_reach_the_store() {
     let models = reply_effects(
         &Context::Models(Some("lade-fixture".into())),
         ReplyData::ModelsList(wire::ModelCatalog {
-            sdk_version: "0.85.1".into(),
+            sdk_version: "1.5.0".into(),
             providers: vec![wire::ProviderInfo {
                 provider: "openai-codex".into(),
                 name: "OpenAI Codex".into(),

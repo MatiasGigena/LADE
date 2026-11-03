@@ -28,10 +28,11 @@ vendor=root/'vendor/pi-coding-agent'
 manifest=json.loads((vendor/'manifest.json').read_text())
 for path, expected in manifest['files'].items():
     assert hashlib.sha256((vendor/path).read_bytes()).hexdigest() == expected, f'pi input changed: {path}'
-lock=json.loads((vendor/'upstream/npm-shrinkwrap.json').read_text())
-assert lock['version'] == manifest['version'] == '0.85.1'
+assert json.loads((vendor/'upstream/package.json').read_text())['version'] == manifest['version'] == '1.5.0'
+lock=json.loads((vendor/'upstream/install-lock/package-lock.json').read_text())
+assert lock['packages']['']['version'] == manifest['version']
 for name, pkg in lock['packages'].items():
-    if name.startswith('node_modules/@earendil-works/'):
+    if name.rsplit('node_modules/', 1)[-1].startswith('@earendil-works/'):
         assert pkg['version'] == manifest['version'], f'pi package mismatch: {name}'
 worker=json.loads((root/'packages/pi-worker/package.json').read_text())
 assert worker['engines'] == {'node':pins['node'],'npm':pins['npm']}

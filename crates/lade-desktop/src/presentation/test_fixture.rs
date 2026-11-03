@@ -603,7 +603,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
         };
     vec![
         StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
-            sdk_version: "0.85.1".into(),
+            sdk_version: "1.5.0".into(),
             providers: vec![
                 provider(
                     "test-provider",

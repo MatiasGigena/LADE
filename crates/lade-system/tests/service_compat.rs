@@ -181,7 +181,7 @@ fn models_come_from_the_sdk_catalogue_with_explicit_provider_access() {
         Ok(ReplyData::ModelsList(catalog)) => catalog,
         other => panic!("models.list: {other:?}"),
     };
-    assert_eq!(catalog.sdk_version, "0.85.1");
+    assert_eq!(catalog.sdk_version, "1.5.0");
     assert_eq!(catalog.error, None, "the pinned SDK catalogue ran");
     assert!(catalog.models.is_empty(), "models are listed per provider");
     let by_id: BTreeMap<_, _> = catalog

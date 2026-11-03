@@ -1,5 +1,5 @@
-import { createAssistantMessageEventStream } from "./pi-ai.ts";
-import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions, TextContent, ToolCall } from "./pi-ai.ts";
+import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "./pi-ai.ts";
+import type { Api, AssistantMessage, AssistantMessageEventStream, Message, Model, SimpleStreamOptions, TextContent, ToolCall, TranscriptContext } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const FIXTURE_PROVIDER = "lade-fixture";
@@ -54,7 +54,7 @@ function directives(text: string): Directives {
   return found;
 }
 
-function userText(message: Context["messages"][number]): string {
+function userText(message: Message): string {
   if (message.role !== "user") return "";
 
   if (Array.isArray(message.content)) return message.content.map(part => part.type === "text" ? part.text : "").join("\n");
@@ -80,7 +80,7 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
 const transientFailed = new Set<string>();
 
-function transientKey(message: Context["messages"][number] | undefined): string {
+function transientKey(message: Message | undefined): string {
   return message ? `${message.timestamp}:${userText(message)}` : "";
 }
 
@@ -94,7 +94,7 @@ function chunks(text: string): string[] {
   return out;
 }
 
-function plan(context: Context): Script {
+function plan(context: TranscriptContext): Script {
   const messages = context.messages;
   let lastUser = -1;
 
@@ -127,7 +127,7 @@ function plan(context: Context): Script {
   if (script.echo) return { text: `lade-fixture echo: ${latest ? userText(latest) : ""}`, calls: [], fail: false, delayMs: script.delayMs };
 
   if (script.system) {
-    const markers = [...new Set(context.systemPrompt?.match(MARKER) ?? [])].sort();
+    const markers = [...new Set(getCurrentSystemPrompt(context.messages).match(MARKER) ?? [])].sort();
 
     return { text: `lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`, calls: [], fail: false, delayMs: script.delayMs };
   }
@@ -146,7 +146,7 @@ function plan(context: Context): Script {
   };
 }
 
-async function run(model: Model<Api>, context: Context, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream): Promise<void> {
+async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream): Promise<void> {
   const signal = options?.signal;
   const script = plan(context);
 
@@ -202,7 +202,7 @@ async function run(model: Model<Api>, context: Context, options: SimpleStreamOpt
   stream.end();
 }
 
-function streamFixture(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream {
+function streamFixture(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   void run(model, context, options, stream);
 

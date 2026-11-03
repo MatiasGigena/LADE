@@ -190,7 +190,7 @@ fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
         }],
     );
     CatalogData {
-        sdk_version: "0.85.1".into(),
+        sdk_version: "1.5.0".into(),
         providers: if test_fixture_provider {
             vec![fixture]
         } else {

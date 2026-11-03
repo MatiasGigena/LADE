@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
-import type { LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionFactory, LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { prefix } from "./activity.ts";
 import type { LoadedResource, WorkerResources } from "./wire.ts";
 
@@ -133,6 +133,7 @@ export interface LoaderInputs {
   settingsManager: SettingsManager;
   systemNote: string;
   resources: WorkerResources | undefined;
+  inputGate: ExtensionFactory;
 }
 
 export class LadeResourceLoader implements ResourceLoader {
@@ -146,7 +147,7 @@ export class LadeResourceLoader implements ResourceLoader {
   }
 
   private build(): DefaultResourceLoader {
-    const { cwd, agentDir, settingsManager, systemNote, resources } = this.inputs;
+    const { cwd, agentDir, settingsManager, systemNote, resources, inputGate } = this.inputs;
     const profile = resources?.profile_dir;
     const existing = (name: string): string[] => profile !== undefined && existsSync(join(profile, name)) ? [join(profile, name)] : [];
     const verified = verifyExtensions(resources);
@@ -162,6 +163,7 @@ export class LadeResourceLoader implements ResourceLoader {
       noThemes: true,
       noContextFiles: true,
       additionalExtensionPaths: verified.paths,
+      extensionFactories: [inputGate],
       additionalSkillPaths: existing("skills"),
       additionalPromptTemplatePaths: existing("prompts"),
       agentsFilesOverride: () => ({ agentsFiles: contextFiles(profile, cwd) }),

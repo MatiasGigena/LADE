@@ -283,7 +283,7 @@ mod tests {
         controller
             .store
             .apply_all(vec![StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
-                sdk_version: "0.85.1".into(),
+                sdk_version: "1.5.0".into(),
                 providers: vec![ProviderView {
                     id: "local-llm".into(),
                     name: "Fixture".into(),
@@ -330,7 +330,7 @@ mod tests {
 
     fn catalog(providers: Vec<ProviderView>, error: Option<&str>) -> StoreUpdate {
         StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
-            sdk_version: "0.85.1".into(),
+            sdk_version: "1.5.0".into(),
             providers,
             error: error.map(str::to_owned),
         }))
