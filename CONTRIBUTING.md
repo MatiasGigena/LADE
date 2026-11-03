@@ -60,7 +60,7 @@ The full list is in [AGENTS.md](AGENTS.md). The main points:
 - **TypeScript.** The worker runs under Node's type stripping, so use only erasable syntax: no `enum`, `namespace`,
   parameter properties, `import =`/`export =`. No `any` unless absolutely necessary. Top-level imports only (no
   inline `import("pkg").Type`). External input is validated at the protocol boundaries without coercion.
-- **Keybindings** are never hardcoded; add defaults to `DEFAULT_EDITOR_KEYBINDINGS` / `DEFAULT_APP_KEYBINDINGS`.
+- **Keybindings** are never hardcoded; add defaults to `DEFAULT_APP_KEYBINDINGS` in `crates/lade-desktop/src/presentation/keys.rs`.
 - **Keep it small.** Inline one-line helpers with a single call site. No backward-compatibility shims unless needed.
   Ask before removing behaviour that looks intentional.
 - **Docs.** When behaviour, limits or guarantees change, update the matching document (user guide, the

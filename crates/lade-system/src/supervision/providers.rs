@@ -43,7 +43,7 @@ const SUBSCRIPTION_VARS: &[&str] = &["ANTHROPIC_OAUTH_TOKEN", "KIMI_API_KEY"];
 
 pub const OAUTH_RESTRICTION: &str = "interactive OAuth login and refresh-token storage are restricted: refresh-token \
      credential custody (who runs the login, who refreshes, where the rotated token is kept) is an open product \
-     decision (#43), and tokens in the sandbox's auth store would be readable by every tool";
+     decision, and tokens in the sandbox's auth store would be readable by every tool";
 
 fn restricted(auth: Vec<AuthKind>, reason: String) -> ProviderAccess {
     ProviderAccess {

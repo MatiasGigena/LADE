@@ -14,9 +14,9 @@ This repository uses a single-context domain-doc layout. See `docs/agents/domain
 - No `any` unless absolutely necessary.
 - Inline single-line helpers that have only one call site.
 - Check `node_modules` for external API types; do not guess.
-- No inline imports (`import("pkg").Type` or dynamic type imports). Use top-level imports only. Runtime dynamic imports are allowed only at documented lazy-loading boundaries, such as the Three.js carousel engine.
+- No inline imports (`import("pkg").Type` or dynamic type imports). Use top-level imports only.
 - Never remove or downgrade code to fix type errors from outdated dependencies; upgrade the dependency instead.
-- Use only erasable TypeScript syntax (Node strip-only mode) in code checked by the root config (`packages/*/src`, `packages/*/test`, `packages/coding-agent/examples`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JavaScript emit. Use explicit fields with constructor assignments.
+- Use only erasable TypeScript syntax (Node strip-only mode) in `packages/pi-worker/src` and `packages/pi-worker/test` (`erasableSyntaxOnly` in its `tsconfig.json`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JavaScript emit. Use explicit fields with constructor assignments.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
-- Never hardcode key checks (for example, `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
+- Never hardcode key checks in the desktop client. Add defaults to `DEFAULT_APP_KEYBINDINGS` (`crates/lade-desktop/src/presentation/keys.rs`) so they stay configurable.
