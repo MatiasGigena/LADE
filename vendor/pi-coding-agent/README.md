@@ -32,7 +32,7 @@ the upstream shrinkwrap; `packages/pi-worker/test/worker-deps.test.ts` checks al
 three. With the empty patch inventory this tarball is the fork's runnable form; a
 reproducible build from the source archive is still open and needed before the first
 patch. The worker imports root exports only and applies **no patches**. Its only other
-direct dependency is `undici@8.9.0` (gateway dispatcher): the `lade-fixture` provider's
+direct dependency is `undici@8.12.3` (gateway dispatcher): the `lade-fixture` provider's
 stream factory and the thinking-level helper come from the pi-ai copy nested under the
 SDK (`packages/pi-worker/src/worker/pi-ai.ts`), so exactly one pi-ai is installed and
 loaded. See [docs/implementation/worker.md](../../docs/implementation/worker.md#dependencies).

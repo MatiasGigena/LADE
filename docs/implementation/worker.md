@@ -161,7 +161,7 @@ automatically.
 - From the SDK's own `@earendil-works/pi-ai@0.85.1` (the copy nested under pi-coding-agent, re-exported
   by `src/worker/pi-ai.ts`; see [Dependencies](#dependencies)): `createAssistantMessageEventStream`,
   `getSupportedThinkingLevels` and message/stream types.
-- From `undici@8.9.0`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
+- From `undici@8.12.3`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
 
 ## `lade-fixture` provider (test-only)
 
@@ -230,7 +230,7 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
 
 ## Dependencies
 
-Direct production dependencies: `@earendil-works/pi-coding-agent@0.85.1` and `undici@8.9.0` (gateway
+Direct production dependencies: `@earendil-works/pi-coding-agent@0.85.1` and `undici@8.12.3` (gateway
 dispatcher). pi-coding-agent ships an `npm-shrinkwrap.json`, so npm installs its whole locked tree —
 pi-ai, pi-agent-core, pi-tui, the provider SDKs — nested under
 `node_modules/@earendil-works/pi-coding-agent/node_modules/` and never hoists or dedupes it. A direct
