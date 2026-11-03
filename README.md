@@ -10,6 +10,12 @@ never treated as approval or verification, and nothing reaches your branches wit
 one developer, one Linux machine and one Git repository per Workspace, with concurrent Objectives isolated from each
 other. Vocabulary is defined in [CONTEXT.md](CONTEXT.md); the rationale is in the [product vision](docs/product/vision.md).
 
+![The LADE workbench reviewing an Objective's Change Set: Objectives on the left, the diff in the centre, approval and intent on the right](docs/images/workbench.png)
+
+![The Activity view: the agent's transcript, tool output and the message composer](docs/images/activity.png)
+
+*Screenshots rendered from the desktop client's built-in fixture data.*
+
 ## Features
 
 - **Objectives and worktrees.** Each Objective has a title, intent (outcome, constraints, acceptance criteria) and
