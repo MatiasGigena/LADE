@@ -10,9 +10,9 @@ LADE is neither chat with tools, an agent-count dashboard, nor a conventional ID
 
 ## Initial user and boundary
 
-One developer, one Linux machine, one Workspace centered on one Git repository, with concurrent Objectives in isolated worktrees. Local-first means no mandatory LADE account or service, not a promise that model providers work offline. The supported first-release environment remains Linux Mint 22.3 / Cinnamon / X11 / x86_64, per [#12](https://github.com/MatiasGigena/LADE/issues/12#issuecomment-5690312917).
+One developer, one Linux machine, one Workspace centered on one Git repository, with concurrent Objectives in isolated worktrees. Local-first means no mandatory LADE account or service, not a promise that model providers work offline. The supported first-release environment remains Linux Mint 22.3 / Cinnamon / X11 / x86_64.
 
-Read-only Inspection and Contextual Feedback replace embedded editing in v1. No Integrated Editor or TODE dependency is required, and no external-editor integration is newly promised. This is not a permanent ban on future editing. The [accepted scope revision](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5691260255) supersedes editor-specific requirements, not agent/tool/terminal governance.
+Read-only Inspection and Contextual Feedback replace embedded editing in v1. No Integrated Editor or TODE dependency is required, and no external-editor integration is newly promised. This is not a permanent ban on future editing. The accepted scope revision supersedes editor-specific requirements, not agent/tool/terminal governance.
 
 ## Product principles
 
@@ -30,7 +30,7 @@ The [readiness decision register](../planning/implementation-readiness.md#decisi
 
 ## Success and evaluation
 
-Success is a developer accepting a correct result with sufficient understanding and retained authority. Required evaluation against the developer's current workflow, accepted in #14:
+Success is a developer accepting a correct result with sufficient understanding and retained authority. Required evaluation against the developer's current workflow, accepted with the release boundary:
 
 1. Use comparable repository tasks, starting state and acceptance criteria; record tool/model versions and task difficulty. Counterbalance task order where feasible to reduce learning effects.
 2. Measure time until a **correct** result is accepted, time to reconstruct context after an interruption, correction iterations, and the developer's explanation of the change, risks and verification limits.
@@ -45,7 +45,7 @@ This exercise is an **accepted release obligation**, not observed product eviden
 - Universal code review, perfect semantic re-anchoring, IDE parity or advanced semantic navigation by default.
 - Remote execution, multi-repository Workspaces, real-time multi-user collaboration, mandatory cloud services or accounts.
 - Redesigning pi's agent loop, reducing provider/authentication support, an unsandboxed shortcut, or additional supported platforms.
-- Graphical package management and ports of particular personal extensions (deferred by #6).
+- Graphical package management and ports of particular personal extensions (deferred).
 
 ## Reading order and status
 
@@ -53,4 +53,4 @@ This exercise is an **accepted release obligation**, not observed product eviden
 2. [UI principles](ui-principles.md): approved composition, corrections, supplied image/skill references and operational-desktop exceptions.
 3. [Implementation readiness](../planning/implementation-readiness.md): evidence, unresolved choices, acceptance matrix and gated increments.
 
-[#1](https://github.com/MatiasGigena/LADE/issues/1) remains the canonical decision map. The original consolidation records the developer's approved product/visual direction. The subsequent [architecture decision](../planning/client-architecture.md) selects GTK4 native; [provisional performance targets and the evidence handoff](../planning/performance-budgets.md) are now accepted, while production measurements, complete technical validation and production implementation remain unverified or unauthorized. New technical choices are explicitly marked as proposals in the linked documents.
+The decision map remains canonical. The original consolidation records the developer's approved product/visual direction. The subsequent [architecture decision](../planning/client-architecture.md) selects GTK4 native; [provisional performance targets and the evidence handoff](../planning/performance-budgets.md) are now accepted, while production measurements, complete technical validation and production implementation remain unverified or unauthorized. New technical choices are explicitly marked as proposals in the linked documents.

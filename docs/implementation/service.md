@@ -455,9 +455,9 @@ JSON object `{ts, pid, source, line}` to `$STATE/logs/laded.log`. Rotation is by
 pass 1 MiB the files shift (`laded.log` → `.1` … `.3`, the oldest is deleted), so the logs never exceed 4 MiB. The
 log is opened lazily, only once the state directory exists as a private directory of the service user; a log
 write failure never stops stderr forwarding. These numeric bounds are the implementation driver's proposal under the
-#14 policy and still need the maintainer's approval.
+release-boundary policy and still need the maintainer's approval.
 
-Redaction (#14: credentials, prompts, source and tool-output bodies are excluded by default; redaction is tested,
+Redaction (release-boundary policy: credentials, prompts, source and tool-output bodies are excluded by default; redaction is tested,
 not infallible): `NAME=value`, `"name": "value"` and `name: value` where the name contains `KEY`, `TOKEN`,
 `SECRET`, `PASSW`, `AUTH`, `CREDENTIAL`, `COOKIE` or `CAPABILITY`; the value after `Bearer`/`Basic`; URL user-info;
 well-known token prefixes (`sk-`, `ghp_`, `github_pat_`, `xox?-`, `AKIA`, `AIza`, `eyJ` …); and opaque strings of
@@ -525,7 +525,7 @@ none resumed.
 Source: `service/limits.rs`. Accounting across Objectives lives in the service only (sandbox limits —
 `prlimit`, cgroups — are the launcher's). Every limit is configurable and printed at startup with its option; the
 refusal and `available_actions` state it in plain words (without the option); the defaults are **proposals
-awaiting approval** (#14 policy):
+awaiting approval** (release-boundary policy):
 
 | Limit | Flag | Default | At the limit |
 | --- | --- | --- | --- |
@@ -613,8 +613,8 @@ go to the ignored `evidence-local/imp-013/` directory by default.
 
 ## Known gaps
 
-- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending the maintainer's approval
-  (#14); a secret in an unusual shape can pass redaction. Lines written to stderr while the log file is unavailable
+- Diagnostics bounds (4 × 1 MiB, 2,048-byte lines) and the redaction rules are proposals pending the maintainer's approval;
+  a secret in an unusual shape can pass redaction. Lines written to stderr while the log file is unavailable
   (state directory not yet created) reach only the journal.
 
 - The working-basis Change Set compares against the current target commit; if the target moved after the start

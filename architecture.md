@@ -2,7 +2,7 @@
 
 Status: implementation design for review. The developer approved the architectural direction in the 2026-09-16 handoff: a modular Rust core, layers with inward dependencies, ports/adapters at external boundaries, and separate graphical-client/agent processes. Concrete choices marked **Proposed** below need acceptance in this specification review or their named implementation gate. No production code, runtime guarantee or issue creation is authorized by this document alone.
 
-Baseline: [planning PR #19](https://github.com/MatiasGigena/LADE/pull/19), commit `60118474b226d1d1d518bd445d25977aa2b6cce3`, and the [accepted release boundary](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043). The product decision map remains closed. This document specifies system structure; [design.md](design.md) specifies appearance and [the implementation spec](docs/implementation/spec.md) specifies delivery and executable acceptance.
+Baseline: planning commit `60118474b226d1d1d518bd445d25977aa2b6cce3` and the accepted release boundary. The product decision map remains closed. This document specifies system structure; [design.md](design.md) specifies appearance and [the implementation spec](docs/implementation/spec.md) specifies delivery and executable acceptance.
 
 ## 1. Architectural choice
 
@@ -36,7 +36,7 @@ A controlled network gateway and PTY/process helpers remain Rust-owned.
 
 The gateway is a capability-enforcement component, not another business service. An independently running helper must remain in the controlled lifetime and have a documented narrow protocol. The diagram omits ordinary operating-system services and does not imply that all worker syscalls are brokered: approved ordinary operations remain direct inside the OS boundary.
 
-The accepted topology and wire families come from [#7](https://github.com/MatiasGigena/LADE/issues/7#issuecomment-5669405012); the OS-enforced boundary comes from [#8](https://github.com/MatiasGigena/LADE/issues/8#issuecomment-5690106617). Module privacy, Rust memory safety and a read-only UI are not that security boundary.
+The accepted topology and wire families come from the component-boundaries decision; the OS-enforced boundary comes from the permissions-and-enforcement decision. Module privacy, Rust memory safety and a read-only UI are not that security boundary.
 
 ## 2. Module ownership and layers
 
@@ -91,11 +91,11 @@ packaging/                      # matched component bundle and user-service setu
 
 This is a target layout, not a requirement to create empty directories. Start with four Rust crates; split a module into another crate only for a real dependency/test/reuse boundary. `lade-core` has no platform dependencies. `lade-desktop` depends on `lade-protocol`, never on `lade-system` or its SQLite connection. `lade-system` maps protocol data into core use cases. The protocol crate is independent of core and contains no approval authority. Cargo dependency checks enforce crate boundaries; import checks and focused review enforce layers inside a crate.
 
-**Proposed implementation choices:** Rust/gtk4-rs for the client; TypeScript for the Node adapter; GtkSourceView 5 as the first read-only text-control candidate; VTE's GTK4 variant only as a terminal presentation candidate. No Libadwaita requirement, web engine or custom-drawn whole UI. Pin runtime, bindings and native libraries in IMP-001; validate rich controls in IMP-002 and terminal ownership in IMP-012. These were not selected by #13's C benchmark.
+**Proposed implementation choices:** Rust/gtk4-rs for the client; TypeScript for the Node adapter; GtkSourceView 5 as the first read-only text-control candidate; VTE's GTK4 variant only as a terminal presentation candidate. No Libadwaita requirement, web engine or custom-drawn whole UI. Pin runtime, bindings and native libraries in IMP-001; validate rich controls in IMP-002 and terminal ownership in IMP-012. These were not selected by the client decision's C benchmark.
 
 The four-crate boundary uses Rust/gtk4-rs, locked build inputs and protocol fixtures. See the [wire contract](docs/implementation/protocol-v1.md), [service admission](docs/implementation/service.md#admission-transport) and [remaining release gates](docs/implementation/limitations.md).
 
-The narrow coding-agent product fork required by #6 is retained. Do not replace it with floating upstream packages or fork the agent/provider layers without demonstrated need. Record upstream commit, runtime/dependency lockfiles, notices and each necessary patch; do not copy historical prototypes into production.
+The narrow coding-agent product fork required by the pi compatibility decision is retained. Do not replace it with floating upstream packages or fork the agent/provider layers without demonstrated need. Record upstream commit, runtime/dependency lockfiles, notices and each necessary patch; do not copy historical prototypes into production.
 
 ## 3. State and concurrency
 

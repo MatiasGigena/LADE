@@ -98,7 +98,7 @@ Two minimal changes to the WP-C sandbox adapter were needed:
 ## Limits (§7)
 
 All values are constants in `crates/lade-system/src/adapters/sandbox/limits.rs`, the single place to change them;
-they are proposed implementation defaults and their approval is the maintainer's decision (#14).
+they are proposed implementation defaults and their approval is the maintainer's decision.
 
 | Limit | Worker (launcher) | §7 default | Note |
 | --- | --- | --- | --- |
@@ -380,13 +380,13 @@ the lock), unlock, and `laded credentials clear` against the real `secret-tool` 
 The terminal echo-off path was checked by hand on a pseudo-terminal, not by a test.
 
 The released key is readable by the worker process and every tool it runs inside the sandbox (in-process exposure
-accepted by issue #8): the Secret Service protects the key **at rest**, not inside the sandbox.
+accepted by the permissions decision): the Secret Service protects the key **at rest**, not inside the sandbox.
 
 ### Credential refresh flows (restricted)
 
 Interactive OAuth logins and refresh-token custody are **restricted**, not implemented: who runs the login (a
 trusted helper outside the sandbox, never a Workspace extension), who refreshes, where a rotated refresh token is
-kept, and how a refresh races a running worker are an open product decision for the maintainer (#43). Until then a pi OAuth
+kept, and how a refresh races a running worker are an open product decision for the maintainer. Until then a pi OAuth
 provider (Claude Pro/Max login, ChatGPT Plus/Pro, GitHub Copilot, xAI, OpenRouter OAuth, Radius) would have to keep
 its refresh token in the sandbox's pi auth store, readable and replaceable by every tool, and its refresh requests
 would go to identity hosts outside the provider's reviewed egress policy. Subscription access that pi accepts as a
@@ -479,7 +479,7 @@ interrupts it.
   variable set only in the service's environment, for example `systemctl --user set-environment`, stays out of
   files but lives in the user manager). A key kept only in the keyring shows *needs credentials* in the picker
   until a start looks it up, and a locked keyring can delay the synchronous start preflight by up to 5 s.
-- **Credential refresh**: interactive OAuth logins and refresh-token custody are restricted pending #43 (see
+- **Credential refresh**: interactive OAuth logins and refresh-token custody are restricted pending the maintainer's decision (see
   [credential refresh flows](#credential-refresh-flows-restricted)).
 - **Tool network**: `fetch`/undici, the global `WebSocket` and `node:http(s)` clients using the global agents are
   tunnelled; clients with their own agent or sockets (the `ws` package), raw sockets, other runtimes (Python, curl)

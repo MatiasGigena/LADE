@@ -1,7 +1,7 @@
 # pi compatibility inventory (IMP-011)
 
 What of the pinned pi workflow (`@earendil-works/pi-coding-agent@0.85.1`) is usable through LADE, mapped from the
-[#6 compatibility decision](https://github.com/MatiasGigena/LADE/issues/6#issuecomment-5669021069) and the
+pi compatibility decision and the
 IMP-011 scope ([spec §5](spec.md#imp-011)). Every promise is in exactly one class:
 
 - **Supported** — works through LADE and is covered by the named test (evidence level in brackets, as defined in
@@ -92,7 +92,7 @@ applies within it. pi auto-discovery is off (`noExtensions`, `noSkills`, `noProm
 | pi packages (npm/git install) | Restricted | Package acquisition is a host effect; graphical package management is excluded by the spec | — |
 | `settings.json` (global/project) | Restricted | In-memory settings chosen by LADE | — |
 | Extension-registered providers | Restricted | Their hosts have no reviewed egress policy, so the gateway refuses the connection; define them as custom providers instead | — |
-| Executable extension isolation from the session | Restricted (accepted) | An approved extension runs with the worker's authority inside the sandbox, including access to the released key (#8) | [limitations](limitations.md#network-and-credentials) |
+| Executable extension isolation from the session | Restricted (accepted) | An approved extension runs with the worker's authority inside the sandbox, including access to the released key | [limitations](limitations.md#network-and-credentials) |
 
 ### Extension UI
 
@@ -124,7 +124,7 @@ provider's reviewed host.
 | --- | --- | --- | --- |
 | API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `providers.rs` tests, S [integrated]; **no live provider run** |
 | Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `providers.rs` tests [fixture]; **no live run** |
-| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT Plus/Pro (`openai-codex`), GitHub Copilot, xAI, OpenRouter OAuth, Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision (#43); tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
+| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT Plus/Pro (`openai-codex`), GitHub Copilot, xAI, OpenRouter OAuth, Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
 | WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 0.85.1, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
 | Cloud credentials (Bedrock, Vertex) | Restricted | AWS profiles/keys and ADC files are not released; the Bedrock SDK's `node:http` transport bypasses the gateway | manifest |
 | Account-specific endpoints (Azure OpenAI, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
@@ -132,7 +132,7 @@ provider's reviewed host.
 | Custom providers (`models.json`) | Supported with trust rules | LADE profile `models.json`: https, or http only to local hosts; credentials only as one whole `$LADE_PROVIDER_*` variable (literal keys only for local endpoints); no `!command` values or other interpolation; no `oauth`; no redefinition of a built-in provider; egress to exactly the declared host:port (private addresses only for local endpoints) | `profile.rs` tests, S catalogue test [integrated] |
 | Graphical login / logout | Restricted | Follows from the OAuth restriction; keys are stored with `laded credentials set` (Secret Service) or in `credentials.env` | — |
 
-### Other #6 areas
+### Other pi compatibility areas
 
 | Promise | Class | How / reason |
 | --- | --- | --- |

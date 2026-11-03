@@ -24,9 +24,9 @@ The concept composition is not a literal specification of code, labels, fixture 
 | Right panel | Summary, observed evidence and its provenance, Contextual Feedback, review and integration actions with reasons for blocked/unavailable actions. |
 | Contextual surfaces | Agent Session, tool activity and terminal in the selected Objective context, accessible on demand without forcing conversation or terminal use for every task. |
 
-The Workspace Objectives board remains the overview; a sidebar does not replace it. Retain [#10](https://github.com/MatiasGigena/LADE/issues/10#issuecomment-5619982976) attention precedence and secondary badges; no draggable stages. The visible **Inspect → Feedback → Agent revision → Review → Integrate** journey explains collaboration, not an automatic pipeline, irreversible wizard or new lifecycle.
+The Workspace Objectives board remains the overview; a sidebar does not replace it. Retain the lifecycle attention precedence and secondary badges; no draggable stages. The visible **Inspect → Feedback → Agent revision → Review → Integrate** journey explains collaboration, not an automatic pipeline, irreversible wizard or new lifecycle.
 
-This supersedes [#9's original](https://github.com/MatiasGigena/LADE/issues/9#issuecomment-5617994597) mandatory Agent Session-centered dedicated screen and the editor pane, not the board/navigation/attention rules. Conversation remains useful while defining intent and responding to the agent. Do not silently switch the main surface or focus when background work changes state; task-led defaults guide explicit navigation, not unsolicited mode changes.
+This supersedes the original mandatory Agent Session-centered dedicated screen and the editor pane, not the board/navigation/attention rules. Conversation remains useful while defining intent and responding to the agent. Do not silently switch the main surface or focus when background work changes state; task-led defaults guide explicit navigation, not unsolicited mode changes.
 
 ## Operational Scandinavian-style rules
 
@@ -57,7 +57,7 @@ Operational rules retained from the approved direction:
 
 ### Initial token references
 
-These are starting references, **not measured passing pairs**. Test compositing over actual surfaces, hover/pressed/selected combinations, text size and rendering; functional text needs sufficient contrast under #17.
+These are starting references, **not measured passing pairs**. Test compositing over actual surfaces, hover/pressed/selected combinations, text size and rendering; functional text needs sufficient contrast under the accessibility baseline.
 
 | Role | Reference |
 | --- | --- |
@@ -78,12 +78,12 @@ Show only a circular placeholder avatar and the local user's display name (the s
 
 ## Interaction and accessibility contracts
 
-Preserve [#17](https://github.com/MatiasGigena/LADE/issues/17#issuecomment-5667531284) except its superseded editor-specific assumptions and mandatory first-visit Agent Session input:
+Preserve the accessibility baseline except its superseded editor-specific assumptions and mandatory first-visit Agent Session input:
 
 - Conventional, remappable keyboard navigation with conflicts, reset and discoverable shortcut reference. Board groups retain Tab/Shift+Tab between groups, Up/Down and Home/End within them, Enter to open. Where tabs exist, preserve arrow keys and Enter/Space.
 - F6/Shift+F6 cycle major regions in both directions: header, Objectives, active central surface, right review/feedback panel, and contextual terminal when open. There must always be a working terminal escape route; remapping cannot remove it. Tab remains local and Escape dismisses local menus/dialogs, not the whole pane unexpectedly.
 - Explicit opening moves focus to the requested task; closing returns to the opener or a predictable available fallback. Returning to an Objective restores its selected surface and focus; returning to the board restores its card. System-driven reordering keeps focus on the same Objective or a predictable neighbor/heading if removed.
-- **Proposed first-visit task defaults carried from #13 into the native component checkpoint:** intent input during definition, inspected-content heading for inspection, comparison heading for revision review. Explicit Respond/Review goes directly to the relevant content. These refine the former fixed Agent Session-input rule and require keyboard/Orca validation before finalization.
+- **Proposed first-visit task defaults carried from the client decision into the native component checkpoint:** intent input during definition, inspected-content heading for inspection, comparison heading for revision review. Explicit Respond/Review goes directly to the relevant content. These refine the former fixed Agent Session-input rule and require keyboard/Orca validation before finalization.
 - No background event, attention request, incoming revision or notification steals focus. Announce concise important action/error/attention changes politely, group bursts, permit disabling announcements; do not narrate streaming output automatically. Content remains readable on demand.
 - Meaningful names include Objective identity, not just a status; expose roles, selection, draft/save/send status, stale references, errors and action outcomes. Keyboard text/range selection, creating feedback, collecting drafts, explicit sending and comparing revisions must be possible without a mouse.
 - Visible unobscured focus, text equivalents for colors, WCAG 2.2 AA contrast thresholds, usable 200% text/UI scaling, and reduced-motion behavior remain the baseline, not an asserted blanket conformance claim. Test LADE-owned core flows with Orca on Mint/Cinnamon/X11; test terminal internals and disclose limitations.

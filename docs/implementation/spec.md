@@ -1,8 +1,8 @@
 # LADE implementation specification and execution backlog
 
-Status: **approved specification; execution backlog published in [IMP-MAP #21](https://github.com/MatiasGigena/LADE/issues/21)**. Backlog publication does not authorize production implementation. Technical details identified below as implementation proposals remain subject to ratification at their named increments.
+Status: **approved specification; execution backlog published as IMP-MAP**. Backlog publication does not authorize production implementation. Technical details identified below as implementation proposals remain subject to ratification at their named increments.
 
-Baseline: [PR #19](https://github.com/MatiasGigena/LADE/pull/19) at `60118474b226d1d1d518bd445d25977aa2b6cce3`; implementation blueprint [PR #20](https://github.com/MatiasGigena/LADE/pull/20); [#13 resolution](https://github.com/MatiasGigena/LADE/issues/13#issuecomment-5698708894); [#14 resolution](https://github.com/MatiasGigena/LADE/issues/14#issuecomment-5699037043). Product planning is complete. Do not reopen the old map or repeat client/agent research merely to begin implementation.
+Baseline: planning commit `60118474b226d1d1d518bd445d25977aa2b6cce3`, the implementation blueprint, and the client-decision and release-boundary resolutions. Product planning is complete. Do not reopen the old map or repeat client/agent research merely to begin implementation.
 
 ## 1. Document authority and scope
 
@@ -15,15 +15,15 @@ Baseline: [PR #19](https://github.com/MatiasGigena/LADE/pull/19) at `60118474b22
 | This spec | Implementation contracts, ordered deliverables and acceptance mapping |
 | [Readiness matrix](../planning/implementation-readiness.md#acceptance-matrix) and [performance budgets](../planning/performance-budgets.md) | Canonical A01–A24 obligations and numerical targets; linked, not independently redefined |
 
-Later explicit issue resolutions supersede earlier clauses only within their recorded scope. A mockup or tool response cannot change lifecycle rules. Newly proposed bindings, dimensions, protocol details and storage implementation are not retroactively approved by #13/#14. Record their acceptance in the relevant PR before coding that boundary.
+Later explicit issue resolutions supersede earlier clauses only within their recorded scope. A mockup or tool response cannot change lifecycle rules. Newly proposed bindings, dimensions, protocol details and storage implementation are not retroactively approved by the client-decision or release-boundary resolutions. Record their acceptance in the relevant PR before coding that boundary.
 
 Scope remains one developer, one Linux machine and one Git Workspace, isolated concurrent Objectives, GTK4, the Rust System Layer and pinned pi coding-agent SDK. No embedded editor/TODE, cloud requirement, microservice platform, provider subset or redesigned pi loop. The first vertical slice is a development milestone, not the release boundary.
 
 ## 2. Delivery model and authorization
 
-The execution backlog is published in [IMP-MAP #21: Deliver the first credible LADE release](https://github.com/MatiasGigena/LADE/issues/21), referencing the closed decision map #1. Its children below are work items, not one issue per A-row. IDs such as IMP-004 are stable planning keys, not GitHub numbers.
+The execution backlog is published as IMP-MAP (Deliver the first credible LADE release), referencing the closed decision map. Its children below are work items, not one issue per A-row. IDs such as IMP-004 are stable planning keys, not GitHub numbers.
 
-The authoritative stable-key-to-GitHub mapping and native dependency graph live in #21; do not duplicate that mapping here. Search all issue states before any future split or tracker maintenance, reuse matching stable keys and read back native links. Do not infer issue numbers, silently change existing dependencies, recreate the closed planning issues or let backlog publication authorize production work.
+The authoritative stable-key-to-GitHub mapping and native dependency graph live in IMP-MAP; do not duplicate that mapping here. Search all issue states before any future split or tracker maintenance, reuse matching stable keys and read back native links. Do not infer issue numbers, silently change existing dependencies, recreate the closed planning issues or let backlog publication authorize production work.
 
 The implementation driver produces evidence; the maintainer approves consequential defaults, changes to accepted contracts, product acceptance and release go/no-go. Work in an isolated branch per reviewable increment. Do not merge prototype branches wholesale. New native production components are built against the accepted contracts, not by promoting permissive fixture brokers.
 
@@ -134,7 +134,7 @@ M0 does not certify the app; M1 does not permit shipping a provider subset. M2 i
 
 ## 5. Published issue specifications
 
-The fields below, this spec's common Definition of Done and the linked A-rows form the specification for each published child of #21. The real key-to-number mapping remains in #21 rather than being duplicated here. First-increment details are deliberately more concrete; later contract details are finalized at their named boundary rather than guessed for the whole application now.
+The fields below, this spec's common Definition of Done and the linked A-rows form the specification for each published child of IMP-MAP. The real key-to-number mapping remains in IMP-MAP rather than being duplicated here. First-increment details are deliberately more concrete; later contract details are finalized at their named boundary rather than guessed for the whole application now.
 
 <a id="imp-001"></a>
 ### IMP-001 — Establish the build boundary and versioned contract fixtures
@@ -253,7 +253,7 @@ The fields below, this spec's common Definition of Done and the linked A-rows fo
 
 **Scope:** tree/fork/clone/import/export, resume, resources/skills/templates and precedence, model/thinking selection, retry/compaction integration, manual reload, semantic extension UI and all accepted provider/API-key/subscription/custom-provider flows. Keep profile separation and original source profiles untouched.
 
-**Acceptance:** compatibility inventory maps every #6 promise to observed support, explicit trust-rule restrictions or unresolved failure. Imports preserve metadata but never restore approvals/Git state; tree navigation does not rewind files. Resource expansion is not applied twice; changed executable resources require approval. Refresh/replacement/late UI callbacks preserve generations. No silent automatic confirmation for unsupported required UI and no API-key-only reduction.
+**Acceptance:** compatibility inventory maps every pi compatibility promise to observed support, explicit trust-rule restrictions or unresolved failure. Imports preserve metadata but never restore approvals/Git state; tree navigation does not rewind files. Resource expansion is not applied twice; changed executable resources require approval. Refresh/replacement/late UI callbacks preserve generations. No silent automatic confirmation for unsupported required UI and no API-key-only reduction.
 
 **Evidence:** seam-level deterministic corpus plus authorized live transport/auth checks where required, failure records and pinned compatibility manifest. **A coverage:** A03/A09/A10/A14/A15/A16. **Excluded:** exhaustive recertification of upstream reasoning/compaction internals and graphical package management.
 
@@ -351,11 +351,11 @@ No unrelated edits, real credentials, personal source text or raw provider trans
 
 Update the owning contract when its implementation changes; do not fork another spec into an issue comment. UI changes update visual tokens centrally and retain actual native captures. New durable stores, frameworks, security exceptions, APIs or dependencies need a concrete reason and review, not a generic claim of cleanliness. Product-policy changes require the maintainer; a supported implementation detail can be accepted in its owning technical PR.
 
-Execution map #21 holds the real issue mapping and native dependency links. Keep that mapping there rather than adding a second separately maintained backlog to this document. Before choosing work, read the current issue and dependencies. Further splitting is allowed only for a genuinely reviewable result with explicit acceptance; do not create a task for every folder.
+The IMP-MAP execution map holds the real issue mapping and native dependency links. Keep that mapping there rather than adding a second separately maintained backlog to this document. Before choosing work, read the current issue and dependencies. Further splitting is allowed only for a genuinely reviewable result with explicit acceptance; do not create a task for every folder.
 
 ## 8. Handoff and next authorized action
 
-This spec, the architecture and the proposed visual tokens have been reviewed, and the execution backlog is published in #21. Publishing or updating the backlog does not start production work.
+This spec, the architecture and the proposed visual tokens have been reviewed, and the execution backlog is published as IMP-MAP. Publishing or updating the backlog does not start production work.
 
 Once production implementation is separately authorized, assign a driver to IMP-001 and then IMP-002/003 as their prerequisites permit. No extra broad decision-stage prototype, pi-internals certification project or microservice design phase is required. The hard-limit and containment gates still precede any untrusted execution.
 
