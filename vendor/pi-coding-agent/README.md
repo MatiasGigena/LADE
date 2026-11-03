@@ -1,6 +1,6 @@
 # Pinned narrow pi product-fork record
 
-Initial compatibility baseline from decision #6: pi **0.85.1**. Current pin, a manually
+Initial compatibility baseline from the pi compatibility decision: pi **0.85.1**. Current pin, a manually
 approved upgrade: pi **1.5.0**, commit `f9a26365568127461c47a07a37dcb42c140a3ac5` (tag
 `v1.5.0`), Node **22.23.1**. `manifest.json` records the source archive and byte hashes of
 the unmodified upstream files retained here: the coding-agent package manifest, the release
