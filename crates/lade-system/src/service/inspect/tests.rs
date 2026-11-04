@@ -1,6 +1,6 @@
 use super::*;
 use crate::adapters::git;
-use crate::service::adapters_support;
+use crate::adapters_support;
 use lade_core::domain::ids::GitAlgorithm;
 use lade_protocol::client::{ClientBody, ClientEnvelope, Reply};
 use lade_protocol::types::{Id, PageLimit};

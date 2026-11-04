@@ -225,7 +225,7 @@ mod tests {
     use lade_protocol::types::{Counter, GitId, Id, Model, WirePath};
 
     use super::*;
-    use crate::service::adapters_support::{commit_all, git};
+    use crate::adapters_support::{commit_all, git};
     use crate::service::test_harness::Harness;
 
     fn open(harness: &mut Harness, path: &std::path::Path) -> Result<ReplyData, Rejection> {

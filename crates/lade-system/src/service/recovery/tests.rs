@@ -9,7 +9,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{DeliveryMode, Id, Model};
 
 use super::*;
-use crate::service::adapters_support::git;
+use crate::adapters_support::git;
 use crate::service::test_harness::Harness;
 use crate::service::{Flow, ReqCtx};
 

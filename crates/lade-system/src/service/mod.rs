@@ -21,11 +21,6 @@ mod terminal;
 #[cfg(test)]
 mod test_harness;
 
-/// The repository fixtures shared with the adapter integration tests, for unit tests here.
-#[cfg(test)]
-#[path = "../../tests/adapters_support/mod.rs"]
-mod adapters_support;
-
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender};

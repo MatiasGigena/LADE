@@ -7,7 +7,7 @@ use lade_protocol::client::{
 };
 
 use super::*;
-use crate::service::adapters_support::{commit_all, git};
+use crate::adapters_support::{commit_all, git};
 use crate::service::limits::Pressure;
 use crate::service::test_harness::Harness;
 use crate::storage::JournalState;

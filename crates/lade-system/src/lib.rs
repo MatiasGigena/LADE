@@ -28,3 +28,8 @@ pub mod storage;
 pub mod supervision;
 pub mod support;
 pub mod transport;
+
+/// The repository fixtures shared with the integration tests, for unit tests in this crate.
+#[cfg(test)]
+#[path = "../tests/adapters_support/mod.rs"]
+mod adapters_support;

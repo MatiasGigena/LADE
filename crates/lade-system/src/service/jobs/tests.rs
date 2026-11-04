@@ -12,7 +12,7 @@ use super::pool::Pool;
 use super::verify::{resolve_program, tail_text};
 use super::*;
 use crate::adapters::git::{self, ChangeStatus, ChangedFile, RepoPath, Repository};
-use crate::service::adapters_support::{TempDir, commit_all, git as run_git, init_repo};
+use crate::adapters_support::{TempDir, commit_all, git as run_git, init_repo};
 use crate::service::convert::core_git;
 
 fn repo(root: &TempDir) -> (PathBuf, Repository) {
