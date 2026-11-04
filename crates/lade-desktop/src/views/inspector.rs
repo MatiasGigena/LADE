@@ -140,8 +140,7 @@ impl Inspector {
 
     pub fn refresh(self: &Rc<Self>, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
-        let mine =
-            |id: &crate::presentation::state::model::ObjectiveId| Some(id) == selected.as_ref();
+        let mine = |id: &ObjectiveId| Some(id) == selected.as_ref();
         let (mut overview, mut evidence, mut drafts, mut submit) = (false, false, false, false);
         for change in changes {
             match change {

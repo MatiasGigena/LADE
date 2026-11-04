@@ -13,7 +13,7 @@ use super::widgets::{
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::panel;
-use crate::presentation::state::model::{Basis, ChangedFile, Load, RepoPath};
+use crate::presentation::state::model::{Basis, ChangedFile, Load, ObjectiveId, RepoPath};
 use crate::presentation::state::store::{Change, PresentationState};
 use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
 
@@ -206,8 +206,7 @@ impl Workbench {
 
     pub fn refresh(&self, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
-        let mine =
-            |id: &crate::presentation::state::model::ObjectiveId| Some(id) == selected.as_ref();
+        let mine = |id: &ObjectiveId| Some(id) == selected.as_ref();
         let mut heading = false;
         let mut change_set = false;
         for change in changes {
