@@ -15,12 +15,13 @@ use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore, MAX_ARTIFACT_PAG
 use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::{self, CaptureRow};
 
+use super::capture::CapturePurpose;
 use super::convert::{
     adapter_git, git_rejection, invalid, not_found, parse_uuid, preview, repo_path, wire_git,
     wire_id, wire_path,
 };
 use super::execution::wire_activity;
-use super::handlers::{CapturePurpose, sql};
+use super::handlers::sql;
 use super::jobs::{self, CaptureOut, FileBytes, LargeBlobs};
 use super::{Completed, Flow, ReqCtx, Service};
 
@@ -29,10 +30,6 @@ const MAX_DIFF_LINES: usize = 1800;
 const MAX_DIFF_TEXT: usize = 640 * 1024;
 const MAX_PAGE_JSON: usize = 900 * 1024;
 const MAX_ACTIVITY_BYTES: usize = 768 * 1024;
-
-#[cfg(test)]
-#[path = "../../tests/adapters_support/mod.rs"]
-pub(super) mod adapters_support;
 
 #[derive(Clone)]
 struct Resolved {
@@ -882,6 +879,7 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::service::adapters_support;
     use lade_core::domain::ids::GitAlgorithm;
     use lade_protocol::client::{ClientBody, ClientEnvelope, Reply};
     use lade_protocol::types::{Id, PageLimit};

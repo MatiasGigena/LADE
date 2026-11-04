@@ -1,18 +1,26 @@
 mod agent_session;
+mod capture;
 pub mod convert;
 mod detail_budget;
 mod execution;
+mod feedback;
 mod handlers;
 mod inspect;
 mod jobs;
 mod limits;
 mod models;
+mod objectives;
 mod project;
 mod recovery;
 mod resources;
 mod review;
 mod state;
 mod terminal;
+
+/// The repository fixtures shared with the adapter integration tests, for unit tests here.
+#[cfg(test)]
+#[path = "../../tests/adapters_support/mod.rs"]
+mod adapters_support;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::{self, File};
@@ -24,12 +32,11 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
+use lade_core::domain::ids::{CandidateId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{
     ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeLevel, Outcome, Rejection,
-    Reply, ReplyData, ReplyResult, RequestFrame, RequestName, ReviewIntegrateCommand, SafeAction,
-    ServiceNotice, Settings,
+    Reply, ReplyData, ReplyResult, RequestFrame, RequestName, SafeAction, ServiceNotice, Settings,
 };
 use lade_protocol::types::{Counter, Id};
 use lade_protocol::worker::WorkerResources;
@@ -172,7 +179,7 @@ pub(crate) enum Completed {
     },
     Capture {
         oid: ObjectiveId,
-        purpose: handlers::CapturePurpose,
+        purpose: capture::CapturePurpose,
         result: Result<jobs::CaptureOut, Rejection>,
     },
     Freeze {
@@ -289,7 +296,10 @@ const VERIFY_THREADS: usize = 4;
 const REAPER_THREADS: usize = 4;
 const TICK: Duration = Duration::from_millis(100);
 
+/// The service's single-threaded state. Each capability keeps its state in one field owned by
+/// its module; the comments name the module that changes each group.
 pub(crate) struct Service {
+    // Infrastructure (mod.rs).
     store: Store,
     paths: Paths,
     artifacts: Arc<ArtifactStore>,
@@ -297,36 +307,35 @@ pub(crate) struct Service {
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
-    general: Option<Pool>,
-    verify: Option<Pool>,
-    reaper: Option<Pool>,
+    pools: jobs::Pools,
+    held: Option<Vec<(bool, jobs::Task)>>,
+    sandbox: OnceLock<Option<SandboxTools>>,
+    cgroups: Option<Arc<SandboxCgroups>>,
+    limits: ResourceLimits,
+    test_fixture_provider: bool,
+    ticks: u64,
+    stopping: bool,
+    // The client link and event stream (mod.rs).
     epoch: Id,
     sequence: u64,
     controller: Option<Controller>,
+    recovery_notes: Vec<String>,
+    // Workspaces, Objectives and settings (handlers.rs, review.rs, execution.rs).
     workspaces: BTreeMap<WorkspaceId, WsState>,
     objectives: BTreeMap<ObjectiveId, ObjState>,
     runtime: HashMap<ObjectiveId, Runtime>,
     settings: Settings,
-    target_cache: HashMap<(WorkspaceId, String), GitId>,
+    // Execution activity and accepted input (execution.rs).
     activity_seq: HashMap<ObjectiveId, u64>,
     input_seq: u64,
     live: execution::LiveActivity,
-    ticks: u64,
-    sandbox: OnceLock<Option<SandboxTools>>,
+    // One field per remaining capability, owned by the module of the same name.
     catalog: models::CatalogCache,
     extension_approvals: HashMap<(String, String), bool>,
     agent_sessions: agent_session::AgentSessions,
     terminals: terminal::Terminals,
-    stopping: bool,
-    limits: ResourceLimits,
-    free_space: limits::Storage,
-    recovery_notes: Vec<String>,
-    integrating: HashMap<(WorkspaceId, String), VecDeque<(ReqCtx, ReviewIntegrateCommand)>>,
-    held: Option<Vec<(bool, jobs::Task)>>,
-    storage_limit: u64,
-    storage_check: bool,
-    cgroups: Option<Arc<SandboxCgroups>>,
-    test_fixture_provider: bool,
+    integrations: review::Integrations,
+    storage: limits::StorageGuard,
 }
 
 pub struct RunningService {
@@ -458,9 +467,11 @@ pub fn start(
         launcher,
         supervisor_tx,
         queue_tx: queue_tx.clone(),
-        general: Some(Pool::new(GENERAL_THREADS)),
-        verify: Some(Pool::new(VERIFY_THREADS)),
-        reaper: Some(Pool::new(REAPER_THREADS)),
+        pools: jobs::Pools {
+            general: Some(Pool::new(GENERAL_THREADS)),
+            verify: Some(Pool::new(VERIFY_THREADS)),
+            reaper: Some(Pool::new(REAPER_THREADS)),
+        },
         epoch: epoch.clone(),
         sequence: 0,
         controller: None,
@@ -471,7 +482,6 @@ pub fn start(
             verification_commands: Vec::new(),
             default_model: None,
         },
-        target_cache: HashMap::new(),
         activity_seq: HashMap::new(),
         input_seq: 0,
         live: execution::LiveActivity::default(),
@@ -483,12 +493,10 @@ pub fn start(
         terminals: terminal::Terminals::default(),
         stopping: false,
         limits: config.limits.clone(),
-        free_space: limits::Storage::default(),
         recovery_notes: Vec::new(),
-        integrating: HashMap::new(),
+        integrations: review::Integrations::default(),
         held: None,
-        storage_limit: config.storage_limit_bytes,
-        storage_check: false,
+        storage: limits::StorageGuard::new(config.storage_limit_bytes),
         cgroups: config.cgroups.clone(),
         test_fixture_provider: config.test_fixture_provider,
     };
@@ -574,12 +582,7 @@ impl Service {
         if let Some(controller) = self.controller.take() {
             controller.out.close();
         }
-        for pool in [self.reaper.take(), self.general.take(), self.verify.take()]
-            .into_iter()
-            .flatten()
-        {
-            pool.shutdown();
-        }
+        self.pools.shutdown();
     }
 
     fn on_link(&mut self, inbound: Inbound) {
@@ -816,10 +819,7 @@ impl Service {
             }
         }
         for (verify, task) in held {
-            let pool = if verify { &self.verify } else { &self.general };
-            if let Some(pool) = pool {
-                pool.submit(task);
-            }
+            self.pools.submit(verify, task);
         }
     }
 
@@ -977,14 +977,11 @@ impl Service {
             held.push((verify, task));
             return;
         }
-        let pool = if verify { &self.verify } else { &self.general };
-        if let Some(pool) = pool {
-            pool.submit(task);
-        }
+        self.pools.submit(verify, task);
     }
 
     pub(crate) fn reap(&self, work: impl FnOnce() + Send + 'static) {
-        if let Some(reaper) = &self.reaper {
+        if let Some(reaper) = &self.pools.reaper {
             reaper.submit(work);
         }
     }

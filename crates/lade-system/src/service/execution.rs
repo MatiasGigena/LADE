@@ -16,9 +16,9 @@ use crate::storage::{self, ActivityRow};
 use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
 use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerEvent};
 
+use super::capture::CapturePurpose;
 use super::convert::wire_input;
 use super::convert::{domain_rejection, parse_uuid, preview, wire_id};
-use super::handlers::CapturePurpose;
 use super::jobs::{self, LaunchInput, ProfileSnapshot, Provision};
 use super::{Completed, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms, wire_ts};
@@ -853,7 +853,7 @@ impl Service {
     }
 
     pub(crate) fn check_storage(&mut self) {
-        if self.storage_check {
+        if self.storage.measuring {
             return;
         }
         let targets: Vec<(ObjectiveId, u64, [PathBuf; 2])> = self
@@ -873,7 +873,7 @@ impl Service {
         if targets.is_empty() {
             return;
         }
-        self.storage_check = true;
+        self.storage.measuring = true;
         self.spawn(move || Completed::Storage {
             usage: targets
                 .into_iter()
@@ -887,9 +887,9 @@ impl Service {
     }
 
     pub(crate) fn storage_measured(&mut self, usage: Vec<StorageUsage>) {
-        self.storage_check = false;
+        self.storage.measuring = false;
         for measured in usage {
-            if measured.bytes > self.storage_limit {
+            if measured.bytes > self.storage.writable_limit {
                 self.storage_exceeded(measured);
             }
         }
@@ -911,7 +911,7 @@ impl Service {
         let reason = format!(
             "{LIMIT_REACHED}: writable storage {} exceeds the {} limit (worktree and session directory)",
             human_bytes(bytes),
-            human_bytes(self.storage_limit)
+            human_bytes(self.storage.writable_limit)
         );
         if st
             .objective_mut()

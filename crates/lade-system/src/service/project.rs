@@ -106,10 +106,10 @@ impl Service {
         let key = (workspace, branch.to_string());
         match &target {
             Some(id) => {
-                self.target_cache.insert(key, id.clone());
+                self.integrations.targets.insert(key, id.clone());
             }
             None => {
-                self.target_cache.remove(&key);
+                self.integrations.targets.remove(&key);
             }
         }
         target
@@ -117,7 +117,8 @@ impl Service {
 
     pub(crate) fn cached_target(&self, st: &ObjState) -> Option<GitId> {
         let record = st.objective().record();
-        self.target_cache
+        self.integrations
+            .targets
             .get(&(
                 record.workspace_id,
                 record.integration_target.as_str().to_string(),

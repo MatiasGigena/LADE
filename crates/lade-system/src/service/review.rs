@@ -1,8 +1,9 @@
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::ids::{
-    ApprovalId, CandidateId, ObjectiveId, Timestamp, VerificationId, WorkspaceId,
+    ApprovalId, CandidateId, GitId, ObjectiveId, Timestamp, VerificationId, WorkspaceId,
 };
 use lade_core::domain::inspection::ArtifactDigest;
 use lade_core::domain::objectives::Lifecycle;
@@ -32,6 +33,14 @@ use crate::support::{new_uuid, now_ms};
 
 fn ts_now() -> Timestamp {
     Timestamp::from_unix_ms(now_ms())
+}
+
+/// Integrations in flight, keyed by workspace and target branch: requests queued behind the
+/// running one, and the last target commit seen per key.
+#[derive(Default)]
+pub(crate) struct Integrations {
+    pub queued: HashMap<(WorkspaceId, String), VecDeque<(ReqCtx, ReviewIntegrateCommand)>>,
+    pub targets: HashMap<(WorkspaceId, String), GitId>,
 }
 
 impl Service {
@@ -548,14 +557,14 @@ impl Service {
             .objective_id(&cmd.objective_id)
             .ok()
             .and_then(|oid| Some((oid, self.integration_key(oid)?)))
-            .filter(|(_, key)| self.integrating.contains_key(key));
+            .filter(|(_, key)| self.integrations.queued.contains_key(key));
         if let Some((oid, key)) = queued {
             if let Err(rejection) = self.check_idle(oid) {
                 self.finish(ctx, Err(rejection));
                 return Flow::Done;
             }
             self.rt(oid).busy = Some("integrate");
-            if let Some(waiting) = self.integrating.get_mut(&key) {
+            if let Some(waiting) = self.integrations.queued.get_mut(&key) {
                 waiting.push_back((ctx, cmd.clone()));
             }
             self.emit_objective(oid);
@@ -655,7 +664,7 @@ impl Service {
         };
         self.rt(oid).busy = Some("integrate");
         if let Some(key) = self.integration_key(oid) {
-            self.integrating.entry(key).or_default();
+            self.integrations.queued.entry(key).or_default();
         }
         self.spawn(move || Completed::Integrate {
             oid,
@@ -754,7 +763,7 @@ impl Service {
         }
         let waiting = self
             .integration_key(oid)
-            .and_then(|key| self.integrating.remove(&key))
+            .and_then(|key| self.integrations.queued.remove(&key))
             .unwrap_or_default();
         for (ctx, cmd) in waiting {
             if let Ok(next) = self.objective_id(&cmd.objective_id) {

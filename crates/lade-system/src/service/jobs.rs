@@ -46,6 +46,33 @@ const LARGE_BLOB_MEMORY: usize = 8;
 
 pub(crate) type Task = Box<dyn FnOnce() + Send>;
 
+/// The service's worker threads: general jobs, verification runs (kept apart so long checks
+/// never hold up captures and queries), and the reaper that terminates stopped workers.
+#[derive(Default)]
+pub(crate) struct Pools {
+    pub general: Option<Pool>,
+    pub verify: Option<Pool>,
+    pub reaper: Option<Pool>,
+}
+
+impl Pools {
+    pub fn submit(&self, verify: bool, task: Task) {
+        let pool = if verify { &self.verify } else { &self.general };
+        if let Some(pool) = pool {
+            pool.submit(task);
+        }
+    }
+
+    pub fn shutdown(&mut self) {
+        for pool in [self.reaper.take(), self.general.take(), self.verify.take()]
+            .into_iter()
+            .flatten()
+        {
+            pool.shutdown();
+        }
+    }
+}
+
 pub struct Pool {
     tx: Option<Sender<Task>>,
     threads: Vec<JoinHandle<()>>,

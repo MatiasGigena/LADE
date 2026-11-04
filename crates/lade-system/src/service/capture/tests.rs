@@ -2,12 +2,15 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::sync::{Arc, OnceLock, mpsc};
 
-use lade_protocol::client::{Intent, ObjectiveCreateCommand, RequestName, Settings};
+use lade_protocol::client::{
+    Intent, ObjectiveCreateCommand, ReplyData, RequestName, Settings, Start, WorkspaceOpenCommand,
+};
 use lade_protocol::types::WirePath;
 
 use super::*;
 use crate::adapters::artifacts::ArtifactStore;
-use crate::service::{Paths, ResourceLimits, execution, inspect::adapters_support, limits};
+use crate::service::convert::parse_uuid;
+use crate::service::{Paths, ResourceLimits, adapters_support, execution, limits};
 use crate::storage::Store;
 use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
@@ -51,9 +54,7 @@ fn reused_capture_registration_keeps_its_original_identity_after_a_newer_capture
         launcher: Arc::new(NoLaunch),
         supervisor_tx,
         queue_tx,
-        general: None,
-        verify: None,
-        reaper: None,
+        pools: jobs::Pools::default(),
         epoch: wire_id(new_uuid()),
         sequence: 0,
         controller: None,
@@ -64,24 +65,21 @@ fn reused_capture_registration_keeps_its_original_identity_after_a_newer_capture
             verification_commands: Vec::new(),
             default_model: None,
         },
-        target_cache: HashMap::new(),
         activity_seq: HashMap::new(),
         input_seq: 0,
         live: execution::LiveActivity::default(),
         ticks: 0,
         sandbox: OnceLock::new(),
-        catalog: super::super::models::CatalogCache::default(),
+        catalog: crate::service::models::CatalogCache::default(),
         extension_approvals: HashMap::new(),
-        agent_sessions: super::super::agent_session::AgentSessions::default(),
-        terminals: super::super::terminal::Terminals::default(),
+        agent_sessions: crate::service::agent_session::AgentSessions::default(),
+        terminals: crate::service::terminal::Terminals::default(),
         stopping: false,
         limits: ResourceLimits::default(),
-        free_space: limits::Storage::default(),
         recovery_notes: Vec::new(),
-        integrating: HashMap::new(),
+        integrations: crate::service::review::Integrations::default(),
         held: None,
-        storage_limit: crate::adapters::sandbox::WRITABLE_STORAGE_BYTES,
-        storage_check: false,
+        storage: limits::StorageGuard::new(crate::adapters::sandbox::WRITABLE_STORAGE_BYTES),
         cgroups: None,
         test_fixture_provider: false,
     };

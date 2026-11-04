@@ -53,6 +53,24 @@ pub(crate) struct Storage {
     pub free: Option<u64>,
 }
 
+/// Storage limits: free space on the state volume, and the writable-storage limit per
+/// Objective with whether a measurement is already running.
+pub(crate) struct StorageGuard {
+    pub free_space: Storage,
+    pub writable_limit: u64,
+    pub measuring: bool,
+}
+
+impl StorageGuard {
+    pub fn new(writable_limit: u64) -> Self {
+        Self {
+            free_space: Storage::default(),
+            writable_limit,
+            measuring: false,
+        }
+    }
+}
+
 pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     rustix::fs::statvfs(path)
         .ok()
@@ -84,11 +102,11 @@ impl Service {
     }
 
     pub(crate) fn storage_blocker(&self) -> Option<String> {
-        (self.free_space.level == Pressure::Critical).then(|| {
+        (self.storage.free_space.level == Pressure::Critical).then(|| {
             format!(
                 "The disk that holds LADE's data has {} MiB free, below the {} MiB LADE keeps in \
                  reserve. Free some space and try again.",
-                self.free_space.free.map_or(0, mib),
+                self.storage.free_space.free.map_or(0, mib),
                 mib(self.limits.storage_reserve_bytes)
             )
         })
@@ -105,8 +123,8 @@ impl Service {
             Some(free) if free < self.limits.storage_warn_bytes => Pressure::Low,
             _ => Pressure::Normal,
         };
-        let changed = level != self.free_space.level;
-        self.free_space = Storage { level, free };
+        let changed = level != self.storage.free_space.level;
+        self.storage.free_space = Storage { level, free };
         if changed {
             eprintln!(
                 "laded: storage level={level:?} free_mib={}",
@@ -117,8 +135,8 @@ impl Service {
     }
 
     pub(crate) fn announce_storage(&mut self, transition: bool) {
-        let free = self.free_space.free.map_or(0, mib);
-        match self.free_space.level {
+        let free = self.storage.free_space.free.map_or(0, mib);
+        match self.storage.free_space.level {
             Pressure::Normal if transition => self.notice(
                 NoticeLevel::Info,
                 "storage_ok",
