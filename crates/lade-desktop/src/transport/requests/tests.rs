@@ -9,9 +9,9 @@ use lade_protocol::types::{Counter, Digest, GitAlgorithm, GitId, Id, Timestamp};
 use lade_protocol::{Framing, encode};
 
 use super::*;
-use crate::presentation::compat::{CompatUpdate, ForkPosition, ThinkingLevel, UiAnswerView};
-use crate::presentation::intents::DraftRevisionRef;
-use crate::presentation::model::{
+use crate::presentation::controller::intents::DraftRevisionRef;
+use crate::presentation::state::compat::{CompatUpdate, ForkPosition, ThinkingLevel, UiAnswerView};
+use crate::presentation::state::model::{
     ApprovalId, ArtifactDigest, CandidateId, CaptureId, DeliveryMode, ModelRef, Reference,
     ReferenceVersion, SessionId, WorkspaceId,
 };
@@ -393,7 +393,7 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
         ),
         (
             I::StopService {
-                reason: crate::presentation::intents::StopReason::Logout,
+                reason: crate::presentation::controller::intents::StopReason::Logout,
             },
             Some(N::ServiceStop),
         ),
@@ -1074,7 +1074,7 @@ fn compat_replies_and_events_reach_the_store() {
         [
             StoreUpdate::Compat(CompatUpdate::Catalog(c)),
             StoreUpdate::Compat(CompatUpdate::Models { provider, models }),
-        ] if c.providers[0].status == crate::presentation::compat::ProviderStatus::Restricted
+        ] if c.providers[0].status == crate::presentation::state::compat::ProviderStatus::Restricted
             && c.providers[0].reason.is_some()
             && provider == "lade-fixture"
             && models.len() == 1

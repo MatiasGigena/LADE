@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
-use super::compat::{ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView};
-use super::controller::Controller;
+use super::Controller;
 use super::intents::Intent;
-use super::model::{ExecutionState, ModelRef, ObjectiveId};
-use super::store::{Change, StoreUpdate};
+use crate::presentation::state::compat::{
+    ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView,
+};
+use crate::presentation::state::model::{ExecutionState, ModelRef, ObjectiveId};
+use crate::presentation::state::store::{Change, StoreUpdate};
 
 impl Controller {
     fn emit_intent(&self, intent: Intent) {
@@ -22,7 +24,7 @@ impl Controller {
             .filter(|p| !self.store.state().compat.models.contains_key(*p))
             .cloned();
         self.store.apply_all(vec![StoreUpdate::Compat(
-            super::compat::CompatUpdate::Choice(choice),
+            crate::presentation::state::compat::CompatUpdate::Choice(choice),
         )]);
         if let Some(provider) = needs_models {
             self.load_models(Some(provider));
@@ -66,7 +68,10 @@ impl Controller {
                     catalog
                         .providers
                         .iter()
-                        .find(|p| p.status == super::compat::ProviderStatus::Available)
+                        .find(|p| {
+                            p.status
+                                == crate::presentation::state::compat::ProviderStatus::Available
+                        })
                         .or_else(|| catalog.providers.first())
                         .map(|p| p.id.clone())
                 });
@@ -88,7 +93,7 @@ impl Controller {
             (choice, missing)
         };
         self.store.apply_all(vec![StoreUpdate::Compat(
-            super::compat::CompatUpdate::Choice(choice),
+            crate::presentation::state::compat::CompatUpdate::Choice(choice),
         )]);
         if let Some(provider) = missing {
             self.load_models(Some(provider));
@@ -256,12 +261,12 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::presentation::compat::{
+    use crate::presentation::controller::intents::RecordingSink;
+    use crate::presentation::state::compat::{
         Catalog, CompatUpdate, ModelView, ProviderStatus, ProviderView, UiDialog, UiPromptView,
     };
-    use crate::presentation::intents::RecordingSink;
-    use crate::presentation::model::ConnectionState;
-    use crate::presentation::store::{PresentationState, Store};
+    use crate::presentation::state::model::ConnectionState;
+    use crate::presentation::state::store::{PresentationState, Store};
     use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {

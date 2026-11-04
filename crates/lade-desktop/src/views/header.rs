@@ -6,12 +6,12 @@ use gtk4 as gtk;
 
 use super::widgets::{self, hbox, label, set_accessible_label, space, vbox};
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::model::{
+use crate::presentation::state::model::{
     ConnectionState, Load, SearchResult, SearchResultKind, SearchScope,
 };
-use crate::presentation::store::{Change, MainView};
+use crate::presentation::state::store::{Change, MainView};
+use crate::presentation::text::format;
 
 pub fn connection_text(connection: &ConnectionState) -> (String, String) {
     match connection {

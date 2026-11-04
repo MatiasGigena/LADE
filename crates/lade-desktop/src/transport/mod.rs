@@ -9,8 +9,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use connection::{Config, Input, UpdateSink};
 
-use crate::presentation::intents::{Intent, IntentSink};
-use crate::presentation::store::StoreUpdate;
+use crate::presentation::controller::intents::{Intent, IntentSink};
+use crate::presentation::state::store::StoreUpdate;
 use crate::views::bridge::UpdateSender;
 
 impl UpdateSink for UpdateSender {

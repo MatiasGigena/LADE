@@ -1,7 +1,7 @@
 use lade_protocol::client as wire;
 use lade_protocol::types::{self, Counter, Id, WirePath};
 
-use crate::presentation::model as view;
+use crate::presentation::state::model as view;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Invalid(pub String);

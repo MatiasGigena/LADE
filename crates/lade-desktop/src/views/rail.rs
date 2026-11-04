@@ -6,10 +6,10 @@ use gtk4 as gtk;
 
 use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
-use crate::presentation::model::{ObjectiveId, ObjectiveSummary};
 use crate::presentation::panel;
-use crate::presentation::store::Change;
+use crate::presentation::state::model::{ObjectiveId, ObjectiveSummary};
+use crate::presentation::state::store::Change;
+use crate::presentation::text::format;
 
 pub type ButtonHandler = Rc<dyn Fn(&gtk::Button)>;
 

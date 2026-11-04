@@ -9,12 +9,12 @@ use gtk4 as gtk;
 use super::widgets::{
     self, Dialog, MessageKind, field, hbox, label, set_accessible_label, set_focus_key, space, vbox,
 };
-use crate::presentation::compat::{
+use crate::presentation::controller::Controller;
+use crate::presentation::state::compat::{
     ForkPosition, ModelChoice, ProviderStatus, Readiness, ResourceKind, ResourceState,
     ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
 };
-use crate::presentation::controller::Controller;
-use crate::presentation::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
+use crate::presentation::state::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
 
 const TREE_ROWS: usize = 60;
 

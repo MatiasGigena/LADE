@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use super::compat::{ForkPosition, ThinkingLevel, UiAnswerView};
-use super::model::{
+use crate::presentation::state::compat::{ForkPosition, ThinkingLevel, UiAnswerView};
+use crate::presentation::state::model::{
     ApprovalId, Basis, CandidateId, DeliveryMode, DraftId, GitId, Intent as ObjectiveIntent,
     ModelRef, ObjectiveId, Reference, RepoPath, SearchScope, SessionId, Side, WorkspaceId,
 };

@@ -7,14 +7,14 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, space, vbox};
+use crate::presentation::controller::intents::StartPoint;
 use crate::presentation::controller::{
     Controller, FeedbackBatch, MAX_FEEDBACK_BATCH, UnsavedDraft,
 };
-use crate::presentation::format;
-use crate::presentation::intents::StartPoint;
 use crate::presentation::keys::{self, AppAction, Keymap};
-use crate::presentation::model::Intent as ObjectiveIntent;
-use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
+use crate::presentation::state::model::Intent as ObjectiveIntent;
+use crate::presentation::text::bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
+use crate::presentation::text::format;
 
 fn labelled(name: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let unit = vbox(space::TIGHT);

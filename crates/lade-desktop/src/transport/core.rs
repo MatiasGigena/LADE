@@ -9,12 +9,12 @@ use lade_protocol::types::{Counter, Id};
 
 use super::convert;
 use super::requests::{self, Context, Effects};
-use crate::presentation::compat::CompatUpdate;
-use crate::presentation::intents::Intent;
-use crate::presentation::model::{
+use crate::presentation::controller::intents::Intent;
+use crate::presentation::state::compat::CompatUpdate;
+use crate::presentation::state::model::{
     ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, ObjectiveId, ServiceNotice,
 };
-use crate::presentation::store::StoreUpdate;
+use crate::presentation::state::store::StoreUpdate;
 
 mod pages;
 use pages::Pages;
@@ -922,7 +922,7 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
         },
         Event::ActivityDelta(d) => StoreUpdate::ActivityDelta {
             objective_id: ObjectiveId::new(d.objective_id.as_str()),
-            item_id: crate::presentation::model::ActivityItemId::new(d.item_id.as_str()),
+            item_id: crate::presentation::state::model::ActivityItemId::new(d.item_id.as_str()),
             append_text: d.append_text,
         },
         Event::DraftChanged(d) => StoreUpdate::DraftChanged(convert::draft(&d)),

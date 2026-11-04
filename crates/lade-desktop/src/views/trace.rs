@@ -9,7 +9,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::presentation::intents::{Intent, IntentSink};
+use crate::presentation::controller::intents::{Intent, IntentSink};
 
 pub const TRACE_ENV: &str = "LADE_DESKTOP_TRACE";
 

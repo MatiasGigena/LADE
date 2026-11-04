@@ -15,12 +15,12 @@ use lade_protocol::types::{Counter, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 
 use super::connection::{self, Config, ConnectError, Input, random_id, spawn_driver};
-use crate::presentation::intents::{Intent, StartPoint};
-use crate::presentation::model::{
+use crate::presentation::controller::intents::{Intent, StartPoint};
+use crate::presentation::state::model::{
     Basis, ConnectionState, DeliveryMode, ExecutionState, Intent as ObjectiveIntent, ModelRef,
     ObjectiveId, RepoPath,
 };
-use crate::presentation::store::StoreUpdate;
+use crate::presentation::state::store::StoreUpdate;
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -509,7 +509,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
         objective_id: objective_id.clone(),
         basis: Basis::Working,
         path,
-        side: crate::presentation::model::Side::New,
+        side: crate::presentation::state::model::Side::New,
         offset: 0,
     });
     wait_for(
@@ -551,7 +551,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
     }
 
     send(Intent::StopService {
-        reason: crate::presentation::intents::StopReason::Exit,
+        reason: crate::presentation::controller::intents::StopReason::Exit,
     });
     wait_for(&updates, "service stopped", |u| {
         u == &StoreUpdate::ServiceStopped

@@ -1,9 +1,9 @@
 use super::*;
-use crate::presentation::intents::RecordingSink;
-use crate::presentation::model::{
+use crate::presentation::controller::intents::RecordingSink;
+use crate::presentation::state::model::{
     Basis, ChangeList, ChangeStatus, ChangedFile, ObjectiveId, RepoPath,
 };
-use crate::presentation::store::PresentationState;
+use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
 
 fn settle() {

@@ -5,7 +5,7 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::presentation::attention::{AttentionRequest, Notifier};
+use crate::presentation::state::attention::{AttentionRequest, Notifier};
 
 pub const OPEN_OBJECTIVE_ACTION: &str = "open-objective";
 

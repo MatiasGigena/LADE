@@ -16,9 +16,9 @@ use lade_protocol::types::{Capability, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError};
 
 use super::core::{Core, Step};
-use crate::presentation::intents::Intent;
-use crate::presentation::model::ConnectionState;
-use crate::presentation::store::StoreUpdate;
+use crate::presentation::controller::intents::Intent;
+use crate::presentation::state::model::ConnectionState;
+use crate::presentation::state::store::StoreUpdate;
 
 pub const SOCKET_NAME: &str = "control.sock";
 pub const CAPABILITY_NAME: &str = "control.cap";

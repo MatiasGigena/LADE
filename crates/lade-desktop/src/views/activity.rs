@@ -10,14 +10,14 @@ use super::widgets::{
 };
 use super::workbench;
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
-use crate::presentation::model::{
+use crate::presentation::panel::{self, PanelAction, Tone};
+use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActionSurface, ActivityItem, ActivityRole, DeliveryMode,
     DeliveryState, ExecutionState, ObjectiveDetail, ObjectiveId, Timestamp,
 };
-use crate::presentation::panel::{self, PanelAction, Tone};
-use crate::presentation::store::{ActivityChange, Change};
-use crate::presentation::text_bound::TEXT_LIMIT;
+use crate::presentation::state::store::{ActivityChange, Change};
+use crate::presentation::text::bound::TEXT_LIMIT;
+use crate::presentation::text::format;
 
 const MODES: [DeliveryMode; 3] = [
     DeliveryMode::Prompt,

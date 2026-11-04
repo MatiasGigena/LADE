@@ -1,4 +1,4 @@
-use super::model::{
+use super::state::model::{
     ActionName, ApprovalId, ArtifactDigest, Attention, AvailableAction, Badge, CandidateId,
     CandidateStatus, CandidateSummary, ChangeCounts, DeliveryMode, DeliveryState, Draft, DraftId,
     DraftState, Execution, ExecutionState, GitId, InputId, InputSummary, Intent as ObjectiveIntent,
@@ -6,7 +6,7 @@ use super::model::{
     Reference, ReferenceVersion, RepoPath, SessionId, SessionInfo, Settings, Side, TargetRef,
     Timestamp, VerificationId, VerificationState, VerificationSummary, Workspace, WorkspaceId,
 };
-use super::store::StoreUpdate;
+use super::state::store::StoreUpdate;
 
 pub const MAIN_OBJECTIVE: &str = "7d0c2a3e-5b1f-4c8e-9a62-0f4f1b7c2d11";
 pub const SECOND_OBJECTIVE: &str = "a41f9c07-2e6d-4b3a-8f15-6c9e0d2b7a22";
@@ -267,7 +267,7 @@ fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetai
             removed,
         },
         unsent_drafts: 5,
-        terminal_open: Some(super::model::TerminalOpenAction {
+        terminal_open: Some(super::state::model::TerminalOpenAction {
             enabled: true,
             reason: None,
         }),
@@ -365,12 +365,12 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
             Vec::new()
         },
         approval: (summary.lifecycle == Lifecycle::Approved).then(|| {
-            super::model::ApprovalSummary {
+            super::state::model::ApprovalSummary {
                 approval_id: ApprovalId::new("a0000003-0000-4000-8000-000000000003"),
                 candidate_id: CandidateId::new("b0000003-3333-4333-8333-333333333333"),
                 target_commit: target().commit,
                 override_reason: None,
-                state: super::model::ApprovalState::Valid,
+                state: super::state::model::ApprovalState::Valid,
             }
         }),
         verifications: Vec::new(),
@@ -381,7 +381,7 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
         },
         unsent_drafts: 0,
         available_actions: actions,
-        terminal_open: Some(super::model::TerminalOpenAction {
+        terminal_open: Some(super::state::model::TerminalOpenAction {
             enabled: !summary.lifecycle.is_archived(),
             reason: summary.lifecycle.is_archived().then(|| {
                 "Terminals open only while the Objective is in progress or under review.".to_owned()
@@ -587,7 +587,7 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
 }
 
 fn compat_fixture() -> Vec<StoreUpdate> {
-    use super::compat::{
+    use super::state::compat::{
         Catalog, CompatUpdate, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
         ResourceState, ResourceView, SessionView, ThinkingLevel,
     };

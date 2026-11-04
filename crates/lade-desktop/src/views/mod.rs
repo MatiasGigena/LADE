@@ -26,14 +26,16 @@ use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::presentation::attention::{self, AttentionWatcher, Delivery, Notifier};
 use crate::presentation::controller::Controller;
-use crate::presentation::drafts::CLOSE_WAIT_MS;
-use crate::presentation::intents::{IntentSink, StopReason};
+use crate::presentation::controller::intents::{IntentSink, StopReason};
 use crate::presentation::keys::{self, AppAction};
 use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
-use crate::presentation::model::{Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice};
-use crate::presentation::store::{Change, MainView, Store, StoreUpdate, ViewerContent};
+use crate::presentation::state::attention::{self, AttentionWatcher, Delivery, Notifier};
+use crate::presentation::state::drafts::CLOSE_WAIT_MS;
+use crate::presentation::state::model::{
+    Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice,
+};
+use crate::presentation::state::store::{Change, MainView, Store, StoreUpdate, ViewerContent};
 
 const CSS: &str = include_str!("../assets/style.css");
 
@@ -1132,8 +1134,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::intents::RecordingSink;
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::controller::intents::RecordingSink;
+    use crate::presentation::state::store::PresentationState;
     use crate::presentation::test_fixture;
 
     #[test]

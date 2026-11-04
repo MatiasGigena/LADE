@@ -109,7 +109,7 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
-    use crate::presentation::model::{
+    use crate::presentation::state::model::{
         Badge, Execution, ExecutionState, Lifecycle, Timestamp, WorkspaceId,
     };
 
@@ -200,8 +200,8 @@ mod tests {
 
     #[test]
     fn notification_failure_keeps_in_app_attention_and_reports_once() {
-        use crate::presentation::model::ConnectionState;
-        use crate::presentation::store::{PresentationState, StoreUpdate};
+        use crate::presentation::state::model::ConnectionState;
+        use crate::presentation::state::store::{PresentationState, StoreUpdate};
         let mut state = PresentationState::new(ConnectionState::Connected);
         state.apply(StoreUpdate::ObjectiveChanged(summary(
             "a",

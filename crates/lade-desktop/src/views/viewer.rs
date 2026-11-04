@@ -12,11 +12,11 @@ use super::widgets::{
     set_accessible_label, space, vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
-use crate::presentation::model::{FileEncoding, Load, Side};
-use crate::presentation::store::{Change, ViewerContent, ViewerMode};
-use crate::presentation::syntax::{self, Highlight};
-use crate::presentation::text_map::{self, TextPos, ViewLine, ViewLineKind};
+use crate::presentation::state::model::{FileEncoding, Load, Side};
+use crate::presentation::state::store::{Change, ViewerContent, ViewerMode};
+use crate::presentation::text::format;
+use crate::presentation::text::map::{self, TextPos, ViewLine, ViewLineKind};
+use crate::presentation::text::syntax::{self, Highlight};
 
 const CODE_SCHEME: &str = include_str!("../assets/code-scheme.xml");
 const SELECTION_HINT: &str = "Select text in the viewer to add feedback on exact bytes.";
@@ -309,7 +309,7 @@ impl Viewer {
                     usize::try_from(i.line_offset()).unwrap_or(0),
                 )
             };
-            text_map::map_selection(&self.lines.borrow(), pos(&a), pos(&b))
+            map::map_selection(&self.lines.borrow(), pos(&a), pos(&b))
         });
         self.controller.set_viewer_selection(mapped);
     }
@@ -467,7 +467,7 @@ impl Viewer {
                     );
                 } else {
                     self.set_lines(
-                        text_map::diff_lines(&diff),
+                        map::diff_lines(&diff),
                         ViewerMode::Diff,
                         Side::New,
                         &key.path.display,
@@ -501,7 +501,7 @@ impl Viewer {
                         .and_downcast::<gtk::ScrolledWindow>()
                         .map(|s| s.vadjustment().value());
                     self.set_lines(
-                        text_map::file_lines(&content),
+                        map::file_lines(&content),
                         ViewerMode::FullFile,
                         content.side,
                         &key.path.display,
@@ -525,7 +525,7 @@ impl Viewer {
                         self.footer.append(&label(
                             &format!(
                                 "Large file ({}) — shown in bounded chunks",
-                                crate::presentation::format::byte_size(content.total_bytes)
+                                crate::presentation::text::format::byte_size(content.total_bytes)
                             ),
                             &["meta"],
                         ));
@@ -555,7 +555,7 @@ impl Viewer {
                         glib::idle_add_local_once(move || {
                             let lines = lines.borrow();
                             let iter = |byte| {
-                                let pos = text_map::position_at(&lines, side, byte)?;
+                                let pos = map::position_at(&lines, side, byte)?;
                                 buffer.iter_at_line_offset(
                                     i32::try_from(pos.line).ok()?,
                                     i32::try_from(pos.char_offset).ok()?,

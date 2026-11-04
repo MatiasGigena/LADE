@@ -1,5 +1,5 @@
-use super::format::sentence;
 use super::model::{Draft, DraftId, DraftState, ObjectiveId, Reference, Refusal, SessionId};
+use crate::presentation::text::format::sentence;
 
 pub type Millis = u64;
 
@@ -307,7 +307,9 @@ impl DraftEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::model::{ArtifactDigest, CaptureId, ReferenceVersion, RepoPath, Side};
+    use crate::presentation::state::model::{
+        ArtifactDigest, CaptureId, ReferenceVersion, RepoPath, Side,
+    };
 
     fn reference() -> Reference {
         Reference {

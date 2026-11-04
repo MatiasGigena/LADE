@@ -11,10 +11,10 @@ use super::widgets::{
     vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::format::{self, JOURNEY_STEPS, StepState};
-use crate::presentation::model::{Basis, ChangedFile, Load, RepoPath};
 use crate::presentation::panel;
-use crate::presentation::store::{Change, PresentationState};
+use crate::presentation::state::model::{Basis, ChangedFile, Load, RepoPath};
+use crate::presentation::state::store::{Change, PresentationState};
+use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
 
 /// The work area's state for a Workspace without Objectives: one instruction and the New
 /// Objective action (the same dialog as the Objectives list's). The inspector stays blank.
@@ -205,7 +205,8 @@ impl Workbench {
 
     pub fn refresh(&self, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
-        let mine = |id: &crate::presentation::model::ObjectiveId| Some(id) == selected.as_ref();
+        let mine =
+            |id: &crate::presentation::state::model::ObjectiveId| Some(id) == selected.as_ref();
         let mut heading = false;
         let mut change_set = false;
         for change in changes {
@@ -618,7 +619,7 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     row.add_css_class("file-row");
     set_focus_key(&row, &format!("file:{}", file.path.display));
     let content = hbox(space::ITEM);
-    let (symbol, status) = crate::presentation::format::file_status(file.status);
+    let (symbol, status) = crate::presentation::text::format::file_status(file.status);
     let symbol_label = gtk::Label::new(Some(symbol));
     symbol_label.add_css_class("file-status");
     symbol_label.add_css_class("mono");

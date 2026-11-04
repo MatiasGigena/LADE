@@ -4,15 +4,15 @@ use std::rc::Rc;
 
 use super::compat::{CompatChange, CompatState, CompatUpdate};
 use super::drafts::DraftEditor;
-use super::keys::Keymap;
-use super::layout::{LayoutClass, Region};
 use super::model::{
     ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
     DeliveryMode, Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, NoticeLevel,
     ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath, SearchResults,
     ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
 };
-use super::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
+use crate::presentation::keys::Keymap;
+use crate::presentation::layout::{LayoutClass, Region};
+use crate::presentation::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
 const MAX_NOTICES: usize = 20;
 pub const MAX_TERMINAL_SESSIONS: usize = 8;
@@ -1205,7 +1205,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::model::{ActivityRole, ExecutionState, Lifecycle, Timestamp};
+    use crate::presentation::state::model::{ActivityRole, ExecutionState, Lifecycle, Timestamp};
 
     fn summary(
         id: &str,
@@ -1219,7 +1219,7 @@ mod tests {
             title: id.to_owned(),
             outcome: String::new(),
             lifecycle,
-            execution: crate::presentation::model::Execution::new(ExecutionState::None, 0),
+            execution: crate::presentation::state::model::Execution::new(ExecutionState::None, 0),
             attention,
             badges: Vec::new(),
             updated_at: Timestamp(updated),
@@ -1283,7 +1283,9 @@ mod tests {
 
     #[test]
     fn file_pages_advance_by_the_reply_length() {
-        use crate::presentation::model::{ArtifactDigest, FileEncoding, FilePage, RepoPath, Side};
+        use crate::presentation::state::model::{
+            ArtifactDigest, FileEncoding, FilePage, RepoPath, Side,
+        };
         let mut state = PresentationState::default();
         let o = ObjectiveId::new("o");
         let path = RepoPath::utf8("a.txt");
@@ -1420,15 +1422,15 @@ mod tests {
         let mut state = PresentationState::default();
         let o = ObjectiveId::new("o");
         state.objective_ui_mut(&o).basis = Basis::Candidate {
-            candidate_id: crate::presentation::model::CandidateId::new("c2"),
+            candidate_id: crate::presentation::state::model::CandidateId::new("c2"),
         };
         let list = ChangeList {
             objective_id: o.clone(),
             basis: Basis::Working,
             basis_label: "Working inspection".into(),
-            target: crate::presentation::model::TargetRef {
+            target: crate::presentation::state::model::TargetRef {
                 branch: "main".into(),
-                commit: crate::presentation::model::GitId::sha1("abc"),
+                commit: crate::presentation::state::model::GitId::sha1("abc"),
             },
             capture_id: None,
             candidate_id: None,
@@ -1447,7 +1449,7 @@ mod tests {
         let mut state = PresentationState::default();
         for n in 0..MAX_NOTICES + 5 {
             state.apply(StoreUpdate::Notice(ServiceNotice {
-                level: crate::presentation::model::NoticeLevel::Warning,
+                level: crate::presentation::state::model::NoticeLevel::Warning,
                 code: "c".into(),
                 message: format!("notice {n}"),
             }));
@@ -1485,7 +1487,7 @@ mod tests {
 
     #[test]
     fn extension_dialogs_are_dropped_with_the_link_and_reannounced_after_it() {
-        use crate::presentation::compat::{UiDialog, UiPromptView};
+        use crate::presentation::state::compat::{UiDialog, UiPromptView};
         let mut state = PresentationState::new(ConnectionState::Connected);
         let dialog = |id: &str| {
             StoreUpdate::Compat(CompatUpdate::DialogOpened(UiDialog {
@@ -1560,7 +1562,7 @@ mod tests {
         let mut state = PresentationState::default();
         let o = ObjectiveId::new("o");
         let note = ServiceNotice {
-            level: crate::presentation::model::NoticeLevel::Info,
+            level: crate::presentation::state::model::NoticeLevel::Info,
             code: "query_operation".into(),
             message: "Checking outcome of “Integrate”…".into(),
         };
@@ -1599,8 +1601,10 @@ mod tests {
 
     #[test]
     fn draft_refusals_land_on_the_draft_and_its_objective() {
-        use crate::presentation::drafts::{DraftEditor, SaveStatus};
-        use crate::presentation::model::{ArtifactDigest, CaptureId, ReferenceVersion, SessionId};
+        use crate::presentation::state::drafts::{DraftEditor, SaveStatus};
+        use crate::presentation::state::model::{
+            ArtifactDigest, CaptureId, ReferenceVersion, SessionId,
+        };
         let mut state = PresentationState::new(ConnectionState::Connected);
         let o = ObjectiveId::new("o");
         let reference = Reference {
@@ -1704,8 +1708,8 @@ mod tests {
 
     #[test]
     fn never_saved_draft_unlisted_after_reconnect_is_saved_again() {
-        use crate::presentation::drafts::DraftEditor;
-        use crate::presentation::model::{
+        use crate::presentation::state::drafts::DraftEditor;
+        use crate::presentation::state::model::{
             ArtifactDigest, CaptureId, DraftId, Reference, ReferenceVersion, RepoPath, SessionId,
             Side,
         };

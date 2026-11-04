@@ -3,15 +3,15 @@ use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 
 use super::compat as compat_wire;
 use super::convert::{self, Invalid, id, to_basis, to_path};
-use crate::presentation::compat::CompatUpdate;
-use crate::presentation::format::sentence;
-use crate::presentation::intents::{Intent, StartPoint, StopReason};
-use crate::presentation::model::{
+use crate::presentation::controller::intents::{Intent, StartPoint, StopReason};
+use crate::presentation::state::compat::CompatUpdate;
+use crate::presentation::state::model::{
     self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath,
     SearchScope, ServiceNotice, Side,
 };
-use crate::presentation::store::StoreUpdate;
+use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
+use crate::presentation::text::format::sentence;
 
 pub const ACTIVITY_PAGE: u32 = 100;
 pub const SEARCH_LIMIT: u32 = 100;

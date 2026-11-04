@@ -6,8 +6,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::presentation::keys;
-use crate::presentation::model::ActionAvailability;
-use crate::presentation::text_bound::{
+use crate::presentation::state::model::ActionAvailability;
+use crate::presentation::text::bound::{
     EditGuard, EndDecision, InsertDecision, Snapshot, TextLimit,
 };
 

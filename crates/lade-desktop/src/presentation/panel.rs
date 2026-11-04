@@ -1,8 +1,8 @@
-use super::compat::{Catalog, ProviderStatus};
-use super::format;
-use super::model::{
+use super::state::compat::{Catalog, ProviderStatus};
+use super::state::model::{
     ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
 };
+use super::text::format;
 
 pub const MORE_ACTIONS_TITLE: &str = "More actions";
 pub const DETAILS_TITLE: &str = "Details";
@@ -331,13 +331,13 @@ pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::model::{AvailableAction, Badge, ExecutionState};
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::state::model::{AvailableAction, Badge, ExecutionState};
+    use crate::presentation::state::store::PresentationState;
     use crate::presentation::test_fixture;
 
     fn details() -> Vec<ObjectiveDetail> {
         let mut state =
-            PresentationState::new(crate::presentation::model::ConnectionState::Connected);
+            PresentationState::new(crate::presentation::state::model::ConnectionState::Connected);
         for update in test_fixture::fixture_updates() {
             state.apply(update);
         }

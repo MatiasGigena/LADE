@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use gtk4::{Application, gio, glib, prelude::*};
 
-use presentation::model::ConnectionState;
-use presentation::store::{PresentationState, Store};
+use presentation::state::model::ConnectionState;
+use presentation::state::store::{PresentationState, Store};
 use transport::Transport;
 use transport::connection::{self, Config, SpawnService};
 

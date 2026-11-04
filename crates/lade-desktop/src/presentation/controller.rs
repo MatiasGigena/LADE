@@ -1,23 +1,26 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use super::compat::Readiness;
-use super::drafts::{DraftEditor, Millis, SaveStatus};
-use super::format;
-use super::intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
-use super::model::{
+use super::state::compat::Readiness;
+use super::state::drafts::{DraftEditor, Millis, SaveStatus};
+use super::state::model::{
     ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId, ExecutionState,
     Intent as ObjectiveIntent, Load, ModelRef, ObjectiveDetail, ObjectiveId, Reference,
     ReferenceVersion, RepoPath, SearchResult, SearchResultKind, SearchScope, SessionInfo, Side,
     VerificationState,
 };
-use super::store::{
+use super::state::store::{
     Change, InspectorTab, MainView, Reveal, Store, ViewerContent, ViewerKey, ViewerMode,
 };
 use super::terminal::{TerminalSession, TerminalStatus, input_chunks};
-use super::text_map::{MappedSelection, SelectionError};
+use super::text::format;
+use super::text::map::{MappedSelection, SelectionError};
+use intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
+
+mod compat;
+pub mod intents;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchItem {
@@ -343,7 +346,7 @@ impl Controller {
                 .get(id)
                 .and_then(Load::loaded)
                 .and_then(|l| l.files.iter().find(|f| &f.path == path))
-                .is_some_and(|f| f.status == super::model::ChangeStatus::Deleted);
+                .is_some_and(|f| f.status == super::state::model::ChangeStatus::Deleted);
             (
                 ui.basis,
                 ui.mode,
@@ -768,7 +771,7 @@ impl Controller {
             .ok_or_else(|| "Select an Objective first".to_owned())
     }
 
-    fn current_candidate(&self) -> Result<super::model::CandidateSummary, String> {
+    fn current_candidate(&self) -> Result<super::state::model::CandidateSummary, String> {
         self.with_detail(|d| d.current_candidate().cloned())
             .flatten()
             .ok_or_else(|| "There is no current candidate".to_owned())
@@ -802,7 +805,7 @@ impl Controller {
     pub fn start_execution(
         &self,
         model: ModelRef,
-        thinking: Option<super::compat::ThinkingLevel>,
+        thinking: Option<super::state::compat::ThinkingLevel>,
     ) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         let is_default = self.store.state().settings.default_model.as_ref() == Some(&model);
@@ -893,7 +896,7 @@ impl Controller {
             let Some(candidate) = d.current_candidate() else {
                 return true;
             };
-            let mut latest: Vec<&super::model::VerificationSummary> = Vec::new();
+            let mut latest: Vec<&super::state::model::VerificationSummary> = Vec::new();
             for v in d
                 .verifications
                 .iter()
@@ -1335,16 +1338,17 @@ fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::intents::RecordingSink;
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::controller::intents::RecordingSink;
+    use crate::presentation::state::store::PresentationState;
     use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
-        let mut state = PresentationState::new(super::super::model::ConnectionState::Connected);
+        let mut state =
+            PresentationState::new(super::super::state::model::ConnectionState::Connected);
         for update in test_fixture::fixture_updates() {
             state.apply(update);
         }
-        state.connection = super::super::model::ConnectionState::Connected;
+        state.connection = super::super::state::model::ConnectionState::Connected;
         let store = Store::new(state);
         let sink = Rc::new(RecordingSink::default());
         (Controller::new(store, sink.clone()), sink)
@@ -1458,7 +1462,7 @@ mod tests {
 
     #[test]
     fn terminal_lifecycle_in_the_controller() {
-        use crate::presentation::store::StoreUpdate;
+        use crate::presentation::state::store::StoreUpdate;
         use crate::presentation::terminal::{TerminalEnd, TerminalMode};
         let (controller, sink) = setup();
         let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
@@ -1531,7 +1535,7 @@ mod tests {
             rows: 24,
         });
         controller.store.apply(StoreUpdate::Connection(
-            super::super::model::ConnectionState::Reconnecting { attempt: 1 },
+            super::super::state::model::ConnectionState::Reconnecting { attempt: 1 },
         ));
         assert_eq!(
             controller
@@ -1553,8 +1557,8 @@ mod tests {
         sink.intents.borrow_mut().clear();
         controller
             .store
-            .apply(crate::presentation::store::StoreUpdate::Connection(
-                super::super::model::ConnectionState::LeaseHeld,
+            .apply(crate::presentation::state::store::StoreUpdate::Connection(
+                super::super::state::model::ConnectionState::LeaseHeld,
             ));
         assert!(!controller.exit(StopReason::Logout));
         assert!(
@@ -1641,7 +1645,7 @@ mod tests {
         });
         if let Some((enabled, reason)) = start {
             d.available_actions
-                .push(super::super::model::AvailableAction {
+                .push(super::super::state::model::AvailableAction {
                     action: ActionName::ExecutionStart,
                     enabled,
                     reason: reason.map(str::to_owned),
@@ -1755,7 +1759,7 @@ mod tests {
 
     #[test]
     fn a_feedback_batch_takes_at_most_the_wire_bound_and_defers_the_rest() {
-        use crate::presentation::model::{Draft, DraftState, SessionId};
+        use crate::presentation::state::model::{Draft, DraftState, SessionId};
         let (controller, sink) = setup();
         let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
         controller.select_objective(&id);
@@ -1860,8 +1864,8 @@ mod tests {
 
     #[test]
     fn draft_removal_waits_for_its_first_save_to_prevent_resurrection() {
-        use crate::presentation::model::{Draft, DraftState};
-        use crate::presentation::store::StoreUpdate;
+        use crate::presentation::state::model::{Draft, DraftState};
+        use crate::presentation::state::store::StoreUpdate;
         let (controller, sink) = setup();
         let objective_id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
         let draft_id = DraftId::new("new-draft");

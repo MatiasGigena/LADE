@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::model::{Lifecycle, ObjectiveId, ObjectiveSummary};
+use super::state::model::{Lifecycle, ObjectiveId, ObjectiveSummary};
 
 pub const SCROLLBACK_LINES: usize = 2000;
 pub const MAX_PARAMS: usize = 16;
@@ -885,8 +885,8 @@ mod tests {
 
     #[test]
     fn only_a_defined_objective_points_to_activity_for_its_terminal() {
-        use crate::presentation::model::{ConnectionState, ExecutionState};
-        use crate::presentation::store::PresentationState;
+        use crate::presentation::state::model::{ConnectionState, ExecutionState};
+        use crate::presentation::state::store::PresentationState;
         let mut state = PresentationState::new(ConnectionState::Connected);
         for update in crate::presentation::test_fixture::fixture_updates() {
             state.apply(update);

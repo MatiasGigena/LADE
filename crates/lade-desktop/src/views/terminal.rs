@@ -12,10 +12,10 @@ use super::widgets::{
 use super::workbench;
 use crate::presentation::controller::Controller;
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::model::{
+use crate::presentation::state::model::{
     ActionAvailability, ActionSurface, ObjectiveDetail, ObjectiveId, Refusal,
 };
-use crate::presentation::store::{Change, MainView, StoreUpdate};
+use crate::presentation::state::store::{Change, MainView, StoreUpdate};
 use crate::presentation::terminal::{
     MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalStatus,
     awaits_first_start, encode_key, paste_text,

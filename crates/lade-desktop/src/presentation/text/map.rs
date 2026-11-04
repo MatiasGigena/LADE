@@ -1,4 +1,4 @@
-use super::model::{DiffLineKind, FileContent, FileDiff, Side};
+use crate::presentation::state::model::{DiffLineKind, FileContent, FileDiff, Side};
 
 pub const CR_SYMBOL: char = '\u{240D}';
 pub const PARAGRAPH_SYMBOL: char = '\u{00B6}';
@@ -296,7 +296,7 @@ pub fn map_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::model::{
+    use crate::presentation::state::model::{
         ArtifactDigest, Basis, DiffHunk, DiffLine, FileEncoding, ObjectiveId, RepoPath,
     };
 

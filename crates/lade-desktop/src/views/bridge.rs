@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use gtk4::glib;
 
-use crate::presentation::store::{Store, StoreUpdate};
+use crate::presentation::state::store::{Store, StoreUpdate};
 
 const DRAIN_BATCH: usize = 512;
 

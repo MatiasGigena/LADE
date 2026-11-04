@@ -2,12 +2,12 @@ use lade_protocol::client as wire;
 use lade_protocol::types as wt;
 
 use super::convert::{counter, model};
-use crate::presentation::compat::{
+use crate::presentation::state::compat::{
     Catalog, ForkPosition, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
     ResourceState, ResourceView, SessionTree, SessionView, ThinkingLevel, TreeNode, UiAnswerView,
     UiDialog, UiPromptView,
 };
-use crate::presentation::model::ObjectiveId;
+use crate::presentation::state::model::ObjectiveId;
 
 pub fn thinking(level: wt::ThinkingLevel) -> ThinkingLevel {
     match level {

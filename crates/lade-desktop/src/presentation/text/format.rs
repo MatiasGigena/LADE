@@ -1,4 +1,4 @@
-use super::model::{
+use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActivityRole, ApprovalState, Attention, Basis, CandidateStatus,
     ChangeStatus, DeliveryMode, DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle,
     ObjectiveDetail, Reference, ReferenceVersion, SearchScope, Side, Timestamp, VerificationState,
@@ -228,7 +228,7 @@ pub fn side_label(side: Side) -> &'static str {
 }
 
 pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
-    let ordinal = |id: &super::model::CandidateId| {
+    let ordinal = |id: &crate::presentation::state::model::CandidateId| {
         detail
             .and_then(|d| d.candidates.iter().find(|c| &c.candidate_id == id))
             .map_or_else(|| id.short().to_owned(), |c| c.ordinal.to_string())
@@ -251,7 +251,7 @@ pub fn version_line(
     basis: &Basis,
     service_label: &str,
     candidate_status: Option<CandidateStatus>,
-    target: &super::model::TargetRef,
+    target: &crate::presentation::state::model::TargetRef,
 ) -> (String, String) {
     let short_target = target.label();
     let full_target = format!("{} at {}", target.branch, target.commit.hex);
@@ -504,7 +504,7 @@ mod tests {
 
     #[test]
     fn version_line_adds_only_what_the_selector_does_not_say() {
-        use crate::presentation::model::{CandidateId, GitId, TargetRef};
+        use crate::presentation::state::model::{CandidateId, GitId, TargetRef};
         let target = TargetRef {
             branch: "main".into(),
             commit: GitId::sha1("86fc063aaaabbbbccccddddeeeeffff000011112"),

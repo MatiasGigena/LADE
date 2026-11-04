@@ -7,7 +7,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{Counter, Id};
 
 use super::*;
-use crate::presentation::model::{
+use crate::presentation::state::model::{
     ArtifactDigest, CaptureId, DeliveryMode, DraftId, Reference, ReferenceVersion, RepoPath, Side,
 };
 use crate::transport::requests::tests::{O, wire_detail};
@@ -419,7 +419,7 @@ fn rejected_query_reaches_its_surface() {
     let (mut core, _) = connected();
     let step = core.submit(Intent::LoadChanges {
         objective_id: oid(),
-        basis: crate::presentation::model::Basis::Working,
+        basis: crate::presentation::state::model::Basis::Working,
     });
     let reply = Reply::rejected(
         step.frames[0].request_id.clone(),
@@ -543,8 +543,8 @@ fn live(core: &mut Core, event: Event) -> Step {
 
 #[test]
 fn failed_later_draft_page_keeps_local_text_and_requires_a_fresh_reconciliation() {
-    use crate::presentation::drafts::{DraftEditor, SaveStatus};
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::state::drafts::{DraftEditor, SaveStatus};
+    use crate::presentation::state::store::PresentationState;
     let (mut core, _) = connected();
     let durable = convert::draft(&wire_draft(30));
     let mut editor = DraftEditor::from_durable(&durable);
@@ -676,7 +676,7 @@ fn draft_completion_preserves_same_revision_events_additions_and_successful_dele
     submitted.input_id = Some(Id::from_random_bytes([75; 16]));
     let event = live(&mut core, Event::DraftChanged(submitted));
     assert!(
-        matches!(&event.updates[..], [StoreUpdate::DraftChanged(d)] if d.state == crate::presentation::model::DraftState::Submitted)
+        matches!(&event.updates[..], [StoreUpdate::DraftChanged(d)] if d.state == crate::presentation::state::model::DraftState::Submitted)
     );
     live(&mut core, Event::DraftChanged(wire_draft(2)));
     let deleted = core
@@ -703,7 +703,7 @@ fn draft_completion_preserves_same_revision_events_additions_and_successful_dele
     );
     assert_eq!(
         drafts[0].state,
-        crate::presentation::model::DraftState::Submitted
+        crate::presentation::state::model::DraftState::Submitted
     );
     assert!(drafts[0].input_id.is_some());
 }
@@ -752,7 +752,7 @@ fn input_pages_preserve_chronological_order_and_live_delivery_changes() {
     );
     assert_eq!(
         inputs[0].delivery,
-        crate::presentation::model::DeliveryState::Received
+        crate::presentation::state::model::DeliveryState::Received
     );
 }
 
@@ -775,7 +775,7 @@ fn a_later_page_reflects_earlier_events_instead_of_replaying_stale_metadata() {
     let complete = core.on_reply(ok(&next, draft_list(vec![newer], false)));
     assert!(
         matches!(&complete.updates[..], [StoreUpdate::Drafts { drafts, .. }]
-        if drafts.len() == 2 && drafts[1].state == crate::presentation::model::DraftState::Submitted)
+        if drafts.len() == 2 && drafts[1].state == crate::presentation::state::model::DraftState::Submitted)
     );
 }
 
@@ -871,8 +871,8 @@ fn malformed_or_unsendable_continuations_fail_without_publishing_partial_history
 
 #[test]
 fn disconnect_during_deferred_save_keeps_text_and_reenables_saving_after_complete_reload() {
-    use crate::presentation::drafts::{DraftEditor, SaveStatus};
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::state::drafts::{DraftEditor, SaveStatus};
+    use crate::presentation::state::store::PresentationState;
     let (mut core, _) = connected();
     let draft = convert::draft(&wire_draft(30));
     let mut editor = DraftEditor::from_durable(&draft);
@@ -937,8 +937,8 @@ fn disconnect_during_deferred_save_keeps_text_and_reenables_saving_after_complet
 
 #[test]
 fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_inputs() {
-    use crate::presentation::drafts::DraftEditor;
-    use crate::presentation::store::PresentationState;
+    use crate::presentation::state::drafts::DraftEditor;
+    use crate::presentation::state::store::PresentationState;
     let (mut core, _) = connected();
     core.submit(Intent::LoadObjective {
         objective_id: oid(),
@@ -1019,7 +1019,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
     }
     assert_eq!(
         state.drafts[&oid()][0].state,
-        crate::presentation::model::DraftState::Submitted,
+        crate::presentation::state::model::DraftState::Submitted,
         "a recovered acknowledgement is historical, not a current draft event"
     );
     let input_recovered = core.on_reply(ok(
@@ -1036,7 +1036,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
     }
     assert_eq!(
         state.inputs[&oid()][0].delivery,
-        crate::presentation::model::DeliveryState::Received
+        crate::presentation::state::model::DeliveryState::Received
     );
     for update in core
         .on_reply(ok(&draft_next, draft_list(vec![wire_draft(11)], false)))
@@ -1052,12 +1052,12 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
     }
     assert_eq!(
         state.drafts[&oid()][0].state,
-        crate::presentation::model::DraftState::Submitted
+        crate::presentation::state::model::DraftState::Submitted
     );
     assert!(state.drafts[&oid()][0].stale);
     assert_eq!(
         state.inputs[&oid()][0].delivery,
-        crate::presentation::model::DeliveryState::Received
+        crate::presentation::state::model::DeliveryState::Received
     );
 }
 

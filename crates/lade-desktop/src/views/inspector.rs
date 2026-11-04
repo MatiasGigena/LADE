@@ -12,15 +12,15 @@ use super::widgets::{
     set_accessible_label, set_focus_key, space, vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::drafts::SaveStatus;
-use crate::presentation::format;
-use crate::presentation::model::{
+use crate::presentation::panel::{self, PanelAction, Tone};
+use crate::presentation::state::drafts::SaveStatus;
+use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActionSurface, CandidateStatus, DeliveryMode, DraftId,
     NoticeLevel, ObjectiveDetail, ObjectiveId, Timestamp, VerificationState,
 };
-use crate::presentation::panel::{self, PanelAction, Tone};
-use crate::presentation::store::{Change, InspectorTab, MainView};
-use crate::presentation::text_bound::TEXT_LIMIT;
+use crate::presentation::state::store::{Change, InspectorTab, MainView};
+use crate::presentation::text::bound::TEXT_LIMIT;
+use crate::presentation::text::format;
 
 const FEEDBACK_MODES: [DeliveryMode; 2] = [DeliveryMode::Steer, DeliveryMode::FollowUp];
 
@@ -154,7 +154,8 @@ impl Inspector {
 
     pub fn refresh(self: &Rc<Self>, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
-        let mine = |id: &crate::presentation::model::ObjectiveId| Some(id) == selected.as_ref();
+        let mine =
+            |id: &crate::presentation::state::model::ObjectiveId| Some(id) == selected.as_ref();
         let (mut overview, mut evidence, mut drafts, mut submit) = (false, false, false, false);
         for change in changes {
             match change {
