@@ -22,6 +22,7 @@ use lade_protocol::types::{Capability, Id};
 use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 use lade_system::service::{self, RunningService, ServiceConfig};
+use lade_system::storage::Store;
 use lade_system::supervision::credentials::{CredentialSource, FIXTURE_SWITCH};
 use lade_system::supervision::launcher::PI_FLAGS;
 use lade_system::supervision::{
@@ -59,6 +60,21 @@ impl Env {
             cgroups: None,
             test_fixture_provider: true,
         }
+    }
+
+    /// The service's database file.
+    pub fn database(&self) -> PathBuf {
+        self.root.path().join("state/lade.db")
+    }
+
+    /// The service's store, for checking or seeding durable state while the service is stopped.
+    pub fn store(&self) -> Store {
+        Store::open(&self.database()).expect("store opens")
+    }
+
+    /// A raw connection to the service's database, for state the store has no accessor for.
+    pub fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.database()).expect("database opens")
     }
 
     pub fn start(&self, launcher: Arc<dyn WorkerLauncher>) -> RunningService {

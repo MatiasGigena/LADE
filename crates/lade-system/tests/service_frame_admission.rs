@@ -8,7 +8,7 @@ use lade_protocol::client::{
     RequestFrame, ReviewVerifyCommand, Settings, SettingsUpdateCommand, Start, UpdateIntentCommand,
 };
 use lade_protocol::{Framing, MAX_FRAME, encode};
-use lade_system::storage::{self, Store, WorkspaceRow};
+use lade_system::storage::{self, WorkspaceRow};
 use service_support::*;
 
 fn sized_intent(mut request: Request, slack: usize) -> Request {
@@ -55,7 +55,7 @@ fn an_unrepresentable_objective_is_refused_before_creation() {
     let result = client.call_op(operation, request);
     drop(client);
     service.shutdown();
-    let conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let conn = env.db();
     let stored: i64 = conn
         .query_row("SELECT COUNT(*) FROM objectives", [], |row| row.get(0))
         .unwrap();
@@ -96,7 +96,7 @@ fn an_unrepresentable_intent_update_preserves_the_prior_durable_intent() {
     }));
     drop(client);
     service.shutdown();
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert!(
         storage::load_objectives(store.conn()).unwrap()[0]
             .objective
@@ -188,7 +188,7 @@ fn large_intent_stays_readable_when_session_and_review_history_grow() {
     assert!(
         matches!(recorded.outcome, Some(Outcome::Ok(data)) if matches!(*data, ReplyData::ObjectiveCreate(ref detail) if detail.intent == objective.intent))
     );
-    let conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let conn = env.db();
     let (argv, tail): (String, String) = conn
         .query_row(
             "SELECT argv,output_tail FROM verifications LIMIT 1",
@@ -203,7 +203,7 @@ fn large_intent_stays_readable_when_session_and_review_history_grow() {
 }
 
 fn seed_review_history(env: &Env, objective: &lade_protocol::types::Id, count: i64) {
-    let mut conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let mut conn = env.db();
     let tx = conn.transaction().unwrap();
     let template: String = tx
         .query_row(
@@ -234,7 +234,7 @@ fn seed_review_history(env: &Env, objective: &lade_protocol::types::Id, count: i
 }
 
 fn seed_objectives(env: &Env, count: usize, outcome: &str) {
-    let mut store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let mut store = env.store();
     let mut template = storage::load_objectives(store.conn()).unwrap().remove(0);
     let mut record = template.objective.clone().into_record();
     record.intent = CoreIntent::new(outcome, "", "").unwrap();
@@ -304,7 +304,7 @@ fn snapshot_byte_budget_preserves_all_objectives_and_exact_settings() {
             .all(|row| !row.outcome.is_empty() && row.outcome.len() < 512)
     );
     assert_eq!(refused.unwrap_err().code, ErrorCode::LimitReached);
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert_eq!(
         storage::load_settings(store.conn()).unwrap(),
         Some(settings)
@@ -337,7 +337,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
             ],
         );
     }
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     for index in 1..64 {
         let path = env.root.path().join(format!("repository-{index}"));
         git(
@@ -419,7 +419,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
     );
     assert_eq!(create.unwrap_err().code, ErrorCode::LimitReached);
     assert_eq!(open.unwrap_err().code, ErrorCode::LimitReached);
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert_eq!(storage::load_objectives(store.conn()).unwrap().len(), 400);
     assert_eq!(storage::load_workspaces(store.conn()).unwrap().len(), 64);
 }
@@ -505,7 +505,7 @@ fn a_wire_sized_verification_command_has_bounded_reply_event_and_recovery_previe
     assert!(
         matches!(recovered.unwrap(), ReplyData::OperationGet(recorded) if matches!(&recorded.outcome, Some(Outcome::Ok(data)) if matches!(data.as_ref(), ReplyData::ReviewVerify(row) if row.truncated)))
     );
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     let review = storage::load_review(
         store.conn(),
         ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap()),
@@ -525,7 +525,7 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
     wait_state(&mut client, &objective, ExecutionState::Idle);
     drop(client);
     service.shutdown();
-    let mut store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let mut store = env.store();
     let tx = store.begin().unwrap();
     let oid = ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap());
     for seq in 1..=200 {
@@ -651,7 +651,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
                 .expect("streamed chunks can assemble a raw192KiB item");
             }
         }
-        let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+        let store = env.store();
         storage::upsert_activity(
             store.conn(),
             ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap()),
@@ -694,7 +694,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
         } else {
             assert_eq!(result.unwrap_err().code, ErrorCode::LimitReached);
         }
-        let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+        let store = env.store();
         let saved: String = store
             .conn()
             .query_row(
