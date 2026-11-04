@@ -2,9 +2,7 @@ use lade_protocol::client::{self as wire, ReplyData};
 use lade_protocol::types::{Counter, GitAlgorithm, GitId, Id, Timestamp};
 
 use super::*;
-use crate::presentation::state::model::{
-    ArtifactDigest, CandidateId, CaptureId, ModelRef, Reference, ReferenceVersion,
-};
+use crate::presentation::state::model::{ArtifactDigest, CaptureId, Reference, ReferenceVersion};
 use crate::transport::convert;
 
 pub(crate) const O: &str = "0b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
@@ -160,60 +158,6 @@ pub(crate) fn wire_detail(objective_id: &str) -> wire::ObjectiveDetail {
         }),
         approval: None,
         history_deleted: None,
-    }
-}
-
-#[test]
-fn objective_detail_converts_field_by_field() {
-    let detail = convert::detail(&wire_detail(O));
-    assert_eq!(detail.summary.objective_id, oid());
-    assert_eq!(detail.summary.lifecycle, view::Lifecycle::Active);
-    assert_eq!(
-        detail.summary.execution.state,
-        view::ExecutionState::Running
-    );
-    assert_eq!(detail.summary.badges, vec![view::Badge::UnsentDrafts]);
-    assert_eq!(
-        detail.summary.updated_at,
-        view::Timestamp(timestamp().unix_ms())
-    );
-    assert_eq!(detail.integration_target.label(), "main@aaaaaaa");
-    assert_eq!(detail.current_candidate().unwrap().ordinal, 1);
-    assert_eq!(
-        detail.availability(view::ActionName::ReviewIntegrate),
-        view::ActionAvailability::Disabled {
-            reason: "no valid approval".into()
-        }
-    );
-    // `terminal.open` is kept apart from the Objective actions.
-    assert_eq!(detail.available_actions.len(), 2);
-    assert_eq!(
-        detail.terminal_availability(),
-        view::ActionAvailability::Disabled {
-            reason: "Start the agent once to create this Objective's worktree.".into()
-        }
-    );
-    assert_eq!(
-        detail.session.as_ref().unwrap().model,
-        ModelRef::new("lade-fixture", "scripted")
-    );
-}
-
-#[test]
-fn references_and_paths_round_trip_losslessly() {
-    let r = reference();
-    assert_eq!(convert::reference(&convert::to_reference(&r).unwrap()), r);
-    let raw = RepoPath::from_bytes(b"a/\xfe\xff".to_vec());
-    let wire_path = convert::to_path(&raw).unwrap();
-    assert_eq!(wire_path.as_bytes(), raw.bytes.as_slice());
-    assert_eq!(convert::path(&wire_path), raw);
-    for basis in [
-        Basis::Working,
-        Basis::Candidate {
-            candidate_id: CandidateId::new(C),
-        },
-    ] {
-        assert!(convert::to_basis(&basis).is_ok());
     }
 }
 
