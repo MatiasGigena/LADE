@@ -82,6 +82,12 @@ pub struct GitId {
 }
 
 impl GitId {
+    /// Parses a full lowercase object id of `format`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidId`] when `hex` is not exactly as long as `format`'s ids or holds
+    /// anything but lowercase hex digits.
     pub fn parse(format: ObjectFormat, hex: &str) -> Result<Self> {
         let valid = hex.len() == format.hex_len()
             && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
@@ -126,6 +132,12 @@ impl fmt::Debug for GitId {
 pub struct RepoPath(Vec<u8>);
 
 impl RepoPath {
+    /// A repository-relative path: non-empty, without NUL bytes and without empty, `.` or
+    /// `..` components.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidPath`] when `bytes` breaks one of those rules.
     pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self> {
         let bytes = bytes.into();
         let valid = !bytes.is_empty()
@@ -250,6 +262,14 @@ pub struct Repository {
 }
 
 impl Repository {
+    /// Opens the non-bare repository whose top-level work tree is `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::NotRepository`] when `path` does not exist or is not inside a repository,
+    /// [`GitError::BareRepository`] or [`GitError::NotTopLevel`] when it is not the top of a work tree,
+    /// [`GitError::UnsupportedVersion`] or [`GitError::UnsupportedObjectFormat`] when the installed
+    /// Git or the repository is not supported, and a command error when `git` cannot run.
     pub fn open(path: &Path) -> Result<Self> {
         let top = path.canonicalize().map_err(|_| GitError::NotRepository)?;
         let version = GitCommand::new("version")
@@ -374,6 +394,12 @@ impl Repository {
         }
     }
 
+    /// Every local branch with its commit, sorted by its raw name.
+    ///
+    /// # Errors
+    ///
+    /// Returns a command error when `git for-each-ref` fails, or [`GitError::Parse`] when its output
+    /// is malformed.
     pub fn list_branches(&self) -> Result<Vec<Branch>> {
         let out = self
             .git("for-each-ref")
@@ -406,6 +432,11 @@ impl Repository {
         Ok(branches)
     }
 
+    /// The branch `HEAD` points at, or `None` when `HEAD` is detached or not a UTF-8 branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a command error when `git symbolic-ref` cannot be run.
     pub fn head_branch(&self) -> Result<Option<String>> {
         let out = self
             .git("symbolic-ref")
@@ -421,6 +452,12 @@ impl Repository {
             .map(str::to_owned))
     }
 
+    /// The object `refname` points at, or `None` when the ref does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] for a malformed `refname`, [`GitError::Failed`] when
+    /// `git rev-parse` fails for another reason, or [`GitError::Parse`] when its output is not an id.
     pub fn resolve_ref(&self, refname: &str) -> Result<Option<GitId>> {
         validate_refname(refname)?;
         let out = self
@@ -441,6 +478,12 @@ impl Repository {
         }
     }
 
+    /// The commit that `rev` (a full object id or a ref name) names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] when `rev` is neither an id nor a valid ref name,
+    /// [`GitError::NotFound`] when it names no commit, or a command error when `git` cannot run.
     pub fn resolve_commit(&self, rev: &str) -> Result<GitId> {
         if GitId::parse(self.format, rev).is_err() {
             validate_refname(rev)?;
@@ -458,6 +501,13 @@ impl Repository {
         }
     }
 
+    /// Writes a commit of `spec.tree` with `spec.parents` and LADE's identity, without
+    /// moving any ref.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidId`] when an id has another object format than the repository, or
+    /// a command error when `git commit-tree` fails.
     pub fn commit_tree(&self, spec: &CommitSpec) -> Result<GitId> {
         self.check_id(&spec.tree)?;
         let mut cmd =
@@ -488,6 +538,14 @@ impl Repository {
         self.parse_id("commit-tree", &out)
     }
 
+    /// Points `refname` at `new` only if it still points at `old` (or does not exist when
+    /// `old` is `None`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::StaleRef`] with the ref's current value when it moved,
+    /// [`GitError::InvalidRefName`] or [`GitError::InvalidId`] for malformed input, or
+    /// [`GitError::Failed`] when `git update-ref` fails for another reason.
     pub fn update_ref_cas(&self, refname: &str, new: &GitId, old: Option<&GitId>) -> Result<()> {
         validate_refname(refname)?;
         self.check_id(new)?;
@@ -506,6 +564,11 @@ impl Repository {
         self.cas_result(refname, old, out)
     }
 
+    /// Deletes `refname` only if it still points at `old`.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Repository::update_ref_cas`] does.
     pub fn delete_ref_cas(&self, refname: &str, old: &GitId) -> Result<()> {
         validate_refname(refname)?;
         self.check_id(old)?;
@@ -539,6 +602,12 @@ impl Repository {
         })
     }
 
+    /// The ref name under which LADE retains objects for `id`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] when `id` is empty, longer than 128 bytes, or holds
+    /// anything but ASCII letters, digits, `-` and `_`.
     pub fn retention_ref(id: &str) -> Result<String> {
         let valid = !id.is_empty()
             && id.len() <= 128
@@ -552,6 +621,13 @@ impl Repository {
         }
     }
 
+    /// Creates the retention ref for `id` pointing at `object`, so Git keeps it; an existing
+    /// ref that already points there is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::StaleRef`] when the retention ref exists for another object, or the errors
+    /// of [`Repository::retention_ref`] and [`Repository::update_ref_cas`].
     pub fn retain(&self, id: &str, object: &GitId) -> Result<String> {
         let refname = Self::retention_ref(id)?;
         match self.update_ref_cas(&refname, object, None) {
@@ -562,10 +638,24 @@ impl Repository {
         }
     }
 
+    /// Deletes the retention ref for `id` if it still points at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Repository::retention_ref`] and [`Repository::delete_ref_cas`] do.
     pub fn release_retention(&self, id: &str, expected: &GitId) -> Result<()> {
         self.delete_ref_cas(&Self::retention_ref(id)?, expected)
     }
 
+    /// Writes a tree of everything in `worktree` (tracked, untracked and modified files, with
+    /// the repository's ignore rules) through a scratch index in `scratch_dir`, without touching the
+    /// worktree's own index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::Failed`] when `git add` fails for a reason other than a nested repository
+    /// without a commit (up to [`MAX_SKIPPED_NESTED`] of those are skipped and reported), or a command
+    /// error when another step fails.
     pub fn capture_working_tree(
         &self,
         worktree: &Worktree,
@@ -645,6 +735,13 @@ impl Repository {
         self
     }
 
+    /// The paths among `paths` that a `filter` attribute (Git LFS, clean/smudge) applies to,
+    /// as of `tree` when the installed Git supports it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidId`] for a `tree` of another object format, a command error when
+    /// `git check-attr` fails, or [`GitError::Parse`] when it reports an invalid path.
     pub fn filtered_paths(&self, tree: &GitId, paths: &[&RepoPath]) -> Result<Vec<RepoPath>> {
         self.check_id(tree)?;
         if paths.is_empty() {
@@ -757,6 +854,12 @@ pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Checks that `name` is a full ref name under `refs/` that `git check-ref-format` would
+/// accept.
+///
+/// # Errors
+///
+/// Returns [`GitError::InvalidRefName`] when it is not.
 pub fn validate_refname(name: &str) -> Result<()> {
     let valid = name.starts_with("refs/")
         && name.len() <= 1024
@@ -776,6 +879,12 @@ pub fn validate_refname(name: &str) -> Result<()> {
     }
 }
 
+/// Checks that `name` is a valid short branch name.
+///
+/// # Errors
+///
+/// Returns [`GitError::InvalidRefName`] when it starts with `-`, is `HEAD`, or does not form a
+/// valid ref under `refs/heads/`.
 pub fn validate_branch_name(name: &str) -> Result<()> {
     if name.starts_with('-') || name == "HEAD" {
         return Err(GitError::InvalidRefName);

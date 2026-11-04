@@ -69,6 +69,13 @@ pub struct FileDiff {
 }
 
 impl Repository {
+    /// The files that differ between trees `old` and `new`, with renames detected and line
+    /// counts.
+    ///
+    /// # Errors
+    ///
+    /// Returns a command error when `git diff-tree` fails, or [`GitError::Parse`] when its output is
+    /// malformed.
     pub fn diff_numstat(&self, old: &GitId, new: &GitId) -> Result<Vec<ChangedFile>> {
         let out = self
             .git("diff-tree")
@@ -182,6 +189,13 @@ impl Repository {
         Ok(files)
     }
 
+    /// The bounded line diff of `path` between trees `old` and `new`; `old_path` names the
+    /// file in `old` when it was renamed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::NotFound`] when the path is in neither tree, or the errors of reading the
+    /// tree entries and blobs.
     pub fn diff_hunks(
         &self,
         old: &GitId,

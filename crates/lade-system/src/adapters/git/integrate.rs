@@ -45,6 +45,14 @@ pub struct SquashOutcome {
 }
 
 impl Repository {
+    /// Merges `candidate` into `target` without touching any work tree, reporting either the
+    /// clean result tree or the conflicting paths.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::UnsupportedVersion`] when the installed Git has no `merge-tree
+    /// --write-tree`, a command error when it fails, or [`GitError::Parse`] when its output is
+    /// malformed.
     pub fn merge_tree(&self, target: &GitId, candidate: &GitId) -> Result<MergeOutcome> {
         if self.git_version() < MIN_MERGE_TREE_VERSION {
             return Err(GitError::UnsupportedVersion {
@@ -87,6 +95,12 @@ impl Repository {
         Ok(MergeOutcome::Conflict { tree, paths })
     }
 
+    /// Where `branch` points and which work trees have it checked out, with their state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] for an invalid branch name, or a command error when the ref
+    /// or the work tree list cannot be read.
     pub fn target_checkout_state(&self, branch: &str) -> Result<TargetCheckout> {
         validate_branch_name(branch)?;
         let refname = format!("refs/heads/{branch}");
@@ -158,6 +172,15 @@ impl Repository {
         Ok((dirty, untracked))
     }
 
+    /// Squash-commits the candidate tree onto the target branch and updates the one work tree
+    /// that has it checked out.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::TargetMoved`] when the branch no longer points at the expected commit,
+    /// [`GitError::TargetBusy`], [`GitError::TargetDirty`] or [`GitError::TargetUntracked`] when the
+    /// checked-out work tree cannot take the update, [`GitError::CheckoutFailed`] (with whether the ref
+    /// was moved back) when updating it fails after the ref moved, or a command error.
     pub fn integrate_squash(&self, request: &SquashRequest) -> Result<SquashOutcome> {
         let state = self.target_checkout_state(&request.target_branch)?;
         let refname = format!("refs/heads/{}", request.target_branch);
@@ -228,6 +251,14 @@ impl Repository {
         }
     }
 
+    /// Updates the work tree that has `branch` checked out from `expected_target` to
+    /// `commit`, for an integration whose ref moved before a restart.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::TargetMoved`] when `branch` is not at `commit`,
+    /// [`GitError::TargetBusy`] or [`GitError::TargetWorktreeUnavailable`] when the work tree cannot be
+    /// updated, [`GitError::CheckoutFailed`] when `git read-tree` fails, or a command error.
     pub fn finish_integration_checkout(
         &self,
         branch: &str,

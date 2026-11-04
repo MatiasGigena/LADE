@@ -20,15 +20,30 @@ use super::state::ObjState;
 use crate::adapters::git::{self, GitError, ObjectFormat};
 use crate::support::wire_ts;
 
+/// Bytes `value` takes as compact JSON, for fitting replies into frame and page budgets.
+///
+/// Wire DTOs derive `Serialize` over strings, numbers and sequences, which cannot fail to
+/// serialize; if one ever did, it reports `usize::MAX` so budget checks leave it out instead of
+/// sending a frame that cannot be encoded.
 #[must_use]
 pub fn wire_id(uuid: Uuid) -> Id {
     Id::parse(uuid.to_string()).expect("domain uuids are canonical v4")
 }
 
+/// The domain UUID of a wire identifier.
+///
+/// # Errors
+///
+/// Returns an `invalid_request` Rejection when `id` is not a lowercase v4 UUID.
 pub fn parse_uuid(id: &Id) -> Result<Uuid, Rejection> {
     Uuid::parse(id.as_str()).map_err(domain_rejection)
 }
 
+/// A wire counter as a `u32`.
+///
+/// # Errors
+///
+/// Returns an `invalid_request` Rejection when the value does not fit.
 pub fn counter_u32(value: &Counter) -> Result<u32, Rejection> {
     u32::try_from(value.value()).map_err(|_| invalid("counter out of range"))
 }
@@ -185,16 +200,32 @@ pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
     }
 }
 
+/// The domain form of an object id read from Git.
+///
+/// # Panics
+///
+/// Never in practice: the Git adapter only yields full, non-zero lowercase object ids, the
+/// same rule the domain id enforces.
 #[must_use]
 pub fn core_git(id: &git::GitId) -> core_ids::GitId {
     core_ids::GitId::new(core_algorithm(id.format()), id.hex()).expect("adapter ids are full ids")
 }
 
+/// The Git adapter form of a domain object id.
+///
+/// # Panics
+///
+/// Never in practice: domain ids are full lowercase object ids, which the adapter accepts.
 #[must_use]
 pub fn adapter_git(id: &core_ids::GitId) -> git::GitId {
     git::GitId::parse(adapter_format(id.algorithm()), id.hex()).expect("domain ids are full ids")
 }
 
+/// The wire form of a domain object id.
+///
+/// # Panics
+///
+/// Never in practice: domain ids are full lowercase object ids, which the wire format accepts.
 #[must_use]
 pub fn wire_git(id: &core_ids::GitId) -> wire_types::GitId {
     let algorithm = match id.algorithm() {
@@ -204,6 +235,11 @@ pub fn wire_git(id: &core_ids::GitId) -> wire_types::GitId {
     wire_types::GitId::new(algorithm, id.hex()).expect("domain ids satisfy the wire format")
 }
 
+/// The domain form of a wire object id.
+///
+/// # Errors
+///
+/// Returns an `invalid_request` Rejection when it is not a full, non-zero lowercase object id.
 pub fn from_wire_git(id: &wire_types::GitId) -> Result<core_ids::GitId, Rejection> {
     let algorithm = match id.algorithm() {
         wire_types::GitAlgorithm::Sha1 => GitAlgorithm::Sha1,
@@ -244,6 +280,12 @@ pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Op
     }
 }
 
+/// The wire form of a domain Reference.
+///
+/// # Panics
+///
+/// Never in practice: a domain Reference holds a sha256 hex digest and a non-empty path within
+/// the wire path bound, both checked when it was built.
 #[must_use]
 pub fn wire_reference(reference: &Reference) -> wire::Reference {
     let version = match reference.version() {
@@ -272,6 +314,12 @@ pub fn wire_reference(reference: &Reference) -> wire::Reference {
     }
 }
 
+/// The domain form of a wire Reference.
+///
+/// # Errors
+///
+/// Returns an `invalid_request` Rejection when an identifier, the digest, the path, the byte range
+/// or the line hint is invalid, or the selected text is larger than the domain bound.
 pub fn core_reference(reference: &wire::Reference) -> Result<Reference, Rejection> {
     let version = match &reference.version {
         wire::ReferenceVersion::Working { capture_id } => InspectedVersion::Working {
@@ -304,10 +352,20 @@ pub fn core_reference(reference: &wire::Reference) -> Result<Reference, Rejectio
     .map_err(domain_rejection)
 }
 
+/// The Git adapter form of a wire path.
+///
+/// # Errors
+///
+/// Returns an `invalid_request` Rejection when it is not a valid repository-relative path.
 pub fn repo_path(path: &wire_types::WirePath) -> Result<git::RepoPath, Rejection> {
     git::RepoPath::new(path.as_bytes().to_vec()).map_err(|_| invalid("invalid repository path"))
 }
 
+/// The wire form of a repository path, cut to the wire path bound; an empty path shows as `?`.
+///
+/// # Panics
+///
+/// Never: the fallback `?` is a valid, non-empty path within the bound.
 #[must_use]
 pub fn wire_path(bytes: &[u8]) -> wire_types::WirePath {
     let bounded = &bytes[..bytes.len().min(wire_types::MAX_PATH_BYTES)];

@@ -85,6 +85,13 @@ pub struct LauncherConfig {
 }
 
 impl LauncherConfig {
+    /// The default launcher configuration: Node and the worker package found as
+    /// [`resolve_node`] and [`default_worker_dir`] find them, built-in provider policies, and
+    /// credentials and proxy settings from the process environment.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`resolve_node`] and [`default_worker_dir`] do.
     pub fn new(run_dir: PathBuf, socket_dir: PathBuf) -> Result<Self, LaunchError> {
         let worker_dir = default_worker_dir()?;
         Ok(Self {
@@ -105,6 +112,13 @@ impl LauncherConfig {
     }
 }
 
+/// The canonical path of the Node runtime: `explicit`, else `LADE_NODE`, else `node` on
+/// `PATH`.
+///
+/// # Errors
+///
+/// Returns [`LaunchError::SandboxUnavailable`] when `LADE_NODE` is relative, no runtime is found,
+/// or its path cannot be resolved.
 pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
     let from_env = std::env::var_os("LADE_NODE").map(PathBuf::from);
     if let Some(path) = &from_env
@@ -127,6 +141,12 @@ pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
         .map_err(|_| LaunchError::SandboxUnavailable("node runtime path unresolvable".into()))
 }
 
+/// The worker package directory for this process, as [`worker_dir_from`] finds it from
+/// `LADE_WORKER_DIR` and the running executable.
+///
+/// # Errors
+///
+/// Fails as [`worker_dir_from`] does.
 pub fn default_worker_dir() -> Result<PathBuf, LaunchError> {
     let exe = std::env::current_exe().ok();
     worker_dir_from(
@@ -135,6 +155,13 @@ pub fn default_worker_dir() -> Result<PathBuf, LaunchError> {
     )
 }
 
+/// The worker package directory: `env_dir` when set, else the bundle next to
+/// `current_exe`, else (in debug builds) the repository's `packages/pi-worker`.
+///
+/// # Errors
+///
+/// Returns [`LaunchError::SandboxUnavailable`] when `env_dir` does not exist or no worker package
+/// is found.
 pub fn worker_dir_from(
     env_dir: Option<PathBuf>,
     current_exe: Option<&Path>,
@@ -168,6 +195,11 @@ pub fn worker_dir_from(
     ))
 }
 
+/// The sandboxed launcher for `config`, boxed as the service takes it.
+///
+/// # Errors
+///
+/// Fails as [`SandboxLauncher::new`] does.
 pub fn default_launcher(config: LauncherConfig) -> Result<Box<dyn WorkerLauncher>, LaunchError> {
     Ok(Box::new(SandboxLauncher::new(config)?))
 }
@@ -180,6 +212,14 @@ pub struct SandboxLauncher {
 }
 
 impl SandboxLauncher {
+    /// A launcher that runs workers in sandboxes as `config` describes, with its paths
+    /// canonicalized and its private directories created.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::SandboxUnavailable`] when `bwrap`, `prlimit` or Node is missing, or
+    /// [`LaunchError::Io`] when the worker directory cannot be resolved, the entry is outside it, the
+    /// run or socket directory is relative, or a private directory cannot be created.
     pub fn new(mut config: LauncherConfig) -> Result<Self, LaunchError> {
         let tools = SandboxTools::locate()?;
         config.node = resolve_node(Some(&config.node))?;
@@ -459,6 +499,13 @@ impl WorkerLauncher for SandboxLauncher {
     }
 }
 
+/// Reads the model catalogue a worker wrote, refusing anything but a regular file of at
+/// most the catalogue bound.
+///
+/// # Errors
+///
+/// Returns [`LaunchError::Io`] when the file cannot be read, is not a regular file, or is too
+/// large.
 pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
     let meta = std::fs::symlink_metadata(path).map_err(LaunchError::Io)?;
     if !meta.is_file() || meta.len() > MAX_CATALOG_BYTES {

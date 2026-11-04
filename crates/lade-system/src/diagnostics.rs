@@ -235,6 +235,13 @@ impl RotatingLog {
         Ok(())
     }
 
+    /// Appends one record (cut to fit a file) as a line, rotating the files first when it
+    /// would not fit in the current one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the log directory is unsafe or a file cannot be
+    /// opened, rotated or written.
     pub fn append(&mut self, record: &str) -> io::Result<()> {
         let limit = usize::try_from(self.file_bytes)
             .unwrap_or(usize::MAX)
@@ -319,6 +326,13 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
     true
 }
 
+/// Redirects the process's stderr through a thread that redacts each line, copies it to
+/// the original stderr and appends it to the rotating log under `state`.
+///
+/// # Errors
+///
+/// Returns the operating system's error when stderr cannot be duplicated or redirected, the pipe
+/// cannot be created, or the thread cannot be spawned.
 pub fn capture_stderr(state: PathBuf) -> io::Result<StderrCapture> {
     let original = rustix::io::fcntl_dupfd_cloexec(io::stderr(), 3)?;
     let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
@@ -384,6 +398,13 @@ fn read_lines_lossy(path: &Path) -> io::Result<Option<Vec<String>>> {
     ))
 }
 
+/// Writes a redacted diagnostics bundle (logs, versions, migration journal) to the new
+/// file `out`.
+///
+/// # Errors
+///
+/// Returns [`ExportError::Exists`] when `out` already exists, or [`ExportError::Io`] naming the step
+/// that failed; a partly written file is removed.
 pub fn export(state: &Path, out: &Path) -> Result<ExportSummary, ExportError> {
     let home = home();
     let mut file = OpenOptions::new()

@@ -38,6 +38,12 @@ impl Tail {
     }
 }
 
+/// Runs `cmd` with its output merged and bounded to the last `max_output` bytes, killing
+/// its process group after `timeout`.
+///
+/// # Errors
+///
+/// Fails as [`run_bounded_with`] does.
 pub fn run_bounded(
     cmd: impl Into<SandboxCommand>,
     timeout: Duration,
@@ -46,6 +52,13 @@ pub fn run_bounded(
     run_bounded_with(cmd, timeout, max_output, |_| Ok(()))
 }
 
+/// [`run_bounded`], calling `place` with the child's process-group id before its gate
+/// opens, so the caller can place it in a cgroup first.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the output pipe cannot be created, the command cannot
+/// be spawned or waited on, or `place` or opening the gate fails (the child is killed then).
 pub fn run_bounded_with(
     cmd: impl Into<SandboxCommand>,
     timeout: Duration,

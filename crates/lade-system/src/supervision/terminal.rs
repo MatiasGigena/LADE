@@ -141,6 +141,12 @@ impl fmt::Debug for Terminal {
 }
 
 impl Terminal {
+    /// Opens a sandboxed interactive shell on a pseudo-terminal, as `request` describes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` for an unsafe identity, size or missing shell, or the operating system's
+    /// error when the pseudo-terminal, the sandbox or its I/O threads cannot be set up.
     pub fn open(tools: &SandboxTools, request: &TerminalRequest) -> io::Result<Self> {
         if !safe_id(&request.objective_id) || !safe_id(&request.terminal_id) {
             return Err(invalid("terminal identity"));
@@ -229,6 +235,12 @@ impl Terminal {
         Ok(terminal)
     }
 
+    /// Queues `data` as terminal input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokenPipe` when the terminal was closed or exited, or `WouldBlock` when its input
+    /// queue is full.
     pub fn write(&self, data: &[u8]) -> io::Result<()> {
         let gone = || io::Error::new(ErrorKind::BrokenPipe, "terminal_closed");
         let Some(tx) = self.input.as_ref() else {
@@ -256,6 +268,11 @@ impl Terminal {
         }
     }
 
+    /// Sets the terminal's size.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` for a zero or oversized size, or the error from setting the window size.
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
         tcsetwinsize(&self.controller, winsize(cols, rows)?).map_err(io::Error::from)
     }

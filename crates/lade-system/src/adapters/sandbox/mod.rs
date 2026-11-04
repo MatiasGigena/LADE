@@ -123,6 +123,11 @@ pub struct SandboxTools {
 }
 
 impl SandboxTools {
+    /// Finds `bwrap` and `prlimit` on `PATH` (or in `/usr/bin` and `/bin`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::ToolMissing`] naming the first tool that is not installed.
     pub fn locate() -> Result<Self, SandboxError> {
         Ok(Self {
             bwrap: find_program("bwrap").ok_or(SandboxError::ToolMissing { tool: "bwrap" })?,
@@ -169,6 +174,12 @@ pub struct SandboxSpec {
 }
 
 impl SandboxSpec {
+    /// A sandbox that runs `argv` in `chdir` under `limits`, with nothing bound or set yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when the program or `chdir` is not an absolute path, or
+    /// [`SandboxError::ToolMissing`] when `env`, `bash` or `rm` is not installed.
     pub fn new(argv: Vec<OsString>, chdir: &Path, limits: Limits) -> Result<Self, SandboxError> {
         if !argv.first().is_some_and(|a| Path::new(a).is_absolute()) {
             return Err(SandboxError::InvalidSpec { what: "argv" });
@@ -202,22 +213,45 @@ impl SandboxSpec {
         })
     }
 
+    /// Makes `path` visible read-only inside the sandbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when `path` is relative or does not exist.
     pub fn ro_bind(&mut self, path: &Path) -> Result<&mut Self, SandboxError> {
         self.ro_binds.push(checked_bind(path)?);
         Ok(self)
     }
 
+    /// Makes `path` visible and writable inside the sandbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when `path` is relative or does not exist.
     pub fn rw_bind(&mut self, path: &Path) -> Result<&mut Self, SandboxError> {
         self.rw_binds.push(checked_bind(path)?);
         Ok(self)
     }
 
+    /// Sets an environment variable that is passed on the `bwrap` command line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when `name` is not a valid variable name or is already
+    /// set.
     pub fn env(&mut self, name: &str, value: impl AsRef<OsStr>) -> Result<&mut Self, SandboxError> {
         self.check_env_name(name)?;
         self.env.push((name.into(), value.as_ref().to_os_string()));
         Ok(self)
     }
 
+    /// Sets an environment variable through the inherited environment instead of the command
+    /// line, so it never shows in a process listing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when `name` is not a valid variable name or is already
+    /// set.
     pub fn secret_env(
         &mut self,
         name: &str,
@@ -234,6 +268,13 @@ impl SandboxSpec {
         self
     }
 
+    /// Tags the sandbox with an environment marker that the startup sweep finds it by; the
+    /// marker is unset inside the sandbox.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when `marker` does not start with `LADE_`, is longer than
+    /// 64 bytes, or holds anything but ASCII letters, digits and `_`.
     pub fn marker(&mut self, marker: &str) -> Result<&mut Self, SandboxError> {
         let valid = marker.starts_with("LADE_")
             && marker.len() <= 64
@@ -364,6 +405,13 @@ impl SandboxSpec {
         args
     }
 
+    /// The `prlimit` + `bwrap` command for this sandbox, with the seccomp filter and the gate
+    /// pipe ready to be inherited.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SandboxError::InvalidSpec`] when no seccomp filter exists for this architecture, or
+    /// [`SandboxError::Io`] when a pipe cannot be created.
     pub fn command(&self, tools: &SandboxTools) -> Result<SandboxCommand, SandboxError> {
         let program = seccomp::program().ok_or(SandboxError::InvalidSpec { what: "seccomp" })?;
         let io = |e: io::Error| SandboxError::Io { kind: e.kind() };
@@ -412,11 +460,18 @@ impl SandboxCommand {
         &mut self.command
     }
 
+    /// The command that spawns the sandbox, for inspecting its arguments.
     #[must_use]
     pub fn get_command(&self) -> &Command {
         &self.command
     }
 
+    /// Spawns the sandbox; its program waits until the returned gate is opened.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the descriptors cannot be passed on or the process
+    /// cannot be spawned.
     pub fn spawn(self) -> io::Result<(Child, Gate)> {
         let Self {
             mut command,
@@ -429,6 +484,10 @@ impl SandboxCommand {
     /// Spawns a supervisor that runs this sandbox itself, instead of the sandbox directly:
     /// `supervisor` builds that process from the sandbox command, and the sandbox's inherited
     /// descriptors and gate carry over to it.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`SandboxCommand::spawn`] does.
     pub fn spawn_via(
         self,
         supervisor: impl FnOnce(&Command) -> Command,
@@ -462,6 +521,11 @@ fn spawn_inheriting(
 pub struct Gate(Option<PipeWriter>);
 
 impl Gate {
+    /// Lets the sandboxed program start. Opening a gate twice does nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns the error from writing to the gate pipe, for example when the sandbox already exited.
     pub fn open(&mut self) -> io::Result<()> {
         match self.0.take() {
             Some(mut writer) => writer.write_all(b"go\n"),
@@ -531,6 +595,13 @@ impl fmt::Debug for WorkerLaunch {
     }
 }
 
+/// The sandbox for a pi worker: Node and the worker read-only, the worktree, session
+/// directory and gateway socket writable, credentials as secret environment.
+///
+/// # Errors
+///
+/// Returns [`SandboxError::InvalidSpec`] when Node cannot be resolved, a bind source is missing, or
+/// a pi variable does not start with `PI_`, and the errors of [`SandboxSpec::new`].
 pub fn worker_spec(launch: &WorkerLaunch) -> Result<SandboxSpec, SandboxError> {
     let node = launch
         .node
@@ -586,6 +657,12 @@ pub struct VerificationLaunch {
     pub limits: Limits,
 }
 
+/// The sandbox for a verification command, with only its work directory writable.
+///
+/// # Errors
+///
+/// Returns the errors of [`SandboxSpec::new`], [`SandboxSpec::ro_bind`], [`SandboxSpec::rw_bind`]
+/// and [`SandboxSpec::env`] for an invalid command, path or variable.
 pub fn verification_spec(launch: &VerificationLaunch) -> Result<SandboxSpec, SandboxError> {
     let mut spec = SandboxSpec::new(launch.argv.clone(), &launch.work_dir, launch.limits)?;
     for path in &launch.extra_ro {
@@ -612,6 +689,13 @@ pub struct TerminalLaunch {
     pub limits: Limits,
 }
 
+/// The sandbox for an interactive terminal on an Objective's worktree, writable only when
+/// `launch.writable` is set.
+///
+/// # Errors
+///
+/// Returns [`SandboxError::ToolMissing`] when `env` is not installed, and the errors of
+/// [`SandboxSpec::new`] and the binds for an invalid shell or path.
 pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxError> {
     let (mode, prompt) = if launch.writable {
         ("read_write", "[lade] \\W\\$ ")
@@ -652,6 +736,13 @@ pub fn terminal_spec(launch: &TerminalLaunch) -> Result<SandboxSpec, SandboxErro
     Ok(spec)
 }
 
+/// Runs `true` in a worker sandbox to check that sandboxes work on this machine.
+///
+/// # Errors
+///
+/// Returns [`SandboxError::ToolMissing`] when `true` is not installed, [`SandboxError::Io`] when
+/// the probe cannot run, or [`SandboxError::Unavailable`] with its output when it fails or times
+/// out.
 pub fn sandbox_available(tools: &SandboxTools) -> Result<(), SandboxError> {
     let program = find_program("true").ok_or(SandboxError::ToolMissing { tool: "true" })?;
     let spec = SandboxSpec::new(

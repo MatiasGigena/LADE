@@ -26,6 +26,11 @@ CREATE TABLE resource_approvals (
 );
 ";
 
+/// Records the thinking level chosen for `objective`.
+///
+/// # Errors
+///
+/// Returns the SQLite error when the write fails, for example when the Objective is not recorded.
 pub fn save_thinking(
     conn: &Connection,
     objective: ObjectiveId,
@@ -41,6 +46,12 @@ pub fn save_thinking(
     Ok(())
 }
 
+/// The thinking level recorded for each Objective.
+///
+/// # Errors
+///
+/// Returns the SQLite error when the query fails, or `InvalidColumnType` when a stored id or level
+/// no longer parses.
 pub fn load_thinking(conn: &Connection) -> Sql<Vec<(ObjectiveId, ThinkingLevel)>> {
     let mut stmt = conn.prepare("SELECT objective_id, thinking FROM session_preferences")?;
     let rows = stmt.query_map([], |row| {
@@ -60,6 +71,11 @@ pub struct ApprovalRow {
     pub approved: bool,
 }
 
+/// Records the developer's decision for one extension version.
+///
+/// # Errors
+///
+/// Returns the SQLite error when the write fails.
 pub fn save_approval(conn: &Connection, row: &ApprovalRow, now: i64) -> Sql<()> {
     conn.execute(
         "INSERT INTO resource_approvals (name, sha256, decision, decided_at) VALUES (?1, ?2, ?3, ?4)
@@ -75,6 +91,12 @@ pub fn save_approval(conn: &Connection, row: &ApprovalRow, now: i64) -> Sql<()> 
     Ok(())
 }
 
+/// Every recorded extension decision.
+///
+/// # Errors
+///
+/// Returns the SQLite error when the query fails, or `InvalidColumnType` when a stored decision is
+/// neither `approved` nor `rejected`.
 pub fn load_approvals(conn: &Connection) -> Sql<Vec<ApprovalRow>> {
     let mut stmt = conn.prepare("SELECT name, sha256, decision FROM resource_approvals")?;
     let rows = stmt.query_map([], |row| {

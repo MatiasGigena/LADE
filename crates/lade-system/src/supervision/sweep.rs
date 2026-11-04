@@ -56,6 +56,12 @@ pub(crate) fn children_of(pid: u32) -> Vec<u32> {
         .collect()
 }
 
+/// Atomically replaces the pidfile at `path` with `records`, mode 0600.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the temporary file cannot be written or synced, or
+/// the rename fails.
 pub fn write_pidfile(path: &Path, records: &[PidRecord]) -> io::Result<()> {
     let tmp = path.with_extension("pid.tmp");
     let mut file = fs::OpenOptions::new()
@@ -93,6 +99,12 @@ pub(crate) fn record_sandbox(
     Ok(Some(init))
 }
 
+/// Moves a sandbox and its namespace init into `leaf` once the init appears.
+///
+/// # Errors
+///
+/// Returns `TimedOut` when the namespace init does not appear in time, or the operating system's
+/// error when the processes cannot be placed in the cgroup.
 pub fn place_sandbox(pid: u32, leaf: &CgroupLeaf, ended: impl Fn() -> bool) -> io::Result<()> {
     match discover_init(pid, &ended)? {
         Some(init) => place(leaf, pid, init.pid),
@@ -131,6 +143,11 @@ fn place(leaf: &CgroupLeaf, outer: u32, init: u32) -> io::Result<()> {
     }
 }
 
+/// The records in the pidfile at `path`; malformed lines are skipped.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the file cannot be read.
 pub fn read_pidfile(path: &Path) -> io::Result<Vec<PidRecord>> {
     let text = fs::read_to_string(path)?;
     Ok(text
@@ -218,6 +235,12 @@ pub struct SweepReport {
     pub removed_sockets: usize,
 }
 
+/// Kills the sandboxes a previous service left behind (found by marker and by pidfile)
+/// and removes their pidfiles and gateway sockets.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `run_dir` exists but cannot be listed.
 pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     let mut report = SweepReport::default();
     let entries = match fs::read_dir(run_dir) {
@@ -268,6 +291,11 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     Ok(report)
 }
 
+/// Removes the stale gateway sockets in `socket_dir`, returning how many it removed.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `socket_dir` exists but cannot be listed.
 pub fn sweep_sockets(socket_dir: &Path) -> io::Result<usize> {
     let entries = match fs::read_dir(socket_dir) {
         Ok(entries) => entries,

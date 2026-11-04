@@ -27,6 +27,11 @@ impl ArtifactDigest {
         Self(digest)
     }
 
+    /// Parses a lowercase hex SHA-256 digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::InvalidDigest`] when `hex` is not 64 lowercase hex digits.
     pub fn parse(hex: &str) -> Result<Self, ArtifactError> {
         let bytes = hex.as_bytes();
         if bytes.len() != 64 {
@@ -114,18 +119,38 @@ fn io_err(stage: &'static str) -> impl Fn(io::Error) -> ArtifactError {
 }
 
 pub trait ArtifactIo: Send + Sync {
+    /// Appends `chunk` to a staged artifact file.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the write fails.
     fn write_chunk(&self, file: &mut File, chunk: &[u8]) -> io::Result<()> {
         file.write_all(chunk)
     }
 
+    /// Flushes a staged artifact file to stable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the sync fails.
     fn sync_file(&self, file: &File) -> io::Result<()> {
         file.sync_all()
     }
 
+    /// Makes the staged file `tmp` visible at `dest` without replacing an existing artifact.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error, `AlreadyExists` when `dest` is already present.
     fn publish(&self, tmp: &Path, dest: &Path) -> io::Result<()> {
         fs::hard_link(tmp, dest)
     }
 
+    /// Flushes the directory entries of `dir` to stable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when `dir` cannot be opened or synced.
     fn sync_dir(&self, dir: &Path) -> io::Result<()> {
         File::open(dir)?.sync_all()
     }
@@ -150,10 +175,21 @@ pub struct ArtifactStore {
 }
 
 impl ArtifactStore {
+    /// Opens the content-addressed store under `artifacts_dir`, staging writes in `tmp_dir`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::Io`] when either directory cannot be created as a private directory.
     pub fn open(artifacts_dir: &Path, tmp_dir: &Path) -> Result<Self, ArtifactError> {
         Self::with_io(artifacts_dir, tmp_dir, Box::new(OsArtifactIo))
     }
 
+    /// Opens the store as [`ArtifactStore::open`] does, with `io` performing the file
+    /// operations whose failure the tests inject.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`ArtifactStore::open`] does.
     pub fn with_io(
         artifacts_dir: &Path,
         tmp_dir: &Path,
@@ -181,10 +217,23 @@ impl ArtifactStore {
         fs::symlink_metadata(self.path_of(digest)).is_ok_and(|m| m.is_file())
     }
 
+    /// Stores `bytes` durably and returns their digest.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`ArtifactStore::put_reader`] does.
     pub fn put(&self, bytes: &[u8]) -> Result<ArtifactDigest, ArtifactError> {
         self.put_reader(&mut &bytes[..])
     }
 
+    /// Streams `reader` into the store, durably, and returns the digest of what it read. An
+    /// artifact that is already stored is verified rather than rewritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::Io`] naming the stage (staging, reading the source, writing, syncing,
+    /// publishing) that failed, or [`ArtifactError::Corrupt`] when the stored copy of the same digest
+    /// no longer matches it.
     pub fn put_reader(&self, reader: &mut dyn Read) -> Result<ArtifactDigest, ArtifactError> {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let tmp_path = self.tmp.join(format!(
@@ -252,6 +301,12 @@ impl ArtifactStore {
         Ok((file, len))
     }
 
+    /// Up to `limit` bytes (at most one page) of an artifact, starting at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::NotFound`] when the artifact is not stored, or [`ArtifactError::Io`]
+    /// when it cannot be read.
     pub fn read_page(
         &self,
         digest: &ArtifactDigest,
@@ -273,6 +328,13 @@ impl ArtifactStore {
         })
     }
 
+    /// The whole artifact, checked against its digest when `verify` is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::TooLarge`] when it is bigger than `max_bytes`,
+    /// [`ArtifactError::Corrupt`] when verification fails, [`ArtifactError::NotFound`] when it is not
+    /// stored, or [`ArtifactError::Io`] when it cannot be read.
     pub fn read_all(
         &self,
         digest: &ArtifactDigest,
@@ -296,6 +358,12 @@ impl ArtifactStore {
         Ok(data)
     }
 
+    /// Whether the stored artifact still hashes to `digest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArtifactError::NotFound`] when it is not stored, or [`ArtifactError::Io`] when it
+    /// cannot be read.
     pub fn verify(&self, digest: &ArtifactDigest) -> Result<bool, ArtifactError> {
         let (mut file, _) = self.open_artifact(digest)?;
         let mut hasher = Sha256::new();

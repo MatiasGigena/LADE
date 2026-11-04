@@ -13,8 +13,13 @@ pub fn service_uid() -> u32 {
 
 /// Creates `dir` (and any missing parents) with mode 0700, then verifies that it is a real
 /// directory owned by the service user with no group or other permission bits. A directory
-/// that already exists is verified the same way, never repaired. A directory that fails the
-/// check is reported as `ErrorKind::PermissionDenied` with the reason as the message.
+/// that already exists is verified the same way, never repaired.
+///
+/// # Errors
+///
+/// Returns the error from creating `dir` or reading its metadata, or `PermissionDenied` (with
+/// the reason as its message) when it is a symbolic link or not a directory, belongs to another
+/// user, or grants group or other permissions.
 pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     fs::DirBuilder::new()
         .recursive(true)

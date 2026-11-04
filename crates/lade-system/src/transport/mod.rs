@@ -49,6 +49,12 @@ fn io_err(stage: &'static str) -> impl Fn(io::Error) -> TransportError {
     move |e| TransportError::Io(stage, e.kind())
 }
 
+/// Mints a fresh admission capability and atomically publishes it, mode 0600, in `dir`.
+///
+/// # Errors
+///
+/// Returns [`TransportError::Io`] naming the step (randomness, creating, writing, publishing,
+/// syncing) that failed.
 pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     let mut secret = [0u8; 32];
     random_fill(&mut secret).map_err(io_err("random"))?;
@@ -72,6 +78,11 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     Ok(capability)
 }
 
+/// Checks that no service answers on the control socket in `dir`.
+///
+/// # Errors
+///
+/// Returns [`TransportError::AlreadyRunning`] when one does.
 pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
     let path = dir.join(CONTROL_SOCKET_NAME);
     let socket = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket());
@@ -81,6 +92,14 @@ pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
     Ok(())
 }
 
+/// Binds the control socket in `dir`, mode 0600, replacing a stale socket nobody answers
+/// on.
+///
+/// # Errors
+///
+/// Returns [`TransportError::UnsafeSocketPath`] when something other than a socket is at the path,
+/// [`TransportError::AlreadyRunning`] when a service answers on it, or [`TransportError::Io`] when
+/// removing, binding or restricting it fails.
 pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     let path = dir.join(CONTROL_SOCKET_NAME);
     if let Ok(meta) = fs::symlink_metadata(&path) {
@@ -135,6 +154,12 @@ impl Outbound {
         }
     }
 
+    /// Queues `frame` for the link's writer; frames pushed after close are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] when the queue already holds [`MAX_OUTBOUND_FRAMES`] frames or would exceed
+    /// [`MAX_OUTBOUND_BYTES`]; the caller then drops the link.
     pub fn push(&self, frame: Vec<u8>) -> Result<(), Overflow> {
         let (lock, wake) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);

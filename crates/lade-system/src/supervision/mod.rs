@@ -83,21 +83,43 @@ impl From<SandboxError> for LaunchError {
 }
 
 pub trait WorkerControl: Send {
+    /// Sends one message to the worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the worker's input is closed or the message cannot be
+    /// written.
     fn send(&mut self, body: WorkerBody) -> std::io::Result<()>;
     fn terminate(&mut self);
 }
 
 pub trait WorkerLauncher: Send + Sync {
+    /// Starts the worker `request` describes; its events arrive on `events`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LaunchError`] when the sandbox, the provider or the worker process cannot be set up.
     fn launch(
         &self,
         request: LaunchRequest,
         events: SyncSender<SupervisorEvent>,
     ) -> Result<Box<dyn WorkerControl>, LaunchError>;
 
+    /// Checks, before a launch, that `provider` can run; the default accepts every provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::ProviderUnavailable`] when the provider has no credentials or policy.
     fn preflight(&self, _provider: &str) -> Result<(), LaunchError> {
         Ok(())
     }
 
+    /// Runs the model catalogue in a sandbox and returns its JSON output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaunchError::SandboxUnavailable`] when the launcher has no sandbox (the default), or
+    /// the launcher's error when the catalogue run fails.
     fn catalog(&self, _scratch: &Path, _models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
         Err(LaunchError::SandboxUnavailable(
             "the model catalogue runs only in the worker sandbox".into(),

@@ -113,6 +113,14 @@ pub struct SandboxCgroups {
     delegation: String,
 }
 
+/// Finds the service's delegated cgroup, prepares it for per-sandbox leaves and proves
+/// that its limits are enforced.
+///
+/// # Errors
+///
+/// Returns the [`CgroupError`] that says why delegated limits are unavailable: disabled by
+/// `LADE_CGROUPS=off`, no cgroup v2, not owned or not delegated, missing controllers, unmovable
+/// processes, an unreadable or unwritable file, or limits that a probe shows are not enforced.
 pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, CgroupError> {
     if std::env::var_os("LADE_CGROUPS").is_some_and(|v| v == "off") {
         return Err(CgroupError::Disabled);
@@ -130,6 +138,12 @@ pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, CgroupError> {
     Ok(cgroups)
 }
 
+/// The detection steps of [`detect`] against the given membership text, mount point and
+/// user manager, without the enforcement probe, so tests can run them on a fake hierarchy.
+///
+/// # Errors
+///
+/// Returns the [`CgroupError`] of the first check that fails.
 pub fn detect_in(
     membership: &str,
     mount: &Path,
@@ -304,6 +318,14 @@ fn members(dir: &Path) -> Vec<u32> {
 }
 
 impl SandboxCgroups {
+    /// Moves the service (and every other process in `dir`) into a `service` leaf and creates
+    /// the `sandboxes` subtree with the memory, pids and cpu controllers enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CgroupError::MissingControllers`] when `dir` lacks a controller,
+    /// [`CgroupError::Unmovable`] when processes stay in `dir`, or [`CgroupError::Io`] naming the step
+    /// that failed.
     pub fn prepare(dir: &Path, limits: CgroupLimits, pid: u32) -> Result<Self, CgroupError> {
         let available = fs::read_to_string(dir.join("cgroup.controllers"))
             .map_err(CgroupError::io("cgroup.controllers"))?;
@@ -370,6 +392,14 @@ impl SandboxCgroups {
         proved.map_err(CgroupError::NotEnforced)
     }
 
+    /// Creates the leaf `name` under the Objective's group, creating the group with the
+    /// configured limits first.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` when either name is empty, longer than 96 bytes or holds anything but
+    /// ASCII letters, digits and `-`, or the operating system's error when a cgroup cannot be created
+    /// or limited.
     pub fn leaf(&self, objective: &str, name: &str) -> io::Result<CgroupLeaf> {
         let safe = |s: &str| {
             (1..=96).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -530,6 +560,12 @@ impl CgroupLeaf {
         &self.path
     }
 
+    /// Moves process `pid` into this leaf.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the process cannot be moved, for example because it
+    /// already exited.
     pub fn add(&self, pid: u32) -> io::Result<()> {
         fs::write(self.path.join("cgroup.procs"), pid.to_string())
     }

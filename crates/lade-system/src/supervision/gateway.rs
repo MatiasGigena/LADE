@@ -389,6 +389,12 @@ impl fmt::Debug for Gateway {
 }
 
 impl Gateway {
+    /// Starts a gateway on `socket` that tunnels HTTPS for the hosts `policy` allows, through
+    /// `upstream` when set, with the default tunnel limit.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Gateway::start_with`] does.
     pub fn start(
         socket: &Path,
         policy: EgressPolicy,
@@ -397,6 +403,13 @@ impl Gateway {
         Self::start_with(socket, policy, upstream, MAX_TUNNELS)
     }
 
+    /// [`Gateway::start`] with at most `max_tunnels` open tunnels.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` when `socket` has no parent directory, or the operating system's error
+    /// when that directory is unsafe, the socket cannot be replaced, bound or restricted, or the accept
+    /// thread cannot be spawned.
     pub fn start_with(
         socket: &Path,
         policy: EgressPolicy,

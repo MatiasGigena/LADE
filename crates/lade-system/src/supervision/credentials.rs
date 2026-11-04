@@ -214,6 +214,15 @@ impl CredentialSource {
         self.file.as_deref()
     }
 
+    /// The credentials released to a worker for built-in `provider`, from the laded
+    /// environment, the credentials file or the Secret Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialError::UnknownProvider`] for a provider without a credential mapping,
+    /// [`CredentialError::Missing`] when no source holds any of its variables, or
+    /// [`CredentialError::InsecureFile`] or [`CredentialError::Io`] when the credentials file is unsafe
+    /// or unreadable.
     pub fn resolve(&self, provider: &str) -> Result<ReleasedCredentials, CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -233,6 +242,13 @@ impl CredentialSource {
         })
     }
 
+    /// The credentials released for custom `provider`, which needs every variable in `vars`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialError::UnknownProvider`] when a variable is not a `LADE_PROVIDER_` name,
+    /// [`CredentialError::MissingCustom`] naming the variables no source holds, or the credentials
+    /// file errors of [`CredentialSource::resolve`].
     pub fn resolve_custom(
         &self,
         provider: &str,
@@ -258,6 +274,12 @@ impl CredentialSource {
         })
     }
 
+    /// Checks that `provider` can be given credentials, asking the Secret Service only when
+    /// the environment and the credentials file hold none.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`CredentialSource::resolve`] does.
     pub fn check(&self, provider: &str) -> Result<(), CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -267,6 +289,11 @@ impl CredentialSource {
         self.resolve(provider).map(drop)
     }
 
+    /// Checks that custom `provider` can be given every variable in `vars`.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`CredentialSource::resolve_custom`] does.
     pub fn check_custom(&self, provider: &str, vars: &[String]) -> Result<(), CredentialError> {
         let names: Vec<&str> = vars.iter().map(String::as_str).collect();
         if vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true)? {

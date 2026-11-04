@@ -278,10 +278,23 @@ pub struct Store {
 }
 
 impl Store {
+    /// Opens (creating it with mode 0600 if missing) and migrates the store at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::Open`] when the file cannot be created or opened or WAL mode and foreign
+    /// keys are unavailable, [`StoreError::Corrupt`] when it fails its integrity check,
+    /// [`StoreError::NewerSchema`] when a newer service migrated it, [`StoreError::Backup`] when the
+    /// pre-migration backup fails, and [`StoreError::Sql`] when a migration fails.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         Self::open_with(path, MIGRATIONS)
     }
 
+    /// Opens the store migrated only up to schema `version`, as an older build would.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Store::open`] does.
     #[doc(hidden)]
     pub fn open_as_schema(path: &Path, version: i64) -> Result<Self, StoreError> {
         let known = MIGRATIONS.iter().take_while(|(v, _)| *v <= version).count();
@@ -370,10 +383,20 @@ impl Store {
         &self.conn
     }
 
+    /// Starts a transaction on the store's connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the SQLite error when the transaction cannot begin.
     pub fn begin(&mut self) -> rusqlite::Result<Transaction<'_>> {
         self.conn.transaction()
     }
 
+    /// The highest schema migration applied to the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns the SQLite error when the query fails.
     pub fn schema_version(&self) -> rusqlite::Result<i64> {
         self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",

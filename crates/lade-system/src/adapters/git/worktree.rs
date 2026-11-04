@@ -39,6 +39,13 @@ pub(crate) struct WorktreeEntry {
 }
 
 impl Repository {
+    /// Creates a linked work tree at `path` on a new `branch` that starts at `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`], [`GitError::InvalidId`] or [`GitError::InvalidArgument`]
+    /// for an invalid branch name, start id or relative path, or a command error when
+    /// `git worktree add` fails (for example because the branch exists).
     pub fn worktree_add(&self, branch: &str, start: &GitId, path: &Path) -> Result<Worktree> {
         validate_branch_name(branch)?;
         if start.format() != self.object_format() {
@@ -57,6 +64,12 @@ impl Repository {
         self.open_worktree(path)
     }
 
+    /// The main or linked work tree of this repository at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::WorktreeNotFound`] when `path` does not exist or is not one of the
+    /// repository's work trees, or a command error when the work tree list cannot be read.
     pub fn open_worktree(&self, path: &Path) -> Result<Worktree> {
         let path = path
             .canonicalize()
@@ -95,6 +108,13 @@ impl Repository {
         })
     }
 
+    /// Removes a linked work tree (only pruning its record when its directory is gone);
+    /// `force` also discards uncommitted changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidArgument`] for the main work tree, [`GitError::WorktreeDirty`] when
+    /// it has changes and `force` is not set, or a command error.
     pub fn worktree_remove(&self, worktree: &Worktree, force: bool) -> Result<()> {
         if worktree.admin_dir() == self.common_dir() {
             return Err(GitError::InvalidArgument {
@@ -126,6 +146,13 @@ impl Repository {
         }
     }
 
+    /// Points a linked work tree's `HEAD` at `branch` and resets its index to `commit` after
+    /// LADE moved the branch, leaving the files as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] or [`GitError::InvalidArgument`] for an invalid branch or
+    /// the main work tree, [`GitError::StaleRef`] when `branch` is not at `commit`, or a command error.
     pub fn sync_worktree_index(
         &self,
         worktree: &Worktree,

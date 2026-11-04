@@ -201,6 +201,12 @@ impl SecretService {
             .then(|| "the keyring holding LADE's keys is locked; unlock it and try again".into())
     }
 
+    /// Stores `secret` as `variable` of `provider` in the Secret Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason the developer can read when `secret-tool` cannot run, times out, or refuses
+    /// the item (for example a locked keyring).
     pub fn store(&self, provider: &str, variable: &str, secret: &[u8]) -> Result<(), String> {
         let label = format!("LADE {provider} {variable}");
         let args = [
@@ -218,6 +224,13 @@ impl SecretService {
             .unwrap_or_else(|| format!("secret-tool store failed ({})", ran.status)))
     }
 
+    /// Deletes the stored `variable` of `provider` (all of its variables when `None`);
+    /// `false` when nothing was stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason the developer can read when `secret-tool` cannot run, times out, or reports an
+    /// error.
     pub fn clear(&self, provider: &str, variable: Option<&str>) -> Result<bool, String> {
         let mut args = vec!["clear", "service", SERVICE, "provider", provider];
         if let Some(variable) = variable {

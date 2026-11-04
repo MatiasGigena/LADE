@@ -110,6 +110,11 @@ fn sha256_file(path: &Path) -> Result<String, BackupError> {
     Ok(hex(&hasher.finalize()))
 }
 
+/// The pre-migration backups the migration journal lists and has not pruned.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Io`] when the journal exists but cannot be read.
 pub fn backups(state: &Path) -> Result<Vec<Backup>, BackupError> {
     let journal = match fs::read_to_string(backup_dir(state).join(JOURNAL)) {
         Ok(text) => text,
@@ -209,6 +214,11 @@ fn prune(state: &Path, dir: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
+/// The schema version of the database at `path`, or `None` when there is no database.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Sql`] when the database cannot be opened or queried.
 pub fn database_schema(path: &Path) -> Result<Option<i64>, BackupError> {
     if !path.exists() {
         return Ok(None);
@@ -247,6 +257,16 @@ pub struct Restored {
     pub kept: PathBuf,
 }
 
+/// Restores the newest intact backup taken before schema `schema` was migrated, keeping
+/// the newer database beside the backups.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Busy`] when a service holds the state lock, [`BackupError::NotNeeded`]
+/// when the database is not newer than `schema`, [`BackupError::NoBackup`] when no backup of
+/// `schema` matches its recorded digest, [`BackupError::Invalid`] when there is no database or the
+/// backup fails its integrity or schema check, and [`BackupError::Io`] or [`BackupError::Sql`] when
+/// a step of the swap fails.
 pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
     let _lock = super::lock_state(state).map_err(|e| match e.kind() {
         io::ErrorKind::WouldBlock => BackupError::Busy,

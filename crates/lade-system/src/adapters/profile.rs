@@ -94,6 +94,14 @@ fn read_extension_file(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// The SHA-256 identity of an extension: of the file itself, or of a sorted manifest of
+/// every file's digest and path for a directory. The worker computes the same value.
+///
+/// # Errors
+///
+/// Returns a reason the developer can read when the extension is a symbolic link or special file,
+/// contains one, is nested more than eight levels deep, has too many files or bytes, or cannot be
+/// read.
 pub fn extension_hash(path: &Path) -> Result<String, String> {
     let meta = fs::symlink_metadata(path).map_err(|e| format!("unreadable: {}", e.kind()))?;
     if meta.file_type().is_symlink() {
@@ -290,6 +298,12 @@ fn read_models(path: &Path) -> Result<(Vec<u8>, Vec<CustomProvider>), String> {
     Ok((bytes, providers))
 }
 
+/// The custom providers declared in a `models.json` document.
+///
+/// # Errors
+///
+/// Returns a reason the developer can read when the document is not JSON, has no `providers`
+/// object, or declares a provider that is malformed or not allowed.
 pub fn custom_providers(bytes: &[u8]) -> Result<Vec<CustomProvider>, String> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| "models.json is not valid JSON".to_string())?;
@@ -385,6 +399,13 @@ pub fn custom_providers(bytes: &[u8]) -> Result<Vec<CustomProvider>, String> {
     Ok(found)
 }
 
+/// The custom providers of the LADE profile at `profile`; none when it has no
+/// `models.json`.
+///
+/// # Errors
+///
+/// Returns a reason the developer can read when `models.json` is not a regular file, is larger
+/// than 1 MiB, cannot be read, or fails [`custom_providers`].
 pub fn profile_providers(profile: &Path) -> Result<Vec<CustomProvider>, String> {
     let path = profile.join("models.json");
     if !path.exists() {
@@ -457,6 +478,13 @@ pub struct Materialized {
     pub sha256: String,
 }
 
+/// Copies the profile's context, skills, prompts, valid `models.json` and approved
+/// extensions into a fresh `dest`, returning the extensions whose copy still hashes as approved.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `dest` cannot be replaced or a copy fails, including
+/// `FileTooLarge` when the profile exceeds the copy budget.
 pub fn materialize(
     profile: &Path,
     dest: &Path,
@@ -514,6 +542,13 @@ pub struct ImportReport {
     pub skipped: Vec<String>,
 }
 
+/// Copies a pi agent directory's context, skills, prompts, extensions and `models.json`
+/// into the LADE profile, never overwriting what is already there.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `source` is not a readable directory or the profile
+/// directories cannot be created; problems with single entries are reported as skipped instead.
 pub fn import(source: &Path, profile: &Path) -> io::Result<ImportReport> {
     let meta = fs::metadata(source)?;
     if !meta.is_dir() {

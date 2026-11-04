@@ -18,6 +18,12 @@ pub fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// The wire timestamp for `ms` milliseconds since the Unix epoch, or the epoch itself when `ms`
+/// is negative or past year 9999.
+///
+/// # Panics
+///
+/// Never: the epoch is always representable.
 #[must_use]
 pub fn wire_ts(ms: i64) -> Timestamp {
     Timestamp::from_unix_ms(ms)
@@ -25,10 +31,21 @@ pub fn wire_ts(ms: i64) -> Timestamp {
         .expect("epoch is representable")
 }
 
+/// Fills `buf` from the kernel's random source.
+///
+/// # Errors
+///
+/// Returns the error from opening or reading `/dev/urandom`.
 pub fn random_fill(buf: &mut [u8]) -> std::io::Result<()> {
     File::open("/dev/urandom")?.read_exact(buf)
 }
 
+/// A fresh random v4 UUID from the kernel's random source.
+///
+/// # Panics
+///
+/// Panics when `/dev/urandom` cannot be read. Every identifier and capability the service
+/// mints depends on it, so there is no safe way to continue without it.
 #[must_use]
 pub fn new_uuid() -> Uuid {
     let mut bytes = [0u8; 16];

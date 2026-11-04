@@ -63,6 +63,13 @@ pub struct GrepResults {
 }
 
 impl Repository {
+    /// The entries of `tree`, limited to `dir` when given and descending into subtrees when
+    /// `recursive` is set.
+    ///
+    /// # Errors
+    ///
+    /// Returns a command error when `git ls-tree` fails, or [`GitError::Parse`] when its output is
+    /// malformed.
     pub fn ls_tree(
         &self,
         tree: &GitId,
@@ -91,6 +98,11 @@ impl Repository {
             .collect()
     }
 
+    /// The entry at `path` in `tree`, if there is one.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Repository::ls_tree`] does.
     pub fn tree_entry(&self, tree: &GitId, path: &RepoPath) -> Result<Option<TreeEntry>> {
         let out = self
             .git("ls-tree")
@@ -147,6 +159,13 @@ impl Repository {
         })
     }
 
+    /// Up to `limit` bytes (at most one page) of the blob at `path` in `tree`, starting at
+    /// `offset`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::NotFound`] when `path` is not in `tree`, [`GitError::NotABlob`] when it is
+    /// not a file, or [`GitError::Io`] or [`GitError::Failed`] when the blob cannot be read.
     pub fn read_blob(
         &self,
         tree: &GitId,
@@ -200,6 +219,12 @@ impl Repository {
         })
     }
 
+    /// Streams blob `id` through `consume` and returns what it returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidId`] for an id of another object format, or a command error when
+    /// `git cat-file` fails.
     pub fn with_blob_reader<R>(
         &self,
         id: &GitId,
@@ -250,6 +275,12 @@ impl Repository {
         Ok(Some(data))
     }
 
+    /// The bounded matches of `query` in `tree`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidArgument`] for an empty, overlong or multi-line query, a command
+    /// error when `git grep` fails, or [`GitError::Parse`] when its output is malformed.
     pub fn grep(&self, tree: &GitId, query: &GrepQuery) -> Result<GrepResults> {
         let text = query.text.as_bytes();
         if text.is_empty() || text.len() > MAX_GREP_QUERY || text.contains(&b'\n') {
