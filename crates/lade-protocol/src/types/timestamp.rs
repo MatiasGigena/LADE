@@ -1,7 +1,15 @@
 //! RFC 3339 UTC timestamps with millisecond precision, and their Unix-millisecond conversions.
 
-use super::Timestamp;
-use crate::schema;
+use crate::{WireError, schema};
+use serde::{Deserialize, Serialize};
+
+/// A UTC instant on the wire as `YYYY-MM-DDTHH:MM:SS.mmmZ`, between 1970 and 9999.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Timestamp {
+    text: String,
+    unix_ms: i64,
+}
 
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
@@ -24,6 +32,17 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 }
 
 impl Timestamp {
+    /// Parses the canonical wire form.
+    ///
+    /// # Errors
+    ///
+    /// [`WireError::InvalidSchema`] when the text is not a valid timestamp in the canonical form.
+    pub fn parse(value: impl Into<String>) -> Result<Self, WireError> {
+        Self::try_from(value.into())
+    }
+
+    /// The instant `ms` milliseconds after the Unix epoch, or `None` before 1970 or after 9999.
+    #[must_use]
     pub fn from_unix_ms(ms: i64) -> Option<Self> {
         if ms < 0 {
             return None;
@@ -33,19 +52,48 @@ impl Timestamp {
         if year > 9999 {
             return None;
         }
-        Some(Self(format!(
+        let text = format!(
             "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
             rem / 3_600_000,
             rem / 60_000 % 60,
             rem / 1000 % 60,
             rem % 1000
-        )))
+        );
+        Some(Self { text, unix_ms: ms })
     }
-    pub fn unix_ms(&self) -> i64 {
-        let [y, mo, d, h, mi, s, ms] = schema::timestamp_parts(&self.0)
-            .expect("validated timestamp")
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    #[must_use]
+    pub const fn unix_ms(&self) -> i64 {
+        self.unix_ms
+    }
+}
+
+impl TryFrom<String> for Timestamp {
+    type Error = WireError;
+    fn try_from(text: String) -> Result<Self, WireError> {
+        let [y, mo, d, h, mi, s, ms] = schema::timestamp_parts(&text)
+            .ok_or(WireError::InvalidSchema)?
             .map(i64::from);
-        days_from_civil(y, mo, d) * 86_400_000 + h * 3_600_000 + mi * 60_000 + s * 1000 + ms
+        let unix_ms =
+            days_from_civil(y, mo, d) * 86_400_000 + h * 3_600_000 + mi * 60_000 + s * 1000 + ms;
+        Ok(Self { text, unix_ms })
+    }
+}
+
+impl From<Timestamp> for String {
+    fn from(value: Timestamp) -> Self {
+        value.text
+    }
+}
+
+impl std::fmt::Display for Timestamp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
     }
 }
 

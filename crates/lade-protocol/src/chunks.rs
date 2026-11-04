@@ -57,10 +57,8 @@ impl Reassembler {
                 if self.transfers.contains_key(transfer_id) {
                     return Err(WireError::ChunkOrder);
                 }
-                let total = total_bytes
-                    .as_str()
-                    .parse::<usize>()
-                    .map_err(|_| WireError::LimitReached)?;
+                let total =
+                    usize::try_from(total_bytes.value()).map_err(|_| WireError::LimitReached)?;
                 if total == 0 || total > MAX_TRANSFER || self.transfers.len() == MAX_TRANSFERS {
                     return Err(WireError::LimitReached);
                 }
@@ -83,7 +81,7 @@ impl Reassembler {
                     .transfers
                     .get_mut(transfer_id)
                     .ok_or(WireError::ChunkOrder)?;
-                if index.as_str().parse::<u64>().ok() != Some(t.next) {
+                if index.value() != t.next {
                     return Err(WireError::ChunkOrder);
                 }
                 if !crate::schema::format(hex, "chunk-hex")
