@@ -63,3 +63,130 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
         },
     }]
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::client::{
+        self as wire, ActivityDelta, TerminalCloseReason, TerminalClosed, TerminalOutput, UiClosed,
+        WorktreeChanged,
+    };
+    use lade_protocol::types::{Counter, Id, UiCloseReason};
+
+    use super::*;
+    use crate::presentation::terminal::TerminalEnd;
+    use crate::transport::requests::tests::{O, event};
+
+    fn id(byte: u8) -> Id {
+        Id::from_random_bytes([byte; 16])
+    }
+
+    fn only(event: Event) -> StoreUpdate {
+        let mut updates = event_updates(event);
+        assert_eq!(updates.len(), 1, "each event is one store update");
+        updates.remove(0)
+    }
+
+    #[test]
+    fn streamed_text_keeps_its_objective_and_item() {
+        let update = only(Event::ActivityDelta(ActivityDelta {
+            objective_id: Id::parse(O).unwrap(),
+            item_id: id(7),
+            append_text: "partial".into(),
+        }));
+        assert_eq!(
+            update,
+            StoreUpdate::ActivityDelta {
+                objective_id: ObjectiveId::new(O),
+                item_id: ActivityItemId::new(id(7).as_str()),
+                append_text: "partial".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_worktree_change_only_flags_its_objective() {
+        let update = only(Event::WorktreeChanged(WorktreeChanged {
+            objective_id: Id::parse(O).unwrap(),
+            capture_id: id(3),
+        }));
+        assert_eq!(
+            update,
+            StoreUpdate::WorktreeChanged {
+                objective_id: ObjectiveId::new(O),
+            }
+        );
+    }
+
+    #[test]
+    fn terminal_output_carries_its_sequence_and_dropped_bytes() {
+        let update = only(Event::TerminalOutput(TerminalOutput {
+            objective_id: Id::parse(O).unwrap(),
+            terminal_id: id(4),
+            seq: Counter::new(12),
+            data: "$ ".into(),
+            dropped_bytes: Counter::new(512),
+        }));
+        assert_eq!(
+            update,
+            StoreUpdate::TerminalOutput {
+                terminal_id: id(4).as_str().to_owned(),
+                seq: 12,
+                data: "$ ".into(),
+                dropped: 512,
+            }
+        );
+    }
+
+    #[test]
+    fn an_exited_terminal_reports_its_code_and_signal() {
+        let update = only(Event::TerminalClosed(TerminalClosed {
+            objective_id: Id::parse(O).unwrap(),
+            terminal_id: id(4),
+            reason: TerminalCloseReason::Exited,
+            exit_code: Some(Counter::new(2)),
+            signal: None,
+        }));
+        assert_eq!(
+            update,
+            StoreUpdate::TerminalClosed {
+                terminal_id: id(4).as_str().to_owned(),
+                end: TerminalEnd::Exited {
+                    code: Some(2),
+                    signal: None,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn a_closed_extension_dialog_is_named_by_its_ui_id() {
+        let update = only(Event::UiClosed(UiClosed {
+            objective_id: Id::parse(O).unwrap(),
+            ui_id: id(9),
+            reason: UiCloseReason::Answered,
+        }));
+        assert_eq!(
+            update,
+            StoreUpdate::AgentSession(AgentSessionUpdate::DialogClosed {
+                ui_id: id(9).as_str().to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_objective_change_becomes_its_summary() {
+        let wire::Event::ObjectiveChanged(summary) = event(1).event else {
+            unreachable!("the shared fixture event is an objective change")
+        };
+        let StoreUpdate::ObjectiveChanged(converted) =
+            only(Event::ObjectiveChanged(summary.clone()))
+        else {
+            panic!("an objective change");
+        };
+        assert_eq!(
+            converted.objective_id.as_str(),
+            summary.objective_id.as_str()
+        );
+        assert_eq!(converted.revision, summary.revision.value());
+    }
+}
