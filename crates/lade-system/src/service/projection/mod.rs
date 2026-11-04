@@ -7,11 +7,10 @@ pub(super) mod budget;
 #[cfg(test)]
 mod tests;
 
+use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::feedback::DeliveryState;
 use lade_core::domain::ids::{GitId, WorkspaceId};
-use lade_core::domain::objectives::{
-    AttentionFacts, Badge as CoreBadge, Lifecycle, derive_attention,
-};
+use lade_core::domain::objectives::{AttentionFacts, Lifecycle, derive_attention};
 use lade_core::domain::review::Evidence;
 use lade_protocol::client::{
     self as wire, Badge, ChangeCounts, Event, ObjectiveDetail, ObjectiveSummary, SessionInfo,
@@ -21,8 +20,8 @@ use lade_protocol::types::{Counter, Model};
 
 use super::Service;
 use super::convert::{
-    preview, wire_approval, wire_candidate, wire_execution_state, wire_git, wire_id,
-    wire_lifecycle, wire_path, wire_verification,
+    preview, wire_approval, wire_attention, wire_badge, wire_candidate, wire_execution_state,
+    wire_git, wire_id, wire_lifecycle, wire_path, wire_verification,
 };
 use super::state::{ObjState, WsState};
 use crate::support::wire_ts;
@@ -32,19 +31,6 @@ pub(super) const DETAIL_LIST_MAX: usize = 64;
 // At most one of failed/missing verification evidence applies. The remaining
 // compatible badges total seven, including unsent drafts and execution state.
 pub(super) const MAX_SUMMARY_BADGES: usize = 7;
-
-fn wire_badge(badge: CoreBadge) -> Option<Badge> {
-    Some(match badge {
-        CoreBadge::Interrupted => Badge::Interrupted,
-        CoreBadge::DeliveryUncertain => Badge::DeliveryUncertain,
-        CoreBadge::StaleFeedback => Badge::StaleFeedback,
-        CoreBadge::VerificationFailed => Badge::VerificationFailed,
-        CoreBadge::IntegrationConflict => Badge::IntegrationConflict,
-        CoreBadge::StaleTarget => Badge::StaleTarget,
-        CoreBadge::CleanedUp => Badge::CleanedUp,
-        CoreBadge::Failed | CoreBadge::Cancelled => return None,
-    })
-}
 
 impl Service {
     pub(crate) fn resolve_target(&mut self, workspace: WorkspaceId, branch: &str) -> Option<GitId> {
@@ -103,7 +89,7 @@ impl Service {
         let mut badges: Vec<Badge> = view.badges.into_iter().filter_map(wire_badge).collect();
         if matches!(
             record.execution.state(),
-            lade_core::domain::execution::ExecutionState::Failed { reason }
+            ExecutionState::Failed { reason }
                 if reason.starts_with(super::execution::LIMIT_REACHED)
         ) {
             badges.insert(0, Badge::LimitReached);
@@ -119,7 +105,8 @@ impl Service {
         if st.unsent_drafts() > 0 && !record.lifecycle.is_terminal() {
             badges.push(Badge::UnsentDrafts);
         }
-        badges.truncate(16);
+        debug_assert!(badges.len() <= MAX_SUMMARY_BADGES, "{badges:?}");
+        badges.truncate(MAX_SUMMARY_BADGES);
         let (state, reason) = wire_execution_state(record.execution.state());
         ObjectiveSummary {
             objective_id: wire_id(record.id.uuid()),
@@ -132,17 +119,7 @@ impl Service {
                 generation: Counter::new(record.execution.generation().value()),
                 reason,
             },
-            attention: match view.attention {
-                lade_core::domain::objectives::Attention::NeedsAttention => {
-                    wire::Attention::NeedsAttention
-                }
-                lade_core::domain::objectives::Attention::ReadyForReview => {
-                    wire::Attention::ReadyForReview
-                }
-                lade_core::domain::objectives::Attention::Working => wire::Attention::Working,
-                lade_core::domain::objectives::Attention::Idle => wire::Attention::Idle,
-                lade_core::domain::objectives::Attention::Archived => wire::Attention::Archived,
-            },
+            attention: wire_attention(view.attention),
             badges,
             updated_at: wire_ts(record.updated_at.unix_ms()),
             revision: Counter::new(record.revision.value()),

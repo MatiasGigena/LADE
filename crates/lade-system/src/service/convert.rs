@@ -5,7 +5,7 @@ use lade_core::domain::ids::{self as core_ids, GitAlgorithm, Uuid};
 use lade_core::domain::inspection::{
     ArtifactDigest, ByteRange, InspectedVersion, MAX_TEXT_BYTES, Reference, RepoPath, Side,
 };
-use lade_core::domain::objectives::Lifecycle;
+use lade_core::domain::objectives::{Attention, Badge, Lifecycle};
 use lade_core::domain::review::{
     Approval, ApprovalState, Candidate, CandidateStatus, Verification, VerificationOutcome,
 };
@@ -271,6 +271,33 @@ pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
         Lifecycle::CompletedNoChanges => wire::Lifecycle::CompletedNoChanges,
         Lifecycle::Discarded => wire::Lifecycle::Discarded,
     }
+}
+
+#[must_use]
+pub fn wire_attention(attention: Attention) -> wire::Attention {
+    match attention {
+        Attention::NeedsAttention => wire::Attention::NeedsAttention,
+        Attention::ReadyForReview => wire::Attention::ReadyForReview,
+        Attention::Working => wire::Attention::Working,
+        Attention::Idle => wire::Attention::Idle,
+        Attention::Archived => wire::Attention::Archived,
+    }
+}
+
+/// The wire badge for a domain badge. `Failed` and `Cancelled` have none: the execution state
+/// already says so, and a failure at a limit gets `LimitReached` from the summary instead.
+#[must_use]
+pub fn wire_badge(badge: Badge) -> Option<wire::Badge> {
+    Some(match badge {
+        Badge::Interrupted => wire::Badge::Interrupted,
+        Badge::DeliveryUncertain => wire::Badge::DeliveryUncertain,
+        Badge::StaleFeedback => wire::Badge::StaleFeedback,
+        Badge::VerificationFailed => wire::Badge::VerificationFailed,
+        Badge::IntegrationConflict => wire::Badge::IntegrationConflict,
+        Badge::StaleTarget => wire::Badge::StaleTarget,
+        Badge::CleanedUp => wire::Badge::CleanedUp,
+        Badge::Failed | Badge::Cancelled => return None,
+    })
 }
 
 #[must_use]
