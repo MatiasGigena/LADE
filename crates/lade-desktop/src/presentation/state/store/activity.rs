@@ -73,3 +73,97 @@ impl ActivityLog {
         Some(index)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::presentation::state::model::{ActivityRole, Timestamp};
+
+    fn item(id: &str, seq: u64, text: &str) -> ActivityItem {
+        ActivityItem {
+            item_id: ActivityItemId::new(id),
+            seq,
+            at: Timestamp(0),
+            role: ActivityRole::Assistant,
+            title: String::new(),
+            text: text.to_owned(),
+            tool_name: None,
+            is_error: false,
+            truncated: false,
+        }
+    }
+
+    fn texts(log: &ActivityLog) -> Vec<&str> {
+        log.items.iter().map(|i| i.text.as_str()).collect()
+    }
+
+    #[test]
+    fn the_first_page_marks_the_log_loaded_and_takes_its_has_more() {
+        let mut log = ActivityLog::default();
+        log.merge_page(Vec::new(), true);
+        assert!(log.loaded);
+        assert!(log.has_more, "an empty first page still decides has_more");
+        let mut log = ActivityLog::default();
+        log.merge_page(vec![item("b", 2, "two"), item("a", 1, "one")], false);
+        assert_eq!(texts(&log), ["one", "two"], "pages are kept in seq order");
+        assert!(!log.has_more);
+    }
+
+    #[test]
+    fn only_a_page_reaching_the_oldest_known_item_decides_has_more() {
+        let mut log = ActivityLog::default();
+        log.merge_page(vec![item("b", 5, "five")], true);
+        log.merge_page(vec![item("c", 9, "nine")], false);
+        assert!(log.has_more, "a newer page does not close older history");
+        log.merge_page(vec![item("a", 5, "same seq")], false);
+        assert!(!log.has_more, "a page as old as the oldest item decides");
+        assert_eq!(log.items.len(), 3);
+    }
+
+    #[test]
+    fn a_page_replaces_known_items_by_id_and_adds_the_rest() {
+        let mut log = ActivityLog::default();
+        log.merge_page(vec![item("a", 1, "old"), item("b", 2, "b")], false);
+        log.merge_page(vec![item("a", 1, "new"), item("z", 0, "first")], true);
+        assert_eq!(texts(&log), ["first", "new", "b"]);
+        assert!(log.has_more);
+    }
+
+    #[test]
+    fn in_order_appends_report_where_they_start() {
+        let mut log = ActivityLog::default();
+        assert_eq!(
+            log.append(vec![item("a", 1, "a"), item("b", 2, "b")]),
+            ActivityChange::Appended { from_index: 0 }
+        );
+        assert_eq!(
+            log.append(vec![item("c", 3, "c")]),
+            ActivityChange::Appended { from_index: 2 }
+        );
+        assert_eq!(texts(&log), ["a", "b", "c"]);
+        assert!(!log.loaded, "appending does not count as loading history");
+    }
+
+    #[test]
+    fn out_of_order_or_repeated_appends_reset_the_log_in_seq_order() {
+        let mut log = ActivityLog::default();
+        log.append(vec![item("b", 2, "b")]);
+        assert_eq!(log.append(vec![item("a", 1, "a")]), ActivityChange::Reset);
+        assert_eq!(texts(&log), ["a", "b"]);
+        assert_eq!(
+            log.append(vec![item("b", 2, "b replaced")]),
+            ActivityChange::Reset
+        );
+        assert_eq!(texts(&log), ["a", "b replaced"]);
+    }
+
+    #[test]
+    fn text_appends_land_on_the_named_item_only() {
+        let mut log = ActivityLog::default();
+        log.append(vec![item("a", 1, "par"), item("b", 2, "x")]);
+        assert_eq!(log.append_text(&ActivityItemId::new("a"), "tial"), Some(0));
+        assert_eq!(texts(&log), ["partial", "x"]);
+        assert_eq!(log.append_text(&ActivityItemId::new("zz"), "lost"), None);
+        assert_eq!(texts(&log), ["partial", "x"]);
+    }
+}

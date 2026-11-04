@@ -161,3 +161,57 @@ pub fn coalesce(updates: Vec<StoreUpdate>) -> Vec<StoreUpdate> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn delta(objective: &str, item: &str, text: &str) -> StoreUpdate {
+        StoreUpdate::ActivityDelta {
+            objective_id: ObjectiveId::new(objective),
+            item_id: ActivityItemId::new(item),
+            append_text: text.into(),
+        }
+    }
+
+    #[test]
+    fn consecutive_deltas_for_one_item_merge_in_order() {
+        let merged = coalesce(vec![
+            delta("o", "a", "1"),
+            delta("o", "a", "2"),
+            delta("o", "b", "3"),
+            delta("o", "a", "4"),
+        ]);
+        assert_eq!(
+            merged,
+            vec![
+                delta("o", "a", "12"),
+                delta("o", "b", "3"),
+                delta("o", "a", "4")
+            ]
+        );
+    }
+
+    #[test]
+    fn deltas_for_the_same_item_id_in_other_objectives_stay_apart() {
+        let merged = coalesce(vec![delta("o", "a", "1"), delta("p", "a", "2")]);
+        assert_eq!(merged, vec![delta("o", "a", "1"), delta("p", "a", "2")]);
+    }
+
+    #[test]
+    fn any_other_update_breaks_a_run_of_deltas() {
+        let between = StoreUpdate::WorktreeChanged {
+            objective_id: ObjectiveId::new("o"),
+        };
+        let merged = coalesce(vec![
+            delta("o", "a", "1"),
+            between.clone(),
+            delta("o", "a", "2"),
+        ]);
+        assert_eq!(
+            merged,
+            vec![delta("o", "a", "1"), between, delta("o", "a", "2")]
+        );
+        assert!(coalesce(Vec::new()).is_empty());
+    }
+}

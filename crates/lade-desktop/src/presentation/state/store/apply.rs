@@ -617,3 +617,6 @@ impl PresentationState {
         vec![Change::Viewer]
     }
 }
+
+#[cfg(test)]
+mod tests;

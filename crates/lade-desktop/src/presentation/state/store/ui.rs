@@ -100,3 +100,18 @@ pub struct Reveal {
     pub start: u64,
     pub end: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_new_objective_starts_on_the_working_diff_prompting_and_steering_feedback() {
+        let ui = ObjectiveUi::default();
+        assert_eq!(ui.basis, Basis::Working);
+        assert_eq!(ui.mode, ViewerMode::Diff);
+        assert_eq!(ui.composer_mode, DeliveryMode::Prompt);
+        assert_eq!(ui.feedback_mode, DeliveryMode::Steer);
+        assert!(ui.file.is_none() && ui.selection.is_none() && ui.composer_text.is_empty());
+    }
+}
