@@ -116,8 +116,12 @@ pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     Ok(listener)
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "requests dominate the inbound queue; boxing them would allocate per request to \
+              shrink the once-per-link attach and detach messages"
+)]
 pub enum Inbound {
     Attach { conn: u64, out: Outbound },
     Request { conn: u64, frame: RequestFrame },
@@ -271,27 +275,31 @@ impl Listener {
     }
 }
 
-#[must_use]
+/// Accepts client links on `listener` on its own thread, admitting each by `capability`
+/// and forwarding its messages to `tx`.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the accept thread cannot be spawned.
 pub fn serve<T: From<Inbound> + Send + 'static>(
     listener: UnixListener,
     socket: PathBuf,
     capability: String,
     tx: SyncSender<T>,
-) -> Listener {
+) -> io::Result<Listener> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
     let writers = Arc::new(Writers::default());
     let link_writers = Arc::clone(&writers);
     let thread = thread::Builder::new()
         .name("laded-accept".into())
-        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx, &link_writers))
-        .expect("spawn accept thread");
-    Listener {
+        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx, &link_writers))?;
+    Ok(Listener {
         stop,
         socket,
         thread: Some(thread),
         writers,
-    }
+    })
 }
 
 fn accept_loop<T: From<Inbound> + Send + 'static>(

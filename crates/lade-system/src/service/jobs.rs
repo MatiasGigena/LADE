@@ -55,7 +55,24 @@ pub(crate) struct Pools {
     pub reaper: Option<Pool>,
 }
 
+const GENERAL_THREADS: usize = 3;
+const VERIFY_THREADS: usize = 4;
+const REAPER_THREADS: usize = 4;
+
 impl Pools {
+    /// Starts the three pools.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when a pool thread cannot be spawned.
+    pub fn start() -> io::Result<Self> {
+        Ok(Self {
+            general: Some(Pool::new(GENERAL_THREADS)?),
+            verify: Some(Pool::new(VERIFY_THREADS)?),
+            reaper: Some(Pool::new(REAPER_THREADS)?),
+        })
+    }
+
     pub fn submit(&self, verify: bool, task: Task) {
         let pool = if verify { &self.verify } else { &self.general };
         if let Some(pool) = pool {
@@ -79,7 +96,13 @@ pub struct Pool {
 }
 
 impl Pool {
-    pub fn new(size: usize) -> Self {
+    /// Starts `size` named worker threads that run submitted tasks in order.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when a thread cannot be spawned; the threads
+    /// already started stop once the returned error drops the task channel.
+    pub fn new(size: usize) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel::<Task>();
         let rx = Arc::new(Mutex::new(rx));
         let threads = (0..size)
@@ -96,13 +119,12 @@ impl Pool {
                             }
                         }
                     })
-                    .expect("spawn pool thread")
             })
-            .collect();
-        Self {
+            .collect::<io::Result<_>>()?;
+        Ok(Self {
             tx: Some(tx),
             threads,
-        }
+        })
     }
 
     pub fn submit(&self, task: impl FnOnce() + Send + 'static) {

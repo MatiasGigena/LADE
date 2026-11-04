@@ -1,16 +1,15 @@
-use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 
 use lade_protocol::client::{
-    Intent, ObjectiveCreateCommand, ReplyData, RequestName, Settings, Start, WorkspaceOpenCommand,
+    Intent, ObjectiveCreateCommand, ReplyData, RequestName, Start, WorkspaceOpenCommand,
 };
 use lade_protocol::types::WirePath;
 
 use super::*;
 use crate::adapters::artifacts::ArtifactStore;
 use crate::service::convert::parse_uuid;
-use crate::service::{Paths, ResourceLimits, adapters_support, execution, limits};
+use crate::service::{Paths, ResourceLimits, ServiceConfig, adapters_support};
 use crate::storage::Store;
 use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
@@ -44,45 +43,24 @@ fn reused_capture_registration_keeps_its_original_identity_after_a_newer_capture
         sockets: root.path().join("sockets"),
     };
     crate::support::fs::ensure_private_dir(&paths.tmp).unwrap();
-    let mut service = Service {
-        store: Store::open(&root.path().join("lade.db")).unwrap(),
-        artifacts: Arc::new(
-            ArtifactStore::open(&root.path().join("artifacts"), &paths.tmp).unwrap(),
-        ),
-        paths,
-        large_blobs: Arc::default(),
-        launcher: Arc::new(NoLaunch),
-        supervisor_tx,
-        queue_tx,
-        pools: jobs::Pools::default(),
-        epoch: wire_id(new_uuid()),
-        sequence: 0,
-        controller: None,
-        workspaces: BTreeMap::new(),
-        objectives: BTreeMap::new(),
-        runtime: HashMap::new(),
-        settings: Settings {
-            verification_commands: Vec::new(),
-            default_model: None,
-        },
-        activity_seq: HashMap::new(),
-        input_seq: 0,
-        live: execution::LiveActivity::default(),
-        ticks: 0,
-        sandbox: OnceLock::new(),
-        catalog: crate::service::models::CatalogCache::default(),
-        extension_approvals: HashMap::new(),
-        agent_sessions: crate::service::agent_session::AgentSessions::default(),
-        terminals: crate::service::terminal::Terminals::default(),
-        stopping: false,
+    let tmp = paths.tmp.clone();
+    let config = ServiceConfig {
+        state_dir: root.path().to_path_buf(),
+        runtime_dir: root.path().join("run"),
         limits: ResourceLimits::default(),
-        recovery_notes: Vec::new(),
-        integrations: crate::service::review::Integrations::default(),
-        held: None,
-        storage: limits::StorageGuard::new(crate::adapters::sandbox::WRITABLE_STORAGE_BYTES),
+        storage_limit_bytes: crate::adapters::sandbox::WRITABLE_STORAGE_BYTES,
         cgroups: None,
         test_fixture_provider: false,
     };
+    let mut service = Service::new(
+        &config,
+        Store::open(&root.path().join("lade.db")).unwrap(),
+        paths,
+        Arc::new(ArtifactStore::open(&root.path().join("artifacts"), &tmp).unwrap()),
+        Arc::new(NoLaunch),
+        supervisor_tx,
+        queue_tx,
+    );
     let ReplyData::WorkspaceOpen(workspace) = service
         .workspace_open(&WorkspaceOpenCommand {
             path: WirePath::from_os_str(repo.as_os_str()).unwrap(),

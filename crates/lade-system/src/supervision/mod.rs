@@ -41,7 +41,11 @@ pub struct LaunchRequest {
 }
 
 #[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "nearly every event is a Body; boxing it would allocate per worker message to \
+              shrink the rare violation and exit events"
+)]
 pub enum WorkerEvent {
     Body(WorkerBody),
     ProtocolViolation(&'static str),

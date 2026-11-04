@@ -26,8 +26,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -63,7 +62,6 @@ pub use limits::ResourceLimits;
 
 use crate::support::{hex, new_uuid, now_ms};
 use convert::{durability, wire_id};
-use jobs::Pool;
 use state::{ObjState, Runtime, WsState};
 
 #[derive(Clone, Debug)]
@@ -113,6 +111,7 @@ pub enum StartError {
     Store(StoreError),
     Transport(TransportError),
     Recovery(String),
+    Thread(&'static str, io::Error),
 }
 
 impl std::fmt::Display for StartError {
@@ -132,6 +131,7 @@ impl std::fmt::Display for StartError {
             Self::Store(e) => write!(f, "{e}"),
             Self::Transport(e) => write!(f, "{e}"),
             Self::Recovery(e) => write!(f, "restart recovery failed: {e}"),
+            Self::Thread(name, e) => write!(f, "could not start the {name} thread: {e}"),
         }
     }
 }
@@ -172,7 +172,6 @@ impl From<Inbound> for Msg {
 /// A finished background job together with everything the service needs to continue the
 /// request or event that started it. The job closure captures that context and returns it, so
 /// each continuation is paired with its result by construction.
-#[allow(clippy::large_enum_variant)]
 pub(crate) enum Completed {
     Launch {
         oid: ObjectiveId,
@@ -292,11 +291,10 @@ struct Controller {
 }
 
 const REQUEST_ID_MEMORY: usize = 4096;
-const GENERAL_THREADS: usize = 3;
-/// Verification runs get their own pool so long checks never hold up captures and queries.
-const VERIFY_THREADS: usize = 4;
-const REAPER_THREADS: usize = 4;
+/// How often the ticker wakes the service thread to flush deltas and check timeouts.
 const TICK: Duration = Duration::from_millis(100);
+/// Ticks between storage-usage checks.
+const STORAGE_CHECK_TICKS: u128 = STORAGE_CHECK_INTERVAL.as_millis() / TICK.as_millis();
 /// How long shutdown waits for client links to flush their last frames.
 const LINK_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -346,7 +344,8 @@ pub struct RunningService {
     queue: SyncSender<Msg>,
     thread: Option<JoinHandle<()>>,
     listener: Option<Listener>,
-    ticker_stop: Arc<AtomicBool>,
+    /// Dropping this sender wakes and stops the ticker thread.
+    ticker_stop: Option<mpsc::Sender<()>>,
     ticker: Option<JoinHandle<()>>,
     socket: PathBuf,
     capability: PathBuf,
@@ -382,7 +381,7 @@ impl RunningService {
             listener.stop();
             listener.drain(LINK_DRAIN_TIMEOUT);
         }
-        self.ticker_stop.store(true, Ordering::SeqCst);
+        self.ticker_stop = None;
         if let Some(ticker) = self.ticker.take() {
             let _ = ticker.join();
         }
@@ -420,10 +419,9 @@ fn private_dir(path: &Path) -> Result<(), StartError> {
     ensure_private_dir(path).map_err(|e| StartError::PrivateDir(path.to_path_buf(), e))
 }
 
-pub fn start(
-    config: ServiceConfig,
-    launcher: Arc<dyn WorkerLauncher>,
-) -> Result<RunningService, StartError> {
+/// Validates the configured directories, creates the private ones the service owns and
+/// returns their canonical layout.
+fn service_paths(config: &ServiceConfig) -> Result<Paths, StartError> {
     if !config.state_dir.is_absolute() {
         return Err(StartError::InvalidPath("state directory"));
     }
@@ -455,6 +453,22 @@ pub fn start(
     ] {
         private_dir(dir)?;
     }
+    Ok(paths)
+}
+
+/// Starts the service: takes the state lock, loads and recovers durable state, then binds the
+/// control socket and starts the service, supervisor-forwarding and ticker threads.
+///
+/// # Errors
+///
+/// Returns a [`StartError`] when a directory is relative, unusable or too deep for socket
+/// paths, another service holds the state lock or answers on the socket, the store or artifact
+/// store cannot be opened, restart recovery fails, or a thread cannot be spawned.
+pub fn start(
+    config: ServiceConfig,
+    launcher: Arc<dyn WorkerLauncher>,
+) -> Result<RunningService, StartError> {
+    let paths = service_paths(&config)?;
     let lock = storage::lock_state(&paths.state).map_err(|e| match e.kind() {
         io::ErrorKind::WouldBlock => StartError::AlreadyRunning,
         kind => StartError::StateDir(format!("lock: {kind}")),
@@ -465,60 +479,30 @@ pub fn start(
         .map_err(|e| StartError::StateDir(format!("artifacts: {}", e.code())))?;
     let (queue_tx, queue_rx) = mpsc::sync_channel::<Msg>(8192);
     let (supervisor_tx, supervisor_rx) = mpsc::sync_channel::<SupervisorEvent>(1024);
-    let epoch = wire_id(new_uuid());
-    let mut service = Service {
+    let mut service = Service::new(
+        &config,
         store,
         paths,
-        artifacts: Arc::new(artifacts),
-        large_blobs: Arc::default(),
+        Arc::new(artifacts),
         launcher,
         supervisor_tx,
-        queue_tx: queue_tx.clone(),
-        pools: jobs::Pools {
-            general: Some(Pool::new(GENERAL_THREADS)),
-            verify: Some(Pool::new(VERIFY_THREADS)),
-            reaper: Some(Pool::new(REAPER_THREADS)),
-        },
-        epoch: epoch.clone(),
-        sequence: 0,
-        controller: None,
-        workspaces: BTreeMap::new(),
-        objectives: BTreeMap::new(),
-        runtime: HashMap::new(),
-        settings: Settings {
-            verification_commands: Vec::new(),
-            default_model: None,
-        },
-        activity_seq: HashMap::new(),
-        input_seq: 0,
-        live: execution::LiveActivity::default(),
-        ticks: 0,
-        sandbox: OnceLock::new(),
-        catalog: models::CatalogCache::default(),
-        extension_approvals: HashMap::new(),
-        agent_sessions: agent_session::AgentSessions::default(),
-        terminals: terminal::Terminals::default(),
-        stopping: false,
-        limits: config.limits.clone(),
-        recovery_notes: Vec::new(),
-        integrations: review::Integrations::default(),
-        held: None,
-        storage: limits::StorageGuard::new(config.storage_limit_bytes),
-        cgroups: config.cgroups.clone(),
-        test_fixture_provider: config.test_fixture_provider,
-    };
+        queue_tx.clone(),
+    );
+    service.pools = jobs::Pools::start().map_err(|e| StartError::Thread("job pool", e))?;
     service.load()?;
     service.load_resources()?;
     service.load_agent_sessions()?;
     service.recover()?;
     service.check_free_space();
     eprintln!("laded: limits {}", config.limits);
+    let epoch = service.epoch.clone();
 
     let capability =
         transport::write_capability(&config.runtime_dir).map_err(StartError::Transport)?;
     let listener = transport::bind_socket(&config.runtime_dir).map_err(StartError::Transport)?;
     let socket = config.runtime_dir.join(CONTROL_SOCKET_NAME);
-    let listener = transport::serve(listener, socket.clone(), capability, queue_tx.clone());
+    let listener = transport::serve(listener, socket.clone(), capability, queue_tx.clone())
+        .map_err(|e| StartError::Thread("accept", e))?;
 
     let forward = queue_tx.clone();
     thread::Builder::new()
@@ -530,28 +514,17 @@ pub fn start(
                 }
             }
         })
-        .map_err(|e| StartError::StateDir(format!("thread: {}", e.kind())))?;
-    let ticker_stop = Arc::new(AtomicBool::new(false));
-    let stop = Arc::clone(&ticker_stop);
-    let tick_tx = queue_tx.clone();
-    let ticker = thread::Builder::new()
-        .name("laded-tick".into())
-        .spawn(move || {
-            while !stop.load(Ordering::SeqCst) {
-                thread::sleep(TICK);
-                let _ = tick_tx.try_send(Msg::Tick);
-            }
-        })
-        .map_err(|e| StartError::StateDir(format!("thread: {}", e.kind())))?;
+        .map_err(|e| StartError::Thread("supervisor", e))?;
+    let (ticker_stop, ticker) = start_ticker(queue_tx.clone())?;
     let thread = thread::Builder::new()
         .name("laded-service".into())
         .spawn(move || service.run(&queue_rx))
-        .map_err(|e| StartError::StateDir(format!("thread: {}", e.kind())))?;
+        .map_err(|e| StartError::Thread("service", e))?;
     Ok(RunningService {
         queue: queue_tx,
         thread: Some(thread),
         listener: Some(listener),
-        ticker_stop,
+        ticker_stop: Some(ticker_stop),
         ticker: Some(ticker),
         socket,
         capability: config.runtime_dir.join(CONTROL_CAPABILITY_NAME),
@@ -560,11 +533,76 @@ pub fn start(
     })
 }
 
+/// Starts the thread that queues a [`Msg::Tick`] every [`TICK`] until the returned sender is
+/// dropped, which wakes it at once.
+fn start_ticker(queue: SyncSender<Msg>) -> Result<(mpsc::Sender<()>, JoinHandle<()>), StartError> {
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let ticker = thread::Builder::new()
+        .name("laded-tick".into())
+        .spawn(move || {
+            while let Err(RecvTimeoutError::Timeout) = stop_rx.recv_timeout(TICK) {
+                let _ = queue.try_send(Msg::Tick);
+            }
+        })
+        .map_err(|e| StartError::Thread("ticker", e))?;
+    Ok((stop_tx, ticker))
+}
+
 fn recordable(rejection: &Rejection) -> bool {
     rejection.code != ErrorCode::DurabilityFailure
 }
 
 impl Service {
+    /// Builds a service with empty in-memory state and no job threads; `start` then loads the
+    /// durable state and starts the pools.
+    fn new(
+        config: &ServiceConfig,
+        store: Store,
+        paths: Paths,
+        artifacts: Arc<ArtifactStore>,
+        launcher: Arc<dyn WorkerLauncher>,
+        supervisor_tx: SyncSender<SupervisorEvent>,
+        queue_tx: SyncSender<Msg>,
+    ) -> Self {
+        Self {
+            store,
+            paths,
+            artifacts,
+            large_blobs: Arc::default(),
+            launcher,
+            supervisor_tx,
+            queue_tx,
+            pools: jobs::Pools::default(),
+            epoch: wire_id(new_uuid()),
+            sequence: 0,
+            controller: None,
+            workspaces: BTreeMap::new(),
+            objectives: BTreeMap::new(),
+            runtime: HashMap::new(),
+            settings: Settings {
+                verification_commands: Vec::new(),
+                default_model: None,
+            },
+            activity_seq: HashMap::new(),
+            input_seq: 0,
+            live: execution::LiveActivity::default(),
+            ticks: 0,
+            sandbox: OnceLock::new(),
+            catalog: models::CatalogCache::default(),
+            extension_approvals: HashMap::new(),
+            agent_sessions: agent_session::AgentSessions::default(),
+            terminals: terminal::Terminals::default(),
+            stopping: false,
+            limits: config.limits.clone(),
+            recovery_notes: Vec::new(),
+            integrations: review::Integrations::default(),
+            held: None,
+            storage: limits::StorageGuard::new(config.storage_limit_bytes),
+            cgroups: config.cgroups.clone(),
+            test_fixture_provider: config.test_fixture_provider,
+        }
+    }
+
     fn run(mut self, queue: &Receiver<Msg>) {
         while let Ok(message) = queue.recv() {
             match message {
@@ -613,9 +651,8 @@ impl Service {
                     service_epoch: self.epoch.clone(),
                     lease_id,
                 });
-                let pushed = encode(&welcome, Framing::Client)
-                    .ok()
-                    .is_some_and(|bytes| out.push(bytes).is_ok());
+                let pushed =
+                    encode(&welcome, Framing::Client).is_ok_and(|bytes| out.push(bytes).is_ok());
                 if pushed {
                     self.controller = Some(Controller {
                         conn,
@@ -1001,10 +1038,7 @@ impl Service {
             self.flush_activity();
             self.check_free_space();
         }
-        if self
-            .ticks
-            .is_multiple_of(STORAGE_CHECK_INTERVAL.as_millis() as u64 / TICK.as_millis() as u64)
-        {
+        if u128::from(self.ticks).is_multiple_of(STORAGE_CHECK_TICKS) {
             self.check_storage();
         }
         self.check_timeouts();
