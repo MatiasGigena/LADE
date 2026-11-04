@@ -1,3 +1,11 @@
+//! LADE's versioned wire contracts: the client protocol between the desktop client and the
+//! service, and the worker protocol between the service and the pi worker.
+//!
+//! It holds the DTOs ([`client`], [`worker`], [`types`]), validation against the closed JSON
+//! schemas with bounded parsing, frame encoding and decoding, chunked transfers, and the bounded
+//! request history that recognises retried operations. Every refusal below the request layer is a
+//! [`WireError`] with a stable wire code.
+
 mod base64;
 mod chunks;
 pub mod client;
