@@ -4,22 +4,24 @@
 //! the controlling link's queue.
 
 use std::collections::VecDeque;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use lade_core::domain::ids::ObjectiveId;
 use lade_protocol::client::{
-    ClientBody, Event, Intent, ObjectiveCreateCommand, Rejection, ReplyData, ReplyResult, Request,
-    RequestName, Start, WorkspaceOpenCommand,
+    CandidateSummary, ClientBody, Event, ExecutionStartCommand, Intent, ObjectiveCreateCommand,
+    Rejection, ReplyData, ReplyResult, Request, RequestName, ReviewApproveCommand, Start,
+    WorkspaceOpenCommand,
 };
 use lade_protocol::decode_client_frame;
-use lade_protocol::types::{Id, WirePath};
+use lade_protocol::types::{GitId as WireGitId, Id, Model, WirePath};
 use lade_protocol::worker::WorkerBody;
 
-use super::adapters_support::{TempDir, init_repo};
+use super::adapters_support::{TempDir, git, init_repo};
 use super::link::Controller;
-use super::{Msg, Paths, ReqCtx, ResourceLimits, Service, ServiceConfig};
+use super::{Flow, Msg, OpInfo, Paths, ReqCtx, ResourceLimits, Service, ServiceConfig};
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::sandbox::WRITABLE_STORAGE_BYTES;
 use crate::storage::Store;
@@ -142,38 +144,9 @@ impl Harness {
         ] {
             ensure_private_dir(dir).expect("private dir");
         }
-        let config = ServiceConfig {
-            state_dir: paths.state.clone(),
-            runtime_dir: paths.run.clone(),
-            limits,
-            storage_limit_bytes: WRITABLE_STORAGE_BYTES,
-            cgroups: None,
-            test_fixture_provider: false,
-        };
-        let (queue_tx, queue) = mpsc::sync_channel(1024);
-        let (supervisor_tx, supervisor) = mpsc::sync_channel(1024);
         let launcher = Arc::new(FakeLauncher::default());
-        let store = Store::open(&paths.state.join("lade.db")).expect("store");
-        let artifacts =
-            ArtifactStore::open(&paths.state.join("artifacts"), &paths.tmp).expect("artifacts");
-        let mut service = Service::new(
-            &config,
-            store,
-            paths,
-            Arc::new(artifacts),
-            Arc::clone(&launcher) as Arc<dyn WorkerLauncher>,
-            supervisor_tx,
-            queue_tx,
-        );
-        service.load_resources().expect("profile directory");
-        let out = Outbound::new();
-        service.controller = Some(Controller {
-            conn: CONN,
-            out: out.clone(),
-            request_ids: std::collections::HashMap::new(),
-            request_order: VecDeque::new(),
-        });
-        service.held = Some(Vec::new());
+        let (mut service, queue, supervisor) = boot(paths, limits, &launcher, false);
+        let out = attach(&mut service);
         Self {
             service,
             repo,
@@ -187,6 +160,20 @@ impl Harness {
         }
     }
 
+    /// Replaces the service with a new one over the same state, as a restart would: the
+    /// durable state is loaded and recovered, and a fresh client attaches.
+    pub fn restart(&mut self) {
+        let paths = self.service.paths.clone();
+        let limits = self.service.limits.clone();
+        let (mut service, queue, supervisor) = boot(paths, limits, &self.launcher, true);
+        self.out = attach(&mut service);
+        self.service = service;
+        self.queue = queue;
+        self._supervisor = supervisor;
+        self.events.clear();
+        self.replies.clear();
+    }
+
     pub fn new(tag: &str) -> Self {
         Self::with_limits(tag, ResourceLimits::default())
     }
@@ -195,12 +182,17 @@ impl Harness {
         self.root.path()
     }
 
+    /// A request context as the controlling client sends it: mutating requests carry an
+    /// operation id, as the protocol requires.
     pub fn ctx(name: RequestName) -> ReqCtx {
         ReqCtx {
             conn: CONN,
             request_id: super::wire_id(new_uuid()),
             name,
-            op: None,
+            op: name.is_mutating().then(|| OpInfo {
+                id: super::wire_id(new_uuid()),
+                digest: "test".into(),
+            }),
             recorded: false,
         }
     }
@@ -298,6 +290,78 @@ impl Harness {
         (detail.objective_id, oid)
     }
 
+    /// Starts an agent for a new Objective, lets it write `file`, and freezes its work.
+    pub fn frozen(&mut self, title: &str, file: &str) -> (Id, ObjectiveId, CandidateSummary) {
+        let (id, oid) = self.create_objective(title);
+        self.call(Request::ExecutionStart(ExecutionStartCommand {
+            objective_id: id.clone(),
+            model: Model {
+                provider: "anthropic".into(),
+                id: "model".into(),
+            },
+            thinking: None,
+        }))
+        .expect("start");
+        self.worker_event(
+            oid,
+            WorkerEvent::Body(WorkerBody::Ready {
+                pi_session_id: "pi".into(),
+                session_file: "/s.jsonl".into(),
+            }),
+        );
+        let worktree = self.service.objectives[&oid]
+            .row
+            .worktree
+            .clone()
+            .expect("worktree");
+        fs::write(worktree.join(file), format!("{title}\n")).expect("agent work");
+        let ctx = Self::ctx(RequestName::ReviewFreeze);
+        let request_id = ctx.request_id.clone();
+        assert!(matches!(
+            self.service.review_freeze(ctx, &id),
+            Flow::Deferred
+        ));
+        assert!(
+            self.reply(&request_id).is_none(),
+            "the freeze waits for the worker to stop"
+        );
+        let (_, log) = self.last_worker();
+        assert!(matches!(
+            log.lock().expect("log").sent.last(),
+            Some(WorkerBody::Abort)
+        ));
+        self.worker_event(
+            oid,
+            WorkerEvent::Exited {
+                code: Some(0),
+                signal: None,
+            },
+        );
+        let Some(Ok(ReplyData::ReviewFreeze(candidate))) = self.reply(&request_id) else {
+            panic!("freeze");
+        };
+        (id, oid, candidate)
+    }
+
+    pub fn approve(
+        &mut self,
+        id: &Id,
+        candidate: &CandidateSummary,
+    ) -> Result<ReplyData, Rejection> {
+        let target_commit = self.main_head();
+        self.call(Request::ReviewApprove(ReviewApproveCommand {
+            objective_id: id.clone(),
+            candidate_id: candidate.candidate_id.clone(),
+            target_commit,
+            override_reason: Some("reviewed by hand".into()),
+        }))
+    }
+
+    /// The commit `main` points at in the fixture repository.
+    pub fn main_head(&self) -> WireGitId {
+        WireGitId::from_hex(git(&self.repo, &["rev-parse", "main"]).trim()).expect("head")
+    }
+
     /// The worker launched most recently and what it was sent.
     pub fn last_worker(&self) -> (LaunchRequest, Arc<Mutex<WorkerLog>>) {
         let launches = self
@@ -325,4 +389,54 @@ impl Harness {
         });
         self.settle();
     }
+}
+
+fn boot(
+    paths: Paths,
+    limits: ResourceLimits,
+    launcher: &Arc<FakeLauncher>,
+    recover: bool,
+) -> (Service, Receiver<Msg>, Receiver<SupervisorEvent>) {
+    let config = ServiceConfig {
+        state_dir: paths.state.clone(),
+        runtime_dir: paths.run.clone(),
+        limits,
+        storage_limit_bytes: WRITABLE_STORAGE_BYTES,
+        cgroups: None,
+        test_fixture_provider: false,
+    };
+    let (queue_tx, queue) = mpsc::sync_channel(1024);
+    let (supervisor_tx, supervisor) = mpsc::sync_channel(1024);
+    let store = Store::open(&paths.state.join("lade.db")).expect("store");
+    let artifacts =
+        ArtifactStore::open(&paths.state.join("artifacts"), &paths.tmp).expect("artifacts");
+    let mut service = Service::new(
+        &config,
+        store,
+        paths,
+        Arc::new(artifacts),
+        Arc::clone(launcher) as Arc<dyn WorkerLauncher>,
+        supervisor_tx,
+        queue_tx,
+    );
+    service.load_resources().expect("profile directory");
+    if recover {
+        service.load().expect("load");
+        service.load_agent_sessions().expect("agent sessions");
+        service.recover().expect("recover");
+    }
+    service.held = Some(Vec::new());
+    (service, queue, supervisor)
+}
+
+/// Attaches a controlling client to `service` and returns the queue its frames land in.
+fn attach(service: &mut Service) -> Outbound {
+    let out = Outbound::new();
+    service.controller = Some(Controller {
+        conn: CONN,
+        out: out.clone(),
+        request_ids: std::collections::HashMap::new(),
+        request_order: VecDeque::new(),
+    });
+    out
 }

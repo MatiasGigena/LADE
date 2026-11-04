@@ -402,3 +402,6 @@ fn kill_stale_sandboxes(state: &Path) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
