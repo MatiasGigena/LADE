@@ -295,6 +295,8 @@ const GENERAL_THREADS: usize = 3;
 const VERIFY_THREADS: usize = 4;
 const REAPER_THREADS: usize = 4;
 const TICK: Duration = Duration::from_millis(100);
+/// How long shutdown waits for client links to flush their last frames.
+const LINK_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The service's single-threaded state. Each capability keeps its state in one field owned by
 /// its module; the comments name the module that changes each group.
@@ -371,8 +373,9 @@ impl RunningService {
     }
 
     fn release(&mut self) {
-        if let Some(listener) = self.listener.take() {
+        if let Some(mut listener) = self.listener.take() {
             listener.stop();
+            listener.drain(LINK_DRAIN_TIMEOUT);
         }
         self.ticker_stop.store(true, Ordering::SeqCst);
         if let Some(ticker) = self.ticker.take() {
@@ -380,11 +383,10 @@ impl RunningService {
         }
         let _ = fs::remove_file(&self.socket);
         let _ = fs::remove_file(&self.capability);
-        thread::sleep(Duration::from_millis(200));
     }
 
     pub fn shutdown(mut self) {
-        if let Some(listener) = self.listener.take() {
+        if let Some(listener) = self.listener.as_mut() {
             listener.stop();
         }
         let _ = self.queue.send(Msg::Shutdown);

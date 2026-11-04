@@ -196,19 +196,55 @@ impl Outbound {
     }
 }
 
+/// Counts link writer threads that may still be flushing frames to a client.
+#[derive(Default)]
+struct Writers {
+    running: Mutex<usize>,
+    finished: Condvar,
+}
+
+impl Writers {
+    fn started(&self) {
+        *self.running.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+    }
+
+    fn finished(&self) {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        *running = running.saturating_sub(1);
+        self.finished.notify_all();
+    }
+}
+
 pub struct Listener {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
     thread: Option<JoinHandle<()>>,
+    writers: Arc<Writers>,
 }
 
 impl Listener {
-    pub fn stop(mut self) {
+    /// Stops accepting connections. Links already admitted keep running.
+    pub fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
         let _ = UnixStream::connect(&self.socket);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = thread.join();
+    }
+
+    /// Waits, at most `timeout`, until every link writer has flushed its closed queue, so the
+    /// last frames (a stop reply, a final notice) reach clients before the service exits.
+    pub fn drain(&self, timeout: Duration) {
+        let running = self
+            .writers
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = self
+            .writers
+            .finished
+            .wait_timeout_while(running, timeout, |running| *running > 0);
     }
 }
 
@@ -220,14 +256,17 @@ pub fn serve<T: From<Inbound> + Send + 'static>(
 ) -> Listener {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
+    let writers = Arc::new(Writers::default());
+    let link_writers = Arc::clone(&writers);
     let thread = thread::Builder::new()
         .name("laded-accept".into())
-        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx))
+        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx, &link_writers))
         .expect("spawn accept thread");
     Listener {
         stop,
         socket,
         thread: Some(thread),
+        writers,
     }
 }
 
@@ -236,6 +275,7 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
     capability: &str,
     stop: &AtomicBool,
     tx: &SyncSender<T>,
+    writers: &Arc<Writers>,
 ) {
     static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
     let pending = Arc::new(AtomicUsize::new(0));
@@ -259,9 +299,10 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
         let capability = capability.to_owned();
         let tx = tx.clone();
         let pending = Arc::clone(&pending);
+        let writers = Arc::clone(writers);
         let spawned = thread::Builder::new()
             .name(format!("laded-conn-{conn}"))
-            .spawn(move || run_link(conn, stream, &capability, &tx, &pending));
+            .spawn(move || run_link(conn, stream, &capability, &tx, &pending, writers));
         if spawned.is_err() {
             eprintln!("laded: could not start link thread");
         }
@@ -280,6 +321,7 @@ fn run_link<T: From<Inbound>>(
     capability: &str,
     tx: &SyncSender<T>,
     pending: &AtomicUsize,
+    writers: Arc<Writers>,
 ) {
     let admitted = handshake(&stream, capability);
     pending.fetch_sub(1, Ordering::SeqCst);
@@ -294,20 +336,30 @@ fn run_link<T: From<Inbound>>(
     };
     let _ = write_half.set_write_timeout(Some(WRITE_STALL_TIMEOUT));
     let writer_out = out.clone();
+    writers.started();
+    let writer_done = Arc::clone(&writers);
     let writer = thread::Builder::new()
         .name(format!("laded-write-{conn}"))
-        .spawn(move || write_loop(write_half, &writer_out));
-    if writer.is_err()
-        || tx
-            .send(
-                Inbound::Attach {
-                    conn,
-                    out: out.clone(),
-                }
-                .into(),
-            )
-            .is_err()
+        .spawn(move || {
+            write_loop(write_half, &writer_out);
+            writer_done.finished();
+        });
+    if writer.is_err() {
+        writers.finished();
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    if tx
+        .send(
+            Inbound::Attach {
+                conn,
+                out: out.clone(),
+            }
+            .into(),
+        )
+        .is_err()
     {
+        out.close();
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
