@@ -103,17 +103,14 @@ fn invalid_execution_transitions_are_rejected() {
 
 #[test]
 fn restart_interrupts_only_live_executions() {
-    for prepare in [0, 1, 2, 3] {
-        let (mut execution, generation) = started();
-        if prepare >= 1 {
-            execution.worker_ready(generation).expect("ready");
-        }
-        if prepare >= 2 {
-            execution.observe_turn(generation, true).expect("running");
-        }
-        if prepare >= 3 {
-            execution.request_stop().expect("stopping");
-        }
+    let (starting, generation) = started();
+    let mut idle = starting.clone();
+    idle.worker_ready(generation).expect("ready");
+    let mut running = idle.clone();
+    running.observe_turn(generation, true).expect("running");
+    let mut stopping = running.clone();
+    stopping.request_stop().expect("stopping");
+    for mut execution in [starting, idle, running, stopping] {
         assert!(execution.interrupt());
         assert_eq!(
             execution.state(),
