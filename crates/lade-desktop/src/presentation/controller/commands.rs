@@ -385,3 +385,6 @@ pub(super) fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLin
     });
     AgentLine { sentence, details }
 }
+
+#[cfg(test)]
+mod tests;

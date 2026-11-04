@@ -14,7 +14,7 @@ pub const SAVED_DRAFT: &str = "d1000000-0000-4000-8000-000000000001";
 const WORKSPACE: &str = "5e3b1d2c-0a9f-4e7d-b6c5-1f2e3d4c5b6a";
 const SESSION: &str = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b";
 const CANDIDATE_1: &str = "b0000001-1111-4111-8111-111111111111";
-const CANDIDATE_2: &str = "b0000002-2222-4222-8222-222222222222";
+pub const CANDIDATE_2: &str = "b0000002-2222-4222-8222-222222222222";
 
 fn model() -> ModelRef {
     ModelRef::new("test-provider", "test-model")

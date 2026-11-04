@@ -101,3 +101,6 @@ impl Controller {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

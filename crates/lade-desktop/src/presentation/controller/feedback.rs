@@ -308,3 +308,6 @@ impl Controller {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
