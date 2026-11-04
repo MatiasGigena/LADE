@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Write as _;
+use std::io::{ErrorKind, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -29,7 +29,8 @@ use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
 use super::convert::{
-    conflict, counter, domain_rejection, invalid, not_found, preview, rejection, wire_id,
+    conflict, counter, domain_rejection, durability, invalid, not_found, preview, rejection,
+    wire_id,
 };
 use super::handlers::{Pending, sql};
 use super::resources::snapshot;
@@ -933,13 +934,29 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     if !source.is_absolute() {
         return Err(invalid("Choose the session file by its full path."));
     }
-    let meta = fs::metadata(source).map_err(|_| not_found("session file"))?;
+    let unreadable = |e: std::io::Error| match e.kind() {
+        ErrorKind::NotFound => not_found("session file"),
+        ErrorKind::PermissionDenied => rejection(
+            ErrorCode::PermissionDenied,
+            SafeAction::None,
+            "LADE is not allowed to read this session file.",
+        ),
+        kind => {
+            eprintln!("laded: session import source unreadable: {kind}");
+            invalid("The session file could not be read.")
+        }
+    };
+    let not_copied = |e: std::io::Error| {
+        eprintln!("laded: session import copy failed: {}", e.kind());
+        durability("The session could not be copied for import. Try again.")
+    };
+    let meta = fs::metadata(source).map_err(unreadable)?;
     if !meta.is_file() || meta.len() > MAX_IMPORT_BYTES {
         return Err(invalid(
             "The session file must be a regular file of at most 16 MiB.",
         ));
     }
-    let bytes = fs::read(source).map_err(|_| not_found("readable session file"))?;
+    let bytes = fs::read(source).map_err(unreadable)?;
     let header = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
     let is_session = serde_json::from_slice::<Value>(header)
         .ok()
@@ -950,18 +967,12 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
         ));
     }
     let dir = copy.parent().ok_or_else(|| invalid("import directory"))?;
-    ensure_private_dir(dir).map_err(|_| {
-        super::convert::durability("The session could not be copied for import. Try again.")
-    })?;
+    ensure_private_dir(dir).map_err(not_copied)?;
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(copy)
-        .map_err(|_| {
-            super::convert::durability("The session could not be copied for import. Try again.")
-        })?;
-    file.write_all(&bytes).map_err(|_| {
-        super::convert::durability("The session could not be copied for import. Try again.")
-    })
+        .map_err(not_copied)?;
+    file.write_all(&bytes).map_err(not_copied)
 }

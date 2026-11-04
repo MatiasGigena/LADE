@@ -2,6 +2,7 @@
 //! decisions for executable extensions, copy-only profile import, and the per-session snapshot
 //! that holds only approved extensions.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use lade_protocol::client::{
@@ -56,6 +57,11 @@ impl Service {
     }
 
     pub(crate) fn inventory(&self) -> ResourceInventory {
+        self.inventory_with(&self.extension_approvals)
+    }
+
+    /// The inventory as it reads under `approvals`, which may differ from the recorded decisions.
+    fn inventory_with(&self, approvals: &HashMap<(String, String), bool>) -> ResourceInventory {
         let profile = self.profile_dir();
         let entries = profile::scan(&profile)
             .into_iter()
@@ -74,7 +80,7 @@ impl Service {
                 let (state, reason) = match (&entry.problem, entry.kind, &entry.sha256) {
                     (Some(problem), _, _) => (ResourceState::Refused, Some(problem.clone())),
                     (None, Kind::Extension, Some(sha)) => {
-                        match self.extension_approvals.get(&(entry.name.clone(), sha.clone())) {
+                        match approvals.get(&(entry.name.clone(), sha.clone())) {
                             Some(true) => (ResourceState::Active, None),
                             Some(false) => (
                                 ResourceState::Rejected,
@@ -127,12 +133,7 @@ impl Service {
         let key = (cmd.name.clone(), sha);
         let mut approvals = self.extension_approvals.clone();
         approvals.insert(key.clone(), cmd.approve);
-        let inventory = {
-            let previous = std::mem::replace(&mut self.extension_approvals, approvals);
-            let inventory = self.inventory();
-            self.extension_approvals = previous;
-            inventory
-        };
+        let inventory = self.inventory_with(&approvals);
         let data = ReplyData::ResourceDecide(inventory.clone());
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
