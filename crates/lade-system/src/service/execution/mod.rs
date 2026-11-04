@@ -3,6 +3,8 @@
 //! in the submodules.
 
 mod activity;
+#[cfg(test)]
+mod tests;
 mod worker;
 mod writable;
 
