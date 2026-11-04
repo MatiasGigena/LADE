@@ -273,7 +273,7 @@ must re-run that test.
 - **Durability**: inherited from pi — first user message not flushed before an assistant entry; no
   fsync. `resume:true` with no prior session file starts a new session; the service detects this
   by a changed `pi_session_id`.
-- **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4: WP-A's schema must type
+- **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4, so the worker schema types
   `pi_session_id` as a bounded string.
 - **Network coverage**: undici/global `fetch` traffic and `node:http(s)` clients that use the global
   agents are routed through the gateway (`src/worker/gateway.ts`). SDKs that bring their own agent
