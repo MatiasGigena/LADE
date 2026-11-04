@@ -17,8 +17,8 @@ use crate::storage::{self, CaptureRow};
 
 use super::capture::CapturePurpose;
 use super::convert::{
-    adapter_git, git_rejection, invalid, not_found, parse_uuid, preview, repo_path, wire_git,
-    wire_id, wire_path,
+    adapter_git, git_rejection, invalid, json_len, not_found, parse_uuid, preview, repo_path,
+    wire_git, wire_id, wire_path,
 };
 use super::execution::wire_activity;
 use super::handlers::sql;
@@ -104,17 +104,11 @@ fn change_list(
         candidate_id: resolved.candidate_id.map(|c| wire_id(c.uuid())),
         notices: None,
     };
-    let mut remaining = MAX_PAGE_JSON
-        - serde_json::to_vec(&list)
-            .expect("change list fields are serializable")
-            .len()
-        - 16; // Optional notices field and array delimiters.
+    // Leave room for the optional notices field and its array delimiters.
+    let mut remaining = MAX_PAGE_JSON.saturating_sub(json_len(&list).saturating_add(16));
     let mut kept_notices = Vec::new();
     for notice in notices {
-        let cost = serde_json::to_vec(&notice)
-            .expect("content notice fields are serializable")
-            .len()
-            + 1;
+        let cost = json_len(&notice).saturating_add(1);
         if cost > remaining {
             list.truncated = true;
             break;
@@ -136,10 +130,7 @@ fn change_list(
                 .map(|path| wire_path(path.as_bytes())),
             filtered: filtered.contains(&file.path).then_some(true),
         };
-        let cost = serde_json::to_vec(&file)
-            .expect("changed file fields are serializable")
-            .len()
-            + 1;
+        let cost = json_len(&file).saturating_add(1);
         if cost > remaining {
             break;
         }
@@ -480,15 +471,9 @@ fn search_tree(
         results: Vec::new(),
         truncated,
     };
-    let mut remaining = MAX_PAGE_JSON
-        - serde_json::to_vec(&page)
-            .expect("search result fields are serializable")
-            .len();
+    let mut remaining = MAX_PAGE_JSON.saturating_sub(json_len(&page));
     for result in results {
-        let cost = serde_json::to_vec(&result)
-            .expect("search result fields are serializable")
-            .len()
-            + 1;
+        let cost = json_len(&result).saturating_add(1);
         if cost > remaining {
             page.truncated = true;
             break;
@@ -839,10 +824,7 @@ impl Service {
             let Some(item) = wire_activity(&row) else {
                 continue;
             };
-            let cost = serde_json::to_vec(&item)
-                .expect("activity fields are serializable")
-                .len()
-                + 1;
+            let cost = json_len(&item).saturating_add(1);
             if cost > budget {
                 if items.is_empty() {
                     let page = ActivityPage {

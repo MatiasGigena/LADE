@@ -9,6 +9,7 @@ use lade_protocol::{Framing, MAX_FRAME, MAX_NODES, encode};
 use serde_json::Value;
 
 use super::Service;
+use super::convert::json_len;
 use super::handlers::SNAPSHOT_OBJECTIVES;
 use super::project::{DETAIL_LIST_MAX, MAX_SUMMARY_BADGES};
 use super::state::{ObjState, WsState};
@@ -324,9 +325,7 @@ impl Service {
                 summary.execution.generation = Counter::new(u64::MAX);
                 summary.execution.state = ExecutionState::Cancelled;
                 summary.execution.reason = Some(String::new());
-                let bytes = serde_json::to_vec(&summary)
-                    .expect("summary serializes")
-                    .len();
+                let bytes = json_len(&summary);
                 (bytes, summary)
             })
             .collect();
@@ -389,8 +388,7 @@ impl Service {
             let mut budget = bytes / (data.workspaces.len() - index);
             let mut node_budget = remaining_nodes / (data.workspaces.len() - index);
             for branch in source.branches.iter().skip(row.branches.len()) {
-                let cost = serde_json::to_vec(branch).expect("branch serializes").len()
-                    + usize::from(!row.branches.is_empty());
+                let cost = json_len(branch).saturating_add(usize::from(!row.branches.is_empty()));
                 if cost > budget || node_budget == 0 {
                     break;
                 }

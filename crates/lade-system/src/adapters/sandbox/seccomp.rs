@@ -171,38 +171,38 @@ impl Asm {
         self.labels[label] = Some(self.insns.len());
     }
 
-    fn finish(mut self) -> Vec<u8> {
-        let returns = [
-            (Target::Allow, RET_ALLOW),
-            (Target::Eperm, RET_ERRNO | EPERM),
-            (Target::Enosys, RET_ERRNO | ENOSYS),
-            (Target::Kill, RET_KILL_PROCESS),
-        ];
+    /// Appends the shared return instructions and resolves every jump target to a relative
+    /// offset. `None` when a label was never placed or a jump is farther than the 8 bits a
+    /// classic BPF conditional jump encodes.
+    fn finish(mut self) -> Option<Vec<u8>> {
         let base = self.insns.len();
-        for (_, value) in returns {
+        for value in [
+            RET_ALLOW,
+            RET_ERRNO | EPERM,
+            RET_ERRNO | ENOSYS,
+            RET_KILL_PROCESS,
+        ] {
             self.ret(value);
         }
-        let resolve = |target: Target, at: usize, labels: &[Option<usize>]| -> u8 {
+        let resolve = |target: Target, at: usize| -> Option<u8> {
             let to = match target {
                 Target::Next => at + 1,
-                Target::Label(label) => labels[label].expect("placed label"),
-                other => {
-                    base + returns
-                        .iter()
-                        .position(|(t, _)| *t == other)
-                        .expect("return target")
-                }
+                Target::Label(label) => (*self.labels.get(label)?)?,
+                Target::Allow => base,
+                Target::Eperm => base + 1,
+                Target::Enosys => base + 2,
+                Target::Kill => base + 3,
             };
-            u8::try_from(to - (at + 1)).expect("BPF jump fits in 8 bits")
+            u8::try_from(to.checked_sub(at + 1)?).ok()
         };
         let mut out = Vec::with_capacity(self.insns.len() * 8);
         for (at, insn) in self.insns.iter().enumerate() {
             out.extend_from_slice(&insn.code.to_ne_bytes());
-            out.push(resolve(insn.jt, at, &self.labels));
-            out.push(resolve(insn.jf, at, &self.labels));
+            out.push(resolve(insn.jt, at)?);
+            out.push(resolve(insn.jf, at)?);
             out.extend_from_slice(&insn.k.to_ne_bytes());
         }
-        out
+        Some(out)
     }
 }
 
@@ -254,7 +254,7 @@ pub fn program() -> Option<Vec<u8>> {
         Target::Eperm,
         Target::Allow,
     );
-    Some(asm.finish())
+    asm.finish()
 }
 
 #[cfg(test)]

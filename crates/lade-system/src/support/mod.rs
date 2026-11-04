@@ -26,6 +26,10 @@ pub fn now_ms() -> i64 {
 ///
 /// Never: the epoch is always representable.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "lade-protocol offers no infallible epoch Timestamp; from_unix_ms(0) always succeeds"
+)]
 pub fn wire_ts(ms: i64) -> Timestamp {
     Timestamp::from_unix_ms(ms)
         .or_else(|| Timestamp::from_unix_ms(0))
@@ -48,6 +52,10 @@ pub fn random_fill(buf: &mut [u8]) -> std::io::Result<()> {
 /// Panics when `/dev/urandom` cannot be read. Every identifier and capability the service
 /// mints depends on it, so there is no safe way to continue without it.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "no identifier can be minted without kernel randomness; there is no degraded mode"
+)]
 pub fn new_uuid() -> Uuid {
     let mut bytes = [0u8; 16];
     random_fill(&mut bytes).expect("kernel random source unavailable");

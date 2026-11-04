@@ -202,19 +202,21 @@ impl RotatingLog {
     }
 
     fn open_current(&mut self) -> io::Result<&mut (File, u64)> {
-        if self.current.is_none() {
-            ensure_private_dir(&self.dir)?;
-            let path = self.path(0);
-            let file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .mode(0o600)
-                .open(&path)?;
-            file.set_permissions(fs::Permissions::from_mode(0o600))?;
-            let len = file.metadata()?.len();
-            self.current = Some((file, len));
-        }
-        Ok(self.current.as_mut().expect("opened above"))
+        let current = match self.current.take() {
+            Some(current) => current,
+            None => {
+                ensure_private_dir(&self.dir)?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .mode(0o600)
+                    .open(self.path(0))?;
+                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+                let len = file.metadata()?.len();
+                (file, len)
+            }
+        };
+        Ok(self.current.insert(current))
     }
 
     fn rotate(&mut self) -> io::Result<()> {

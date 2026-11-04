@@ -27,7 +27,7 @@ use super::capture::CapturePurpose;
 use super::convert::{
     conflict, core_reference, domain_rejection, durability, invalid, not_found, parse_uuid,
 };
-use super::convert::{core_mode, wire_draft, wire_input};
+use super::convert::{core_mode, json_len, wire_draft, wire_input};
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
 use super::state::ObjState;
@@ -36,12 +36,10 @@ use crate::fault::{self, Fault};
 use crate::support::{new_uuid, now_ms, wire_ts};
 
 fn reply_json_len(request_id: &Id, data: ReplyData) -> usize {
-    serde_json::to_vec(&ClientEnvelope::new(ClientBody::Reply(Reply::ok(
+    json_len(&ClientEnvelope::new(ClientBody::Reply(Reply::ok(
         request_id.clone(),
         data,
     ))))
-    .expect("reply fields are serializable")
-    .len()
 }
 
 fn history_too_large() -> Rejection {
@@ -76,7 +74,7 @@ impl Service {
             .collect();
         eligible.sort_by_key(|draft| (draft.record().created_at.unix_ms(), draft.id()));
         let mut drafts = Vec::new();
-        let mut content_bytes = 0;
+        let mut content_bytes: usize = 0;
         let mut last = None;
         for (index, draft) in eligible
             .iter()
@@ -97,11 +95,9 @@ impl Service {
                 }),
             );
             let next_content = content_bytes
-                + usize::from(!drafts.is_empty())
-                + serde_json::to_vec(&wire)
-                    .expect("draft fields are serializable")
-                    .len();
-            if overhead + next_content > MAX_FRAME {
+                .saturating_add(usize::from(!drafts.is_empty()))
+                .saturating_add(json_len(&wire));
+            if overhead.saturating_add(next_content) > MAX_FRAME {
                 break;
             }
             drafts.push(wire);
@@ -125,7 +121,7 @@ impl Service {
         let mut eligible: Vec<_> = st.inputs.iter().filter(|(seq, _)| *seq > after).collect();
         eligible.sort_by_key(|(seq, _)| *seq);
         let mut inputs = Vec::new();
-        let mut content_bytes = 0;
+        let mut content_bytes: usize = 0;
         let mut last = None;
         for (index, (seq, input)) in eligible
             .iter()
@@ -143,11 +139,9 @@ impl Service {
                 }),
             );
             let next_content = content_bytes
-                + usize::from(!inputs.is_empty())
-                + serde_json::to_vec(&wire)
-                    .expect("input fields are serializable")
-                    .len();
-            if overhead + next_content > MAX_FRAME {
+                .saturating_add(usize::from(!inputs.is_empty()))
+                .saturating_add(json_len(&wire));
+            if overhead.saturating_add(next_content) > MAX_FRAME {
                 break;
             }
             inputs.push(wire);

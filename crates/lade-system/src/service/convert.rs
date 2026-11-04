@@ -15,6 +15,7 @@ use lade_protocol::client::{
     VerificationState, VerificationSummary,
 };
 use lade_protocol::types::{self as wire_types, Counter, DeliveryMode, Id};
+use serde::Serialize;
 
 use super::state::ObjState;
 use crate::adapters::git::{self, GitError, ObjectFormat};
@@ -26,6 +27,36 @@ use crate::support::wire_ts;
 /// serialize; if one ever did, it reports `usize::MAX` so budget checks leave it out instead of
 /// sending a frame that cannot be encoded.
 #[must_use]
+pub(crate) fn json_len(value: &impl Serialize) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match serde_json::to_writer(&mut count, value) {
+        Ok(()) => count.0,
+        Err(_) => usize::MAX,
+    }
+}
+
+/// The wire form of a domain identifier.
+///
+/// # Panics
+///
+/// Never in practice: domain UUIDs are lowercase v4 by construction, which is exactly what the
+/// wire `uuid-v4` format accepts.
+#[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "lade-protocol offers only a validating constructor for Id; the domain invariant \
+              guarantees it accepts every domain UUID"
+)]
 pub fn wire_id(uuid: Uuid) -> Id {
     Id::parse(uuid.to_string()).expect("domain uuids are canonical v4")
 }
@@ -207,6 +238,10 @@ pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
 /// Never in practice: the Git adapter only yields full, non-zero lowercase object ids, the
 /// same rule the domain id enforces.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "lade-core offers only a validating constructor for GitId; adapter ids satisfy it"
+)]
 pub fn core_git(id: &git::GitId) -> core_ids::GitId {
     core_ids::GitId::new(core_algorithm(id.format()), id.hex()).expect("adapter ids are full ids")
 }
@@ -217,6 +252,10 @@ pub fn core_git(id: &git::GitId) -> core_ids::GitId {
 ///
 /// Never in practice: domain ids are full lowercase object ids, which the adapter accepts.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "domain GitIds are full object ids, which the adapter's parser always accepts"
+)]
 pub fn adapter_git(id: &core_ids::GitId) -> git::GitId {
     git::GitId::parse(adapter_format(id.algorithm()), id.hex()).expect("domain ids are full ids")
 }
@@ -227,6 +266,10 @@ pub fn adapter_git(id: &core_ids::GitId) -> git::GitId {
 ///
 /// Never in practice: domain ids are full lowercase object ids, which the wire format accepts.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "lade-protocol offers only a validating constructor for GitId; domain ids satisfy it"
+)]
 pub fn wire_git(id: &core_ids::GitId) -> wire_types::GitId {
     let algorithm = match id.algorithm() {
         GitAlgorithm::Sha1 => wire_types::GitAlgorithm::Sha1,
@@ -287,6 +330,11 @@ pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Op
 /// Never in practice: a domain Reference holds a sha256 hex digest and a non-empty path within
 /// the wire path bound, both checked when it was built.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "lade-protocol offers only validating constructors for Digest and WirePath; a \
+              domain Reference already satisfies both"
+)]
 pub fn wire_reference(reference: &Reference) -> wire::Reference {
     let version = match reference.version() {
         InspectedVersion::Working { capture_id } => wire::ReferenceVersion::Working {
@@ -367,6 +415,10 @@ pub fn repo_path(path: &wire_types::WirePath) -> Result<git::RepoPath, Rejection
 ///
 /// Never: the fallback `?` is a valid, non-empty path within the bound.
 #[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "the literal fallback path `?` always satisfies the wire path bound"
+)]
 pub fn wire_path(bytes: &[u8]) -> wire_types::WirePath {
     let bounded = &bytes[..bytes.len().min(wire_types::MAX_PATH_BYTES)];
     wire_types::WirePath::from_bytes(bounded.to_vec())
