@@ -9,6 +9,17 @@ use crate::presentation::state::agent_session::{
 use crate::presentation::state::model::{ExecutionState, ModelRef, ObjectiveId};
 use crate::presentation::state::store::{Change, StoreUpdate};
 
+/// When an Agent Session operation may be sent, by the agent's turn state.
+#[derive(Clone, Copy)]
+enum SessionUse {
+    /// The agent is running and idle between turns.
+    BetweenTurns,
+    /// The agent is running, during a turn or between turns.
+    Running,
+    /// No turn is in progress, including while the agent is stopped.
+    OutsideTurn,
+}
+
 impl Controller {
     pub fn load_models(&self, provider: Option<String>) {
         self.emit(Intent::LoadModels { provider });
@@ -107,7 +118,7 @@ impl Controller {
         }
     }
 
-    fn live_session(&self, allow_running: bool) -> Result<ObjectiveId, String> {
+    fn session_target(&self, when: SessionUse) -> Result<ObjectiveId, String> {
         let state = self.store.state();
         let detail = state
             .selected_detail()
@@ -115,22 +126,27 @@ impl Controller {
         if detail.session.is_none() {
             return Err("Start the agent first".to_owned());
         }
-        match detail.summary.execution.state {
-            ExecutionState::Idle => Ok(detail.summary.objective_id.clone()),
-            ExecutionState::Running if allow_running => Ok(detail.summary.objective_id.clone()),
-            ExecutionState::Running => Err("Wait until the current turn has finished".to_owned()),
+        let target = detail.summary.objective_id.clone();
+        match (detail.summary.execution.state, when) {
+            (ExecutionState::Idle, _) | (ExecutionState::Running, SessionUse::Running) => {
+                Ok(target)
+            }
+            (ExecutionState::Running, _) => {
+                Err("Wait until the current turn has finished".to_owned())
+            }
+            (_, SessionUse::OutsideTurn) => Ok(target),
             _ => Err("Start or resume the agent first".to_owned()),
         }
     }
 
     pub fn load_session_tree(&self) -> Result<(), String> {
-        let objective_id = self.live_session(true)?;
+        let objective_id = self.session_target(SessionUse::Running)?;
         self.emit(Intent::LoadSessionTree { objective_id });
         Ok(())
     }
 
     pub fn navigate_session(&self, entry_id: &str) -> Result<(), String> {
-        let objective_id = self.live_session(false)?;
+        let objective_id = self.session_target(SessionUse::BetweenTurns)?;
         self.emit(Intent::NavigateSession {
             objective_id,
             entry_id: entry_id.to_owned(),
@@ -139,7 +155,7 @@ impl Controller {
     }
 
     pub fn fork_session(&self, entry_id: &str, position: ForkPosition) -> Result<(), String> {
-        let objective_id = self.live_session(false)?;
+        let objective_id = self.session_target(SessionUse::BetweenTurns)?;
         self.emit(Intent::ForkSession {
             objective_id,
             entry_id: entry_id.to_owned(),
@@ -149,44 +165,32 @@ impl Controller {
     }
 
     pub fn import_session(&self, path: PathBuf) -> Result<(), String> {
-        let objective_id = self.live_session(false)?;
+        let objective_id = self.session_target(SessionUse::BetweenTurns)?;
         self.emit(Intent::ImportSession { objective_id, path });
         Ok(())
     }
 
     pub fn export_session(&self) -> Result<(), String> {
-        let objective_id = self.live_session(true)?;
+        let objective_id = self.session_target(SessionUse::Running)?;
         self.emit(Intent::ExportSession { objective_id });
         Ok(())
     }
 
     pub fn compact_session(&self) -> Result<(), String> {
-        let objective_id = self.live_session(false)?;
+        let objective_id = self.session_target(SessionUse::BetweenTurns)?;
         self.emit(Intent::CompactSession { objective_id });
         Ok(())
     }
 
     pub fn reload_session(&self) -> Result<(), String> {
-        let objective_id = self.live_session(false)?;
+        let objective_id = self.session_target(SessionUse::BetweenTurns)?;
         self.emit(Intent::ReloadSession { objective_id });
         Ok(())
     }
 
     pub fn configure_session(&self) -> Result<(), String> {
         let (model, thinking) = self.chosen_model()?;
-        let objective_id = {
-            let state = self.store.state();
-            let detail = state
-                .selected_detail()
-                .ok_or_else(|| "Select an Objective first".to_owned())?;
-            if detail.session.is_none() {
-                return Err("Start the agent first".to_owned());
-            }
-            if detail.summary.execution.state == ExecutionState::Running {
-                return Err("Wait until the current turn has finished".to_owned());
-            }
-            detail.summary.objective_id.clone()
-        };
+        let objective_id = self.session_target(SessionUse::OutsideTurn)?;
         self.emit(Intent::ConfigureSession {
             objective_id,
             model,
@@ -262,7 +266,7 @@ mod tests {
         AgentSessionUpdate, Catalog, ModelView, ProviderStatus, ProviderView, UiDialog,
         UiPromptView,
     };
-    use crate::presentation::state::model::ConnectionState;
+    use crate::presentation::state::model::{ConnectionState, Load};
     use crate::presentation::state::store::{PresentationState, Store};
     use crate::presentation::test_fixture;
 
@@ -479,5 +483,67 @@ mod tests {
                 assert!(sink.intents.borrow().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn configuring_waits_only_for_a_running_turn() {
+        let (controller, sink) = setup();
+        controller.store.apply_all(vec![
+            catalog(
+                vec![ProviderView {
+                    id: "local-llm".into(),
+                    name: "Fixture".into(),
+                    auth: vec!["no credentials needed".into()],
+                    status: ProviderStatus::Available,
+                    reason: None,
+                    variables: Vec::new(),
+                    models: 1,
+                }],
+                None,
+            ),
+            StoreUpdate::AgentSession(AgentSessionUpdate::Models {
+                provider: "local-llm".into(),
+                models: vec![ModelView {
+                    provider: "local-llm".into(),
+                    id: "scripted".into(),
+                    name: "Scripted".into(),
+                    reasoning: false,
+                    thinking: vec![ThinkingLevel::Off],
+                }],
+            }),
+        ]);
+        let execution = |state| {
+            controller.store.update(|s| {
+                let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+                if let Some(Load::Loaded(detail)) = s.details.get_mut(&id) {
+                    detail.summary.execution.state = state;
+                }
+                ((), Vec::new())
+            });
+        };
+        sink.intents.borrow_mut().clear();
+        execution(ExecutionState::Running);
+        assert_eq!(
+            controller.configure_session().unwrap_err(),
+            "Wait until the current turn has finished"
+        );
+        assert_eq!(
+            controller.compact_session().unwrap_err(),
+            "Wait until the current turn has finished"
+        );
+        assert!(controller.export_session().is_ok());
+        execution(ExecutionState::Cancelled);
+        assert!(controller.configure_session().is_ok());
+        assert_eq!(
+            controller.compact_session().unwrap_err(),
+            "Start or resume the agent first"
+        );
+        assert!(matches!(
+            sink.intents.borrow().as_slice(),
+            [
+                Intent::ExportSession { .. },
+                Intent::ConfigureSession { .. }
+            ]
+        ));
     }
 }
