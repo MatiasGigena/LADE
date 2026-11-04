@@ -17,7 +17,7 @@ use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
-use super::convert::{invalid, preview, rejection};
+use super::convert::{invalid, preview};
 use super::handlers::Pending;
 use super::{Flow, JobOutput, ReqCtx, Service, StartError};
 use crate::support::now_ms;
@@ -124,7 +124,7 @@ impl Service {
             e.kind == Kind::Extension && e.name == cmd.name && e.sha256.as_deref() == Some(&sha)
         });
         if !current {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::StaleReference,
                 SafeAction::Refresh,
                 "This extension changed since it was listed. Review it again.",
@@ -196,7 +196,7 @@ impl Service {
                     inventory,
                 }))
             }
-            Err(why) => Err(rejection(
+            Err(why) => Err(Rejection::new(
                 ErrorCode::PermissionDenied,
                 SafeAction::None,
                 &why,

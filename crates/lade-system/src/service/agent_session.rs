@@ -17,7 +17,8 @@ use lade_protocol::client::{
     SessionNavigateCommand, SessionState, SessionTree, UiClosed, UiRequest, UiRespondCommand,
 };
 use lade_protocol::types::{
-    Id, Model, SessionChangeReason, ThinkingLevel, TreeEntry, UiCloseReason, UiPrompt, WirePath,
+    Counter, Id, Model, SessionChangeReason, ThinkingLevel, TreeEntry, UiCloseReason, UiPrompt,
+    WirePath,
 };
 use lade_protocol::worker::{
     LoadStatus, LoadedKind, LoadedResource, ResourceSource, SessionCommand, WorkerBody,
@@ -29,8 +30,7 @@ use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
 use super::convert::{
-    conflict, counter, domain_rejection, durability, invalid, not_found, preview, rejection,
-    wire_id,
+    conflict, domain_rejection, durability, invalid, not_found, preview, wire_id,
 };
 use super::handlers::{Pending, sql};
 use super::resources::snapshot;
@@ -141,7 +141,7 @@ impl Service {
             _ => *state == ExecutionState::Idle,
         };
         if !ready || self.runtime.get(&oid).is_none_or(|rt| rt.control.is_none()) {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::ExecutionUnavailable,
                 SafeAction::None,
                 if state.is_live() {
@@ -175,7 +175,7 @@ impl Service {
         if !matches!(sent, Some(Ok(()))) {
             self.finish(
                 ctx,
-                Err(rejection(
+                Err(Rejection::new(
                     ErrorCode::ExecutionUnavailable,
                     SafeAction::None,
                     "The agent stopped unexpectedly. Resume it and try again.",
@@ -322,7 +322,7 @@ impl Service {
     ) {
         self.rt(oid).busy = None;
         match result
-            .map_err(|why| rejection(ErrorCode::DurabilityFailure, SafeAction::Refresh, &why))
+            .map_err(|why| Rejection::new(ErrorCode::DurabilityFailure, SafeAction::Refresh, &why))
         {
             Ok((resources, _)) => {
                 if let Err(rejection) = self.command_target(oid, Op::Reload) {
@@ -348,15 +348,15 @@ impl Service {
     ) -> Flow {
         let prepared = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;
-            let model = ModelRef::new(&cmd.model.provider, &cmd.model.id)
-                .map_err(|e| domain_rejection(&e))?;
+            let model =
+                ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(domain_rejection)?;
             let st = self.obj(oid)?;
             let session = st
                 .objective()
                 .execution()
                 .session()
                 .cloned()
-                .ok_or_else(|| domain_rejection(&lade_core::DomainError::ExecutionUnavailable))?;
+                .ok_or_else(|| domain_rejection(lade_core::DomainError::ExecutionUnavailable))?;
             let live = st.objective().execution().state().is_live();
             if live && session.model.provider() != model.provider() {
                 return Err(invalid(
@@ -405,7 +405,7 @@ impl Service {
         let mut st = self.obj(oid)?.clone();
         st.objective_mut()
             .select_model(model, Timestamp::from_unix_ms(now_ms()))
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
         let previous_model = self.objectives.insert(oid, st.clone());
         let previous = self.agent_sessions.thinking.insert(oid, thinking);
         let data = ReplyData::SessionConfigure(reply(self));
@@ -453,7 +453,7 @@ impl Service {
             });
         SessionState {
             objective_id: wire_id(oid.uuid()),
-            generation: counter(pi.as_ref().map_or(0, |p| p.generation)),
+            generation: Counter::new(pi.as_ref().map_or(0, |p| p.generation)),
             reason,
             model,
             thinking: pi
@@ -464,7 +464,7 @@ impl Service {
             session_id: session.as_ref().map(|s| wire_id(s.session_id.uuid())),
             association_revision: session
                 .as_ref()
-                .map(|s| counter(s.association_revision.value())),
+                .map(|s| Counter::new(s.association_revision.value())),
             pi_session_id: pi
                 .as_ref()
                 .map(|p| preview(&p.pi_session_id, 256))
@@ -483,14 +483,14 @@ impl Service {
         let live = self.live(oid);
         let current = live.pi.as_ref().map(|p| p.generation);
         let Some(open) = live.ui.get(&ui_id) else {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::NotFound,
                 SafeAction::None,
                 "This dialog was already answered, closed or replaced.",
             ));
         };
         if open.generation != cmd.generation.value() || current != Some(open.generation) {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::StaleExecution,
                 SafeAction::Refresh,
                 "This dialog belongs to an earlier session and can no longer be answered.",
@@ -507,7 +507,7 @@ impl Service {
             .as_mut()
             .map(|control| control.send(body));
         if !matches!(sent, Some(Ok(()))) {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::ExecutionUnavailable,
                 SafeAction::None,
                 "The agent stopped unexpectedly. Resume it and try again.",
@@ -532,7 +532,7 @@ impl Service {
                     open.push(UiRequest {
                         objective_id: wire_id(oid.uuid()),
                         ui_id: id,
-                        generation: counter(dialog.generation),
+                        generation: Counter::new(dialog.generation),
                         prompt: dialog.prompt.clone(),
                     });
                 }
@@ -784,7 +784,7 @@ impl Service {
                 ),
             })
         } else {
-            Err(rejection(
+            Err(Rejection::new(
                 ErrorCode::Conflict,
                 SafeAction::Refresh,
                 &format!("The Agent Session refused this: {message}"),
@@ -854,7 +854,7 @@ impl Service {
         if let Some(pending) = pending {
             self.finish(
                 pending.ctx,
-                Err(rejection(
+                Err(Rejection::new(
                     ErrorCode::Interrupted,
                     SafeAction::Refresh,
                     "The agent stopped before the session operation finished.",
@@ -882,7 +882,7 @@ impl Service {
             if let Some(pending) = self.live(oid).command.take() {
                 self.finish(
                     pending.ctx,
-                    Err(rejection(
+                    Err(Rejection::new(
                         ErrorCode::Interrupted,
                         SafeAction::Refresh,
                         "The session operation didn't finish in time.",
@@ -936,7 +936,7 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     }
     let unreadable = |e: std::io::Error| match e.kind() {
         ErrorKind::NotFound => not_found("session file"),
-        ErrorKind::PermissionDenied => rejection(
+        ErrorKind::PermissionDenied => Rejection::new(
             ErrorCode::PermissionDenied,
             SafeAction::None,
             "LADE is not allowed to read this session file.",

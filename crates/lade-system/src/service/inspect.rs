@@ -8,7 +8,7 @@ use lade_protocol::client::{
     FileReadQuery, Rejection, Reply, ReplyData, Request, SafeAction, SearchQuery, SearchResult,
     SearchResultKind, SearchResults, SearchScope, Side, TargetRef,
 };
-use lade_protocol::types::Digest;
+use lade_protocol::types::{Counter, Digest};
 use lade_protocol::{Framing, encode};
 
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore, MAX_ARTIFACT_PAGE};
@@ -16,7 +16,7 @@ use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::{self, CaptureRow};
 
 use super::convert::{
-    adapter_git, counter, invalid, not_found, parse_uuid, preview, rejection, repo_path, wire_git,
+    adapter_git, git_rejection, invalid, not_found, parse_uuid, preview, repo_path, wire_git,
     wire_id, wire_path,
 };
 use super::execution::wire_activity;
@@ -101,8 +101,8 @@ fn change_list(
         target: resolved.target.clone(),
         files: Vec::new(),
         truncated: false,
-        total_added: counter(files.iter().map(|f| f.added).sum()),
-        total_removed: counter(files.iter().map(|f| f.removed).sum()),
+        total_added: Counter::new(files.iter().map(|f| f.added).sum()),
+        total_removed: Counter::new(files.iter().map(|f| f.removed).sum()),
         capture_id: resolved.capture_id.map(|c| wire_id(c.uuid())),
         candidate_id: resolved.candidate_id.map(|c| wire_id(c.uuid())),
         notices: None,
@@ -130,8 +130,8 @@ fn change_list(
         let file = ChangedFile {
             path: wire_path(file.path.as_bytes()),
             status: wire_status(file.status),
-            added: counter(file.added),
-            removed: counter(file.removed),
+            added: Counter::new(file.added),
+            removed: Counter::new(file.removed),
             binary: file.binary,
             old_path: file
                 .old_path
@@ -199,9 +199,9 @@ fn file_page(
     };
     Ok(FileContent {
         artifact_digest: digest,
-        total_bytes: counter(total),
-        offset: counter(offset),
-        length: counter((end - start) as u64),
+        total_bytes: Counter::new(total),
+        offset: Counter::new(offset),
+        length: Counter::new((end - start) as u64),
         encoding: if binary {
             FileEncoding::Binary
         } else {
@@ -265,9 +265,9 @@ fn chunk_page(
     };
     Ok(FileContent {
         artifact_digest: Digest::parse(digest.to_hex()).map_err(|_| invalid("digest"))?,
-        total_bytes: counter(page.total_bytes),
-        offset: counter(page.offset),
-        length: counter(length as u64),
+        total_bytes: Counter::new(page.total_bytes),
+        offset: Counter::new(page.offset),
+        length: Counter::new(length as u64),
         encoding: if binary {
             FileEncoding::Binary
         } else {
@@ -324,10 +324,9 @@ fn read_diff(
     query: &DiffGetQuery,
 ) -> Result<ReplyData, Rejection> {
     let path = repo_path(&query.path)?;
-    let git_err = |e: git::GitError| super::convert::git_rejection(&e);
     let files = repo
         .diff_numstat(&adapter_git(&resolved.old), &adapter_git(&resolved.new))
-        .map_err(git_err)?;
+        .map_err(git_rejection)?;
     let old_path = files
         .iter()
         .find(|f| f.path == path)
@@ -339,7 +338,7 @@ fn read_diff(
             &path,
             old_path.as_ref(),
         )
-        .map_err(git_err)?;
+        .map_err(git_rejection)?;
     let side_digest = |tree: &GitId, p: &git::RepoPath| -> Result<Option<Digest>, Rejection> {
         match jobs::read_whole(repo, tree, p) {
             Ok(Some(bytes)) => retain(artifacts, &bytes).map(Some),
@@ -374,10 +373,10 @@ fn read_diff(
                     LineKind::Del => DiffLineKind::Del,
                 },
                 text,
-                old_no: line.old_no.map(counter),
-                new_no: line.new_no.map(counter),
-                old_byte_start: line.old_byte_start.map(counter),
-                new_byte_start: line.new_byte_start.map(counter),
+                old_no: line.old_no.map(Counter::new),
+                new_no: line.new_no.map(Counter::new),
+                old_byte_start: line.old_byte_start.map(Counter::new),
+                new_byte_start: line.new_byte_start.map(Counter::new),
             });
         }
         truncated |= hunk.lines.len() > 1024;
@@ -395,10 +394,10 @@ fn read_diff(
 
 fn wire_hunk(hunk: &git::Hunk, lines: Vec<DiffLine>) -> DiffHunk {
     DiffHunk {
-        old_start: counter(hunk.old_start),
-        old_lines: counter(hunk.old_lines),
-        new_start: counter(hunk.new_start),
-        new_lines: counter(hunk.new_lines),
+        old_start: Counter::new(hunk.old_start),
+        old_lines: Counter::new(hunk.old_lines),
+        new_start: Counter::new(hunk.new_start),
+        new_lines: Counter::new(hunk.new_lines),
         lines,
     }
 }
@@ -410,13 +409,12 @@ fn search_tree(
     label: &str,
 ) -> Result<ReplyData, Rejection> {
     let limit = query.limit.value() as usize;
-    let git_err = |e: git::GitError| super::convert::git_rejection(&e);
     let (results, truncated) = match query.scope {
         SearchScope::Files => {
             let needle = query.query.as_bytes().to_ascii_lowercase();
             let entries = repo
                 .ls_tree(&adapter_git(tree), None, true)
-                .map_err(git_err)?;
+                .map_err(git_rejection)?;
             let mut matched: Vec<SearchResult> = entries
                 .iter()
                 .filter(|e| e.kind == ObjectKind::Blob)
@@ -456,7 +454,7 @@ fn search_tree(
                         max_results: limit,
                     },
                 )
-                .map_err(git_err)?;
+                .map_err(git_rejection)?;
             let results = found
                 .matches
                 .iter()
@@ -466,10 +464,10 @@ fn search_tree(
                     preview: preview(&String::from_utf8_lossy(&m.preview), 1024),
                     objective_id: query.objective_id.clone(),
                     path: Some(wire_path(m.path.as_bytes())),
-                    line: Some(counter(m.line)),
-                    byte_start: m.byte_start.map(counter),
-                    column: Some(counter(m.column)),
-                    byte_end: m.byte_end.map(counter),
+                    line: Some(Counter::new(m.line)),
+                    byte_start: m.byte_start.map(Counter::new),
+                    column: Some(Counter::new(m.column)),
+                    byte_end: m.byte_end.map(Counter::new),
                 })
                 .collect();
             (results, found.truncated)
@@ -680,7 +678,7 @@ impl Service {
                 let new = adapter_git(&resolved.new);
                 let files = repo
                     .diff_numstat(&adapter_git(&resolved.old), &new)
-                    .map_err(|e| super::convert::git_rejection(&e))?;
+                    .map_err(git_rejection)?;
                 let filtered = jobs::filtered_paths(&repo, &new, &files)?;
                 let notices = content_notices(&[], &filtered);
                 Ok(ReplyData::ChangesList(change_list(
@@ -864,7 +862,7 @@ impl Service {
                         Framing::Client,
                     )
                     .map_err(|_| {
-                        rejection(
+                        Rejection::new(
                             ErrorCode::LimitReached,
                             SafeAction::None,
                             "This activity item exceeds the reply limit and cannot be shown.",

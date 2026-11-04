@@ -1,5 +1,15 @@
+//! Work that runs off the service thread: Git capture, freeze, refresh, verification,
+//! launch, cleanup and file reads. Each entry point takes an owned input and returns a value the
+//! service applies on its own thread.
+//!
+//! Most entry points return `Result<_, Rejection>` because a failure simply rejects the
+//! request. `verify` and `launch` instead report failure inside `VerifyOut` and `LaunchOut`:
+//! their outcome is recorded either way (a failed check is a verification result, and a
+//! launch that provisioned a worktree must persist it even if the worker did not start).
+
 use std::collections::VecDeque;
 use std::ffi::OsString;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -16,9 +26,7 @@ use lade_protocol::types::WirePath;
 use sha2::{Digest as _, Sha256};
 
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore};
-use crate::adapters::git::{
-    self, ChangedFile, CommitSpec, GitError, MergeOutcome, Repository, SquashOutcome, SquashRequest,
-};
+use crate::adapters::git::{self, ChangedFile, CommitSpec, GitError, MergeOutcome, Repository};
 use crate::adapters::sandbox::{
     Limits, SandboxCgroups, SandboxTools, VERIFICATION_OUTPUT_LIMIT, VERIFICATION_TIMEOUT,
     VerificationLaunch, run_bounded_with, verification_spec,
@@ -84,17 +92,13 @@ impl Pool {
     }
 }
 
-fn git_err(error: &GitError) -> Rejection {
-    git_rejection(error)
-}
-
 pub fn open_repository(path: &Path) -> Result<Repository, GitError> {
     Repository::open(path).map(|repo| repo.with_excludes_file(git::user_excludes_file()))
 }
 
 pub fn target_commit(repo: &Repository, branch: &str) -> Result<GitId, Rejection> {
     repo.resolve_ref(&format!("refs/heads/{branch}"))
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
         .map(|id| core_git(&id))
         .ok_or_else(|| not_found("integration target branch"))
 }
@@ -113,7 +117,7 @@ pub fn read_whole(
     path: &git::RepoPath,
 ) -> Result<Option<Vec<u8>>, Rejection> {
     let tree = adapter_git(tree);
-    let Some(entry) = repo.tree_entry(&tree, path).map_err(|e| git_err(&e))? else {
+    let Some(entry) = repo.tree_entry(&tree, path).map_err(git_rejection)? else {
         return Ok(None);
     };
     if entry.kind != git::ObjectKind::Blob {
@@ -125,7 +129,7 @@ pub fn read_whole(
     }
     match repo
         .read_blob_capped(&entry.id, MAX_WHOLE_FILE)
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
     {
         Some(bytes) => Ok(Some(bytes)),
         None => Err(Rejection::new(
@@ -156,7 +160,7 @@ pub fn read_file_bytes(
 ) -> Result<Option<FileBytes>, Rejection> {
     let Some(entry) = repo
         .tree_entry(&adapter_git(tree), path)
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
     else {
         return Ok(None);
     };
@@ -193,7 +197,7 @@ impl LargeBlobs {
         }
         let digest = repo
             .with_blob_reader(id, |reader| artifacts.put_reader(reader))
-            .map_err(|e| git_err(&e))?
+            .map_err(git_rejection)?
             .map_err(|_| super::convert::durability("content could not be retained"))?;
         let mut memory = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         memory.retain(|(blob, _)| blob != id);
@@ -296,13 +300,20 @@ pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> 
     out.into_bytes()
 }
 
+/// The newest registered capture, reused when the worktree and target have not moved.
+pub struct LatestCapture {
+    pub id: CaptureId,
+    pub tree: GitId,
+    pub target: GitId,
+}
+
 pub struct CaptureInput {
     pub repo: Repository,
     pub worktree: PathBuf,
     pub scratch: PathBuf,
     pub target_branch: String,
     pub capture_id: CaptureId,
-    pub latest: Option<(CaptureId, GitId, GitId)>,
+    pub latest: Option<LatestCapture>,
     pub drafts: Vec<(DraftId, Reference)>,
 }
 
@@ -320,30 +331,24 @@ pub struct CaptureOut {
 
 pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
     let repo = &input.repo;
-    let worktree = repo
-        .open_worktree(&input.worktree)
-        .map_err(|e| git_err(&e))?;
+    let worktree = repo.open_worktree(&input.worktree).map_err(git_rejection)?;
     let captured = repo
         .capture_working_tree(&worktree, &input.scratch)
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     let tree = core_git(&captured.tree);
     let target = target_commit(repo, &input.target_branch)?;
     let files = repo
         .diff_numstat(&adapter_git(&target), &captured.tree)
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     let filtered = filtered_paths(repo, &captured.tree, &files)?;
     let (capture_id, reused) = match &input.latest {
-        Some((id, latest_tree, latest_target))
-            if *latest_tree == tree && *latest_target == target =>
-        {
-            (*id, true)
-        }
+        Some(latest) if latest.tree == tree && latest.target == target => (latest.id, true),
         _ => {
             repo.retain(
                 &format!("capture-{}", input.capture_id),
                 &adapter_git(&tree),
             )
-            .map_err(|e| git_err(&e))?;
+            .map_err(git_rejection)?;
             crate::fault::point("capture.retained");
             (input.capture_id, false)
         }
@@ -371,7 +376,7 @@ pub fn filtered_paths(
     files: &[ChangedFile],
 ) -> Result<Vec<git::RepoPath>, Rejection> {
     let paths: Vec<&git::RepoPath> = files.iter().map(|f| &f.path).collect();
-    repo.filtered_paths(tree, &paths).map_err(|e| git_err(&e))
+    repo.filtered_paths(tree, &paths).map_err(git_rejection)
 }
 
 pub struct FreezeInput {
@@ -398,12 +403,10 @@ pub struct FreezeOut {
 
 pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let repo = &input.repo;
-    let worktree = repo
-        .open_worktree(&input.worktree)
-        .map_err(|e| git_err(&e))?;
+    let worktree = repo.open_worktree(&input.worktree).map_err(git_rejection)?;
     let captured = repo
         .capture_working_tree(&worktree, &input.scratch)
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
         .tree;
     let target = target_commit(repo, &input.target_branch)?;
     let commit = repo
@@ -413,13 +416,13 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
             message: input.message.clone(),
             timestamp: None,
         })
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     let tree = if input.start_commit == target {
         captured.clone()
     } else {
         match repo
             .merge_tree(&adapter_git(&target), &commit)
-            .map_err(|e| git_err(&e))?
+            .map_err(git_rejection)?
         {
             MergeOutcome::Clean { tree } => tree,
             MergeOutcome::Conflict { .. } => {
@@ -431,10 +434,10 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     };
     let files = repo
         .diff_numstat(&adapter_git(&target), &tree)
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     if files.is_empty() {
         return Err(super::convert::domain_rejection(
-            &lade_core::DomainError::InvalidLifecycle(super::project::NO_CHANGES_TO_FREEZE),
+            lade_core::DomainError::InvalidLifecycle(super::project::NO_CHANGES_TO_FREEZE),
         ));
     }
     let digest = input
@@ -442,12 +445,12 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
         .put(&manifest(&target, &core_git(&tree), &files))
         .map_err(|_| super::convert::durability("manifest artifact could not be stored"))?;
     let branch_ref = format!("refs/heads/{}", input.git_branch);
-    let old = repo.resolve_ref(&branch_ref).map_err(|e| git_err(&e))?;
+    let old = repo.resolve_ref(&branch_ref).map_err(git_rejection)?;
     repo.update_ref_cas(&branch_ref, &commit, old.as_ref())
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     crate::fault::point("freeze.branch_moved");
     repo.retain(&input.candidate_ref, &commit)
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     if let Err(e) = repo.sync_worktree_index(&worktree, &input.git_branch, &commit) {
         eprintln!(
             "laded: worktree index not refreshed after freeze: {}",
@@ -456,11 +459,11 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     }
     if tree != captured {
         repo.retain(&format!("{}-tree", input.candidate_ref), &tree)
-            .map_err(|e| git_err(&e))?;
+            .map_err(git_rejection)?;
     }
     let again = repo
         .capture_working_tree(&worktree, &input.scratch)
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
         .tree;
     Ok(FreezeOut {
         commit: core_git(&commit),
@@ -498,13 +501,13 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
     let target = target_commit(repo, &input.target_branch)?;
     match repo
         .merge_tree(&adapter_git(&target), &adapter_git(&input.candidate_commit))
-        .map_err(|e| git_err(&e))?
+        .map_err(git_rejection)?
     {
         MergeOutcome::Conflict { .. } => Ok(RefreshOut::Conflict { target }),
         MergeOutcome::Clean { tree } => {
             let files = repo
                 .diff_numstat(&adapter_git(&target), &tree)
-                .map_err(|e| git_err(&e))?;
+                .map_err(git_rejection)?;
             if files.is_empty() {
                 return Err(conflict(
                     "the moved target already contains this change set; complete the objective instead",
@@ -515,7 +518,7 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
                 .put(&manifest(&target, &core_git(&tree), &files))
                 .map_err(|_| super::convert::durability("manifest artifact could not be stored"))?;
             repo.retain(&input.retain_ref, &tree)
-                .map_err(|e| git_err(&e))?;
+                .map_err(git_rejection)?;
             Ok(RefreshOut::Rebuilt {
                 tree: core_git(&tree),
                 target,
@@ -686,10 +689,6 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
     })
 }
 
-pub fn integrate(repo: &Repository, request: &SquashRequest) -> Result<SquashOutcome, GitError> {
-    repo.integrate_squash(request)
-}
-
 pub fn change_set_empty(
     repo: &Repository,
     worktree: Option<&Path>,
@@ -700,16 +699,16 @@ pub fn change_set_empty(
     let target = target_commit(repo, target_branch)?;
     let tree = match worktree {
         Some(path) => {
-            let wt = repo.open_worktree(path).map_err(|e| git_err(&e))?;
+            let wt = repo.open_worktree(path).map_err(git_rejection)?;
             repo.capture_working_tree(&wt, scratch)
-                .map_err(|e| git_err(&e))?
+                .map_err(git_rejection)?
                 .tree
         }
         None => adapter_git(start_commit),
     };
     let files = repo
         .diff_numstat(&adapter_git(&target), &tree)
-        .map_err(|e| git_err(&e))?;
+        .map_err(git_rejection)?;
     Ok(files.is_empty())
 }
 
@@ -727,15 +726,15 @@ pub fn cleanup(
                 if !force && let Some(branch) = git_branch {
                     let head = repo
                         .resolve_ref(&format!("refs/heads/{branch}"))
-                        .map_err(|e| git_err(&e))?;
+                        .map_err(git_rejection)?;
                     let tree = repo
                         .capture_working_tree(&wt, scratch)
-                        .map_err(|e| git_err(&e))?
+                        .map_err(git_rejection)?
                         .tree;
                     if let Some(head) = head {
                         force = repo
                             .diff_numstat(&head, &tree)
-                            .map_err(|e| git_err(&e))?
+                            .map_err(git_rejection)?
                             .is_empty();
                     }
                 }
@@ -746,20 +745,20 @@ pub fn cleanup(
                             "worktree has changes not in any candidate; confirm data loss to remove it",
                         ));
                     }
-                    Err(e) => return Err(git_err(&e)),
+                    Err(e) => return Err(git_rejection(e)),
                 }
             }
             Err(GitError::WorktreeNotFound) => {
                 let _ = fs::remove_dir_all(path);
             }
-            Err(e) => return Err(git_err(&e)),
+            Err(e) => return Err(git_rejection(e)),
         }
     }
     if let Some(branch) = git_branch {
         let refname = format!("refs/heads/{branch}");
-        if let Some(current) = repo.resolve_ref(&refname).map_err(|e| git_err(&e))? {
+        if let Some(current) = repo.resolve_ref(&refname).map_err(git_rejection)? {
             repo.delete_ref_cas(&refname, &current)
-                .map_err(|e| git_err(&e))?;
+                .map_err(git_rejection)?;
         }
     }
     Ok(())
@@ -767,9 +766,9 @@ pub fn cleanup(
 
 pub fn delete_refs(repo: &Repository, refs: &[String]) -> Result<(), Rejection> {
     for refname in refs {
-        if let Some(current) = repo.resolve_ref(refname).map_err(|e| git_err(&e))? {
+        if let Some(current) = repo.resolve_ref(refname).map_err(git_rejection)? {
             repo.delete_ref_cas(refname, &current)
-                .map_err(|e| git_err(&e))?;
+                .map_err(git_rejection)?;
         }
     }
     Ok(())
@@ -780,28 +779,60 @@ pub struct LaunchInput {
     pub launcher: Arc<dyn WorkerLauncher>,
     pub events: mpsc::SyncSender<SupervisorEvent>,
     pub request: LaunchRequest,
-    pub provision: Option<(String, GitId)>,
-    pub profile: Option<(PathBuf, Vec<(String, String)>)>,
+    /// Set when the Objective has no worktree yet: create one on a fresh branch.
+    pub provision: Option<Provision>,
+    pub profile: Option<ProfileSnapshot>,
+}
+
+pub struct Provision {
+    /// The branch name to start from; a numbered suffix is added if it is taken.
+    pub base_branch: String,
+    pub start: GitId,
+}
+
+/// The LADE profile to snapshot into the session, holding only the approved extensions.
+pub struct ProfileSnapshot {
+    pub source: PathBuf,
+    pub approved: Vec<(String, String)>,
 }
 
 pub struct LaunchOut {
     pub provisioned_branch: Option<String>,
-    pub result: Result<Box<dyn WorkerControl>, String>,
+    pub result: Result<Box<dyn WorkerControl>, LaunchFailure>,
 }
 
-fn launch_reason(error: &LaunchError) -> String {
-    match error {
-        LaunchError::SandboxUnavailable(_) => "sandbox_unavailable".into(),
-        LaunchError::ProviderUnavailable(_) => "provider_unavailable".into(),
-        LaunchError::Io(e) => format!("launch_io: {}", e.kind()),
+#[derive(Debug)]
+pub enum LaunchFailure {
+    Provision(&'static str),
+    WorktreeOccupied,
+    WorktreeMissing,
+    SessionDir(io::ErrorKind),
+    ProfileSnapshot(io::ErrorKind),
+    Worker(LaunchError),
+}
+
+impl fmt::Display for LaunchFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provision(code) => write!(f, "provision: {code}"),
+            Self::WorktreeOccupied => f.write_str("worktree_path_occupied"),
+            Self::WorktreeMissing => f.write_str("worktree_missing"),
+            Self::SessionDir(kind) => write!(f, "session_dir: {kind}"),
+            Self::ProfileSnapshot(kind) => write!(f, "profile_snapshot: {kind}"),
+            Self::Worker(LaunchError::SandboxUnavailable(_)) => f.write_str("sandbox_unavailable"),
+            Self::Worker(LaunchError::ProviderUnavailable(_)) => {
+                f.write_str("provider_unavailable")
+            }
+            Self::Worker(LaunchError::Io(e)) => write!(f, "launch_io: {}", e.kind()),
+        }
     }
 }
 
 pub fn launch(input: LaunchInput) -> LaunchOut {
     let mut provisioned_branch = None;
     let request = input.request;
-    if let Some((base, start)) = &input.provision {
-        match provision(&input.repo, base, start, &request.worktree) {
+    if let Some(wanted) = &input.provision {
+        match provision(&input.repo, wanted, &request.worktree) {
             Ok(branch) => {
                 crate::fault::point("launch.provisioned");
                 provisioned_branch = Some(branch);
@@ -817,19 +848,19 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     if !request.worktree.is_dir() {
         return LaunchOut {
             provisioned_branch,
-            result: Err("worktree_missing".into()),
+            result: Err(LaunchFailure::WorktreeMissing),
         };
     }
     if let Err(e) = ensure_private_dir(&request.session_dir) {
         return LaunchOut {
             provisioned_branch,
-            result: Err(format!("session_dir: {}", e.kind())),
+            result: Err(LaunchFailure::SessionDir(e.kind())),
         };
     }
     let mut request = request;
-    if let Some((profile, approved)) = &input.profile {
+    if let Some(profile) = &input.profile {
         let dest = request.session_dir.join("profile");
-        match super::resources::snapshot(profile, &dest, approved) {
+        match super::resources::snapshot(&profile.source, &dest, &profile.approved) {
             Ok(snapshot) => {
                 if let lade_protocol::worker::WorkerBody::Start { resources, .. } =
                     &mut request.start
@@ -840,7 +871,7 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
             Err(e) => {
                 return LaunchOut {
                     provisioned_branch,
-                    result: Err(format!("profile_snapshot: {}", e.kind())),
+                    result: Err(LaunchFailure::ProfileSnapshot(e.kind())),
                 };
             }
         }
@@ -848,28 +879,28 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     let result = input
         .launcher
         .launch(request, input.events)
-        .map_err(|e| launch_reason(&e));
+        .map_err(LaunchFailure::Worker);
     LaunchOut {
         provisioned_branch,
         result,
     }
 }
 
-fn provision(repo: &Repository, base: &str, start: &GitId, path: &Path) -> Result<String, String> {
+fn provision(repo: &Repository, wanted: &Provision, path: &Path) -> Result<String, LaunchFailure> {
+    let (base, start) = (wanted.base_branch.as_str(), &wanted.start);
     if path.exists() {
-        return adopt_provisioned(repo, base, start, path)
-            .ok_or_else(|| "worktree_path_occupied".into());
+        return adopt_provisioned(repo, base, start, path).ok_or(LaunchFailure::WorktreeOccupied);
     }
     let mut branch = base.to_string();
     for attempt in 2..=32 {
         match repo.resolve_ref(&format!("refs/heads/{branch}")) {
             Ok(None) => break,
             Ok(Some(_)) => branch = format!("{base}-{attempt}"),
-            Err(e) => return Err(format!("provision: {}", e.code())),
+            Err(e) => return Err(LaunchFailure::Provision(e.code())),
         }
     }
     repo.worktree_add(&branch, &adapter_git(start), path)
-        .map_err(|e| format!("provision: {}", e.code()))?;
+        .map_err(|e| LaunchFailure::Provision(e.code()))?;
     Ok(branch)
 }
 

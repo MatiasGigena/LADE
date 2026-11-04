@@ -30,7 +30,7 @@ use lade_protocol::client::{
     Reply, ReplyData, ReplyResult, RequestFrame, RequestName, ReviewIntegrateCommand, SafeAction,
     ServiceNotice, Settings,
 };
-use lade_protocol::types::Id;
+use lade_protocol::types::{Counter, Id};
 use lade_protocol::{Framing, encode};
 use rusqlite::Transaction;
 
@@ -584,7 +584,7 @@ impl Service {
     fn encode_event_frame(&self, sequence: u64, event: Event) -> Option<Vec<u8>> {
         let frame = ClientEnvelope::new(ClientBody::Event(EventFrame {
             service_epoch: self.epoch.clone(),
-            sequence: convert::counter(sequence),
+            sequence: Counter::new(sequence),
             event,
         }));
         encode(&frame, Framing::Client).ok()

@@ -1,25 +1,20 @@
 use lade_core::domain::execution::ExecutionState;
-use lade_core::domain::feedback::{AcceptedInput, DeliveryState, Draft, DraftState};
+use lade_core::domain::feedback::DeliveryState;
 use lade_core::domain::ids::{GitId, WorkspaceId};
 use lade_core::domain::objectives::{
     AttentionFacts, Badge as CoreBadge, Lifecycle, derive_attention,
 };
-use lade_core::domain::review::{
-    Approval, ApprovalState, Candidate, CandidateStatus, Evidence, Verification,
-    VerificationOutcome,
-};
+use lade_core::domain::review::{CandidateStatus, Evidence, VerificationOutcome};
 use lade_protocol::client::{
-    self as wire, ActionName, ApprovalSummary, AvailableAction, Badge, CandidateSummary,
-    ChangeCounts, DeliveryState as WireDelivery, DraftState as WireDraftState, Event, InputSummary,
-    ObjectiveDetail, ObjectiveSummary, SessionInfo, TargetRef, VerificationState,
-    VerificationSummary, Workspace,
+    self as wire, ActionName, AvailableAction, Badge, ChangeCounts, Event, ObjectiveDetail,
+    ObjectiveSummary, SessionInfo, TargetRef, Workspace,
 };
-use lade_protocol::types::{DeliveryMode, Model};
+use lade_protocol::types::{Counter, Model};
 
 use super::Service;
 use super::convert::{
-    counter, preview, wire_execution_state, wire_git, wire_id, wire_lifecycle, wire_path,
-    wire_reference,
+    preview, wire_approval, wire_candidate, wire_execution_state, wire_git, wire_id,
+    wire_lifecycle, wire_path, wire_verification,
 };
 use super::state::{ObjState, WsState};
 use crate::support::wire_ts;
@@ -41,24 +36,6 @@ const CLOSED: &str = "This Objective is closed.";
 const STOP_AGENT_FIRST: &str = "Stop the agent first.";
 const CHECK_RUNNING: &str = "Wait for the running check to finish.";
 const NO_CURRENT_CANDIDATE: &str = "There is no current candidate.";
-
-fn blocked_reason(reason: lade_core::domain::feedback::BlockedReason) -> &'static str {
-    use lade_core::domain::feedback::BlockedReason;
-    match reason {
-        BlockedReason::ExecutionUnavailable => {
-            "The agent isn't running. Resume it to deliver this."
-        }
-        BlockedReason::StaleAssociation => {
-            "The Agent Session was replaced, so this was not delivered to it."
-        }
-        BlockedReason::StaleReference => {
-            "The code this refers to changed, so it was not delivered."
-        }
-        BlockedReason::InvalidLifecycle => {
-            "The Objective is no longer in progress, so this was not delivered."
-        }
-    }
-}
 
 fn input_blocker(
     lifecycle: Lifecycle,
@@ -86,134 +63,6 @@ pub(crate) fn terminal_blocker(st: &ObjState) -> Option<&'static str> {
         Some(NO_WORKTREE_YET)
     } else {
         None
-    }
-}
-
-pub fn wire_mode(mode: lade_core::domain::feedback::InputMode) -> DeliveryMode {
-    use lade_core::domain::feedback::InputMode;
-    match mode {
-        InputMode::Prompt => DeliveryMode::Prompt,
-        InputMode::Steer => DeliveryMode::Steer,
-        InputMode::FollowUp => DeliveryMode::FollowUp,
-    }
-}
-
-pub fn core_mode(mode: DeliveryMode) -> lade_core::domain::feedback::InputMode {
-    use lade_core::domain::feedback::InputMode;
-    match mode {
-        DeliveryMode::Prompt => InputMode::Prompt,
-        DeliveryMode::Steer => InputMode::Steer,
-        DeliveryMode::FollowUp => InputMode::FollowUp,
-    }
-}
-
-pub fn wire_input(input: &AcceptedInput) -> InputSummary {
-    let (delivery, blocked_reason) = match input.delivery {
-        DeliveryState::Queued => (WireDelivery::Queued, None),
-        DeliveryState::Dispatched { .. } => (WireDelivery::Dispatched, None),
-        DeliveryState::Received { .. } => (WireDelivery::Received, None),
-        DeliveryState::Uncertain { .. } => (WireDelivery::Uncertain, None),
-        DeliveryState::Blocked { reason } => (
-            WireDelivery::Blocked,
-            Some(blocked_reason(reason).to_string()),
-        ),
-    };
-    InputSummary {
-        input_id: wire_id(input.id.uuid()),
-        objective_id: wire_id(input.objective_id.uuid()),
-        operation_id: wire_id(input.operation_id.uuid()),
-        mode: wire_mode(input.mode),
-        text_preview: preview(&input.rendered_text, 1024),
-        accepted_at: wire_ts(input.accepted_at.unix_ms()),
-        delivery,
-        blocked_reason,
-    }
-}
-
-pub fn wire_draft(st: &ObjState, draft: &Draft) -> wire::Draft {
-    let record = draft.record();
-    let (state, input_id) = match record.state {
-        DraftState::Unsent => (WireDraftState::Unsent, None),
-        DraftState::Submitted { input_id } => {
-            (WireDraftState::Submitted, Some(wire_id(input_id.uuid())))
-        }
-    };
-    wire::Draft {
-        draft_id: wire_id(record.id.uuid()),
-        objective_id: wire_id(record.objective_id.uuid()),
-        destination_session_id: wire_id(record.destination_session_id.uuid()),
-        reference: wire_reference(&record.reference),
-        body: record.body.clone(),
-        revision: counter(record.revision.value()),
-        state,
-        stale: draft.is_unsent() && st.draft_stale.get(&record.id).copied().unwrap_or(false),
-        input_id,
-    }
-}
-
-pub fn wire_candidate(candidate: &Candidate) -> CandidateSummary {
-    CandidateSummary {
-        candidate_id: wire_id(candidate.id.uuid()),
-        ordinal: counter(u64::from(candidate.ordinal)),
-        commit: wire_git(&candidate.commit),
-        base_target_commit: wire_git(&candidate.base_target_commit),
-        status: match candidate.status {
-            CandidateStatus::Current => wire::CandidateStatus::Current,
-            CandidateStatus::Historical => wire::CandidateStatus::Historical,
-            CandidateStatus::Invalidated => wire::CandidateStatus::Invalidated,
-        },
-        files: counter(u64::from(candidate.changes.files)),
-        added: counter(candidate.changes.added),
-        removed: counter(candidate.changes.removed),
-        created_at: wire_ts(candidate.created_at.unix_ms()),
-    }
-}
-
-pub fn wire_verification(st: &ObjState, verification: &Verification) -> VerificationSummary {
-    super::detail_budget::budget_verification(VerificationSummary {
-        verification_id: wire_id(verification.id.uuid()),
-        objective_id: wire_id(st.objective().id().uuid()),
-        candidate_id: wire_id(verification.candidate_id.uuid()),
-        command: verification
-            .argv
-            .iter()
-            .take(256)
-            .map(|a| preview(a, 4096))
-            .collect(),
-        state: match verification.outcome {
-            VerificationOutcome::Running => VerificationState::Running,
-            VerificationOutcome::Passed => VerificationState::Passed,
-            VerificationOutcome::Failed => VerificationState::Failed,
-            VerificationOutcome::Interrupted => VerificationState::Interrupted,
-            VerificationOutcome::Error => VerificationState::Error,
-        },
-        started_at: wire_ts(verification.started_at.unix_ms()),
-        output_tail: st.tails.get(&verification.id).cloned().unwrap_or_default(),
-        truncated: verification.truncated,
-        provenance: wire::Provenance::ServiceObserved,
-        exit_code: verification
-            .exit_code
-            .and_then(|c| u64::try_from(c).ok())
-            .map(counter),
-        ended_at: verification.ended_at.map(|t| wire_ts(t.unix_ms())),
-    })
-}
-
-pub fn wire_approval(approval: &Approval) -> ApprovalSummary {
-    ApprovalSummary {
-        approval_id: wire_id(approval.id.uuid()),
-        candidate_id: wire_id(approval.candidate_id.uuid()),
-        target_commit: wire_git(&approval.target_commit),
-        state: match approval.state {
-            ApprovalState::Valid => wire::ApprovalState::Valid,
-            ApprovalState::Consumed => wire::ApprovalState::Consumed,
-            ApprovalState::Invalidated { .. } => wire::ApprovalState::Invalidated,
-        },
-        override_reason: approval
-            .override_reason
-            .as_ref()
-            .map(|r| preview(r, 2048))
-            .filter(|r| !r.is_empty()),
     }
 }
 
@@ -332,7 +181,7 @@ impl Service {
             lifecycle: wire_lifecycle(record.lifecycle),
             execution: wire::Execution {
                 state,
-                generation: counter(record.execution.generation().value()),
+                generation: Counter::new(record.execution.generation().value()),
                 reason,
             },
             attention: match view.attention {
@@ -348,7 +197,7 @@ impl Service {
             },
             badges,
             updated_at: wire_ts(record.updated_at.unix_ms()),
-            revision: counter(record.revision.value()),
+            revision: Counter::new(record.revision.value()),
         }
     }
 
@@ -367,8 +216,8 @@ impl Service {
         let review = &st.review;
         let session = record.execution.session().map(|s| SessionInfo {
             session_id: wire_id(s.session_id.uuid()),
-            association_revision: counter(s.association_revision.value()),
-            execution_generation: counter(record.execution.generation().value()),
+            association_revision: Counter::new(s.association_revision.value()),
+            execution_generation: Counter::new(record.execution.generation().value()),
             model: Model {
                 provider: preview(s.model.provider(), 128),
                 id: preview(s.model.id(), 256),
@@ -416,7 +265,7 @@ impl Service {
                 constraints: record.intent.constraints().to_string(),
                 acceptance: record.intent.acceptance().to_string(),
             },
-            intent_revision: counter(record.intent_revision.value()),
+            intent_revision: Counter::new(record.intent_revision.value()),
             integration_target: target_ref,
             start_commit: wire_git(&record.start_commit),
             branch: st
@@ -427,11 +276,11 @@ impl Service {
             candidates,
             verifications,
             change_counts: ChangeCounts {
-                files: counter(u64::from(counts.files)),
-                added: counter(counts.added),
-                removed: counter(counts.removed),
+                files: Counter::new(u64::from(counts.files)),
+                added: Counter::new(counts.added),
+                removed: Counter::new(counts.removed),
             },
-            unsent_drafts: counter(st.unsent_drafts() as u64),
+            unsent_drafts: Counter::new(st.unsent_drafts() as u64),
             available_actions: self.actions(st, target),
             session,
             approval,

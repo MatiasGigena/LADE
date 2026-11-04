@@ -4,7 +4,6 @@ use lade_core::domain::ids::ObjectiveId;
 use lade_protocol::client::{ErrorCode, NoticeLevel, Rejection, SafeAction};
 
 use super::Service;
-use super::convert::rejection;
 
 const MIB: u64 = 1 << 20;
 
@@ -96,7 +95,7 @@ impl Service {
     }
 
     pub(crate) fn quota_rejection(detail: String) -> Rejection {
-        rejection(ErrorCode::LimitReached, SafeAction::Refresh, &detail)
+        Rejection::new(ErrorCode::LimitReached, SafeAction::Refresh, &detail)
     }
 
     pub(crate) fn check_free_space(&mut self) {

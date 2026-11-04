@@ -9,17 +9,17 @@ use lade_protocol::client::{
     ActivityAppended, ActivityDelta, ActivityItem, ErrorCode, Event, ExecutionStartCommand,
     NoticeLevel, Rejection, ReplyData, SafeAction,
 };
-use lade_protocol::types::{ActivityRole, Id, Model, truncate_utf8};
+use lade_protocol::types::{ActivityRole, Counter, Id, Model, truncate_utf8};
 use lade_protocol::worker::{MAX_ITEM_TEXT_BYTES, TurnState, WorkerBody};
 
 use crate::storage::{self, ActivityRow};
 use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
 use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerEvent};
 
-use super::convert::{counter, domain_rejection, parse_uuid, preview, rejection, wire_id};
+use super::convert::wire_input;
+use super::convert::{domain_rejection, parse_uuid, preview, wire_id};
 use super::handlers::{CapturePurpose, Pending};
-use super::jobs::{self, LaunchInput};
-use super::project::wire_input;
+use super::jobs::{self, LaunchInput, ProfileSnapshot, Provision};
 use super::{JobOutput, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms, wire_ts};
 
@@ -87,7 +87,7 @@ fn parse_role(code: &str) -> ActivityRole {
 pub(crate) fn wire_activity(row: &ActivityRow) -> Option<ActivityItem> {
     Some(ActivityItem {
         item_id: Id::parse(row.item_id.clone()).ok()?,
-        seq: counter(row.seq),
+        seq: Counter::new(row.seq),
         at: wire_ts(row.at),
         role: parse_role(&row.role),
         title: preview(&row.title, 1024),
@@ -106,15 +106,14 @@ impl Service {
     ) -> Result<ReplyData, Rejection> {
         let oid = self.objective_id(&cmd.objective_id)?;
         self.check_idle(oid)?;
-        let model =
-            ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(|e| domain_rejection(&e))?;
+        let model = ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(domain_rejection)?;
         let mut st = self.obj(oid)?.clone();
         self.ws_of(&st)?;
         let session = SessionId::new(new_uuid());
         let generation = st
             .objective_mut()
             .start_execution(session, model, ts_now())
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
             return Err(Self::quota_rejection(why));
         }
@@ -140,7 +139,7 @@ impl Service {
 
     pub(crate) fn preflight(&self, provider: &str) -> Result<(), Rejection> {
         if provider == FIXTURE_PROVIDER && !self.test_fixture_provider {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::ExecutionUnavailable,
                 SafeAction::None,
                 FIXTURE_REFUSED,
@@ -154,7 +153,7 @@ impl Service {
                 }
                 LaunchError::ProviderUnavailable(_) | LaunchError::Io(_) => e.detail(),
             };
-            rejection(ErrorCode::ExecutionUnavailable, SafeAction::None, &detail)
+            Rejection::new(ErrorCode::ExecutionUnavailable, SafeAction::None, &detail)
         })
     }
 
@@ -167,7 +166,7 @@ impl Service {
         let mut st = self.obj(oid)?.clone();
         st.objective_mut()
             .request_stop(ts_now())
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
         let data = ReplyData::ExecutionCancel(Box::new(self.detail_of(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.stop_worker(oid);
@@ -187,7 +186,7 @@ impl Service {
         let generation = st
             .objective_mut()
             .resume_execution(ts_now())
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
             return Err(Self::quota_rejection(why));
         }
@@ -249,11 +248,9 @@ impl Service {
             .worktree
             .clone()
             .unwrap_or_else(|| self.paths.worktrees.join(oid.to_string()));
-        let provision = st.row.worktree.is_none().then(|| {
-            (
-                record.branch.as_str().to_string(),
-                record.start_commit.clone(),
-            )
+        let provision = st.row.worktree.is_none().then(|| Provision {
+            base_branch: record.branch.as_str().to_string(),
+            start: record.start_commit.clone(),
         });
         let session_dir = self.paths.sessions.join(oid.to_string());
         let (thinking, session_file) = self.start_extras(oid);
@@ -291,7 +288,10 @@ impl Service {
                 start,
             },
             provision,
-            profile: Some((self.profile_dir(), self.approved_extensions())),
+            profile: Some(ProfileSnapshot {
+                source: self.profile_dir(),
+                approved: self.approved_extensions(),
+            }),
         };
         self.rt(oid).launching = Some(generation);
         self.spawn(Pending::Launch { oid, generation }, move || {
@@ -332,7 +332,7 @@ impl Service {
                 if current && state.is_live() {
                     let _ = st.objective_mut().observe_failure(
                         lade_core::domain::execution::ExecutionGeneration::new(generation),
-                        &reason,
+                        &reason.to_string(),
                         ts_now(),
                     );
                     if self.commit_obj(None, None, st).is_err() {
@@ -683,7 +683,7 @@ impl Service {
             crate::fault::point("dispatch.recorded");
             let body = WorkerBody::Deliver {
                 input_id: wire_id(id.uuid()),
-                mode: super::project::wire_mode(input.mode),
+                mode: super::convert::wire_mode(input.mode),
                 text: input.rendered_text.clone(),
             };
             let sent = self

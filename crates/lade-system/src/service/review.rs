@@ -21,20 +21,17 @@ use crate::storage::{self, JournalRow, JournalState, OperationState};
 
 use super::convert::{
     adapter_git, conflict, domain_rejection, durability, from_wire_git, git_rejection, invalid,
-    not_found, parse_uuid, rejection,
+    not_found, parse_uuid,
 };
+use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::handlers::{Pending, sql};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
-use super::project::{delete_history_blocker, wire_approval, wire_candidate, wire_verification};
+use super::project::delete_history_blocker;
 use super::{Flow, JobOutput, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms};
 
 fn ts_now() -> Timestamp {
     Timestamp::from_unix_ms(now_ms())
-}
-
-fn domain(error: lade_core::DomainError) -> Rejection {
-    domain_rejection(&error)
 }
 
 impl Service {
@@ -48,7 +45,7 @@ impl Service {
             self.check_idle(oid)?;
             let st = self.obj(oid)?;
             if st.objective().lifecycle() != Lifecycle::Active {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     "freeze requires an active objective",
                 )));
             }
@@ -56,7 +53,7 @@ impl Service {
                 return Err(invalid("no agent work to freeze yet"));
             }
             if st.capture.as_ref().is_some_and(|c| c.counts.files == 0) {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     super::project::NO_CHANGES_TO_FREEZE,
                 )));
             }
@@ -85,7 +82,7 @@ impl Service {
             && let Err(e) = st.objective_mut().request_stop(ts_now())
         {
             self.rt(oid).busy = None;
-            self.finish(ctx, Err(domain(e)));
+            self.finish(ctx, Err(domain_rejection(e)));
             return Flow::Done;
         }
         if let Err(rejection) = self.commit_obj(None, None, st) {
@@ -189,16 +186,16 @@ impl Service {
                         tree: out.tree,
                         base_target_commit: out.target,
                         manifest_digest: ArtifactDigest::parse(&out.manifest_digest)
-                            .map_err(domain)?,
+                            .map_err(domain_rejection)?,
                         changes: out.counts,
                     },
                     now,
                 )
-                .map_err(domain)?;
+                .map_err(domain_rejection)?;
             if out.changed {
                 st.review
                     .invalidate_candidate(&mut st.row.objective, now)
-                    .map_err(domain)?;
+                    .map_err(domain_rejection)?;
             }
             st.row.integration_conflict = false;
             let candidate = st
@@ -237,7 +234,7 @@ impl Service {
         let mut st = self.obj(oid)?.clone();
         st.review
             .return_for_revision(&mut st.row.objective, candidate, ts_now())
-            .map_err(domain)?;
+            .map_err(domain_rejection)?;
         let data = ReplyData::ReviewReturn(Box::new(self.detail_of(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
@@ -256,7 +253,7 @@ impl Service {
             return Err(Self::quota_rejection(why));
         }
         let tools = self.sandbox_tools().ok_or_else(|| {
-            rejection(
+            Rejection::new(
                 ErrorCode::ExecutionUnavailable,
                 SafeAction::None,
                 super::project::VERIFICATION_SANDBOX_UNAVAILABLE,
@@ -280,7 +277,7 @@ impl Service {
                 },
                 ts_now(),
             )
-            .map_err(domain)?;
+            .map_err(domain_rejection)?;
         let verification = st
             .review
             .verifications()
@@ -385,7 +382,7 @@ impl Service {
                 &current,
                 ts_now(),
             )
-            .map_err(domain)?;
+            .map_err(domain_rejection)?;
         let approval = st
             .review
             .valid_approval()
@@ -406,7 +403,7 @@ impl Service {
                 st.objective().lifecycle(),
                 Lifecycle::Frozen | Lifecycle::Approved
             ) {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     "refresh requires a frozen candidate",
                 )));
             }
@@ -414,7 +411,7 @@ impl Service {
                 .review
                 .current_candidate()
                 .filter(|c| c.id == candidate_id)
-                .ok_or_else(|| domain(lade_core::DomainError::StaleCandidate))?
+                .ok_or_else(|| domain_rejection(lade_core::DomainError::StaleCandidate))?
                 .clone();
             let target = self
                 .fresh_target(&st)
@@ -500,12 +497,12 @@ impl Service {
                                 tree,
                                 base_target_commit: target.clone(),
                                 manifest_digest: ArtifactDigest::parse(&manifest_digest)
-                                    .map_err(domain)?,
+                                    .map_err(domain_rejection)?,
                                 changes: counts,
                             }),
                             now,
                         )
-                        .map_err(domain)?;
+                        .map_err(domain_rejection)?;
                     let RefreshResult::Refreshed { candidate_id } = result else {
                         return Err(conflict("refresh did not produce a candidate"));
                     };
@@ -527,10 +524,10 @@ impl Service {
                             RefreshOutcome::Conflict,
                             now,
                         )
-                        .map_err(domain)?;
+                        .map_err(domain_rejection)?;
                     st.row.integration_conflict = true;
                     self.commit_obj(None, None, st)?;
-                    Err(rejection(
+                    Err(Rejection::new(
                         ErrorCode::StaleTarget,
                         SafeAction::Refresh,
                         "refresh conflicted with the moved target; the objective was returned for revision",
@@ -587,7 +584,7 @@ impl Service {
                     let mut st = st;
                     st.review
                         .observe_target(&mut st.row.objective, &current, ts_now())
-                        .map_err(domain)?;
+                        .map_err(domain_rejection)?;
                     if st.review.valid_approval().is_some() {
                         st.review
                             .invalidate_approval(
@@ -595,13 +592,13 @@ impl Service {
                                 lade_core::domain::review::InvalidationReason::TargetMoved,
                                 ts_now(),
                             )
-                            .map_err(domain)?;
+                            .map_err(domain_rejection)?;
                     }
                     self.commit_obj(None, None, st)?;
                     self.emit_objective(oid);
-                    Err(domain(lade_core::DomainError::StaleTarget))
+                    Err(domain_rejection(lade_core::DomainError::StaleTarget))
                 }
-                Err(e) => Err(domain(e)),
+                Err(e) => Err(domain_rejection(e)),
             }
         })();
         let (oid, st, plan) = match prepared {
@@ -673,7 +670,7 @@ impl Service {
                 plan,
                 journal_id: journal.id,
             },
-            move || JobOutput::Integrate(jobs::integrate(&ws, &request)),
+            move || JobOutput::Integrate(ws.integrate_squash(&request)),
         );
         Flow::Deferred
     }
@@ -695,7 +692,7 @@ impl Service {
                 let mut st = self.obj(oid)?.clone();
                 st.review
                     .complete_integration(&mut st.row.objective, plan, ts_now())
-                    .map_err(domain)?;
+                    .map_err(domain_rejection)?;
                 st.row.integration_conflict = false;
                 let data = ReplyData::ReviewIntegrate(Box::new(self.detail_of(&st)));
                 self.commit(Some(&mut ctx), Some(&data), |tx| {
@@ -725,7 +722,6 @@ impl Service {
                     "laded: integration refused objective={oid} code={}",
                     error.code()
                 );
-                let rejection = git_rejection(&error);
                 if let Ok(mut st) = self.obj(oid).cloned() {
                     match &error {
                         GitError::TargetMoved { .. } => {
@@ -742,7 +738,7 @@ impl Service {
                     }
                     let _ = self.commit_obj(None, None, st);
                 }
-                Err(rejection)
+                Err(git_rejection(error))
             }
         };
         self.finish(ctx, outcome);
@@ -785,12 +781,12 @@ impl Service {
                 st.objective().lifecycle(),
                 Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen
             ) {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     "objective is approved or closed",
                 )));
             }
             if st.objective().execution().state().is_live() {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     "stop execution first",
                 )));
             }
@@ -838,7 +834,7 @@ impl Service {
             let mut st = self.obj(oid)?.clone();
             st.review
                 .complete_without_changes(&mut st.row.objective, empty, ts_now())
-                .map_err(domain)?;
+                .map_err(domain_rejection)?;
             let data = ReplyData::ObjectiveComplete(Box::new(self.detail_of(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)?;
             Ok(data)
@@ -857,7 +853,7 @@ impl Service {
         let mut st = self.obj(oid)?.clone();
         st.review
             .discard(&mut st.row.objective, ts_now())
-            .map_err(domain)?;
+            .map_err(domain_rejection)?;
         let data = ReplyData::ObjectiveDiscard(Box::new(self.detail_of(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
@@ -870,7 +866,7 @@ impl Service {
             self.check_idle(oid)?;
             let st = self.obj(oid)?;
             if st.objective().execution().state().is_live() {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     "stop execution first",
                 )));
             }
@@ -878,7 +874,7 @@ impl Service {
             probe
                 .objective_mut()
                 .cleanup(st.unsent_drafts(), cmd.confirm_data_loss, ts_now())
-                .map_err(domain)?;
+                .map_err(domain_rejection)?;
             let ws = self.ws_of(st)?;
             Ok((
                 oid,
@@ -920,7 +916,9 @@ impl Service {
             self.check_idle(oid)?;
             let st = self.obj(oid)?;
             if let Some(reason) = delete_history_blocker(st) {
-                return Err(domain(lade_core::DomainError::InvalidLifecycle(reason)));
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
+                    reason,
+                )));
             }
             if !cmd.confirm_history_loss {
                 return Err(super::convert::invalid(
@@ -990,7 +988,7 @@ impl Service {
             let unsent = st.unsent_drafts();
             st.objective_mut()
                 .cleanup(unsent, confirm, ts_now())
-                .map_err(domain)?;
+                .map_err(domain_rejection)?;
             st.row.worktree = None;
             let data = ReplyData::ObjectiveCleanup(Box::new(self.detail_of(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)

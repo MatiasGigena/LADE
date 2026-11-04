@@ -21,7 +21,7 @@ use lade_protocol::client::{
     Outcome, Rejection, Reply, ReplyData, Request, SafeAction, Settings, SettingsUpdateCommand,
     SnapshotData, Start, UpdateIntentCommand, WorkspaceOpenCommand,
 };
-use lade_protocol::types::Id;
+use lade_protocol::types::{Counter, Id};
 use lade_protocol::{Framing, MAX_FRAME, encode};
 
 use crate::adapters::artifacts::ArtifactDigest;
@@ -29,11 +29,11 @@ use crate::adapters::git;
 use crate::storage::{self, CaptureRow, ObjectiveRow, WorkspaceRow};
 
 use super::convert::{
-    conflict, core_reference, counter, domain_rejection, durability, from_wire_git, git_rejection,
-    invalid, not_found, parse_uuid, rejection, wire_id,
+    conflict, core_reference, domain_rejection, durability, from_wire_git, git_rejection, invalid,
+    not_found, parse_uuid, wire_id,
 };
-use super::jobs::{self, CaptureInput, CaptureOut};
-use super::project::{core_mode, wire_draft, wire_input};
+use super::convert::{core_mode, wire_draft, wire_input};
+use super::jobs::{self, CaptureInput, CaptureOut, LatestCapture};
 use super::state::{ObjState, Runtime, WsState};
 use super::{Flow, JobOutput, ReqCtx, Service};
 use crate::fault::{self, Fault};
@@ -126,7 +126,7 @@ fn reply_json_len(request_id: &Id, data: ReplyData) -> usize {
 }
 
 fn history_too_large() -> Rejection {
-    rejection(
+    Rejection::new(
         ErrorCode::LimitReached,
         SafeAction::None,
         "This saved record exceeds the reply limit and cannot be shown.",
@@ -386,7 +386,7 @@ impl Service {
             .collect();
         SnapshotData {
             service_epoch: self.epoch.clone(),
-            sequence: counter(self.sequence),
+            sequence: Counter::new(self.sequence),
             workspaces,
             objectives,
             settings: settings.clone(),
@@ -473,7 +473,7 @@ impl Service {
             .take(query.limit.value() as usize)
         {
             let wire = wire_input(input);
-            let cursor = counter(*seq);
+            let cursor = Counter::new(*seq);
             let more = index + 1 < eligible.len();
             let overhead = reply_json_len(
                 request_id,
@@ -507,7 +507,7 @@ impl Service {
         mut draft: WireDraft,
         cursor: DraftCursor,
     ) -> Result<(), Rejection> {
-        draft.revision = counter(u64::MAX);
+        draft.revision = Counter::new(u64::MAX);
         draft.state = WireDraftState::Submitted;
         draft.input_id = Some(request_id.clone());
         draft.stale = false;
@@ -530,14 +530,14 @@ impl Service {
             && encode(
                 &ClientEnvelope::new(ClientBody::Event(EventFrame {
                     service_epoch: self.epoch.clone(),
-                    sequence: counter(u64::MAX),
+                    sequence: Counter::new(u64::MAX),
                     event: Event::DraftChanged(draft),
                 })),
                 Framing::Client,
             )
             .is_ok();
         if !fits {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::LimitReached,
                 SafeAction::None,
                 "This draft is too large to save. Shorten the comment or selection and try again.",
@@ -573,7 +573,7 @@ impl Service {
         if !path.is_absolute() {
             return Err(invalid("workspace path must be absolute"));
         }
-        let repo = jobs::open_repository(&path).map_err(|e| git_rejection(&e))?;
+        let repo = jobs::open_repository(&path).map_err(git_rejection)?;
         let top = repo.work_tree().to_path_buf();
         if let Some(existing) = self.workspaces.values().find(|ws| ws.path == top) {
             return Ok(ReplyData::WorkspaceOpen(
@@ -622,14 +622,13 @@ impl Service {
             .workspaces
             .get(&workspace)
             .ok_or_else(|| not_found("workspace"))?;
-        let domain = |e: lade_core::DomainError| domain_rejection(&e);
-        let title = Title::new(&cmd.title).map_err(domain)?;
+        let title = Title::new(&cmd.title).map_err(domain_rejection)?;
         let intent = Intent::new(
             &cmd.intent.outcome,
             &cmd.intent.constraints,
             &cmd.intent.acceptance,
         )
-        .map_err(domain)?;
+        .map_err(domain_rejection)?;
         if cmd.integration_target.contains("\\x")
             && git::unescape_branch_name(&cmd.integration_target)
                 .is_some_and(|raw| std::str::from_utf8(&raw).is_err())
@@ -640,7 +639,7 @@ impl Service {
                 "branch names that are not UTF-8 are listed but cannot be an integration target",
             ));
         }
-        let target = BranchName::new(&cmd.integration_target).map_err(domain)?;
+        let target = BranchName::new(&cmd.integration_target).map_err(domain_rejection)?;
         let target_commit = jobs::target_commit(&ws.repo, target.as_str())?;
         let start_commit = match &cmd.start {
             Start::Target => target_commit,
@@ -649,7 +648,7 @@ impl Service {
                 let resolved = ws
                     .repo
                     .resolve_commit(requested.hex())
-                    .map_err(|e| git_rejection(&e))?;
+                    .map_err(git_rejection)?;
                 super::convert::core_git(&resolved)
             }
         };
@@ -701,13 +700,12 @@ impl Service {
     ) -> Result<ReplyData, Rejection> {
         let oid = self.objective_id(&cmd.objective_id)?;
         self.check_idle(oid)?;
-        let domain = |e: lade_core::DomainError| domain_rejection(&e);
         let intent = Intent::new(
             &cmd.intent.outcome,
             &cmd.intent.constraints,
             &cmd.intent.acceptance,
         )
-        .map_err(domain)?;
+        .map_err(domain_rejection)?;
         let mut st = self.obj(oid)?.clone();
         st.objective_mut()
             .update_intent(
@@ -715,7 +713,7 @@ impl Service {
                 intent,
                 lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
             )
-            .map_err(domain)?;
+            .map_err(domain_rejection)?;
         let detail = self.detail_of(&st);
         self.check_intent_representation(&detail)?;
         let data = ReplyData::ObjectiveUpdateIntent(Box::new(detail));
@@ -732,7 +730,7 @@ impl Service {
         let mut settings = self.settings.clone();
         if let Some(model) = cmd.default_model {
             lade_core::domain::execution::ModelRef::new(&model.provider, &model.id)
-                .map_err(|e| domain_rejection(&e))?;
+                .map_err(domain_rejection)?;
             settings.default_model = Some(model);
         }
         if let Some(commands) = cmd.verification_commands {
@@ -781,7 +779,7 @@ impl Service {
         let digest = ArtifactDigest::parse(reference.artifact_digest().hex())
             .map_err(|_| invalid("invalid artifact digest"))?;
         if !self.artifacts.contains(&digest) {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::NotFound,
                 SafeAction::None,
                 "The commented file version is no longer available. Open the file again.",
@@ -825,7 +823,7 @@ impl Service {
             },
             lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
         )
-        .map_err(|e| domain_rejection(&e))?;
+        .map_err(domain_rejection)?;
         let mut st = st.clone();
         match st.drafts.iter_mut().find(|d| d.id() == draft_id) {
             Some(slot) => *slot = draft.clone(),
@@ -875,7 +873,7 @@ impl Service {
             .ok_or_else(|| not_found("draft"))?;
         draft
             .check_delete(Revision::new(cmd.expected_revision.value()))
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
         let data = ReplyData::DraftDelete(Empty {});
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
@@ -903,7 +901,7 @@ impl Service {
             Some(pair) => pair,
             None => {
                 let current = st.objective().execution().session().ok_or_else(|| {
-                    domain_rejection(&lade_core::DomainError::ExecutionUnavailable)
+                    domain_rejection(lade_core::DomainError::ExecutionUnavailable)
                 })?;
                 (current.session_id, current.association_revision)
             }
@@ -970,7 +968,7 @@ impl Service {
                 cmd.text.clone(),
                 lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
             )
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
             Ok((st.clone(), input))
         })();
         match result {
@@ -988,9 +986,9 @@ impl Service {
             st.objective()
                 .execution()
                 .check_association(session, Revision::new(cmd.association_revision.value()))
-                .map_err(|e| domain_rejection(&e))?;
+                .map_err(domain_rejection)?;
             if st.objective().lifecycle() != lade_core::domain::objectives::Lifecycle::Active {
-                return Err(domain_rejection(&lade_core::DomainError::InvalidLifecycle(
+                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
                     lade_core::domain::feedback::input_refusal(st.objective().lifecycle()),
                 )));
             }
@@ -1010,7 +1008,7 @@ impl Service {
             }
             let worktree =
                 st.row.worktree.clone().ok_or_else(|| {
-                    domain_rejection(&lade_core::DomainError::ExecutionUnavailable)
+                    domain_rejection(lade_core::DomainError::ExecutionUnavailable)
                 })?;
             Ok((oid, self.capture_input(st, worktree, drafts)?))
         })();
@@ -1079,7 +1077,7 @@ impl Service {
                 cmd.note.clone(),
                 lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
             )
-            .map_err(|e| domain_rejection(&e))?;
+            .map_err(domain_rejection)?;
             drop(batch);
             Ok((st.clone(), input, drafts))
         })();
@@ -1114,10 +1112,11 @@ impl Service {
                 .as_str()
                 .to_string(),
             capture_id: CaptureId::new(new_uuid()),
-            latest: st
-                .capture
-                .as_ref()
-                .map(|c| (c.id, c.tree.clone(), c.target_commit.clone())),
+            latest: st.capture.as_ref().map(|c| LatestCapture {
+                id: c.id,
+                tree: c.tree.clone(),
+                target: c.target_commit.clone(),
+            }),
             drafts,
         })
     }

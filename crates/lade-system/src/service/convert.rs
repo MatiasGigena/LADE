@@ -1,41 +1,43 @@
 use lade_core::DomainError;
 use lade_core::domain::execution::ExecutionState;
+use lade_core::domain::feedback::{AcceptedInput, DeliveryState, Draft, DraftState};
 use lade_core::domain::ids::{self as core_ids, GitAlgorithm, Uuid};
 use lade_core::domain::inspection::{
     ArtifactDigest, ByteRange, InspectedVersion, MAX_TEXT_BYTES, Reference, RepoPath, Side,
 };
 use lade_core::domain::objectives::Lifecycle;
-use lade_protocol::client::{self as wire, ErrorCode, Rejection, SafeAction, Side as WireSide};
-use lade_protocol::types::{self as wire_types, Counter, Id};
+use lade_core::domain::review::{
+    Approval, ApprovalState, Candidate, CandidateStatus, Verification, VerificationOutcome,
+};
+use lade_protocol::client::{
+    self as wire, ApprovalSummary, CandidateSummary, DeliveryState as WireDelivery,
+    DraftState as WireDraftState, ErrorCode, InputSummary, Rejection, SafeAction, Side as WireSide,
+    VerificationState, VerificationSummary,
+};
+use lade_protocol::types::{self as wire_types, Counter, DeliveryMode, Id};
 
+use super::state::ObjState;
 use crate::adapters::git::{self, GitError, ObjectFormat};
+use crate::support::wire_ts;
 
 pub fn wire_id(uuid: Uuid) -> Id {
     Id::parse(uuid.to_string()).expect("domain uuids are canonical v4")
 }
 
 pub fn parse_uuid(id: &Id) -> Result<Uuid, Rejection> {
-    Uuid::parse(id.as_str()).map_err(|e| domain_rejection(&e))
-}
-
-pub fn counter(value: u64) -> Counter {
-    Counter::new(value)
+    Uuid::parse(id.as_str()).map_err(domain_rejection)
 }
 
 pub fn counter_u32(value: &Counter) -> Result<u32, Rejection> {
     u32::try_from(value.value()).map_err(|_| invalid("counter out of range"))
 }
 
-pub fn rejection(code: ErrorCode, action: SafeAction, detail: &str) -> Rejection {
-    Rejection::new(code, action, detail)
-}
-
 pub fn invalid(detail: &str) -> Rejection {
-    rejection(ErrorCode::InvalidRequest, SafeAction::None, detail)
+    Rejection::new(ErrorCode::InvalidRequest, SafeAction::None, detail)
 }
 
 pub fn not_found(what: &str) -> Rejection {
-    rejection(
+    Rejection::new(
         ErrorCode::NotFound,
         SafeAction::Refresh,
         &format!("{what} not found"),
@@ -43,18 +45,18 @@ pub fn not_found(what: &str) -> Rejection {
 }
 
 pub fn conflict(detail: &str) -> Rejection {
-    rejection(ErrorCode::Conflict, SafeAction::Refresh, detail)
+    Rejection::new(ErrorCode::Conflict, SafeAction::Refresh, detail)
 }
 
 pub fn durability(detail: &str) -> Rejection {
-    rejection(
+    Rejection::new(
         ErrorCode::DurabilityFailure,
         SafeAction::QueryOperation,
         detail,
     )
 }
 
-pub fn domain_rejection(error: &DomainError) -> Rejection {
+pub fn domain_rejection(error: DomainError) -> Rejection {
     let (code, action) = match error {
         DomainError::Unauthorized => (ErrorCode::Unauthorized, SafeAction::None),
         DomainError::StaleService => (ErrorCode::StaleService, SafeAction::Refresh),
@@ -84,13 +86,13 @@ pub fn domain_rejection(error: &DomainError) -> Rejection {
     Rejection::new(code, action, &error.detail())
 }
 
-pub fn git_rejection(error: &GitError) -> Rejection {
+pub fn git_rejection(error: GitError) -> Rejection {
     match error {
         GitError::NotFound { what } => not_found(what),
         GitError::NotRepository | GitError::NotTopLevel | GitError::BareRepository => {
             invalid("path is not the top level of a non-bare Git repository")
         }
-        GitError::UnsupportedObjectFormat | GitError::UnsupportedVersion { .. } => rejection(
+        GitError::UnsupportedObjectFormat | GitError::UnsupportedVersion { .. } => Rejection::new(
             ErrorCode::UnsupportedContent,
             SafeAction::None,
             &error.to_string(),
@@ -98,12 +100,12 @@ pub fn git_rejection(error: &GitError) -> Rejection {
         GitError::InvalidRefName | GitError::InvalidPath | GitError::InvalidId => {
             invalid(&error.to_string())
         }
-        GitError::NotABlob => rejection(
+        GitError::NotABlob => Rejection::new(
             ErrorCode::UnsupportedContent,
             SafeAction::None,
             "path is not a regular file in this version",
         ),
-        GitError::TargetMoved { .. } => rejection(
+        GitError::TargetMoved { .. } => Rejection::new(
             ErrorCode::StaleTarget,
             SafeAction::Refresh,
             "integration target moved",
@@ -147,7 +149,7 @@ pub fn git_rejection(error: &GitError) -> Rejection {
         ),
         GitError::StaleRef { .. } => conflict("reference changed concurrently"),
         GitError::WorktreeDirty => conflict("worktree has uncaptured changes"),
-        other => rejection(
+        other => Rejection::new(
             ErrorCode::DurabilityFailure,
             SafeAction::Refresh,
             &format!("git operation failed: {}", other.code()),
@@ -190,7 +192,7 @@ pub fn from_wire_git(id: &wire_types::GitId) -> Result<core_ids::GitId, Rejectio
         wire_types::GitAlgorithm::Sha1 => GitAlgorithm::Sha1,
         wire_types::GitAlgorithm::Sha256 => GitAlgorithm::Sha256,
     };
-    core_ids::GitId::new(algorithm, id.hex()).map_err(|e| domain_rejection(&e))
+    core_ids::GitId::new(algorithm, id.hex()).map_err(domain_rejection)
 }
 
 pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
@@ -243,15 +245,14 @@ pub fn wire_reference(reference: &Reference) -> wire::Reference {
             Side::Old => WireSide::Old,
             Side::New => WireSide::New,
         },
-        byte_start: counter(range.start()),
-        byte_end: counter(range.end()),
+        byte_start: Counter::new(range.start()),
+        byte_end: Counter::new(range.end()),
         selected_text: reference.selected_text().to_string(),
-        line_hint: Some(counter(u64::from(reference.line_hint()))),
+        line_hint: Some(Counter::new(u64::from(reference.line_hint()))),
     }
 }
 
 pub fn core_reference(reference: &wire::Reference) -> Result<Reference, Rejection> {
-    let domain = |e: DomainError| domain_rejection(&e);
     let version = match &reference.version {
         wire::ReferenceVersion::Working { capture_id } => InspectedVersion::Working {
             capture_id: core_ids::CaptureId::new(parse_uuid(capture_id)?),
@@ -268,18 +269,19 @@ pub fn core_reference(reference: &wire::Reference) -> Result<Reference, Rejectio
         None => 1,
     };
     Reference::new(
-        ArtifactDigest::parse(reference.artifact_digest.as_str()).map_err(domain)?,
-        RepoPath::new(reference.path.as_bytes().to_vec()).map_err(domain)?,
+        ArtifactDigest::parse(reference.artifact_digest.as_str()).map_err(domain_rejection)?,
+        RepoPath::new(reference.path.as_bytes().to_vec()).map_err(domain_rejection)?,
         version,
         match reference.side {
             WireSide::Old => Side::Old,
             WireSide::New => Side::New,
         },
-        ByteRange::new(reference.byte_start.value(), reference.byte_end.value()).map_err(domain)?,
+        ByteRange::new(reference.byte_start.value(), reference.byte_end.value())
+            .map_err(domain_rejection)?,
         reference.selected_text.clone(),
         line_hint,
     )
-    .map_err(domain)
+    .map_err(domain_rejection)
 }
 
 pub fn repo_path(path: &wire_types::WirePath) -> Result<git::RepoPath, Rejection> {
@@ -296,6 +298,152 @@ pub fn preview(text: &str, max: usize) -> String {
     wire_types::truncate_chars(text, max).to_string()
 }
 
+fn blocked_reason(reason: lade_core::domain::feedback::BlockedReason) -> &'static str {
+    use lade_core::domain::feedback::BlockedReason;
+    match reason {
+        BlockedReason::ExecutionUnavailable => {
+            "The agent isn't running. Resume it to deliver this."
+        }
+        BlockedReason::StaleAssociation => {
+            "The Agent Session was replaced, so this was not delivered to it."
+        }
+        BlockedReason::StaleReference => {
+            "The code this refers to changed, so it was not delivered."
+        }
+        BlockedReason::InvalidLifecycle => {
+            "The Objective is no longer in progress, so this was not delivered."
+        }
+    }
+}
+
+pub fn wire_mode(mode: lade_core::domain::feedback::InputMode) -> DeliveryMode {
+    use lade_core::domain::feedback::InputMode;
+    match mode {
+        InputMode::Prompt => DeliveryMode::Prompt,
+        InputMode::Steer => DeliveryMode::Steer,
+        InputMode::FollowUp => DeliveryMode::FollowUp,
+    }
+}
+
+pub fn core_mode(mode: DeliveryMode) -> lade_core::domain::feedback::InputMode {
+    use lade_core::domain::feedback::InputMode;
+    match mode {
+        DeliveryMode::Prompt => InputMode::Prompt,
+        DeliveryMode::Steer => InputMode::Steer,
+        DeliveryMode::FollowUp => InputMode::FollowUp,
+    }
+}
+
+pub fn wire_input(input: &AcceptedInput) -> InputSummary {
+    let (delivery, blocked_reason) = match input.delivery {
+        DeliveryState::Queued => (WireDelivery::Queued, None),
+        DeliveryState::Dispatched { .. } => (WireDelivery::Dispatched, None),
+        DeliveryState::Received { .. } => (WireDelivery::Received, None),
+        DeliveryState::Uncertain { .. } => (WireDelivery::Uncertain, None),
+        DeliveryState::Blocked { reason } => (
+            WireDelivery::Blocked,
+            Some(blocked_reason(reason).to_string()),
+        ),
+    };
+    InputSummary {
+        input_id: wire_id(input.id.uuid()),
+        objective_id: wire_id(input.objective_id.uuid()),
+        operation_id: wire_id(input.operation_id.uuid()),
+        mode: wire_mode(input.mode),
+        text_preview: preview(&input.rendered_text, 1024),
+        accepted_at: wire_ts(input.accepted_at.unix_ms()),
+        delivery,
+        blocked_reason,
+    }
+}
+
+pub fn wire_draft(st: &ObjState, draft: &Draft) -> wire::Draft {
+    let record = draft.record();
+    let (state, input_id) = match record.state {
+        DraftState::Unsent => (WireDraftState::Unsent, None),
+        DraftState::Submitted { input_id } => {
+            (WireDraftState::Submitted, Some(wire_id(input_id.uuid())))
+        }
+    };
+    wire::Draft {
+        draft_id: wire_id(record.id.uuid()),
+        objective_id: wire_id(record.objective_id.uuid()),
+        destination_session_id: wire_id(record.destination_session_id.uuid()),
+        reference: wire_reference(&record.reference),
+        body: record.body.clone(),
+        revision: Counter::new(record.revision.value()),
+        state,
+        stale: draft.is_unsent() && st.draft_stale.get(&record.id).copied().unwrap_or(false),
+        input_id,
+    }
+}
+
+pub fn wire_candidate(candidate: &Candidate) -> CandidateSummary {
+    CandidateSummary {
+        candidate_id: wire_id(candidate.id.uuid()),
+        ordinal: Counter::new(u64::from(candidate.ordinal)),
+        commit: wire_git(&candidate.commit),
+        base_target_commit: wire_git(&candidate.base_target_commit),
+        status: match candidate.status {
+            CandidateStatus::Current => wire::CandidateStatus::Current,
+            CandidateStatus::Historical => wire::CandidateStatus::Historical,
+            CandidateStatus::Invalidated => wire::CandidateStatus::Invalidated,
+        },
+        files: Counter::new(u64::from(candidate.changes.files)),
+        added: Counter::new(candidate.changes.added),
+        removed: Counter::new(candidate.changes.removed),
+        created_at: wire_ts(candidate.created_at.unix_ms()),
+    }
+}
+
+pub fn wire_verification(st: &ObjState, verification: &Verification) -> VerificationSummary {
+    super::detail_budget::budget_verification(VerificationSummary {
+        verification_id: wire_id(verification.id.uuid()),
+        objective_id: wire_id(st.objective().id().uuid()),
+        candidate_id: wire_id(verification.candidate_id.uuid()),
+        command: verification
+            .argv
+            .iter()
+            .take(256)
+            .map(|a| preview(a, 4096))
+            .collect(),
+        state: match verification.outcome {
+            VerificationOutcome::Running => VerificationState::Running,
+            VerificationOutcome::Passed => VerificationState::Passed,
+            VerificationOutcome::Failed => VerificationState::Failed,
+            VerificationOutcome::Interrupted => VerificationState::Interrupted,
+            VerificationOutcome::Error => VerificationState::Error,
+        },
+        started_at: wire_ts(verification.started_at.unix_ms()),
+        output_tail: st.tails.get(&verification.id).cloned().unwrap_or_default(),
+        truncated: verification.truncated,
+        provenance: wire::Provenance::ServiceObserved,
+        exit_code: verification
+            .exit_code
+            .and_then(|c| u64::try_from(c).ok())
+            .map(Counter::new),
+        ended_at: verification.ended_at.map(|t| wire_ts(t.unix_ms())),
+    })
+}
+
+pub fn wire_approval(approval: &Approval) -> ApprovalSummary {
+    ApprovalSummary {
+        approval_id: wire_id(approval.id.uuid()),
+        candidate_id: wire_id(approval.candidate_id.uuid()),
+        target_commit: wire_git(&approval.target_commit),
+        state: match approval.state {
+            ApprovalState::Valid => wire::ApprovalState::Valid,
+            ApprovalState::Consumed => wire::ApprovalState::Consumed,
+            ApprovalState::Invalidated { .. } => wire::ApprovalState::Invalidated,
+        },
+        override_reason: approval
+            .override_reason
+            .as_ref()
+            .map(|r| preview(r, 2048))
+            .filter(|r| !r.is_empty()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,7 +451,7 @@ mod tests {
     #[test]
     fn domain_codes_map_to_wire_codes() {
         let error = DomainError::StaleTarget;
-        let rejection = domain_rejection(&error);
+        let rejection = domain_rejection(error);
         assert_eq!(rejection.code, ErrorCode::StaleTarget);
         assert_eq!(rejection.action, SafeAction::Refresh);
     }

@@ -8,15 +8,15 @@ use std::sync::Arc;
 use lade_protocol::client::{
     ModelCatalog, ModelInfo, ModelsListQuery, ProviderAuth, ProviderInfo, ProviderStatus, ReplyData,
 };
-use lade_protocol::types::ThinkingLevel;
+use lade_protocol::types::{Counter, ThinkingLevel};
 use serde_json::Value;
 
-use crate::adapters::profile::{self};
+use crate::adapters::profile;
 use crate::supervision::credentials::FIXTURE_PROVIDER;
 use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
 use crate::support::fs::ensure_private_dir;
 
-use super::convert::{counter, preview};
+use super::convert::preview;
 use super::handlers::Pending;
 use super::{Flow, JobOutput, ReqCtx, Service};
 use crate::support::new_uuid;
@@ -259,7 +259,7 @@ impl Service {
                     name: preview(&facts.name, 256),
                     auth: access.auth.iter().map(|a| wire_auth(*a)).take(8).collect(),
                     status: wire_status(access.status),
-                    models: counter(models.len() as u64),
+                    models: Counter::new(models.len() as u64),
                     reason: access.reason.map(|r| preview(&r, 512)),
                     variables: (!access.variables.is_empty()).then(|| {
                         access

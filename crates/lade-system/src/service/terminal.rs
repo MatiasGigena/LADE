@@ -11,7 +11,7 @@ use crate::supervision::terminal::{
     MAX_COLS, MAX_ROWS, TERMINAL_LIMITS, Terminal, TerminalExit, TerminalRequest,
 };
 
-use super::convert::{conflict, counter, invalid, not_found, parse_uuid, rejection, wire_id};
+use super::convert::{conflict, invalid, not_found, parse_uuid, wire_id};
 use super::handlers::Pending;
 use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Flow, JobOutput, ReqCtx, Service};
@@ -38,7 +38,7 @@ fn size(value: &Counter, max: u16, what: &str) -> Result<u16, Rejection> {
 }
 
 fn unavailable(detail: &str) -> Rejection {
-    rejection(ErrorCode::ExecutionUnavailable, SafeAction::None, detail)
+    Rejection::new(ErrorCode::ExecutionUnavailable, SafeAction::None, detail)
 }
 
 pub(crate) fn decode_chunk(tail: &mut Vec<u8>, bytes: &[u8], last: bool) -> String {
@@ -81,7 +81,7 @@ impl Service {
         let st = self.obj(oid)?;
         // A precondition, not stale state: refreshing does not help (the projection says why).
         if let Some(why) = terminal_blocker(st) {
-            return Err(rejection(
+            return Err(Rejection::new(
                 ErrorCode::InvalidLifecycle,
                 SafeAction::None,
                 why,
@@ -108,7 +108,7 @@ impl Service {
             let total = self.terminals.len() + self.terminals_opening;
             let max = self.limits.max_terminals;
             if total >= max || open >= MAX_PER_OBJECTIVE {
-                return Err(rejection(
+                return Err(Rejection::new(
                     ErrorCode::LimitReached,
                     SafeAction::None,
                     &format!(
@@ -213,8 +213,8 @@ impl Service {
                 } else {
                     TerminalMode::ReadOnly
                 },
-                cols: counter(u64::from(cols)),
-                rows: counter(u64::from(rows)),
+                cols: Counter::new(u64::from(cols)),
+                rows: Counter::new(u64::from(rows)),
             })
         });
         self.finish(ctx, result);
@@ -236,7 +236,7 @@ impl Service {
             .write(cmd.data.as_bytes())
             .map(|()| ReplyData::TerminalInput(Empty {}))
             .map_err(|e| match e.kind() {
-                std::io::ErrorKind::WouldBlock => rejection(
+                std::io::ErrorKind::WouldBlock => Rejection::new(
                     ErrorCode::LimitReached,
                     SafeAction::None,
                     "The terminal isn't reading input. Wait, or close it.",
@@ -294,7 +294,7 @@ impl Service {
         let Ok(terminal_id) = Id::parse(id.to_owned()) else {
             return;
         };
-        let to_counter = |v: Option<i32>| v.and_then(|v| u64::try_from(v).ok()).map(counter);
+        let to_counter = |v: Option<i32>| v.and_then(|v| u64::try_from(v).ok()).map(Counter::new);
         self.emit(Event::TerminalClosed(TerminalClosed {
             objective_id: wire_id(oid.uuid()),
             terminal_id,
@@ -369,9 +369,9 @@ impl Service {
                 self.emit(Event::TerminalOutput(TerminalOutput {
                     objective_id: wire_id(oid.uuid()),
                     terminal_id,
-                    seq: counter(seq),
+                    seq: Counter::new(seq),
                     data,
-                    dropped_bytes: counter(drained.dropped),
+                    dropped_bytes: Counter::new(drained.dropped),
                 }));
             }
             let finished = self

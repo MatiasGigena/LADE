@@ -9,7 +9,6 @@ use lade_protocol::{Framing, MAX_FRAME, MAX_NODES, encode};
 use serde_json::Value;
 
 use super::Service;
-use super::convert::{counter, rejection};
 use super::handlers::SNAPSHOT_OBJECTIVES;
 use super::project::{DETAIL_LIST_MAX, MAX_SUMMARY_BADGES};
 use super::state::{ObjState, WsState};
@@ -47,7 +46,7 @@ fn frames(detail: &ObjectiveDetail, epoch: &Id) -> Vec<ClientEnvelope> {
     .chain(std::iter::once(ClientEnvelope::new(ClientBody::Event(
         EventFrame {
             service_epoch: epoch.clone(),
-            sequence: counter(u64::MAX),
+            sequence: Counter::new(u64::MAX),
             event: Event::ObjectiveDetail(Box::new(detail.clone())),
         },
     ))))
@@ -233,7 +232,7 @@ pub(super) fn budget_verification(mut row: VerificationSummary) -> VerificationS
     let mut frames = reply_frames(ReplyData::ReviewVerify(row.clone()), &row.objective_id);
     frames.push(ClientEnvelope::new(ClientBody::Event(EventFrame {
         service_epoch: row.objective_id.clone(),
-        sequence: counter(u64::MAX),
+        sequence: Counter::new(u64::MAX),
         event: Event::VerificationChanged(row.clone()),
     })));
     restore_previews(std::slice::from_mut(&mut row), previews, capacity(frames));
@@ -256,15 +255,15 @@ fn minimal_snapshot(mut data: SnapshotData, future: bool) -> SnapshotData {
             objective.lifecycle = Lifecycle::CompletedNoChanges;
             objective.attention = Attention::ReadyForReview;
             objective.badges = vec![Badge::IntegrationConflict; MAX_SUMMARY_BADGES];
-            objective.revision = counter(u64::MAX);
-            objective.execution.generation = counter(u64::MAX);
+            objective.revision = Counter::new(u64::MAX);
+            objective.execution.generation = Counter::new(u64::MAX);
             objective.execution.state = ExecutionState::Cancelled;
             objective.execution.reason = Some(String::new());
         } else if let Some(reason) = &mut objective.execution.reason {
             reason.clear();
         }
     }
-    data.sequence = counter(u64::MAX);
+    data.sequence = Counter::new(u64::MAX);
     data
 }
 
@@ -286,7 +285,7 @@ impl Service {
         {
             Ok(())
         } else {
-            Err(rejection(
+            Err(Rejection::new(
                 lade_protocol::client::ErrorCode::LimitReached,
                 lade_protocol::client::SafeAction::None,
                 "This intent is too large to save. Shorten it and try again.",
@@ -321,8 +320,8 @@ impl Service {
                 summary.lifecycle = Lifecycle::CompletedNoChanges;
                 summary.attention = Attention::ReadyForReview;
                 summary.badges = vec![Badge::IntegrationConflict; MAX_SUMMARY_BADGES];
-                summary.revision = counter(u64::MAX);
-                summary.execution.generation = counter(u64::MAX);
+                summary.revision = Counter::new(u64::MAX);
+                summary.execution.generation = Counter::new(u64::MAX);
                 summary.execution.state = ExecutionState::Cancelled;
                 summary.execution.reason = Some(String::new());
                 let bytes = serde_json::to_vec(&summary)
@@ -346,7 +345,7 @@ impl Service {
         {
             Ok(())
         } else {
-            Err(rejection(
+            Err(Rejection::new(
                 lade_protocol::client::ErrorCode::LimitReached,
                 lade_protocol::client::SafeAction::None,
                 "The saved workspace state would be too large to load. Shorten the verification settings before trying again.",
