@@ -2,15 +2,38 @@ pub mod backup;
 mod compat;
 mod rows;
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
+use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::thread;
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
 pub use compat::*;
 pub use rows::*;
+
+pub const LOCK_FILE: &str = "lade.lock";
+
+/// Takes the exclusive lock that marks the state directory as owned by one service. Retries
+/// for about two seconds so a restarting service can outlast its predecessor's exit; a lock
+/// still held after that fails with `ErrorKind::WouldBlock`.
+pub fn lock_state(state: &Path) -> io::Result<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(state.join(LOCK_FILE))?;
+    for _ in 0..40 {
+        if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
+            return Ok(file);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(io::ErrorKind::WouldBlock.into())
+}
 
 const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2), (3, SCHEMA_V3)];
 
@@ -330,7 +353,7 @@ impl Store {
             tx.execute_batch(sql)?;
             tx.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                rusqlite::params![version, crate::service::convert::now_ms()],
+                rusqlite::params![version, crate::support::now_ms()],
             )?;
             tx.commit()?;
         }
@@ -375,7 +398,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "lade-store-{name}-{}-{}",
             std::process::id(),
-            crate::service::convert::now_ms()
+            crate::support::now_ms()
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::DirBuilder::new()
@@ -502,7 +525,7 @@ mod tests {
             backup::restore(&state, 0),
             Err(backup::BackupError::NoBackup(0))
         ));
-        let lock = crate::service::lock_state(&state).expect("lock");
+        let lock = lock_state(&state).expect("lock");
         assert!(matches!(
             backup::restore(&state, 1),
             Err(backup::BackupError::Busy)

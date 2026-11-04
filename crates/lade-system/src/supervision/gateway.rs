@@ -2,14 +2,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::net::{IpAddr, Ipv6Addr, Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
+
+use crate::adapters::providers::{BUILT_IN_PROVIDERS, is_non_public};
+use crate::support::fs::ensure_private_dir;
 
 pub const MAX_HEADER_BYTES: usize = 8 << 10;
 pub const MAX_TUNNELS: usize = 32;
@@ -70,30 +73,12 @@ impl EgressPolicy {
     }
 }
 
+/// The reviewed endpoint policy of every built-in provider: HTTPS to its documented API hosts.
 pub fn default_policies() -> BTreeMap<String, EgressPolicy> {
-    [
-        ("lade-fixture", &[][..]),
-        ("anthropic", &["api.anthropic.com"][..]),
-        ("openai", &["api.openai.com"][..]),
-        ("google", &["generativelanguage.googleapis.com"][..]),
-        ("openrouter", &["openrouter.ai"][..]),
-        ("mistral", &["api.mistral.ai"][..]),
-        ("groq", &["api.groq.com"][..]),
-        ("xai", &["api.x.ai"][..]),
-        ("deepseek", &["api.deepseek.com"][..]),
-        ("cerebras", &["api.cerebras.ai"][..]),
-        ("together", &["api.together.ai"][..]),
-        ("fireworks", &["api.fireworks.ai"][..]),
-        ("moonshotai", &["api.moonshot.ai"][..]),
-        ("huggingface", &["router.huggingface.co"][..]),
-        ("nvidia", &["integrate.api.nvidia.com"][..]),
-        ("zai", &["api.z.ai"][..]),
-        ("vercel-ai-gateway", &["ai-gateway.vercel.sh"][..]),
-        ("kimi-coding", &["api.kimi.com"][..]),
-    ]
-    .into_iter()
-    .map(|(id, hosts)| (id.to_owned(), EgressPolicy::https_hosts(hosts)))
-    .collect()
+    BUILT_IN_PROVIDERS
+        .iter()
+        .map(|p| (p.id.to_owned(), EgressPolicy::https_hosts(p.hosts)))
+        .collect()
 }
 
 fn normalize_host(host: &str) -> String {
@@ -103,47 +88,6 @@ fn normalize_host(host: &str) -> String {
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
     host.to_ascii_lowercase()
-}
-
-pub fn is_non_public(addr: IpAddr) -> bool {
-    match addr {
-        IpAddr::V4(v4) => is_non_public_v4(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_non_public_v4(v4);
-            }
-            let seg = v6.segments();
-            if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-                let [a, b] = seg[6].to_be_bytes();
-                let [c, d] = seg[7].to_be_bytes();
-                return is_non_public_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (seg[0] & 0xfe00) == 0xfc00
-                || (seg[0] & 0xffc0) == 0xfe80
-                || (seg[0] & 0xffc0) == 0xfec0
-                || (seg[0] == 0x2001 && seg[1] == 0x0db8)
-                || seg[..6] == [0, 0, 0, 0, 0, 0]
-        }
-    }
-}
-
-fn is_non_public_v4(v4: Ipv4Addr) -> bool {
-    let [a, b, c, _] = v4.octets();
-    v4.is_loopback()
-        || v4.is_private()
-        || v4.is_link_local()
-        || v4.is_unspecified()
-        || v4.is_multicast()
-        || v4.is_broadcast()
-        || v4.is_documentation()
-        || a == 0
-        || (a == 100 && (b & 0xc0) == 64)
-        || (a == 192 && b == 0 && c == 0)
-        || (a == 198 && (b & 0xfe) == 18)
-        || a >= 240
 }
 
 #[derive(Clone)]
@@ -524,26 +468,6 @@ impl Drop for Gateway {
     }
 }
 
-pub(crate) fn ensure_private_dir(dir: &Path) -> io::Result<()> {
-    match fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-    {
-        Ok(()) => {}
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e),
-    }
-    let meta = fs::symlink_metadata(dir)?;
-    if !meta.is_dir() || meta.permissions().mode() & 0o077 != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "run directory must be a 0700 directory",
-        ));
-    }
-    Ok(())
-}
-
 fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
     for stream in listener.incoming() {
         if shared.stopped.load(Ordering::SeqCst) {
@@ -824,39 +748,6 @@ mod tests {
             b"CONNECT ::1:443 HTTP/1.1",
         ] {
             assert_eq!(parse_request(bad).unwrap_err().status, 400, "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn classifies_addresses() {
-        for addr in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "172.16.0.1",
-            "192.168.1.1",
-            "169.254.169.254",
-            "0.0.0.0",
-            "100.64.0.1",
-            "224.0.0.1",
-            "255.255.255.255",
-            "::1",
-            "::",
-            "fd00::1",
-            "fe80::1",
-            "ff02::1",
-            "::ffff:10.0.0.1",
-            "::ffff:127.0.0.1",
-            "64:ff9b::a00:1",
-        ] {
-            assert!(is_non_public(addr.parse().unwrap()), "{addr}");
-        }
-        for addr in [
-            "1.1.1.1",
-            "160.79.104.10",
-            "2606:4700::1111",
-            "::ffff:8.8.8.8",
-        ] {
-            assert!(!is_non_public(addr.parse().unwrap()), "{addr}");
         }
     }
 

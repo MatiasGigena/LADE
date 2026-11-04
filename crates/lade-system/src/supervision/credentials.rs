@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::secret_service::{Lookup, SecretService};
+use crate::adapters::providers::{BUILT_IN_PROVIDERS, built_in_provider};
+use crate::support::fs::service_uid;
 
 const MAX_FILE_BYTES: u64 = 64 << 10;
 
-pub const FIXTURE_PROVIDER: &str = "lade-fixture";
+pub use crate::adapters::providers::FIXTURE_PROVIDER;
 
 pub use crate::adapters::sandbox::FIXTURE_SWITCH;
 
@@ -22,43 +24,15 @@ pub fn fixture_switch_on() -> bool {
     std::env::var_os(FIXTURE_SWITCH).is_some_and(|v| v == "1")
 }
 
-const PROVIDER_VARS: &[(&str, &[&str])] = &[
-    (FIXTURE_PROVIDER, &[]),
-    (
-        "anthropic",
-        &[
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_OAUTH_TOKEN",
-            "ANTHROPIC_AUTH_TOKEN",
-        ],
-    ),
-    ("openai", &["OPENAI_API_KEY"]),
-    ("google", &["GEMINI_API_KEY"]),
-    ("openrouter", &["OPENROUTER_API_KEY"]),
-    ("mistral", &["MISTRAL_API_KEY"]),
-    ("groq", &["GROQ_API_KEY"]),
-    ("xai", &["XAI_API_KEY"]),
-    ("deepseek", &["DEEPSEEK_API_KEY"]),
-    ("cerebras", &["CEREBRAS_API_KEY"]),
-    ("together", &["TOGETHER_API_KEY"]),
-    ("fireworks", &["FIREWORKS_API_KEY"]),
-    ("moonshotai", &["MOONSHOT_API_KEY"]),
-    ("huggingface", &["HF_TOKEN"]),
-    ("nvidia", &["NVIDIA_API_KEY"]),
-    ("zai", &["ZAI_API_KEY"]),
-    ("vercel-ai-gateway", &["AI_GATEWAY_API_KEY"]),
-    ("kimi-coding", &["KIMI_API_KEY"]),
-];
-
 pub fn provider_env_vars(provider: &str) -> Option<&'static [&'static str]> {
-    PROVIDER_VARS
-        .iter()
-        .find(|(id, _)| *id == provider)
-        .map(|(_, vars)| *vars)
+    built_in_provider(provider).map(|p| p.env_vars)
 }
 
 fn known_var(name: &str) -> bool {
-    PROVIDER_VARS.iter().any(|(_, vars)| vars.contains(&name)) || custom_var(name)
+    BUILT_IN_PROVIDERS
+        .iter()
+        .any(|p| p.env_vars.contains(&name))
+        || custom_var(name)
 }
 
 pub fn custom_var(name: &str) -> bool {
@@ -395,10 +369,6 @@ fn default_file() -> Option<PathBuf> {
     Some(base.join("lade").join("credentials.env"))
 }
 
-pub(crate) fn current_uid() -> io::Result<u32> {
-    fs::metadata("/proc/self").map(|m| m.uid())
-}
-
 fn read_file(path: &Path) -> Result<Vec<(String, OsString)>, CredentialError> {
     let io_err = |e: io::Error| CredentialError::Io {
         path: path.to_path_buf(),
@@ -421,7 +391,7 @@ fn read_file(path: &Path) -> Result<Vec<(String, OsString)>, CredentialError> {
     if meta.dev() != link.dev() || meta.ino() != link.ino() {
         return Err(insecure("replaced while opening"));
     }
-    if meta.uid() != current_uid().map_err(io_err)? {
+    if meta.uid() != service_uid() {
         return Err(insecure("not owned by the service user"));
     }
     if meta.mode() & 0o077 != 0 {

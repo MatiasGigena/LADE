@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest as _, Sha256};
 
-use crate::service::convert::{hex, now_ms};
+use crate::support::fs::ensure_private_dir;
+use crate::support::{hex, now_ms};
 
 pub const BACKUP_DIR: &str = "backups";
 pub const JOURNAL: &str = "migrations.journal";
@@ -72,8 +73,7 @@ fn backup_dir(state: &Path) -> PathBuf {
 
 fn private_backup_dir(state: &Path) -> Result<PathBuf, BackupError> {
     let dir = backup_dir(state);
-    crate::transport::prepare_private_dir(&dir)
-        .map_err(|e| BackupError::Invalid(format!("backup directory: {e}")))?;
+    ensure_private_dir(&dir).map_err(|e| BackupError::Invalid(format!("backup directory: {e}")))?;
     Ok(dir)
 }
 
@@ -248,7 +248,10 @@ pub struct Restored {
 }
 
 pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
-    let _lock = crate::service::lock_state(state).map_err(|_| BackupError::Busy)?;
+    let _lock = super::lock_state(state).map_err(|e| match e.kind() {
+        io::ErrorKind::WouldBlock => BackupError::Busy,
+        kind => BackupError::Io("lock state directory", kind),
+    })?;
     let db = state.join(DATABASE);
     let database_schema = database_schema(&db)?.ok_or(BackupError::Invalid(
         "no database in the state directory".into(),

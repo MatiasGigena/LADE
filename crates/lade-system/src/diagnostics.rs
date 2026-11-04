@@ -7,8 +7,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::service::convert::{now_ms, wire_ts};
 use crate::storage::backup;
+use crate::support::fs::{ensure_private_dir, service_uid};
+use crate::support::{now_ms, wire_ts};
 
 pub const LOG_DIR: &str = "logs";
 pub const LOG_FILE: &str = "laded.log";
@@ -199,8 +200,7 @@ impl RotatingLog {
 
     fn open_current(&mut self) -> io::Result<&mut (File, u64)> {
         if self.current.is_none() {
-            crate::transport::prepare_private_dir(&self.dir)
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            ensure_private_dir(&self.dir)?;
             let path = self.path(0);
             let file = OpenOptions::new()
                 .create(true)
@@ -272,9 +272,8 @@ pub fn record(line: &str) -> String {
 }
 
 fn state_is_private(state: &Path) -> bool {
-    fs::symlink_metadata(state).is_ok_and(|m| {
-        m.is_dir() && m.uid() == rustix::process::getuid().as_raw() && m.mode() & 0o077 == 0
-    })
+    fs::symlink_metadata(state)
+        .is_ok_and(|m| m.is_dir() && m.uid() == service_uid() && m.mode() & 0o077 == 0)
 }
 
 pub struct StderrCapture {

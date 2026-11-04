@@ -19,9 +19,10 @@ use lade_protocol::types::{DeliveryMode, Model};
 use super::Service;
 use super::convert::{
     counter, preview, wire_execution_state, wire_git, wire_id, wire_lifecycle, wire_path,
-    wire_reference, wire_ts,
+    wire_reference,
 };
 use super::state::{ObjState, WsState};
+use crate::support::wire_ts;
 
 const SUMMARY_OUTCOME_CHARS: usize = 512;
 pub(super) const DETAIL_LIST_MAX: usize = 64;

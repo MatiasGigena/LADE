@@ -1,7 +1,3 @@
-use std::fs::File;
-use std::io::Read;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use lade_core::DomainError;
 use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::ids::{self as core_ids, GitAlgorithm, Uuid};
@@ -13,28 +9,6 @@ use lade_protocol::client::{self as wire, ErrorCode, Rejection, SafeAction, Side
 use lade_protocol::types::{self as wire_types, Counter, Id};
 
 use crate::adapters::git::{self, GitError, ObjectFormat};
-
-pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-}
-
-pub fn wire_ts(ms: i64) -> wire_types::Timestamp {
-    wire_types::Timestamp::from_unix_ms(ms)
-        .or_else(|| wire_types::Timestamp::from_unix_ms(0))
-        .expect("epoch is representable")
-}
-
-pub fn random_fill(buf: &mut [u8]) -> std::io::Result<()> {
-    File::open("/dev/urandom")?.read_exact(buf)
-}
-
-pub fn new_uuid() -> Uuid {
-    let mut bytes = [0u8; 16];
-    random_fill(&mut bytes).expect("kernel random source unavailable");
-    Uuid::from_random_bytes(bytes)
-}
 
 pub fn wire_id(uuid: Uuid) -> Id {
     Id::parse(uuid.to_string()).expect("domain uuids are canonical v4")
@@ -340,17 +314,6 @@ pub fn wire_path(bytes: &[u8]) -> wire_types::WirePath {
         .unwrap_or_else(|_| wire_types::WirePath::from_bytes(b"?".to_vec()).expect("valid path"))
 }
 
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 pub fn preview(text: &str, max: usize) -> String {
     wire_types::truncate_chars(text, max).to_string()
 }
@@ -358,13 +321,6 @@ pub fn preview(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn constant_time_comparison() {
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
-    }
 
     #[test]
     fn domain_codes_map_to_wire_codes() {

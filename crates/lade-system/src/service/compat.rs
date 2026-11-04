@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -30,13 +30,14 @@ use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
 use crate::supervision::credentials::FIXTURE_PROVIDER;
 use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
+use crate::support::fs::ensure_private_dir;
 
 use super::convert::{
-    conflict, counter, domain_rejection, invalid, new_uuid, not_found, now_ms, preview, rejection,
-    wire_id,
+    conflict, counter, domain_rejection, invalid, not_found, preview, rejection, wire_id,
 };
 use super::handlers::{Pending, sql};
 use super::{Flow, JobOutput, ReqCtx, Service};
+use crate::support::{new_uuid, now_ms};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 pub(crate) const MAX_IMPORT_BYTES: u64 = 16 << 20;
@@ -276,20 +277,13 @@ fn wire_reason(reason: SessionChangeReason) -> &'static str {
     }
 }
 
-fn private_dir(path: &Path) -> std::io::Result<()> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-}
-
 impl Service {
     pub(crate) fn profile_dir(&self) -> PathBuf {
         self.paths.state.join("profile")
     }
 
     pub(crate) fn load_compat(&mut self) -> Result<(), String> {
-        private_dir(&self.profile_dir()).map_err(|e| format!("profile: {}", e.kind()))?;
+        ensure_private_dir(&self.profile_dir()).map_err(|e| format!("profile: {}", e.kind()))?;
         let conn = self.store.conn();
         for (oid, level) in storage::load_thinking(conn).map_err(|e| e.to_string())? {
             if let Some(level) = ThinkingLevel::parse(&level) {
@@ -343,7 +337,7 @@ impl Service {
                 let models = profile::profile_providers(&profile)
                     .is_ok_and(|p| !p.is_empty())
                     .then_some(models);
-                let result = private_dir(&scratch)
+                let result = ensure_private_dir(&scratch)
                     .map_err(|e| CatalogFailure::other(format!("catalogue scratch: {}", e.kind())))
                     .and_then(|()| {
                         launcher
@@ -1418,7 +1412,7 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
         ));
     }
     let dir = copy.parent().ok_or_else(|| invalid("import directory"))?;
-    private_dir(dir).map_err(|_| {
+    ensure_private_dir(dir).map_err(|_| {
         super::convert::durability("The session could not be copied for import. Try again.")
     })?;
     let mut file = fs::OpenOptions::new()

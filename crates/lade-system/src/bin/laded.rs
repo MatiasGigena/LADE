@@ -20,6 +20,7 @@ use lade_system::supervision::{
     GATEWAY_SOCKET_DIR, LaunchError, LaunchRequest, LauncherConfig, SupervisorEvent, WorkerControl,
     WorkerLauncher, default_launcher,
 };
+use lade_system::support::wire_ts;
 
 const USAGE: &str = "usage: laded serve [--state-dir DIR] [--runtime-dir DIR] [--max-workers N]
                    [--max-terminals N] [--storage-warn-mib N] [--storage-reserve-mib N]
@@ -409,7 +410,7 @@ fn store_info(parsed: &Args) -> ExitCode {
                     "backup schema={} to={} taken={} file={}",
                     b.from,
                     b.to,
-                    service::convert::wire_ts(b.taken_ms),
+                    wire_ts(b.taken_ms),
                     state.join(backup::BACKUP_DIR).join(&b.file).display()
                 );
             }
@@ -436,7 +437,7 @@ fn store_restore(parsed: &Args) -> ExitCode {
             println!(
                 "restored schema {} backup taken {} (database was schema {})",
                 schema,
-                service::convert::wire_ts(restored.backup.taken_ms),
+                wire_ts(restored.backup.taken_ms),
                 restored.database_schema
             );
             println!("kept the newer database as {}", restored.kept.display());

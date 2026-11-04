@@ -40,7 +40,7 @@ fn reused_capture_registration_keeps_its_original_identity_after_a_newer_capture
         run: root.path().join("run"),
         sockets: root.path().join("sockets"),
     };
-    fs::create_dir(&paths.tmp).unwrap();
+    crate::support::fs::ensure_private_dir(&paths.tmp).unwrap();
     let mut service = Service {
         store: Store::open(&root.path().join("lade.db")).unwrap(),
         artifacts: Arc::new(

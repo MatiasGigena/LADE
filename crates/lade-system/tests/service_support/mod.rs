@@ -33,7 +33,7 @@ pub const TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn new_id() -> Id {
     let mut bytes = [0u8; 16];
-    lade_system::service::convert::random_fill(&mut bytes).unwrap();
+    lade_system::support::random_fill(&mut bytes).unwrap();
     Id::from_random_bytes(bytes)
 }
 

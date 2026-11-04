@@ -12,8 +12,9 @@ use crate::adapters::git::CommitSpec;
 use crate::storage;
 
 use super::Service;
-use super::convert::{adapter_git, core_git, now_ms};
+use super::convert::{adapter_git, core_git};
 use super::state::{ObjState, WsState};
+use crate::support::now_ms;
 
 fn sql_text(error: &rusqlite::Error) -> String {
     format!("store: {error}")
@@ -321,7 +322,7 @@ impl Service {
 
 fn kill_stale_sandboxes(state: &Path) {
     let me = std::process::id();
-    let uid = crate::transport::service_uid();
+    let uid = crate::support::fs::service_uid();
     let state_bytes = state.as_os_str().as_encoded_bytes();
     let mut targets = Vec::new();
     if let Ok(entries) = fs::read_dir("/proc") {

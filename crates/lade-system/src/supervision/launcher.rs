@@ -18,9 +18,7 @@ use super::credentials::{
     CredentialError, CredentialSource, FIXTURE_PROVIDER, FIXTURE_REFUSED, FIXTURE_SWITCH,
     ReleasedCredentials,
 };
-use super::gateway::{
-    EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies, ensure_private_dir,
-};
+use super::gateway::{EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies};
 use super::providers::{ProviderAccess, ProviderFacts, classify};
 use super::sweep::{PidRecord, kill_record, record_sandbox, sandbox_marker};
 use super::{
@@ -28,6 +26,7 @@ use super::{
     WorkerLauncher,
 };
 use crate::adapters::profile::{self, CustomProvider};
+use crate::support::fs::ensure_private_dir;
 pub use crate::adapters::sandbox::WORKER_LIMITS;
 use crate::adapters::sandbox::{
     CgroupLeaf, Limits, SandboxCgroups, SandboxError, SandboxSpec, SandboxTools, WorkerLaunch,

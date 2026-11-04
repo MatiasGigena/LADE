@@ -21,12 +21,13 @@ use crate::storage::{self, JournalRow};
 
 use super::convert::{
     adapter_git, conflict, domain_rejection, durability, from_wire_git, git_rejection, invalid,
-    new_uuid, not_found, now_ms, parse_uuid, rejection,
+    not_found, parse_uuid, rejection,
 };
 use super::handlers::{Pending, sql};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::project::{delete_history_blocker, wire_approval, wire_candidate, wire_verification};
 use super::{Flow, JobOutput, ReqCtx, Service};
+use crate::support::{new_uuid, now_ms};
 
 fn ts_now() -> Timestamp {
     Timestamp::from_unix_ms(now_ms())

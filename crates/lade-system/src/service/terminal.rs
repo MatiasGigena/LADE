@@ -11,12 +11,11 @@ use crate::supervision::terminal::{
     MAX_COLS, MAX_ROWS, TERMINAL_LIMITS, Terminal, TerminalExit, TerminalRequest,
 };
 
-use super::convert::{
-    conflict, counter, invalid, new_uuid, not_found, parse_uuid, rejection, wire_id,
-};
+use super::convert::{conflict, counter, invalid, not_found, parse_uuid, rejection, wire_id};
 use super::handlers::Pending;
 use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Flow, JobOutput, ReqCtx, Service};
+use crate::support::new_uuid;
 
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
 const EVENT_BYTES: usize = 32 << 10;

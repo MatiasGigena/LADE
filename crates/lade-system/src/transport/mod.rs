@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::net::Shutdown;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -15,7 +15,8 @@ use lade_protocol::client::{ClientBody, ClientEnvelope, RequestFrame};
 use lade_protocol::types::Id;
 use lade_protocol::{FrameReader, Framing, decode_client_frame, encode};
 
-use crate::service::convert::{constant_time_eq, hex, random_fill};
+use crate::support::fs::service_uid;
+use crate::support::{constant_time_eq, hex, random_fill};
 
 pub const SOCKET_NAME: &str = "control.sock";
 pub const CAPABILITY_NAME: &str = "control.cap";
@@ -27,7 +28,7 @@ const MAX_PENDING_HANDSHAKES: usize = 8;
 
 #[derive(Debug)]
 pub enum TransportError {
-    UnsafeRuntimeDir(&'static str),
+    UnsafeSocketPath,
     AlreadyRunning,
     Io(&'static str, io::ErrorKind),
 }
@@ -35,7 +36,7 @@ pub enum TransportError {
 impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsafeRuntimeDir(why) => write!(f, "unsafe runtime directory: {why}"),
+            Self::UnsafeSocketPath => f.write_str("control socket path is not a socket"),
             Self::AlreadyRunning => {
                 f.write_str("another service is listening on the control socket")
             }
@@ -48,41 +49,6 @@ impl std::error::Error for TransportError {}
 
 fn io_err(stage: &'static str) -> impl Fn(io::Error) -> TransportError {
     move |e| TransportError::Io(stage, e.kind())
-}
-
-pub fn service_uid() -> u32 {
-    rustix::process::getuid().as_raw()
-}
-
-pub fn prepare_private_dir(dir: &Path) -> Result<(), TransportError> {
-    match fs::symlink_metadata(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = dir.parent() {
-                fs::create_dir_all(parent).map_err(io_err("create runtime parent"))?;
-            }
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .create(dir)
-                .map_err(io_err("create runtime dir"))?;
-        }
-        Err(e) => return Err(TransportError::Io("inspect runtime dir", e.kind())),
-        Ok(_) => {}
-    }
-    let meta = fs::symlink_metadata(dir).map_err(io_err("inspect runtime dir"))?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err(TransportError::UnsafeRuntimeDir("not a directory"));
-    }
-    if meta.uid() != service_uid() {
-        return Err(TransportError::UnsafeRuntimeDir(
-            "not owned by the service user",
-        ));
-    }
-    if meta.permissions().mode() & 0o077 != 0 {
-        return Err(TransportError::UnsafeRuntimeDir(
-            "group or other permissions are set",
-        ));
-    }
-    Ok(())
 }
 
 pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
@@ -121,9 +87,7 @@ pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     let path = dir.join(SOCKET_NAME);
     if let Ok(meta) = fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
-            return Err(TransportError::UnsafeRuntimeDir(
-                "control socket path is not a socket",
-            ));
+            return Err(TransportError::UnsafeSocketPath);
         }
         if UnixStream::connect(&path).is_ok() {
             return Err(TransportError::AlreadyRunning);

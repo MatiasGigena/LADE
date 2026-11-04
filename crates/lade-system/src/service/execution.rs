@@ -16,13 +16,12 @@ use crate::storage::{self, ActivityRow};
 use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
 use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerEvent};
 
-use super::convert::{
-    counter, domain_rejection, new_uuid, now_ms, parse_uuid, preview, rejection, wire_id, wire_ts,
-};
+use super::convert::{counter, domain_rejection, parse_uuid, preview, rejection, wire_id};
 use super::handlers::{CapturePurpose, Pending};
 use super::jobs::{self, LaunchInput};
 use super::project::wire_input;
 use super::{JobOutput, ReqCtx, Service};
+use crate::support::{new_uuid, now_ms, wire_ts};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const AGENT_SANDBOX_UNAVAILABLE: &str =

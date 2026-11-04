@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -28,7 +28,9 @@ use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
 };
 
-use super::convert::{adapter_git, conflict, core_git, git_rejection, hex, not_found};
+use super::convert::{adapter_git, conflict, core_git, git_rejection, not_found};
+use crate::support::fs::ensure_private_dir;
+use crate::support::hex;
 
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
 pub const MAX_CHUNKED_FILE: u64 = 1 << 30;
@@ -818,11 +820,7 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
             result: Err("worktree_missing".into()),
         };
     }
-    if let Err(e) = fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&request.session_dir)
-    {
+    if let Err(e) = ensure_private_dir(&request.session_dir) {
         return LaunchOut {
             provisioned_branch,
             result: Err(format!("session_dir: {}", e.kind())),

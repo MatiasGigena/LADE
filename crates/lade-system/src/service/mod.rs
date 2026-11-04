@@ -13,8 +13,8 @@ mod state;
 mod terminal;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::fs::{self, File};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -41,11 +41,13 @@ use crate::supervision::launcher::RESERVED_GENERATION;
 use crate::supervision::{
     GATEWAY_SOCKET_DIR, SupervisorEvent, WorkerLauncher, gateway_socket_path, socket_path_fits,
 };
+use crate::support::fs::ensure_private_dir;
 use crate::transport::{self, Inbound, Listener, Outbound, TransportError};
 
 pub use limits::ResourceLimits;
 
-use convert::{durability, hex, new_uuid, now_ms, wire_id};
+use crate::support::{hex, new_uuid, now_ms};
+use convert::{durability, wire_id};
 use jobs::Pool;
 use state::{ObjState, Runtime, WsState};
 
@@ -90,6 +92,7 @@ pub enum StartError {
     InvalidPath(&'static str),
     SocketPathTooLong(PathBuf),
     StateDir(String),
+    PrivateDir(PathBuf, io::Error),
     AlreadyRunning,
     Store(StoreError),
     Transport(TransportError),
@@ -108,6 +111,7 @@ impl std::fmt::Display for StartError {
                 crate::supervision::launcher::MAX_SOCKET_PATH
             ),
             Self::StateDir(e) => write!(f, "state directory: {e}"),
+            Self::PrivateDir(path, e) => write!(f, "{}: {e}", path.display()),
             Self::AlreadyRunning => f.write_str("another service owns this state directory"),
             Self::Store(e) => write!(f, "{e}"),
             Self::Transport(e) => write!(f, "{e}"),
@@ -307,28 +311,7 @@ fn check_socket_paths(runtime: &Path) -> Result<(), StartError> {
 }
 
 fn private_dir(path: &Path) -> Result<(), StartError> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .map_err(|e| StartError::StateDir(format!("{}: {}", path.display(), e.kind())))
-}
-
-pub(crate) fn lock_state(state: &Path) -> Result<File, StartError> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(state.join("lade.lock"))
-        .map_err(|e| StartError::StateDir(format!("lock: {}", e.kind())))?;
-    for _ in 0..40 {
-        if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
-            return Ok(file);
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    Err(StartError::AlreadyRunning)
+    ensure_private_dir(path).map_err(|e| StartError::PrivateDir(path.to_path_buf(), e))
 }
 
 pub fn start(
@@ -342,9 +325,8 @@ pub fn start(
         return Err(StartError::InvalidPath("runtime directory"));
     }
     check_socket_paths(&config.runtime_dir)?;
-    transport::prepare_private_dir(&config.runtime_dir).map_err(StartError::Transport)?;
+    private_dir(&config.runtime_dir)?;
     private_dir(&config.state_dir)?;
-    transport::prepare_private_dir(&config.state_dir).map_err(StartError::Transport)?;
     let state = config
         .state_dir
         .canonicalize()
@@ -367,7 +349,10 @@ pub fn start(
     ] {
         private_dir(dir)?;
     }
-    let lock = lock_state(&paths.state)?;
+    let lock = storage::lock_state(&paths.state).map_err(|e| match e.kind() {
+        io::ErrorKind::WouldBlock => StartError::AlreadyRunning,
+        kind => StartError::StateDir(format!("lock: {kind}")),
+    })?;
     transport::ensure_not_running(&config.runtime_dir).map_err(StartError::Transport)?;
     let store = Store::open(&paths.state.join("lade.db")).map_err(StartError::Store)?;
     let artifacts = ArtifactStore::open(&paths.state.join("artifacts"), &paths.tmp)

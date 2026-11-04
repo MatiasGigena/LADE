@@ -4,13 +4,15 @@ use std::io;
 use std::io::Read as _;
 use std::net::IpAddr;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::supervision::gateway::is_non_public;
+use crate::adapters::providers::{built_in_provider, is_non_public};
+use crate::support::fs::ensure_private_dir;
+use crate::support::hex;
 
 pub const MAX_EXTENSION_FILES: usize = 256;
 pub const MAX_EXTENSION_BYTES: u64 = 8 << 20;
@@ -38,14 +40,6 @@ pub struct Entry {
     pub name: String,
     pub sha256: Option<String>,
     pub problem: Option<String>,
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -312,9 +306,7 @@ pub fn custom_providers(bytes: &[u8]) -> Result<Vec<CustomProvider>, String> {
         if !valid_id {
             return Err(format!("provider id {id:?} is not a lowercase label"));
         }
-        if crate::supervision::credentials::provider_env_vars(id).is_some()
-            || crate::supervision::gateway::default_policies().contains_key(id)
-        {
+        if built_in_provider(id).is_some() {
             return Err(format!(
                 "provider {id} redefines a built-in provider; its reviewed endpoint policy applies"
             ));
@@ -405,13 +397,6 @@ struct Budget {
     bytes: u64,
 }
 
-fn private_dir(path: &Path) -> io::Result<()> {
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-}
-
 fn copy_file(from: &Path, to: &Path, budget: &mut Budget) -> io::Result<()> {
     let meta = fs::symlink_metadata(from)?;
     if !meta.is_file() {
@@ -441,7 +426,7 @@ fn copy_tree(from: &Path, to: &Path, budget: &mut Budget, depth: usize) -> io::R
     if depth > MAX_DEPTH {
         return Ok(());
     }
-    private_dir(to)?;
+    ensure_private_dir(to)?;
     for path in sorted_entries(from) {
         let Some(name) = path.file_name() else {
             continue;
@@ -479,7 +464,7 @@ pub fn materialize(
     if dest.exists() {
         fs::remove_dir_all(dest)?;
     }
-    private_dir(dest)?;
+    ensure_private_dir(dest)?;
     let mut budget = Budget { files: 0, bytes: 0 };
     let context = profile.join("AGENTS.md");
     if fs::symlink_metadata(&context).is_ok_and(|m| m.is_file()) {
@@ -502,7 +487,7 @@ pub fn materialize(
         if !approved(&entry.name, hash) {
             continue;
         }
-        private_dir(&dest.join("extensions"))?;
+        ensure_private_dir(&dest.join("extensions"))?;
         let target = dest.join("extensions").join(&entry.name);
         copy_entry(
             &profile.join("extensions").join(&entry.name),
@@ -536,7 +521,7 @@ pub fn import(source: &Path, profile: &Path) -> io::Result<ImportReport> {
             "not a directory",
         ));
     }
-    private_dir(profile)?;
+    ensure_private_dir(profile)?;
     let mut report = ImportReport::default();
     let mut budget = Budget { files: 0, bytes: 0 };
     let mut item = |from: PathBuf, to: PathBuf, label: String, report: &mut ImportReport| {
@@ -567,7 +552,7 @@ pub fn import(source: &Path, profile: &Path) -> io::Result<ImportReport> {
         if !source.join(dir).is_dir() {
             continue;
         }
-        private_dir(&profile.join(dir))?;
+        ensure_private_dir(&profile.join(dir))?;
         for path in sorted_entries(&source.join(dir)) {
             let Some(name) = name_of(&path) else { continue };
             item(
@@ -601,7 +586,7 @@ mod tests {
 
     fn temp(tag: &str) -> PathBuf {
         let mut bytes = [0u8; 8];
-        crate::service::convert::random_fill(&mut bytes).unwrap();
+        crate::support::random_fill(&mut bytes).unwrap();
         let dir = std::env::temp_dir().join(format!("lade-profile-{tag}-{}", hex(&bytes)));
         fs::create_dir_all(&dir).unwrap();
         dir

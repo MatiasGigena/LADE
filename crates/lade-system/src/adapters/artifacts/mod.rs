@@ -1,11 +1,13 @@
 use std::fmt;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest as _, Sha256};
+
+use crate::support::fs::ensure_private_dir;
 
 pub const MAX_ARTIFACT_PAGE: usize = 1 << 20;
 const CHUNK: usize = 64 << 10;
@@ -155,7 +157,7 @@ impl ArtifactStore {
     ) -> Result<Self, ArtifactError> {
         let objects = artifacts_dir.join("sha256");
         for dir in [&objects, tmp_dir] {
-            private_dir(dir).map_err(io_err("create_dir"))?;
+            ensure_private_dir(dir).map_err(io_err("create_dir"))?;
         }
         Ok(Self {
             objects,
@@ -302,11 +304,6 @@ impl ArtifactStore {
         }
         Ok(ArtifactDigest::from_hasher(hasher) == *digest)
     }
-}
-
-fn private_dir(dir: &Path) -> io::Result<()> {
-    DirBuilder::new().mode(0o700).recursive(true).create(dir)?;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
 struct RemoveOnDrop<'a>(&'a Path);
