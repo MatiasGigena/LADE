@@ -1,6 +1,6 @@
 use super::*;
 use crate::presentation::controller::intents::{RecordingSink, StartPoint};
-use crate::presentation::controller::tests::{setup, without_session};
+use crate::presentation::controller::tests::{main_selected, setup, without_session};
 use crate::presentation::state::model::{
     ApprovalId, ApprovalState, ApprovalSummary, AvailableAction, CandidateId, ConnectionState,
     GitId, Load, Timestamp,
@@ -8,13 +8,6 @@ use crate::presentation::state::model::{
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::test_fixture;
 use std::rc::Rc;
-
-fn main_selected() -> (Rc<Controller>, Rc<RecordingSink>) {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
-    (controller, sink)
-}
 
 fn edit_detail(controller: &Controller, edit: impl FnOnce(&mut ObjectiveDetail)) {
     let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
@@ -37,9 +30,7 @@ fn offer(detail: &mut ObjectiveDetail, action: ActionName) {
 
 #[test]
 fn edit_intent_sends_the_edited_revision() {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, _) = main_selected();
     let (revision, mut intent, enabled) = {
         let state = controller.store.state();
         let d = state.selected_detail().unwrap();
@@ -73,9 +64,7 @@ fn edit_intent_sends_the_edited_revision() {
 
 #[test]
 fn disabled_actions_are_not_sent() {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, _) = main_selected();
     let err = controller.integrate().unwrap_err();
     assert!(!err.is_empty());
     assert!(sink.intents.borrow().is_empty());
@@ -158,7 +147,7 @@ fn commands_need_a_selected_and_loaded_objective() {
 
 #[test]
 fn a_disabled_action_reports_the_service_reason_and_an_absent_one_says_so() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     assert_eq!(
         controller.freeze(),
         Err("Already frozen as Candidate 2".into())
@@ -179,7 +168,7 @@ fn a_disabled_action_reports_the_service_reason_and_an_absent_one_says_so() {
 
 #[test]
 fn messages_and_intents_must_say_something() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     assert_eq!(
         controller.send_message("  \n", DeliveryMode::Prompt),
         Err("Type a message first".into())
@@ -198,7 +187,7 @@ fn messages_and_intents_must_say_something() {
 
 #[test]
 fn starting_with_another_model_also_makes_it_the_default() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     edit_detail(&controller, |d| offer(d, ActionName::ExecutionStart));
     let default = ModelRef::new("test-provider", "test-model");
     controller.start_execution(default.clone(), None).unwrap();
@@ -220,7 +209,7 @@ fn starting_with_another_model_also_makes_it_the_default() {
 
 #[test]
 fn verify_splits_the_command_line_and_rejects_bad_quoting() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     assert_eq!(
         controller.verify("npm test 'unclosed"),
         Err("Unclosed single quote".into())
@@ -242,7 +231,7 @@ fn verify_splits_the_command_line_and_rejects_bad_quoting() {
 
 #[test]
 fn approval_needs_an_override_unless_the_latest_run_of_every_check_passed() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     assert!(controller.approval_needs_override(), "npm test failed");
     assert_eq!(
         controller.approve(Some("   ".into())),
@@ -286,7 +275,7 @@ fn approval_needs_an_override_unless_the_latest_run_of_every_check_passed() {
 
 #[test]
 fn integrating_needs_a_valid_approval() {
-    let (controller, sink) = main_selected();
+    let (controller, sink, _) = main_selected();
     edit_detail(&controller, |d| offer(d, ActionName::ReviewIntegrate));
     assert_eq!(
         controller.integrate(),
@@ -392,7 +381,7 @@ fn a_new_objective_needs_an_open_repository() {
 
 #[test]
 fn a_stopped_agent_offers_to_resume_only_when_the_service_does() {
-    let (controller, _) = main_selected();
+    let (controller, _, _) = main_selected();
     let mut detail = controller.store.state().selected_detail().cloned().unwrap();
     detail.summary.execution.state = ExecutionState::Failed;
     let readiness = Readiness::CatalogLoading;

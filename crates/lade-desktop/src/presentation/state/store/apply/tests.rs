@@ -1,26 +1,11 @@
 use super::*;
 use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
-    ActivityItem, ActivityItemId, ActivityRole, ArtifactDigest, Attention, CandidateId,
-    ChangeStatus, ChangedFile, DiffHunk, FileEncoding, GitId, Lifecycle, NoticeLevel, Reference,
-    Side, TargetRef, Timestamp, WorkspaceId,
+    ActivityItemId, ArtifactDigest, Attention, CandidateId, ChangeStatus, ChangedFile, DiffHunk,
+    FileEncoding, GitId, Lifecycle, NoticeLevel, Reference, Side, TargetRef, WorkspaceId,
 };
 use crate::presentation::state::store::ViewerKey;
-use crate::presentation::state::store::tests::summary;
-
-fn item(id: &str, seq: u64, text: &str) -> ActivityItem {
-    ActivityItem {
-        item_id: ActivityItemId::new(id),
-        seq,
-        at: Timestamp(0),
-        role: ActivityRole::Assistant,
-        title: String::new(),
-        text: text.to_owned(),
-        tool_name: None,
-        is_error: false,
-        truncated: false,
-    }
-}
+use crate::presentation::state::store::tests::{item, summary};
 
 fn change_list(o: &ObjectiveId, basis: Basis, files: &[&str]) -> ChangeList {
     ChangeList {

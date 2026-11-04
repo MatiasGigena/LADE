@@ -290,10 +290,9 @@ impl Controller {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
 
     use super::*;
-    use crate::presentation::controller::intents::RecordingSink;
+    use crate::presentation::controller::tests::main_selected;
     use crate::presentation::state::agent_session::{
         AgentSessionUpdate, Catalog, ModelView, ProviderStatus, ProviderView, UiDialog,
         UiPromptView,
@@ -301,16 +300,9 @@ mod tests {
     use crate::presentation::state::model::Load;
     use crate::presentation::test_fixture;
 
-    fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
-        let (controller, sink) = super::super::tests::setup();
-        controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-        sink.intents.borrow_mut().clear();
-        (controller, sink)
-    }
-
     #[test]
     fn the_picker_uses_the_service_catalogue_and_loads_models_on_demand() {
-        let (controller, sink) = setup();
+        let (controller, sink, _) = main_selected();
         controller.store.apply_all(vec![StoreUpdate::AgentSession(
             AgentSessionUpdate::Catalog(Catalog {
                 sdk_version: "1.5.0".into(),
@@ -369,7 +361,7 @@ mod tests {
 
     #[test]
     fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
-        let (controller, sink) = setup();
+        let (controller, sink, _) = main_selected();
         controller.store.update(|s| {
             s.agent_session = Default::default();
             ((), Vec::new())
@@ -459,7 +451,7 @@ mod tests {
 
     #[test]
     fn dialogs_are_answered_explicitly_with_their_generation() {
-        let (controller, sink) = setup();
+        let (controller, sink, _) = main_selected();
         assert!(
             controller
                 .answer_dialog("missing", UiAnswerView::Cancel)
@@ -494,7 +486,7 @@ mod tests {
 
     #[test]
     fn session_operations_need_a_live_session() {
-        let (controller, sink) = setup();
+        let (controller, sink, _) = main_selected();
         let state = controller
             .store
             .state()
@@ -512,7 +504,7 @@ mod tests {
 
     #[test]
     fn configuring_waits_only_for_a_running_turn() {
-        let (controller, sink) = setup();
+        let (controller, sink, _) = main_selected();
         controller.store.apply_all(vec![
             catalog(
                 vec![ProviderView {

@@ -1,5 +1,22 @@
 use super::*;
-use crate::presentation::state::model::{ExecutionState, Lifecycle, NoticeScope, Timestamp};
+use crate::presentation::state::model::{
+    ActivityItem, ActivityItemId, ActivityRole, ExecutionState, Lifecycle, NoticeScope, Timestamp,
+};
+
+/// An Assistant activity item with no title or tool.
+pub(super) fn item(id: &str, seq: u64, text: &str) -> ActivityItem {
+    ActivityItem {
+        item_id: ActivityItemId::new(id),
+        seq,
+        at: Timestamp(0),
+        role: ActivityRole::Assistant,
+        title: String::new(),
+        text: text.to_owned(),
+        tool_name: None,
+        is_error: false,
+        truncated: false,
+    }
+}
 
 pub(super) fn summary(
     id: &str,

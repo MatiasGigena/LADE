@@ -18,6 +18,15 @@ pub(super) fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
     (Controller::new(store, sink.clone()), sink)
 }
 
+/// [`setup`] with the fixture's main Objective selected and the selection's intents cleared.
+pub(super) fn main_selected() -> (Rc<Controller>, Rc<RecordingSink>, ObjectiveId) {
+    let (controller, sink) = setup();
+    let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+    controller.select_objective(&id);
+    sink.intents.borrow_mut().clear();
+    (controller, sink, id)
+}
+
 #[test]
 fn compact_layout_follows_width_and_explicit_tasks() {
     let (controller, _) = setup();

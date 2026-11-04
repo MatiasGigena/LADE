@@ -1,21 +1,11 @@
 use super::*;
-use crate::presentation::controller::intents::RecordingSink;
-use crate::presentation::controller::tests::setup;
+use crate::presentation::controller::tests::{main_selected, setup};
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, ArtifactDigest, CandidateId, CaptureId, ChangeList,
     ChangedFile, FileDiff, FileEncoding, FilePage, GitId, SearchResults, TargetRef, Timestamp,
 };
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::test_fixture;
-use std::rc::Rc;
-
-fn main_selected() -> (Rc<Controller>, Rc<RecordingSink>, ObjectiveId) {
-    let (controller, sink) = setup();
-    let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
-    controller.select_objective(&id);
-    sink.intents.borrow_mut().clear();
-    (controller, sink, id)
-}
 
 fn changes(id: &ObjectiveId, files: &[(&str, ChangeStatus)]) -> StoreUpdate {
     StoreUpdate::Changes(ChangeList {

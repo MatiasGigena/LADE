@@ -77,21 +77,7 @@ impl ActivityLog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::state::model::{ActivityRole, Timestamp};
-
-    fn item(id: &str, seq: u64, text: &str) -> ActivityItem {
-        ActivityItem {
-            item_id: ActivityItemId::new(id),
-            seq,
-            at: Timestamp(0),
-            role: ActivityRole::Assistant,
-            title: String::new(),
-            text: text.to_owned(),
-            tool_name: None,
-            is_error: false,
-            truncated: false,
-        }
-    }
+    use crate::presentation::state::store::tests::item;
 
     fn texts(log: &ActivityLog) -> Vec<&str> {
         log.items.iter().map(|i| i.text.as_str()).collect()

@@ -1,5 +1,5 @@
 use super::*;
-use crate::presentation::controller::tests::{setup, without_session};
+use crate::presentation::controller::tests::{main_selected, setup, without_session};
 use crate::presentation::state::model::{
     ConnectionState, Draft, DraftState, Load, ObjectiveId, SessionId,
 };
@@ -67,9 +67,7 @@ fn feedback_without_a_session_states_that_once() {
 
 #[test]
 fn stale_item_blocks_the_whole_batch() {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, _) = main_selected();
     let batch = controller.feedback_batch().unwrap();
     assert!(batch.items.iter().any(|i| i.stale));
     assert!(batch.blockers.iter().any(|b| b.contains("stale")));
@@ -79,10 +77,7 @@ fn stale_item_blocks_the_whole_batch() {
 
 #[test]
 fn a_feedback_batch_takes_at_most_the_wire_bound_and_defers_the_rest() {
-    let (controller, sink) = setup();
-    let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
-    controller.select_objective(&id);
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, id) = main_selected();
     controller.store.update(|s| {
         let template = s.drafts[&id][0].reference.clone();
         let session = s
@@ -131,9 +126,7 @@ fn a_feedback_batch_takes_at_most_the_wire_bound_and_defers_the_rest() {
 
 #[test]
 fn closing_flushes_drafts_and_lists_what_is_not_yet_saved() {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, _) = main_selected();
     let draft = DraftId::new(test_fixture::SAVED_DRAFT);
     let before = controller.unsaved_drafts().len();
     controller.edit_draft(&draft, "Closing right after typing.", 1_000);
@@ -163,9 +156,7 @@ fn closing_flushes_drafts_and_lists_what_is_not_yet_saved() {
 
 #[test]
 fn typing_in_a_draft_schedules_a_save_intent() {
-    let (controller, sink) = setup();
-    controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    sink.intents.borrow_mut().clear();
+    let (controller, sink, _) = main_selected();
     let draft = DraftId::new(test_fixture::SAVED_DRAFT);
     controller.edit_draft(&draft, "Use a typed TimeoutError here.", 1_000);
     assert_eq!(controller.poll_drafts(1_100), Some(1_300));
