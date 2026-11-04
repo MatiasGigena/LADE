@@ -447,3 +447,6 @@ fn write_loop(mut stream: UnixStream, out: &Outbound) {
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Both);
 }
+
+#[cfg(test)]
+mod tests;
