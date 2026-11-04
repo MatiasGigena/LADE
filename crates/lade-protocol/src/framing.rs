@@ -28,6 +28,13 @@ impl Deframer {
         }
     }
 
+    /// Consumes bytes from `input` and returns the next complete frame body, if any. A refusal
+    /// poisons the deframer.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::Closed` after an earlier refusal.
+    /// - `WireError::FrameSize` for an empty or oversized frame.
     pub fn next_frame(&mut self, input: &mut &[u8]) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
             return Err(WireError::Closed);
@@ -106,6 +113,12 @@ impl Deframer {
         Ok(None)
     }
 
+    /// Ends the stream; the deframer accepts nothing afterwards.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::Closed` after an earlier refusal.
+    /// - `WireError::TruncatedFrame` when the stream ended inside a frame.
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
             return Err(WireError::Closed);
@@ -134,6 +147,13 @@ impl<M: Message> Decoder<M> {
             message: PhantomData,
         }
     }
+    /// Decodes every complete frame in `input` and hands each message to `emit`. A refusal,
+    /// including one returned by `emit`, poisons the decoder.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::Closed` after an earlier refusal.
+    /// - Any refusal from deframing, from `Message::decode`, or from `emit`.
     pub fn push(
         &mut self,
         mut input: &[u8],
@@ -156,6 +176,12 @@ impl<M: Message> Decoder<M> {
         }
         result
     }
+    /// Ends the stream; the decoder accepts nothing afterwards.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::Closed` after an earlier refusal.
+    /// - `WireError::TruncatedFrame` when the stream ended inside a frame.
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
             return Err(WireError::Closed);
@@ -187,6 +213,13 @@ impl std::io::Write for BoundedWriter {
     }
 }
 
+/// Serializes `frame`, checks that it decodes under its own contract, and frames it.
+///
+/// # Errors
+///
+/// - `WireError::VersionMismatch` when the frame is not for this protocol version and bundle.
+/// - `WireError::FrameSize` when it serializes to more than `MAX_FRAME` bytes.
+/// - Any refusal from `Message::precheck` or `Message::decode`, such as `WireError::InvalidSchema`.
 pub fn encode<M: Message>(frame: &M, framing: Framing) -> Result<Vec<u8>, WireError> {
     if frame.identity() != (crate::VERSION, crate::BUNDLE) {
         return Err(WireError::VersionMismatch);

@@ -29,6 +29,19 @@ impl Reassembler {
             failed: false,
         }
     }
+    /// Applies one chunk frame and returns the reassembled bytes when a transfer completes. Any
+    /// refusal closes the reassembler.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::Closed` after an earlier refusal.
+    /// - `WireError::StaleExecution` for a transfer of another owner or execution generation.
+    /// - `WireError::ChunkOrder` for a duplicate or unknown transfer, or an out-of-order chunk.
+    /// - `WireError::LimitReached` for an oversized or excess transfer, or a malformed or oversized
+    ///   chunk.
+    /// - `WireError::ChunkLength` or `WireError::ChunkChecksum` when a finished transfer's size or
+    ///   SHA-256 differs from its start.
+    /// - `WireError::InvalidSchema` for a body that is not a chunk frame.
     pub fn accept(&mut self, body: &Body) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
             return Err(WireError::Closed);

@@ -35,6 +35,12 @@ struct RawRequest {
     payload: Value,
 }
 impl RequestFrame {
+    /// A request frame; mutating requests carry an operation id and reads do not.
+    ///
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` when `operation_id` is present for a read or missing for a
+    /// mutating request.
     pub fn new(
         request_id: Id,
         operation_id: Option<Id>,

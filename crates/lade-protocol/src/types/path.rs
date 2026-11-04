@@ -20,6 +20,11 @@ struct RawPath {
     display: String,
 }
 impl WirePath {
+    /// A path from its raw bytes, with a lossy UTF-8 display form.
+    ///
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` for an empty path or one longer than `MAX_PATH_BYTES`.
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, WireError> {
         let bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > MAX_PATH_BYTES {
@@ -31,6 +36,9 @@ impl WirePath {
             .collect();
         Ok(Self { bytes, display })
     }
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` for an empty path or one longer than `MAX_PATH_BYTES`.
     #[cfg(unix)]
     pub fn from_os_str(path: &OsStr) -> Result<Self, WireError> {
         use std::os::unix::ffi::OsStrExt;

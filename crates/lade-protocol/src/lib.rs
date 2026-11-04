@@ -78,9 +78,21 @@ impl std::error::Error for WireError {}
 pub trait Message: Serialize + DeserializeOwned + Sized {
     const CONTRACT: Contract;
     fn identity(&self) -> (u32, &str);
+    /// Extra checks a frame must pass before it is encoded; none by default.
+    ///
+    /// # Errors
+    ///
+    /// Implementations return the `WireError` for the first violated rule.
     fn precheck(&self) -> Result<(), WireError> {
         Ok(())
     }
+    /// Decodes one frame body under the message's contract.
+    ///
+    /// # Errors
+    ///
+    /// - Any refusal from `bounded_json`.
+    /// - `WireError::VersionMismatch` for another protocol version or bundle.
+    /// - `WireError::InvalidSchema` when the frame does not match the contract.
     fn decode(bytes: &[u8]) -> Result<Self, WireError> {
         let value = bounded_json(bytes)?;
         check_version(&value)?;
@@ -125,6 +137,12 @@ pub struct FrameRejection {
     pub request_id: Option<Id>,
 }
 
+/// Decodes a client frame, keeping the request id of a well-formed request envelope whose payload
+/// was refused so the refusal can be answered.
+///
+/// # Errors
+///
+/// `FrameRejection` with the refusal, and the request id when it could be read.
 pub fn decode_client_frame(bytes: &[u8]) -> Result<ClientEnvelope, FrameRejection> {
     let fatal = |error| FrameRejection {
         error,

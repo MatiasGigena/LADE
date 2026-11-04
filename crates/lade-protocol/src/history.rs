@@ -13,6 +13,15 @@ pub struct RequestHistory {
 impl RequestHistory {
     pub const CAPACITY: usize = 256;
 
+    /// Records the outcome of a mutating request, or returns the outcome first recorded for a retry
+    /// of the same operation.
+    ///
+    /// # Errors
+    ///
+    /// - `WireError::InvalidSchema` for a request without an operation id.
+    /// - `WireError::DuplicateConflict` when the request id or operation id was seen with different
+    ///   content.
+    /// - `WireError::LimitReached` when the history is full.
     pub fn observe(
         &mut self,
         request: &RequestFrame,

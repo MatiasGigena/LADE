@@ -105,6 +105,14 @@ impl<'de> Visitor<'de> for Seed<'_> {
     }
 }
 
+/// Parses one JSON frame within the node, depth and size limits, refusing duplicate keys.
+///
+/// # Errors
+///
+/// - `WireError::FrameSize` for an empty or oversized frame.
+/// - `WireError::InvalidUtf8` or `WireError::InvalidJson` for malformed text.
+/// - `WireError::DuplicateKey` for an object with a repeated key.
+/// - `WireError::LimitReached` when the frame exceeds the node, depth, string or entry limits.
 pub fn bounded_json(bytes: &[u8]) -> Result<Value, WireError> {
     if bytes.is_empty() || bytes.len() > MAX_FRAME {
         return Err(WireError::FrameSize);

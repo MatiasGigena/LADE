@@ -114,6 +114,12 @@ macro_rules! requests {
             pub fn payload_value(&self) -> Value {
                 match self { $(Request::$variant(p) => to_value(p)),* }
             }
+            /// Rebuilds the typed request named `name` from its JSON payload.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the payload does not match the request's payload
+            /// type.
             pub fn from_parts(name: RequestName, payload: Value) -> Result<Self, WireError> {
                 match name { $(RequestName::$variant => from_value(payload).map(Request::$variant)),* }
             }
@@ -128,6 +134,11 @@ macro_rules! requests {
             pub fn data_value(&self) -> Value {
                 match self { $(ReplyData::$variant(d) => to_value(d)),* }
             }
+            /// Rebuilds the typed reply data for `name` from its JSON value.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the data does not match the request's reply type.
             pub fn from_parts(name: RequestName, data: Value) -> Result<Self, WireError> {
                 match name { $(RequestName::$variant => from_value(data).map(ReplyData::$variant)),* }
             }
@@ -209,6 +220,11 @@ macro_rules! events {
             pub fn payload_value(&self) -> Value {
                 match self { $(Event::$variant(p) => to_value(p)),* }
             }
+            /// Rebuilds the typed event named `name` from its JSON payload.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the payload does not match the event's payload type.
             pub fn from_parts(name: EventName, payload: Value) -> Result<Self, WireError> {
                 match name { $(EventName::$variant => from_value(payload).map(Event::$variant)),* }
             }

@@ -23,6 +23,11 @@ macro_rules! wire_string {
         #[serde(try_from = "String", into = "String")]
         pub struct $name(String);
         impl $name {
+            /// Parses the validated wire form.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the text does not have the type's wire format.
             pub fn parse(value: impl Into<String>) -> Result<Self, WireError> {
                 Self::try_from(value.into())
             }

@@ -23,12 +23,21 @@ struct RawGitId {
     hex: String,
 }
 impl GitId {
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` unless `hex` is a lowercase object id of the algorithm's length.
     pub fn new(algorithm: GitAlgorithm, hex: impl Into<String>) -> Result<Self, WireError> {
         Self::try_from(RawGitId {
             algorithm,
             hex: hex.into(),
         })
     }
+    /// An object id whose algorithm is inferred from its length: 40 digits are SHA-1, others
+    /// SHA-256.
+    ///
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` unless `hex` is a valid lowercase object id.
     pub fn from_hex(hex: &str) -> Result<Self, WireError> {
         let algorithm = if hex.len() == 40 {
             GitAlgorithm::Sha1

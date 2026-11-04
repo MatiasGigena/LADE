@@ -48,6 +48,13 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
+    /// Reads the next frame body; `None` at a clean end of stream. A refusal poisons the reader.
+    ///
+    /// # Errors
+    ///
+    /// - `TransportError::Wire` for a refused frame, a stream that ended inside a frame, or a read
+    ///   after an earlier refusal.
+    /// - `TransportError::Io` when reading fails.
     pub fn read_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
         if self.failed {
             return Err(WireError::Closed.into());
@@ -83,6 +90,12 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
+    /// Reads and decodes the next message; `None` at a clean end of stream.
+    ///
+    /// # Errors
+    ///
+    /// Fails as `FrameReader::read_frame` does, or with `TransportError::Wire` when the frame does
+    /// not decode as `M`.
     pub fn read<M: Message>(&mut self) -> Result<Option<M>, TransportError> {
         let Some(frame) = self.read_frame()? else {
             return Ok(None);
@@ -114,6 +127,13 @@ impl<W: Write> FrameWriter<W> {
             failed: false,
         }
     }
+    /// Encodes, writes and flushes one message. A write failure poisons the writer.
+    ///
+    /// # Errors
+    ///
+    /// - `TransportError::Wire` when the message does not encode, or after an earlier write
+    ///   failure.
+    /// - `TransportError::Io` when writing or flushing fails.
     pub fn write<M: Message>(&mut self, message: &M) -> Result<(), TransportError> {
         if self.failed {
             return Err(WireError::Closed.into());
