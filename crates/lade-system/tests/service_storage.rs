@@ -19,6 +19,9 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
     let id = objective.objective_id.clone();
     start_execution(&mut client, &id);
     wait_state(&mut client, &id, ExecutionState::Idle);
+    let probe = create_objective(&mut client, &ws.workspace_id, "Fill it later").objective_id;
+    start_execution(&mut client, &probe);
+    wait_state(&mut client, &probe, ExecutionState::Idle);
     fs::write(worktree(&env, &id).join("small.txt"), vec![b'a'; 4096]).unwrap();
     fs::write(worktree(&env, &id).join("big.bin"), vec![7u8; 1 << 20]).unwrap();
 
@@ -39,7 +42,13 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
     };
     assert_eq!(notice.level, NoticeLevel::Error);
     assert!(action_enabled(&failed, ActionName::ExecutionResume));
-    std::thread::sleep(std::time::Duration::from_secs(6));
+    assert_eq!(
+        detail(&mut client, &probe).execution.state,
+        ExecutionState::Idle
+    );
+    // A later storage check (it fails the probe) leaves the failed objective as it was.
+    fs::write(worktree(&env, &probe).join("big.bin"), vec![7u8; 1 << 20]).unwrap();
+    wait_state(&mut client, &probe, ExecutionState::Failed);
     assert_eq!(
         detail(&mut client, &id).execution.state,
         ExecutionState::Failed

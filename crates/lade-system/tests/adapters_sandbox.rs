@@ -211,7 +211,10 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let (mut child, mut gate) = cmd.spawn().unwrap();
-    thread::sleep(Duration::from_millis(500));
+    assert!(
+        wait_until(Duration::from_secs(10), || blocked_at_gate(child.id())),
+        "the sandbox never reached its gate"
+    );
     assert!(!started.exists(), "the program ran before the gate opened");
     gate.open().unwrap();
     assert_eq!(child.wait().unwrap().code(), Some(0));
@@ -226,6 +229,40 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
     drop(gate);
     assert_eq!(child.wait().unwrap().code(), Some(125));
     assert!(!started.exists(), "the program ran without the gate");
+}
+
+/// Whether the gate script below `outer` sleeps: the read of its gate is the only place it
+/// blocks before it runs the program.
+fn blocked_at_gate(outer: u32) -> bool {
+    let stat = |pid: u32| fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+    let field = |stat: &str, n: usize| {
+        stat.rsplit(") ")
+            .next()?
+            .split(' ')
+            .nth(n)
+            .map(str::to_owned)
+    };
+    let descends = |mut pid: u32| {
+        while pid > 1 {
+            if pid == outer {
+                return true;
+            }
+            match stat(pid).and_then(|s| field(&s, 1)?.parse().ok()) {
+                Some(parent) => pid = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|c| c.split(|b| *b == 0).any(|arg| arg == b"lade-gate"))
+        })
+        .any(|pid| descends(pid) && stat(pid).and_then(|s| field(&s, 0)).as_deref() == Some("S"))
 }
 
 fn processes_with(marker: &str) -> Vec<u32> {

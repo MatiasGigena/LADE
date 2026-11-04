@@ -383,7 +383,13 @@ fn input_and_launch_windows_recover_without_replay() {
     resume(&mut client, &objective);
     wait_path(&wt.join("c.txt"));
     wait_state(&mut client, &objective, ExecutionState::Idle);
-    thread::sleep(Duration::from_secs(1));
+    // A later input completes only after any resend of the uncertain one would have.
+    send_op(
+        &mut client,
+        message("lade-fixture: write d.txt D", &objective),
+    );
+    wait_path(&wt.join("d.txt"));
+    wait_state(&mut client, &objective, ExecutionState::Idle);
     assert!(
         !wt.join("b.txt").exists(),
         "uncertain input is never resent"
