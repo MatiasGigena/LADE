@@ -124,7 +124,7 @@ runs them after it with `xvfb-run -a ./scripts/cargo test -p lade-desktop --lock
 
 The contained terminal (IMP-012) adds no dependency: the PTY comes from rustix (`pty`, `termios` features of the
 already-reviewed `rustix =1.1.4`) and the client renders it with its own minimal VT parser
-(`presentation/terminal.rs`). VTE (`vte4`) was not adopted: it is not in the CI image or the documented host
+(`presentation/terminal/screen.rs`). VTE (`vte4`) was not adopted: it is not in the CI image or the documented host
 prerequisites, its Rust bindings would add a native dependency chain for a supporting feature, and its full
 terminal emulation (hyperlinks, clipboard escape sequences, its own key handling) would bypass the reviewed keymap
 escape routes.
