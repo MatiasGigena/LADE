@@ -18,8 +18,7 @@ use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
 use super::convert::{invalid, preview};
-use super::handlers::Pending;
-use super::{Flow, JobOutput, ReqCtx, Service, StartError};
+use super::{Completed, Flow, ReqCtx, Service, StartError};
 use crate::support::now_ms;
 
 pub(crate) const RESTRICTIONS: &[&str] = &[
@@ -171,11 +170,10 @@ impl Service {
             );
             return Flow::Done;
         }
-        self.spawn(Pending::ProfileImport { ctx }, move || {
-            JobOutput::Profile(
-                profile::import(&source, &profile)
-                    .map_err(|e| format!("The profile could not be imported ({}).", e.kind())),
-            )
+        self.spawn(move || Completed::ProfileImport {
+            ctx,
+            result: profile::import(&source, &profile)
+                .map_err(|e| format!("The profile could not be imported ({}).", e.kind())),
         });
         Flow::Deferred
     }

@@ -6,13 +6,13 @@ use lade_core::domain::feedback::{
     Acceptance, BatchEntry, DraftState, SaveDraft, accept_feedback, accept_message, save_draft,
 };
 use lade_core::domain::ids::{
-    CandidateId, CaptureId, DraftId, InputId, ObjectiveId, OperationId, SessionId, WorkspaceId,
+    CaptureId, DraftId, InputId, ObjectiveId, OperationId, SessionId, WorkspaceId,
 };
 use lade_core::domain::inspection::{
     ArtifactDigest as CoreDigest, CurrentContent, InspectedVersion,
 };
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
-use lade_core::domain::review::{IntegrationPlan, Review};
+use lade_core::domain::review::Review;
 use lade_protocol::client::{
     ClientBody, ClientEnvelope, Draft as WireDraft, DraftCursor, DraftDeleteCommand, DraftList,
     DraftSaveCommand, DraftState as WireDraftState, DraftsListQuery, Empty, ErrorCode, Event,
@@ -35,74 +35,9 @@ use super::convert::{
 use super::convert::{core_mode, wire_draft, wire_input};
 use super::jobs::{self, CaptureInput, CaptureOut, LatestCapture};
 use super::state::{ObjState, Runtime, WsState};
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service};
 use crate::fault::{self, Fault};
 use crate::support::{new_uuid, now_ms, wire_ts};
-
-pub(crate) enum Pending {
-    Launch {
-        oid: ObjectiveId,
-        generation: u64,
-    },
-    Capture {
-        oid: ObjectiveId,
-        purpose: CapturePurpose,
-    },
-    Freeze {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-        candidate_id: CandidateId,
-    },
-    Refresh {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-        candidate_id: CandidateId,
-        new_id: CandidateId,
-    },
-    Verify {
-        oid: ObjectiveId,
-        verification_id: lade_core::domain::ids::VerificationId,
-    },
-    Integrate {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-        plan: IntegrationPlan,
-        journal_id: lade_core::domain::ids::Uuid,
-    },
-    Cleanup {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-        confirm: bool,
-    },
-    DeleteHistory {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-    },
-    Complete {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-    },
-    Query {
-        ctx: ReqCtx,
-    },
-    Catalog,
-    ProfileImport {
-        ctx: ReqCtx,
-    },
-    Reload {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-    },
-    TerminalOpen {
-        oid: ObjectiveId,
-        ctx: ReqCtx,
-        terminal_id: Id,
-        writable: bool,
-        size: (u16, u16),
-    },
-    Storage,
-    Ignore,
-}
 
 pub(crate) enum CapturePurpose {
     Idle,
@@ -269,83 +204,67 @@ impl Service {
         Flow::Done
     }
 
-    pub(crate) fn on_job(&mut self, token: u64, output: JobOutput) {
-        let Some(pending) = self.pending.remove(&token) else {
-            return;
-        };
-        match (pending, output) {
-            (Pending::Launch { oid, generation }, JobOutput::Launch(out)) => {
-                self.launch_done(oid, generation, out);
-            }
-            (Pending::Storage, JobOutput::Storage(usage)) => self.storage_measured(usage),
-            (Pending::Capture { oid, purpose }, JobOutput::Capture(result)) => {
-                self.capture_done(oid, purpose, result);
-            }
-            (
-                Pending::Freeze {
-                    oid,
-                    ctx,
-                    candidate_id,
-                },
-                JobOutput::Freeze(result),
-            ) => {
-                self.freeze_done(oid, ctx, candidate_id, result);
-            }
-            (
-                Pending::Refresh {
-                    oid,
-                    ctx,
-                    candidate_id,
-                    new_id,
-                },
-                JobOutput::Refresh(result),
-            ) => self.refresh_done(oid, ctx, candidate_id, new_id, result),
-            (
-                Pending::Verify {
-                    oid,
-                    verification_id,
-                },
-                JobOutput::Verify(out),
-            ) => {
-                self.verify_done(oid, verification_id, out);
-            }
-            (
-                Pending::Integrate {
-                    oid,
-                    ctx,
-                    plan,
-                    journal_id,
-                },
-                JobOutput::Integrate(result),
-            ) => self.integrate_done(oid, ctx, &plan, journal_id, result),
-            (Pending::Cleanup { oid, ctx, confirm }, JobOutput::Unit(result)) => {
-                self.cleanup_done(oid, ctx, confirm, result);
-            }
-            (Pending::DeleteHistory { oid, ctx }, JobOutput::Unit(result)) => {
+    pub(crate) fn on_job(&mut self, completed: Completed) {
+        match completed {
+            Completed::Launch {
+                oid,
+                generation,
+                out,
+            } => self.launch_done(oid, generation, out),
+            Completed::Storage { usage } => self.storage_measured(usage),
+            Completed::Capture {
+                oid,
+                purpose,
+                result,
+            } => self.capture_done(oid, purpose, result),
+            Completed::Freeze {
+                oid,
+                ctx,
+                candidate_id,
+                result,
+            } => self.freeze_done(oid, ctx, candidate_id, result),
+            Completed::Refresh {
+                oid,
+                ctx,
+                candidate_id,
+                new_id,
+                result,
+            } => self.refresh_done(oid, ctx, candidate_id, new_id, result),
+            Completed::Verify {
+                oid,
+                verification_id,
+                out,
+            } => self.verify_done(oid, verification_id, out),
+            Completed::Integrate {
+                oid,
+                ctx,
+                plan,
+                journal_id,
+                result,
+            } => self.integrate_done(oid, ctx, &plan, journal_id, result),
+            Completed::Cleanup {
+                oid,
+                ctx,
+                confirm,
+                result,
+            } => self.cleanup_done(oid, ctx, confirm, result),
+            Completed::DeleteHistory { oid, ctx, result } => {
                 self.delete_history_done(oid, ctx, result);
             }
-            (Pending::Complete { oid, ctx }, JobOutput::Flag(result)) => {
-                self.complete_done(oid, ctx, result);
-            }
-            (Pending::Query { ctx }, JobOutput::Query(result)) => self.finish(ctx, result),
-            (Pending::Catalog, JobOutput::Catalog(result)) => self.catalog_done(result),
-            (Pending::ProfileImport { ctx }, JobOutput::Profile(result)) => {
-                self.profile_import_done(ctx, result);
-            }
-            (Pending::Reload { oid, ctx }, JobOutput::Snapshot(result)) => {
-                self.reload_snapshot_done(oid, ctx, result);
-            }
-            (
-                Pending::TerminalOpen {
-                    oid,
-                    ctx,
-                    terminal_id,
-                    writable,
-                    size,
-                },
-                JobOutput::Terminal(result),
-            ) => self.terminal_open_done(oid, ctx, (terminal_id, writable, size), result),
-            _ => {}
+            Completed::Complete { oid, ctx, result } => self.complete_done(oid, ctx, result),
+            Completed::Query { ctx, result } => self.finish(ctx, result),
+            Completed::Catalog { result } => self.catalog_done(result),
+            Completed::ProfileImport { ctx, result } => self.profile_import_done(ctx, result),
+            Completed::Reload { oid, ctx, result } => self.reload_snapshot_done(oid, ctx, result),
+            Completed::TerminalOpen {
+                oid,
+                ctx,
+                terminal_id,
+                writable,
+                size,
+                result,
+            } => self.terminal_open_done(oid, ctx, (terminal_id, writable, size), result),
+            Completed::Done => {}
         }
     }
 
@@ -1014,13 +933,11 @@ impl Service {
         })();
         match prepared {
             Ok((oid, input)) => {
-                self.spawn(
-                    Pending::Capture {
-                        oid,
-                        purpose: CapturePurpose::Submit(ctx, Box::new(cmd)),
-                    },
-                    move || JobOutput::Capture(jobs::capture(&input)),
-                );
+                self.spawn(move || Completed::Capture {
+                    oid,
+                    purpose: CapturePurpose::Submit(ctx, Box::new(cmd)),
+                    result: jobs::capture(&input),
+                });
                 Flow::Deferred
             }
             Err(rejection) => {
@@ -1147,13 +1064,11 @@ impl Service {
             return;
         };
         self.rt(oid).capture_running = true;
-        self.spawn(
-            Pending::Capture {
-                oid,
-                purpose: CapturePurpose::Idle,
-            },
-            move || JobOutput::Capture(jobs::capture(&input)),
-        );
+        self.spawn(move || Completed::Capture {
+            oid,
+            purpose: CapturePurpose::Idle,
+            result: jobs::capture(&input),
+        });
     }
 
     pub(crate) fn register_capture(

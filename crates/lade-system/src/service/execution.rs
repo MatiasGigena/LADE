@@ -18,9 +18,9 @@ use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest, SupervisorEv
 
 use super::convert::wire_input;
 use super::convert::{domain_rejection, parse_uuid, preview, wire_id};
-use super::handlers::{CapturePurpose, Pending};
+use super::handlers::CapturePurpose;
 use super::jobs::{self, LaunchInput, ProfileSnapshot, Provision};
-use super::{JobOutput, ReqCtx, Service};
+use super::{Completed, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms, wire_ts};
 
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -294,8 +294,10 @@ impl Service {
             }),
         };
         self.rt(oid).launching = Some(generation);
-        self.spawn(Pending::Launch { oid, generation }, move || {
-            JobOutput::Launch(jobs::launch(input))
+        self.spawn(move || Completed::Launch {
+            oid,
+            generation,
+            out: jobs::launch(input),
         });
     }
 
@@ -632,13 +634,11 @@ impl Service {
                 match self.capture_input(st, worktree, references) {
                     Ok(capture) => {
                         self.rt(oid).dispatching = true;
-                        self.spawn(
-                            Pending::Capture {
-                                oid,
-                                purpose: CapturePurpose::DispatchCheck(id),
-                            },
-                            move || JobOutput::Capture(jobs::capture(&capture)),
-                        );
+                        self.spawn(move || Completed::Capture {
+                            oid,
+                            purpose: CapturePurpose::DispatchCheck(id),
+                            result: jobs::capture(&capture),
+                        });
                     }
                     Err(_) => {
                         self.dispatch_one(oid, id, true);
@@ -874,17 +874,15 @@ impl Service {
             return;
         }
         self.storage_check = true;
-        self.spawn(Pending::Storage, move || {
-            JobOutput::Storage(
-                targets
-                    .into_iter()
-                    .map(|(oid, generation, paths)| StorageUsage {
-                        oid,
-                        generation,
-                        bytes: jobs::disk_usage(&paths),
-                    })
-                    .collect(),
-            )
+        self.spawn(move || Completed::Storage {
+            usage: targets
+                .into_iter()
+                .map(|(oid, generation, paths)| StorageUsage {
+                    oid,
+                    generation,
+                    bytes: jobs::disk_usage(&paths),
+                })
+                .collect(),
         });
     }
 
@@ -928,9 +926,9 @@ impl Service {
         }
         eprintln!("laded: writable storage limit reached objective={oid} bytes={bytes}");
         if let Some(mut control) = self.rt(oid).control.take() {
-            self.spawn(Pending::Ignore, move || {
+            self.spawn(move || {
                 control.terminate();
-                JobOutput::Done
+                Completed::Done
             });
         }
         self.notice(NoticeLevel::Error, LIMIT_REACHED, &reason);

@@ -20,9 +20,9 @@ use super::convert::{
     wire_id, wire_path,
 };
 use super::execution::wire_activity;
-use super::handlers::{CapturePurpose, Pending, sql};
+use super::handlers::{CapturePurpose, sql};
 use super::jobs::{self, CaptureOut, FileBytes, LargeBlobs};
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service};
 
 const MAX_FILES: usize = 1024;
 const MAX_DIFF_LINES: usize = 1800;
@@ -616,13 +616,11 @@ impl Service {
                     .and_then(|w| self.capture_input(st, w, Self::unsent_references(st)));
                 match input {
                     Ok(input) => {
-                        self.spawn(
-                            Pending::Capture {
-                                oid,
-                                purpose: CapturePurpose::Retry(ctx, Box::new(retry)),
-                            },
-                            move || JobOutput::Capture(jobs::capture(&input)),
-                        );
+                        self.spawn(move || Completed::Capture {
+                            oid,
+                            purpose: CapturePurpose::Retry(ctx, Box::new(retry)),
+                            result: jobs::capture(&input),
+                        });
                         Flow::Deferred
                     }
                     Err(rejection) => {
@@ -633,8 +631,9 @@ impl Service {
             }
             Ok((_, Basis2::Ready(resolved), repo)) => {
                 let artifacts = self.artifacts.clone();
-                self.spawn(Pending::Query { ctx }, move || {
-                    JobOutput::Query(work(repo, artifacts, *resolved))
+                self.spawn(move || Completed::Query {
+                    ctx,
+                    result: work(repo, artifacts, *resolved),
                 });
                 Flow::Deferred
             }
@@ -653,13 +652,11 @@ impl Service {
         if let (Basis::Working, Some(worktree)) = (&query.basis, st.row.worktree.clone()) {
             match self.capture_input(st, worktree, Self::unsent_references(st)) {
                 Ok(input) => {
-                    self.spawn(
-                        Pending::Capture {
-                            oid,
-                            purpose: CapturePurpose::Changes(ctx),
-                        },
-                        move || JobOutput::Capture(jobs::capture(&input)),
-                    );
+                    self.spawn(move || Completed::Capture {
+                        oid,
+                        purpose: CapturePurpose::Changes(ctx),
+                        result: jobs::capture(&input),
+                    });
                     return Flow::Deferred;
                 }
                 Err(rejection) => {
@@ -814,8 +811,9 @@ impl Service {
                 };
                 let label = format!("branch {branch} at {}", &tree.hex()[..12]);
                 let repo = ws.repo.clone();
-                self.spawn(Pending::Query { ctx }, move || {
-                    JobOutput::Query(search_tree(&repo, &tree, &query, &label))
+                self.spawn(move || Completed::Query {
+                    ctx,
+                    result: search_tree(&repo, &tree, &query, &label),
                 });
                 Flow::Deferred
             }

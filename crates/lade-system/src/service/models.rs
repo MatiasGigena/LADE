@@ -17,8 +17,7 @@ use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
 use crate::support::fs::ensure_private_dir;
 
 use super::convert::preview;
-use super::handlers::Pending;
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::new_uuid;
 
 const MAX_PROVIDERS: usize = 128;
@@ -203,7 +202,7 @@ impl Service {
             let launcher = self.launcher.clone();
             let scratch = self.paths.tmp.join(format!("catalog-{}", new_uuid()));
             let profile = self.profile_dir();
-            self.spawn(Pending::Catalog, move || {
+            self.spawn(move || {
                 let models = profile.join("models.json");
                 let models = profile::profile_providers(&profile)
                     .is_ok_and(|p| !p.is_empty())
@@ -217,10 +216,12 @@ impl Service {
                     })
                     .and_then(|bytes| parse_catalog(&bytes).map_err(CatalogFailure::other));
                 let _ = fs::remove_dir_all(&scratch);
-                JobOutput::Catalog(result.map_err(|failure| {
-                    eprintln!("laded: model catalogue unavailable: {}", failure.detail);
-                    failure.message.to_owned()
-                }))
+                Completed::Catalog {
+                    result: result.map_err(|failure| {
+                        eprintln!("laded: model catalogue unavailable: {}", failure.detail);
+                        failure.message.to_owned()
+                    }),
+                }
             });
         }
         Flow::Deferred

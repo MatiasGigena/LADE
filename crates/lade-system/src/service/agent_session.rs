@@ -32,9 +32,9 @@ use crate::support::fs::ensure_private_dir;
 use super::convert::{
     conflict, domain_rejection, durability, invalid, not_found, preview, wire_id,
 };
-use super::handlers::{Pending, sql};
+use super::handlers::sql;
 use super::resources::snapshot;
-use super::{Flow, JobOutput, ReqCtx, Service, StartError};
+use super::{Completed, Flow, ReqCtx, Service, StartError};
 use crate::support::{new_uuid, now_ms};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
@@ -299,17 +299,17 @@ impl Service {
         let dest = self.session_dir(oid).join("profile");
         let approved = self.approved_extensions();
         self.rt(oid).busy = Some("session reload");
-        self.spawn(Pending::Reload { oid, ctx }, move || {
-            JobOutput::Snapshot(
-                snapshot(&source, &dest, &approved)
-                    .map(|resources| (resources, dest))
-                    .map_err(|e| {
-                        format!(
-                            "The profile could not be prepared for the session ({}).",
-                            e.kind()
-                        )
-                    }),
-            )
+        self.spawn(move || Completed::Reload {
+            oid,
+            ctx,
+            result: snapshot(&source, &dest, &approved)
+                .map(|resources| (resources, dest))
+                .map_err(|e| {
+                    format!(
+                        "The profile could not be prepared for the session ({}).",
+                        e.kind()
+                    )
+                }),
         });
         Flow::Deferred
     }

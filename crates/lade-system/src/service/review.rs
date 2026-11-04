@@ -24,10 +24,10 @@ use super::convert::{
     not_found, parse_uuid,
 };
 use super::convert::{wire_approval, wire_candidate, wire_verification};
-use super::handlers::{Pending, sql};
+use super::handlers::sql;
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::project::delete_history_blocker;
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms};
 
 fn ts_now() -> Timestamp {
@@ -144,14 +144,12 @@ impl Service {
             ))
         })();
         match input {
-            Ok((candidate_id, input)) => self.spawn(
-                Pending::Freeze {
-                    oid,
-                    ctx,
-                    candidate_id,
-                },
-                move || JobOutput::Freeze(jobs::freeze(&input)),
-            ),
+            Ok((candidate_id, input)) => self.spawn(move || Completed::Freeze {
+                oid,
+                ctx,
+                candidate_id,
+                result: jobs::freeze(&input),
+            }),
             Err(rejection) => {
                 self.rt(oid).busy = None;
                 self.finish(ctx, Err(rejection));
@@ -303,13 +301,11 @@ impl Service {
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit(Event::VerificationChanged(summary));
         self.emit_objective(oid);
-        self.spawn_long(
-            Pending::Verify {
-                oid,
-                verification_id,
-            },
-            move || JobOutput::Verify(jobs::verify(input)),
-        );
+        self.spawn_verify(move || Completed::Verify {
+            oid,
+            verification_id,
+            out: jobs::verify(input),
+        });
         Ok(data)
     }
 
@@ -442,15 +438,13 @@ impl Service {
         match prepared {
             Ok((oid, candidate_id, new_id, input)) => {
                 self.rt(oid).busy = Some("refresh");
-                self.spawn(
-                    Pending::Refresh {
-                        oid,
-                        ctx,
-                        candidate_id,
-                        new_id,
-                    },
-                    move || JobOutput::Refresh(jobs::refresh(&input)),
-                );
+                self.spawn(move || Completed::Refresh {
+                    oid,
+                    ctx,
+                    candidate_id,
+                    new_id,
+                    result: jobs::refresh(&input),
+                });
                 Flow::Deferred
             }
             Err(rejection) => {
@@ -663,15 +657,13 @@ impl Service {
         if let Some(key) = self.integration_key(oid) {
             self.integrating.entry(key).or_default();
         }
-        self.spawn(
-            Pending::Integrate {
-                oid,
-                ctx,
-                plan,
-                journal_id: journal.id,
-            },
-            move || JobOutput::Integrate(ws.integrate_squash(&request)),
-        );
+        self.spawn(move || Completed::Integrate {
+            oid,
+            ctx,
+            plan,
+            journal_id: journal.id,
+            result: ws.integrate_squash(&request),
+        });
         Flow::Deferred
     }
 
@@ -804,14 +796,16 @@ impl Service {
             Ok((oid, repo, worktree, target, start)) => {
                 self.rt(oid).busy = Some("complete");
                 let scratch = self.paths.tmp.clone();
-                self.spawn(Pending::Complete { oid, ctx }, move || {
-                    JobOutput::Flag(jobs::change_set_empty(
+                self.spawn(move || Completed::Complete {
+                    oid,
+                    ctx,
+                    result: jobs::change_set_empty(
                         &repo,
                         worktree.as_deref(),
                         &scratch,
                         &target,
                         &start,
-                    ))
+                    ),
                 });
                 Flow::Deferred
             }
@@ -888,14 +882,17 @@ impl Service {
                 let confirm = cmd.confirm_data_loss;
                 let scratch = self.paths.tmp.clone();
                 self.rt(oid).busy = Some("cleanup");
-                self.spawn(Pending::Cleanup { oid, ctx, confirm }, move || {
-                    JobOutput::Unit(jobs::cleanup(
+                self.spawn(move || Completed::Cleanup {
+                    oid,
+                    ctx,
+                    confirm,
+                    result: jobs::cleanup(
                         &repo,
                         worktree.as_deref(),
                         branch.as_deref(),
                         &scratch,
                         confirm,
-                    ))
+                    ),
                 });
                 Flow::Deferred
             }
@@ -939,8 +936,10 @@ impl Service {
         match prepared {
             Ok((oid, repo, refs)) => {
                 self.rt(oid).busy = Some("delete_history");
-                self.spawn(Pending::DeleteHistory { oid, ctx }, move || {
-                    JobOutput::Unit(jobs::delete_refs(&repo, &refs))
+                self.spawn(move || Completed::DeleteHistory {
+                    oid,
+                    ctx,
+                    result: jobs::delete_refs(&repo, &refs),
                 });
                 Flow::Deferred
             }

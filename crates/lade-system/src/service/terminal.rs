@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use lade_core::domain::ids::ObjectiveId;
 use lade_core::domain::objectives::Lifecycle;
 use lade_protocol::client::{
@@ -12,14 +14,20 @@ use crate::supervision::terminal::{
 };
 
 use super::convert::{conflict, invalid, not_found, parse_uuid, wire_id};
-use super::handlers::Pending;
 use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::new_uuid;
 
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
 const EVENT_BYTES: usize = 32 << 10;
 const EVENTS_PER_TICK: usize = 2;
+
+/// Terminals that are open, keyed by terminal id, and the Objectives of those still starting.
+#[derive(Default)]
+pub(crate) struct Terminals {
+    pub open: BTreeMap<String, TermState>,
+    pub opening: Vec<ObjectiveId>,
+}
 
 pub(crate) struct TermState {
     pub oid: ObjectiveId,
@@ -99,13 +107,15 @@ impl Service {
             let cols = size(&cmd.cols, MAX_COLS, "columns")?;
             let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
             let writable = self.terminal_scope(oid)?;
-            let starting = self
-                .pending
+            let starting = self.terminals.opening.iter().filter(|o| **o == oid).count();
+            let open = self
+                .terminals
+                .open
                 .values()
-                .filter(|p| matches!(p, Pending::TerminalOpen { oid: o, .. } if *o == oid))
-                .count();
-            let open = self.terminals.values().filter(|t| t.oid == oid).count() + starting;
-            let total = self.terminals.len() + self.terminals_opening;
+                .filter(|t| t.oid == oid)
+                .count()
+                + starting;
+            let total = self.terminals.open.len() + self.terminals.opening.len();
             let max = self.limits.max_terminals;
             if total >= max || open >= MAX_PER_OBJECTIVE {
                 return Err(Rejection::new(
@@ -146,23 +156,19 @@ impl Service {
                 return Flow::Done;
             }
         };
-        self.terminals_opening += 1;
+        self.terminals.opening.push(oid);
         let writable = request.writable;
-        self.spawn(
-            Pending::TerminalOpen {
-                oid,
-                ctx,
-                terminal_id: wire_id(terminal_id),
-                writable,
-                size: (request.cols, request.rows),
-            },
-            move || {
-                JobOutput::Terminal(Terminal::open(&tools, &request).map_err(|e| {
-                    eprintln!("laded: terminal could not start: {}", e.kind());
-                    unavailable("The terminal could not start. Try again.")
-                }))
-            },
-        );
+        self.spawn(move || Completed::TerminalOpen {
+            oid,
+            ctx,
+            terminal_id: wire_id(terminal_id),
+            writable,
+            size: (request.cols, request.rows),
+            result: Terminal::open(&tools, &request).map_err(|e| {
+                eprintln!("laded: terminal could not start: {}", e.kind());
+                unavailable("The terminal could not start. Try again.")
+            }),
+        });
         Flow::Deferred
     }
 
@@ -173,7 +179,9 @@ impl Service {
         opened: (Id, bool, (u16, u16)),
         result: Result<Terminal, Rejection>,
     ) {
-        self.terminals_opening = self.terminals_opening.saturating_sub(1);
+        if let Some(at) = self.terminals.opening.iter().position(|o| *o == oid) {
+            self.terminals.opening.swap_remove(at);
+        }
         let (terminal_id, writable, (cols, rows)) = opened;
         let still_controller = self.controller.as_ref().is_some_and(|c| c.conn == ctx.conn);
         let outcome = result.and_then(|handle| {
@@ -194,7 +202,7 @@ impl Service {
             }
         });
         let result = outcome.map(|handle| {
-            self.terminals.insert(
+            self.terminals.open.insert(
                 terminal_id.as_str().to_owned(),
                 TermState {
                     oid,
@@ -223,6 +231,7 @@ impl Service {
     fn terminal(&self, id: &Id) -> Result<&TermState, Rejection> {
         parse_uuid(id)?;
         self.terminals
+            .open
             .get(id.as_str())
             .ok_or_else(|| not_found("terminal"))
     }
@@ -272,7 +281,7 @@ impl Service {
     }
 
     fn close_terminal(&mut self, id: &str, reason: TerminalCloseReason, wait: bool) {
-        let Some(mut term) = self.terminals.remove(id) else {
+        let Some(mut term) = self.terminals.open.remove(id) else {
             return;
         };
         let exit = term.handle.exit();
@@ -307,6 +316,7 @@ impl Service {
     pub(crate) fn exclude_terminal_writers(&mut self, oid: ObjectiveId) {
         let writers: Vec<String> = self
             .terminals
+            .open
             .iter()
             .filter(|(_, t)| t.oid == oid && t.writable)
             .map(|(id, _)| id.clone())
@@ -320,12 +330,13 @@ impl Service {
         let scope = self.terminal_scope(oid);
         let stale: Vec<String> = self
             .terminals
+            .open
             .iter()
             .filter(|(_, t)| t.oid == oid && !matches!(scope, Ok(w) if w || !t.writable))
             .map(|(id, _)| id.clone())
             .collect();
         for id in stale {
-            let wait = self.terminals.get(&id).is_some_and(|t| t.writable);
+            let wait = self.terminals.open.get(&id).is_some_and(|t| t.writable);
             self.close_terminal(&id, TerminalCloseReason::Lifecycle, wait);
         }
     }
@@ -333,12 +344,13 @@ impl Service {
     pub(crate) fn drop_terminals(&mut self, conn: Option<u64>, wait: bool) {
         let ids: Vec<String> = self
             .terminals
+            .open
             .iter()
             .filter(|(_, t)| conn.is_none_or(|c| t.conn == c))
             .map(|(id, _)| id.clone())
             .collect();
         for id in ids {
-            if let Some(mut term) = self.terminals.remove(&id) {
+            if let Some(mut term) = self.terminals.open.remove(&id) {
                 if wait {
                     term.handle.kill();
                 } else {
@@ -349,10 +361,10 @@ impl Service {
     }
 
     pub(crate) fn pump_terminals(&mut self) {
-        let ids: Vec<String> = self.terminals.keys().cloned().collect();
+        let ids: Vec<String> = self.terminals.open.keys().cloned().collect();
         for id in ids {
             for _ in 0..EVENTS_PER_TICK {
-                let Some(term) = self.terminals.get_mut(&id) else {
+                let Some(term) = self.terminals.open.get_mut(&id) else {
                     break;
                 };
                 if !term.handle.pending() {
@@ -376,10 +388,11 @@ impl Service {
             }
             let finished = self
                 .terminals
+                .open
                 .get(&id)
                 .and_then(|t| t.handle.finished().map(|exit| (t.oid, exit)));
             if let Some((oid, exit)) = finished {
-                self.terminals.remove(&id);
+                self.terminals.open.remove(&id);
                 self.emit_closed(oid, &id, TerminalCloseReason::Exited, Some(exit));
             }
         }

@@ -24,24 +24,29 @@ use std::sync::{Arc, OnceLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use lade_core::domain::ids::{GitId, ObjectiveId, WorkspaceId};
+use lade_core::domain::ids::{CandidateId, GitId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
+use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{
     ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeLevel, Outcome, Rejection,
     Reply, ReplyData, ReplyResult, RequestFrame, RequestName, ReviewIntegrateCommand, SafeAction,
     ServiceNotice, Settings,
 };
 use lade_protocol::types::{Counter, Id};
+use lade_protocol::worker::WorkerResources;
 use lade_protocol::{Framing, encode};
 use rusqlite::Transaction;
 
 use crate::adapters::artifacts::ArtifactStore;
+use crate::adapters::git::{GitError, SquashOutcome};
+use crate::adapters::profile::ImportReport;
 use crate::adapters::sandbox::{
     STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxTools, WRITABLE_STORAGE_BYTES,
 };
 use crate::storage::{self, OperationKey, OperationState, Store, StoreError};
 use crate::supervision::launcher::RESERVED_GENERATION;
 use crate::supervision::{
-    GATEWAY_SOCKET_DIR, SupervisorEvent, WorkerLauncher, gateway_socket_path, socket_path_fits,
+    GATEWAY_SOCKET_DIR, SupervisorEvent, Terminal, WorkerLauncher, gateway_socket_path,
+    socket_path_fits,
 };
 use crate::support::fs::ensure_private_dir;
 use crate::transport::{self, Inbound, Listener, Outbound, TransportError};
@@ -144,7 +149,7 @@ pub(crate) struct Paths {
 pub(crate) enum Msg {
     Link(Inbound),
     Supervisor(SupervisorEvent),
-    Job { token: u64, output: JobOutput },
+    Job(Completed),
     Tick,
     Shutdown,
 }
@@ -155,22 +160,89 @@ impl From<Inbound> for Msg {
     }
 }
 
+/// A finished background job together with everything the service needs to continue the
+/// request or event that started it. The job closure captures that context and returns it, so
+/// each continuation is paired with its result by construction.
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum JobOutput {
-    Launch(jobs::LaunchOut),
-    Capture(Result<jobs::CaptureOut, Rejection>),
-    Freeze(Result<jobs::FreezeOut, Rejection>),
-    Refresh(Result<jobs::RefreshOut, Rejection>),
-    Verify(jobs::VerifyOut),
-    Integrate(Result<crate::adapters::git::SquashOutcome, crate::adapters::git::GitError>),
-    Unit(Result<(), Rejection>),
-    Flag(Result<bool, Rejection>),
-    Query(Result<ReplyData, Rejection>),
-    Catalog(Result<models::CatalogData, String>),
-    Profile(Result<crate::adapters::profile::ImportReport, String>),
-    Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
-    Terminal(Result<crate::supervision::Terminal, Rejection>),
-    Storage(Vec<execution::StorageUsage>),
+pub(crate) enum Completed {
+    Launch {
+        oid: ObjectiveId,
+        generation: u64,
+        out: jobs::LaunchOut,
+    },
+    Capture {
+        oid: ObjectiveId,
+        purpose: handlers::CapturePurpose,
+        result: Result<jobs::CaptureOut, Rejection>,
+    },
+    Freeze {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        candidate_id: CandidateId,
+        result: Result<jobs::FreezeOut, Rejection>,
+    },
+    Refresh {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        candidate_id: CandidateId,
+        new_id: CandidateId,
+        result: Result<jobs::RefreshOut, Rejection>,
+    },
+    Verify {
+        oid: ObjectiveId,
+        verification_id: VerificationId,
+        out: jobs::VerifyOut,
+    },
+    Integrate {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        plan: IntegrationPlan,
+        journal_id: Uuid,
+        result: Result<SquashOutcome, GitError>,
+    },
+    Cleanup {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        confirm: bool,
+        result: Result<(), Rejection>,
+    },
+    DeleteHistory {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        result: Result<(), Rejection>,
+    },
+    Complete {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        result: Result<bool, Rejection>,
+    },
+    Query {
+        ctx: ReqCtx,
+        result: Result<ReplyData, Rejection>,
+    },
+    Catalog {
+        result: Result<models::CatalogData, String>,
+    },
+    ProfileImport {
+        ctx: ReqCtx,
+        result: Result<ImportReport, String>,
+    },
+    Reload {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        result: Result<(WorkerResources, PathBuf), String>,
+    },
+    TerminalOpen {
+        oid: ObjectiveId,
+        ctx: ReqCtx,
+        terminal_id: Id,
+        writable: bool,
+        size: (u16, u16),
+        result: Result<Terminal, Rejection>,
+    },
+    Storage {
+        usage: Vec<execution::StorageUsage>,
+    },
     Done,
 }
 
@@ -212,6 +284,7 @@ struct Controller {
 
 const REQUEST_ID_MEMORY: usize = 4096;
 const GENERAL_THREADS: usize = 3;
+/// Verification runs get their own pool so long checks never hold up captures and queries.
 const VERIFY_THREADS: usize = 4;
 const REAPER_THREADS: usize = 4;
 const TICK: Duration = Duration::from_millis(100);
@@ -224,8 +297,8 @@ pub(crate) struct Service {
     launcher: Arc<dyn WorkerLauncher>,
     supervisor_tx: SyncSender<SupervisorEvent>,
     queue_tx: SyncSender<Msg>,
-    pool: Option<Pool>,
-    long: Option<Pool>,
+    general: Option<Pool>,
+    verify: Option<Pool>,
     reaper: Option<Pool>,
     epoch: Id,
     sequence: u64,
@@ -235,8 +308,6 @@ pub(crate) struct Service {
     runtime: HashMap<ObjectiveId, Runtime>,
     settings: Settings,
     target_cache: HashMap<(WorkspaceId, String), GitId>,
-    pending: HashMap<u64, handlers::Pending>,
-    next_token: u64,
     activity_seq: HashMap<ObjectiveId, u64>,
     input_seq: u64,
     live: execution::LiveActivity,
@@ -245,8 +316,7 @@ pub(crate) struct Service {
     catalog: models::CatalogCache,
     extension_approvals: HashMap<(String, String), bool>,
     agent_sessions: agent_session::AgentSessions,
-    terminals: BTreeMap<String, terminal::TermState>,
-    terminals_opening: usize,
+    terminals: terminal::Terminals,
     stopping: bool,
     limits: ResourceLimits,
     free_space: limits::Storage,
@@ -388,8 +458,8 @@ pub fn start(
         launcher,
         supervisor_tx,
         queue_tx: queue_tx.clone(),
-        pool: Some(Pool::new(GENERAL_THREADS)),
-        long: Some(Pool::new(VERIFY_THREADS)),
+        general: Some(Pool::new(GENERAL_THREADS)),
+        verify: Some(Pool::new(VERIFY_THREADS)),
         reaper: Some(Pool::new(REAPER_THREADS)),
         epoch: epoch.clone(),
         sequence: 0,
@@ -402,8 +472,6 @@ pub fn start(
             default_model: None,
         },
         target_cache: HashMap::new(),
-        pending: HashMap::new(),
-        next_token: 1,
         activity_seq: HashMap::new(),
         input_seq: 0,
         live: execution::LiveActivity::default(),
@@ -412,8 +480,7 @@ pub fn start(
         catalog: models::CatalogCache::default(),
         extension_approvals: HashMap::new(),
         agent_sessions: agent_session::AgentSessions::default(),
-        terminals: BTreeMap::new(),
-        terminals_opening: 0,
+        terminals: terminal::Terminals::default(),
         stopping: false,
         limits: config.limits.clone(),
         free_space: limits::Storage::default(),
@@ -488,7 +555,7 @@ impl Service {
             match message {
                 Msg::Link(inbound) => self.on_link(inbound),
                 Msg::Supervisor(event) => self.on_supervisor(event),
-                Msg::Job { token, output } => self.on_job(token, output),
+                Msg::Job(completed) => self.on_job(completed),
                 Msg::Tick => self.on_tick(),
                 Msg::Shutdown => break,
             }
@@ -507,7 +574,7 @@ impl Service {
         if let Some(controller) = self.controller.take() {
             controller.out.close();
         }
-        for pool in [self.reaper.take(), self.pool.take(), self.long.take()]
+        for pool in [self.reaper.take(), self.general.take(), self.verify.take()]
             .into_iter()
             .flatten()
         {
@@ -748,8 +815,8 @@ impl Service {
                 eprintln!("laded: could not journal pending operation");
             }
         }
-        for (long, task) in held {
-            let pool = if long { &self.long } else { &self.pool };
+        for (verify, task) in held {
+            let pool = if verify { &self.verify } else { &self.general };
             if let Some(pool) = pool {
                 pool.submit(task);
             }
@@ -893,41 +960,24 @@ impl Service {
         }
     }
 
-    pub(crate) fn spawn(
-        &mut self,
-        pending: handlers::Pending,
-        work: impl FnOnce() -> JobOutput + Send + 'static,
-    ) {
-        self.spawn_in(false, pending, work);
+    pub(crate) fn spawn(&mut self, work: impl FnOnce() -> Completed + Send + 'static) {
+        self.spawn_in(false, work);
     }
 
-    pub(crate) fn spawn_long(
-        &mut self,
-        pending: handlers::Pending,
-        work: impl FnOnce() -> JobOutput + Send + 'static,
-    ) {
-        self.spawn_in(true, pending, work);
+    pub(crate) fn spawn_verify(&mut self, work: impl FnOnce() -> Completed + Send + 'static) {
+        self.spawn_in(true, work);
     }
 
-    fn spawn_in(
-        &mut self,
-        long: bool,
-        pending: handlers::Pending,
-        work: impl FnOnce() -> JobOutput + Send + 'static,
-    ) {
-        let token = self.next_token;
-        self.next_token += 1;
-        self.pending.insert(token, pending);
+    fn spawn_in(&mut self, verify: bool, work: impl FnOnce() -> Completed + Send + 'static) {
         let tx = self.queue_tx.clone();
         let task: jobs::Task = Box::new(move || {
-            let output = work();
-            let _ = tx.send(Msg::Job { token, output });
+            let _ = tx.send(Msg::Job(work()));
         });
         if let Some(held) = self.held.as_mut() {
-            held.push((long, task));
+            held.push((verify, task));
             return;
         }
-        let pool = if long { &self.long } else { &self.pool };
+        let pool = if verify { &self.verify } else { &self.general };
         if let Some(pool) = pool {
             pool.submit(task);
         }
