@@ -13,7 +13,7 @@ use crate::adapters::sandbox::TERMINAL_LIMITS;
 use crate::supervision::terminal::{MAX_COLS, MAX_ROWS, Terminal, TerminalExit, TerminalRequest};
 
 use super::convert::{conflict, invalid, not_found, parse_uuid, wire_id};
-use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
+use super::projection::actions::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::new_uuid;
 

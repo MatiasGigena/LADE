@@ -190,7 +190,9 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
         .map_err(git_rejection)?;
     if files.is_empty() {
         return Err(crate::service::convert::domain_rejection(
-            lade_core::DomainError::InvalidLifecycle(crate::service::project::NO_CHANGES_TO_FREEZE),
+            lade_core::DomainError::InvalidLifecycle(
+                crate::service::projection::actions::NO_CHANGES_TO_FREEZE,
+            ),
         ));
     }
     let digest = input

@@ -1,3 +1,7 @@
+//! The reply budget: cuts verification previews, outcomes and branch lists so that every
+//! detail, snapshot and verification reply fits one client frame, and rejects intents and
+//! settings that could never fit.
+
 use lade_protocol::client::{
     ApprovalState, ApprovalSummary, Attention, Badge, CandidateStatus, CandidateSummary,
     ChangeCounts, ClientBody, ClientEnvelope, Event, EventFrame, ExecutionState, Lifecycle,
@@ -8,10 +12,10 @@ use lade_protocol::types::{Counter, Id, Model, ThinkingLevel};
 use lade_protocol::{Framing, MAX_FRAME, MAX_NODES, encode, json_len};
 use serde_json::Value;
 
-use super::Service;
-use super::handlers::SNAPSHOT_OBJECTIVES;
-use super::project::{DETAIL_LIST_MAX, MAX_SUMMARY_BADGES};
-use super::state::{ObjState, WsState};
+use super::{DETAIL_LIST_MAX, MAX_SUMMARY_BADGES};
+use crate::service::Service;
+use crate::service::handlers::SNAPSHOT_OBJECTIVES;
+use crate::service::state::{ObjState, WsState};
 
 fn nodes(value: &Value) -> usize {
     1 + match value {
@@ -227,7 +231,7 @@ fn reply_frames(data: ReplyData, request_id: &Id) -> Vec<ClientEnvelope> {
     .collect()
 }
 
-pub(super) fn budget_verification(mut row: VerificationSummary) -> VerificationSummary {
+pub(crate) fn budget_verification(mut row: VerificationSummary) -> VerificationSummary {
     let previews = take_previews(std::slice::from_mut(&mut row));
     let mut frames = reply_frames(ReplyData::ReviewVerify(row.clone()), &row.objective_id);
     frames.push(ClientEnvelope::new(ClientBody::Event(EventFrame {

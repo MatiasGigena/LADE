@@ -1,7 +1,6 @@
 mod agent_session;
 mod capture;
 pub mod convert;
-mod detail_budget;
 mod execution;
 mod feedback;
 mod handlers;
@@ -11,7 +10,7 @@ mod limits;
 mod link;
 mod models;
 mod objectives;
-mod project;
+mod projection;
 mod recovery;
 mod resources;
 mod review;

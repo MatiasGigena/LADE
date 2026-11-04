@@ -49,7 +49,7 @@ impl Service {
 
     pub(crate) fn check_idle(&self, oid: ObjectiveId) -> Result<(), Rejection> {
         match self.runtime.get(&oid).and_then(|r| r.busy) {
-            Some(_) => Err(conflict(super::project::BUSY)),
+            Some(_) => Err(conflict(super::projection::actions::BUSY)),
             None => Ok(()),
         }
     }
@@ -335,7 +335,7 @@ mod tests {
         harness.service.rt(oid).busy = Some("freeze");
         assert_eq!(
             harness.service.check_idle(oid).expect_err("busy").detail,
-            super::super::project::BUSY
+            super::super::projection::actions::BUSY
         );
     }
 

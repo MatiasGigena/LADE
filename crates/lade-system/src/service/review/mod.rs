@@ -28,7 +28,7 @@ use crate::storage;
 use super::convert::{conflict, domain_rejection, from_wire_git, invalid, not_found, parse_uuid};
 use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
-use super::project::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
+use super::projection::actions::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms};
 

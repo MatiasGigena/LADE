@@ -13,7 +13,7 @@ use crate::adapters::git;
 use crate::service::convert::{domain_rejection, durability, invalid};
 use crate::service::handlers::sql;
 use crate::service::jobs;
-use crate::service::project::delete_history_blocker;
+use crate::service::projection::actions::delete_history_blocker;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage;
 
