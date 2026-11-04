@@ -59,3 +59,82 @@ impl Lifecycle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_table_is_exact() {
+        use Lifecycle::*;
+        let allowed = [
+            (Defined, Active),
+            (Active, Frozen),
+            (Frozen, Active),
+            (Frozen, Approved),
+            (Approved, Frozen),
+            (Approved, Integrated),
+            (Defined, CompletedNoChanges),
+            (Active, CompletedNoChanges),
+            (Frozen, CompletedNoChanges),
+            (Defined, Discarded),
+            (Active, Discarded),
+            (Frozen, Discarded),
+            (Approved, Discarded),
+        ];
+        for from in Lifecycle::ALL {
+            for to in Lifecycle::ALL {
+                assert_eq!(
+                    from.permits(to),
+                    allowed.contains(&(from, to)),
+                    "{from:?} -> {to:?}"
+                );
+            }
+        }
+        for terminal in [Integrated, CompletedNoChanges, Discarded] {
+            assert!(terminal.is_terminal());
+            assert!(Lifecycle::ALL.iter().all(|to| !terminal.permits(*to)));
+        }
+    }
+
+    #[test]
+    fn every_non_terminal_state_can_still_be_discarded_or_reach_a_terminal_state() {
+        for from in Lifecycle::ALL.iter().filter(|state| !state.is_terminal()) {
+            assert!(from.permits(Lifecycle::Discarded), "{from:?}");
+            assert!(!from.permits(*from), "{from:?} never loops onto itself");
+        }
+        let terminal: Vec<Lifecycle> = Lifecycle::ALL
+            .into_iter()
+            .filter(|state| state.is_terminal())
+            .collect();
+        assert_eq!(
+            terminal,
+            [
+                Lifecycle::Integrated,
+                Lifecycle::CompletedNoChanges,
+                Lifecycle::Discarded
+            ]
+        );
+        assert!(
+            !Lifecycle::Approved.permits(Lifecycle::CompletedNoChanges),
+            "an approved candidate has changes"
+        );
+    }
+
+    #[test]
+    fn codes_are_distinct_snake_case_names() {
+        let codes: Vec<&str> = Lifecycle::ALL.iter().map(|state| state.code()).collect();
+        assert_eq!(
+            codes,
+            [
+                "defined",
+                "active",
+                "frozen",
+                "approved",
+                "integrated",
+                "completed_no_changes",
+                "discarded"
+            ]
+        );
+    }
+}

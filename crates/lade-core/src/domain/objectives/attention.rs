@@ -126,3 +126,235 @@ pub fn derive_attention(objective: &Objective, facts: &AttentionFacts) -> Attent
     };
     AttentionView { attention, badges }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{active_objective, defined_objective, stopped_objective, ts};
+
+    #[test]
+    fn attention_precedence_and_badges() {
+        let defined = defined_objective();
+        assert_eq!(
+            derive_attention(&defined, &AttentionFacts::default()).attention,
+            Attention::Idle
+        );
+
+        let (mut objective, generation) = active_objective();
+        assert_eq!(
+            derive_attention(&objective, &AttentionFacts::default()).attention,
+            Attention::Idle
+        );
+        let changed = AttentionFacts {
+            change_set_non_empty: true,
+            ..AttentionFacts::default()
+        };
+        assert_eq!(
+            derive_attention(&objective, &changed).attention,
+            Attention::ReadyForReview
+        );
+        let uncertain = AttentionFacts {
+            delivery_uncertain: true,
+            ..changed
+        };
+        let view = derive_attention(&objective, &uncertain);
+        assert_eq!(view.attention, Attention::NeedsAttention);
+        assert_eq!(view.badges, vec![Badge::DeliveryUncertain]);
+
+        objective
+            .observe_turn(generation, true, ts(5))
+            .expect("running");
+        assert_eq!(
+            derive_attention(&objective, &changed).attention,
+            Attention::Working
+        );
+        objective.request_stop(ts(6)).expect("stop");
+        assert_eq!(
+            derive_attention(&objective, &changed).attention,
+            Attention::Working
+        );
+        objective
+            .observe_stopped(generation, ts(7))
+            .expect("stopped");
+        let view = derive_attention(&objective, &changed);
+        assert_eq!(
+            (view.attention, view.badges),
+            (Attention::Idle, vec![Badge::Cancelled])
+        );
+
+        objective
+            .transition(&[Lifecycle::Frozen], ts(8))
+            .expect("freeze");
+        assert_eq!(
+            derive_attention(&objective, &AttentionFacts::default()).attention,
+            Attention::ReadyForReview
+        );
+        let all = AttentionFacts {
+            delivery_uncertain: true,
+            stale_feedback: true,
+            verification_failed: true,
+            integration_conflict: true,
+            target_moved: true,
+            change_set_non_empty: true,
+        };
+        let view = derive_attention(&objective, &all);
+        assert_eq!(view.attention, Attention::NeedsAttention);
+        assert_eq!(
+            view.badges,
+            vec![
+                Badge::DeliveryUncertain,
+                Badge::StaleFeedback,
+                Badge::VerificationFailed,
+                Badge::IntegrationConflict,
+                Badge::StaleTarget,
+                Badge::Cancelled
+            ]
+        );
+
+        objective
+            .transition(&[Lifecycle::Discarded], ts(9))
+            .expect("discard");
+        assert_eq!(
+            derive_attention(&objective, &all),
+            AttentionView {
+                attention: Attention::Archived,
+                badges: vec![]
+            }
+        );
+    }
+
+    #[test]
+    fn failed_execution_needs_attention() {
+        let (mut objective, generation) = active_objective();
+        objective
+            .observe_failure(generation, "worker exited", ts(5))
+            .expect("fail");
+        let view = derive_attention(&objective, &AttentionFacts::default());
+        assert_eq!(
+            (view.attention, view.badges),
+            (Attention::NeedsAttention, vec![Badge::Failed])
+        );
+    }
+
+    #[test]
+    fn board_order_sorts_by_precedence() {
+        let mut board = vec![
+            Attention::Archived,
+            Attention::Idle,
+            Attention::Working,
+            Attention::ReadyForReview,
+            Attention::NeedsAttention,
+        ];
+        board.sort();
+        assert_eq!(
+            board,
+            vec![
+                Attention::NeedsAttention,
+                Attention::ReadyForReview,
+                Attention::Working,
+                Attention::Idle,
+                Attention::Archived
+            ]
+        );
+        assert_eq!(Attention::NeedsAttention.code(), "needs_attention");
+    }
+
+    #[test]
+    fn closed_objectives_are_archived_whatever_the_facts_and_show_only_clean_up() {
+        let all = AttentionFacts {
+            delivery_uncertain: true,
+            stale_feedback: true,
+            verification_failed: true,
+            integration_conflict: true,
+            target_moved: true,
+            change_set_non_empty: true,
+        };
+        let mut objective = defined_objective();
+        objective
+            .transition(&[Lifecycle::CompletedNoChanges], ts(2))
+            .expect("complete");
+        objective.cleanup(0, false, ts(3)).expect("clean up");
+        assert_eq!(
+            derive_attention(&objective, &all),
+            AttentionView {
+                attention: Attention::Archived,
+                badges: vec![Badge::CleanedUp]
+            }
+        );
+    }
+
+    #[test]
+    fn a_failure_or_interruption_comes_before_observed_facts() {
+        let (mut objective, generation) = active_objective();
+        objective.interrupt_after_restart(ts(3)).expect("interrupt");
+        let facts = AttentionFacts {
+            stale_feedback: true,
+            ..AttentionFacts::default()
+        };
+        assert_eq!(
+            derive_attention(&objective, &facts).badges,
+            [Badge::Interrupted, Badge::StaleFeedback]
+        );
+        let next = objective.resume_execution(ts(4)).expect("resume");
+        assert_ne!(next, generation);
+        objective
+            .observe_failure(next, "worker exited", ts(5))
+            .expect("fail");
+        assert_eq!(
+            derive_attention(&objective, &facts).badges,
+            [Badge::Failed, Badge::StaleFeedback]
+        );
+    }
+
+    #[test]
+    fn changes_are_ready_for_review_only_once_the_agent_is_idle() {
+        let changed = AttentionFacts {
+            change_set_non_empty: true,
+            ..AttentionFacts::default()
+        };
+        let stopped = stopped_objective();
+        let view = derive_attention(&stopped, &changed);
+        assert_eq!(
+            (view.attention, view.badges),
+            (Attention::Idle, vec![Badge::Cancelled]),
+            "a stopped agent with changes waits for freezing"
+        );
+        let mut starting = stopped;
+        starting.resume_execution(ts(4)).expect("resume");
+        assert_eq!(
+            derive_attention(&starting, &changed).attention,
+            Attention::Working
+        );
+    }
+
+    #[test]
+    fn attention_and_badge_codes_are_distinct() {
+        let attention = [
+            Attention::NeedsAttention,
+            Attention::ReadyForReview,
+            Attention::Working,
+            Attention::Idle,
+            Attention::Archived,
+        ]
+        .map(Attention::code);
+        let badges = [
+            Badge::Interrupted,
+            Badge::Failed,
+            Badge::DeliveryUncertain,
+            Badge::StaleFeedback,
+            Badge::VerificationFailed,
+            Badge::IntegrationConflict,
+            Badge::StaleTarget,
+            Badge::Cancelled,
+            Badge::CleanedUp,
+        ]
+        .map(Badge::code);
+        for codes in [&attention[..], &badges[..]] {
+            for (index, code) in codes.iter().enumerate() {
+                assert!(!codes[..index].contains(code), "{code} repeated");
+                assert!(code.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'));
+            }
+        }
+        assert_eq!(Badge::StaleTarget.code(), "stale_target");
+    }
+}
