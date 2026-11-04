@@ -13,7 +13,7 @@ jobs:
       - name: Native build and sandbox prerequisites (disposable runner only)
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev build-essential pkg-config bubblewrap
+          sudo apt-get install -y libgtk-4-dev libgtksourceview-5-dev build-essential pkg-config bubblewrap xvfb
       - name: Allow unprivileged user namespaces for bubblewrap (disposable runner only)
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -24,6 +24,10 @@ jobs:
         env:
           LADE_REQUIRE_SANDBOX: "1"
         run: ./scripts/verify
+      - name: GTK display tests under Xvfb (ignored by scripts/verify)
+        env:
+          LADE_CAPTURE_DIR: ${{ runner.temp }}/captures
+        run: xvfb-run -a ./scripts/cargo test -p lade-desktop --locked -- --ignored
       - name: Throwaway signing key (this runner only; the release key and trust bootstrap are pending)
         run: |
           mkdir -m 700 "$RUNNER_TEMP/keys"

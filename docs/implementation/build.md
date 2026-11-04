@@ -117,7 +117,9 @@ Inspect the resulting PNG; do not infer native rendering from source/CSS. Captur
 Scripted native runs under Xvfb (development host): `scripts/e2e-gui` drives the whole review loop and
 `scripts/e2e-terminal` the IMP-012 terminal, single-instance, client-close, Exit and restart flows (it runs inside its
 own `dbus-run-session`). Both need a debug build, Xvfb, xdotool, ImageMagick and bubblewrap and are not part of
-`scripts/verify`. Native, resilience, performance and load scripts write captures and reports under the ignored
+`scripts/verify`. The `#[ignore]`d `lade-desktop` display tests (launch QA layout checks and the fixture-view
+capture, which writes PNGs to `LADE_CAPTURE_DIR` and does nothing without it) are not in `scripts/verify` either; CI
+runs them after it with `xvfb-run -a ./scripts/cargo test -p lade-desktop --locked -- --ignored`. Native, resilience, performance and load scripts write captures and reports under the ignored
 `evidence-local/` directory by default; pass an output directory to retain them elsewhere.
 
 The contained terminal (IMP-012) adds no dependency: the PTY comes from rustix (`pty`, `termios` features of the
