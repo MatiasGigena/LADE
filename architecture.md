@@ -68,7 +68,7 @@ architecture.md, CONTEXT.md, design.md
 docs/implementation/            # contracts, limits and acceptance status per area
 crates/
   lade-core/src/
-    domain/{objectives,inspection,feedback,review,execution,recovery,ids}.rs
+    domain/{objectives,feedback,review,execution}/, domain/{inspection,recovery,ids}.rs
                                 # values, invariants and transitions; no platform imports
   lade-protocol/src/            # wire DTOs, validators, framing (client and worker)
   lade-system/src/
