@@ -2,21 +2,9 @@
 
 use super::{Request, RequestName};
 use crate::{WireError, types::Id};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-
-impl Serialize for RequestName {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-impl<'de> Deserialize<'de> for RequestName {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        Self::parse(&name).ok_or_else(|| serde::de::Error::custom("invalid_schema"))
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(try_from = "RawRequest")]

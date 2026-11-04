@@ -88,6 +88,26 @@ fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, WireError> {
     serde_json::from_value(value).map_err(|_| WireError::InvalidSchema)
 }
 
+/// Serializes a closed name catalogue as its wire string and refuses names outside it.
+macro_rules! wire_name {
+    ($name:ident) => {
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let name = <String as serde::Deserialize>::deserialize(deserializer)?;
+                Self::parse(&name).ok_or_else(|| serde::de::Error::custom("invalid_schema"))
+            }
+        }
+    };
+}
+
 macro_rules! requests {
     ($($variant:ident = $wire:literal, $mutating:literal, $payload:ty => $data:ty;)*) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -207,6 +227,7 @@ requests! {
     ServiceStop = "service.stop", true, ServiceStopCommand => Empty;
     ObjectiveDeleteHistory = "objective.delete_history", true, ObjectiveHistoryDeleteCommand => Box<ObjectiveDetail>;
 }
+wire_name!(RequestName);
 
 macro_rules! events {
     ($($variant:ident = $wire:literal, $payload:ty;)*) => {
@@ -264,3 +285,4 @@ events! {
     TerminalOutput = "terminal.output", TerminalOutput;
     TerminalClosed = "terminal.closed", TerminalClosed;
 }
+wire_name!(EventName);
