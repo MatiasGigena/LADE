@@ -245,11 +245,3 @@ fn model_selection_keeps_the_destination() {
     assert_eq!(after.session_id, before.session_id);
     assert_eq!(after.association_revision, before.association_revision);
 }
-
-#[test]
-fn model_labels_are_validated() {
-    assert!(ModelRef::new("lade-fixture", "scripted-1").is_ok());
-    assert!(ModelRef::new("", "x").is_err());
-    assert!(ModelRef::new("a b", "x").is_err());
-    assert!(ModelRef::new("a", &"x".repeat(MAX_LABEL_BYTES + 1)).is_err());
-}

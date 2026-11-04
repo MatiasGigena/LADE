@@ -75,3 +75,86 @@ pub struct SessionAssociation {
     pub association_revision: Revision,
     pub model: ModelRef,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ALL: [ExecutionState; 7] = [
+        ExecutionState::None,
+        ExecutionState::Starting,
+        ExecutionState::Running,
+        ExecutionState::Idle,
+        ExecutionState::Stopping,
+        ExecutionState::Cancelled { interrupted: false },
+        ExecutionState::Failed {
+            reason: String::new(),
+        },
+    ];
+
+    #[test]
+    fn generations_advance_by_one_and_refuse_to_wrap() {
+        assert_eq!(ExecutionGeneration::NONE.value(), 0);
+        assert_eq!(
+            ExecutionGeneration::NONE.advance(),
+            Ok(ExecutionGeneration::new(1))
+        );
+        assert_eq!(
+            ExecutionGeneration::new(41)
+                .advance()
+                .map(ExecutionGeneration::value),
+            Ok(42)
+        );
+        assert!(matches!(
+            ExecutionGeneration::new(u64::MAX).advance(),
+            Err(DomainError::LimitReached(_))
+        ));
+        assert!(ExecutionGeneration::new(1) < ExecutionGeneration::new(2));
+    }
+
+    #[test]
+    fn only_running_and_idle_runs_accept_dispatch_and_both_are_live() {
+        for state in &ALL {
+            let live = matches!(
+                state,
+                ExecutionState::Starting
+                    | ExecutionState::Running
+                    | ExecutionState::Idle
+                    | ExecutionState::Stopping
+            );
+            assert_eq!(state.is_live(), live, "{state:?}");
+            let dispatchable = matches!(state, ExecutionState::Running | ExecutionState::Idle);
+            assert_eq!(state.accepts_dispatch(), dispatchable, "{state:?}");
+            assert!(!state.accepts_dispatch() || state.is_live());
+        }
+        assert!(!ExecutionState::Cancelled { interrupted: true }.is_live());
+    }
+
+    #[test]
+    fn state_codes_are_distinct_and_ignore_payloads() {
+        let codes: Vec<&str> = ALL.iter().map(ExecutionState::code).collect();
+        assert_eq!(
+            codes,
+            [
+                "none",
+                "starting",
+                "running",
+                "idle",
+                "stopping",
+                "cancelled",
+                "failed"
+            ]
+        );
+        assert_eq!(
+            ExecutionState::Cancelled { interrupted: true }.code(),
+            "cancelled"
+        );
+        assert_eq!(
+            ExecutionState::Failed {
+                reason: "boom".into()
+            }
+            .code(),
+            "failed"
+        );
+    }
+}

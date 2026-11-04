@@ -44,3 +44,49 @@ impl ModelRef {
         &self.id
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn labels_up_to_the_byte_limit_are_kept_verbatim() {
+        let at_limit = "é".repeat(MAX_LABEL_BYTES / 2);
+        let model = ModelRef::new("lade-fixture", &at_limit).expect("at the limit");
+        assert_eq!(model.provider(), "lade-fixture");
+        assert_eq!(model.id(), at_limit);
+        assert!(ModelRef::new("p", &"x".repeat(MAX_LABEL_BYTES)).is_ok());
+    }
+
+    #[test]
+    fn empty_oversized_spaced_or_control_labels_are_refused_on_either_side() {
+        let over = "x".repeat(MAX_LABEL_BYTES + 1);
+        for bad in [
+            "",
+            "a b",
+            "a\tb",
+            "a\u{a0}b",
+            "a\u{7}b",
+            "a\nb",
+            over.as_str(),
+        ] {
+            for (provider, id) in [(bad, "ok"), ("ok", bad)] {
+                assert!(
+                    matches!(
+                        ModelRef::new(provider, id),
+                        Err(DomainError::InvalidRequest(_))
+                    ),
+                    "{provider:?}/{id:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn models_compare_by_provider_and_id() {
+        let model = |provider, id| ModelRef::new(provider, id).expect("model");
+        assert_eq!(model("a", "m"), model("a", "m"));
+        assert_ne!(model("a", "m"), model("b", "m"));
+        assert_ne!(model("a", "m"), model("a", "n"));
+    }
+}
