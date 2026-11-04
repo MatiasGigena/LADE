@@ -2,22 +2,25 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use lade_protocol::client::{
-    DraftCursor, ErrorCode, Event, EventFrame, OperationGetQuery, OperationState, OperationStatus,
-    Outcome, Rejection, Reply, ReplyData, ReplyResult, Request, RequestFrame, SafeAction,
+    DraftCursor, Event, EventFrame, Rejection, Reply, ReplyData, ReplyResult, Request, RequestFrame,
 };
 use lade_protocol::types::{Counter, Id};
 
 use super::convert;
 use super::requests::{self, Context, Effects};
 use crate::presentation::controller::intents::Intent;
-use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
     ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, NoticeScope, ObjectiveId,
     ServiceNotice,
 };
 use crate::presentation::state::store::StoreUpdate;
 
+mod events;
 mod pages;
+mod paging;
+mod recovery;
+
+pub use events::event_updates;
 use pages::Pages;
 
 const MAX_DEFERRED_QUERIES: usize = 64;
@@ -25,7 +28,8 @@ const MAX_RECHECKS: u32 = 60;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Operation {
-    pub operation_id: Id,
+    /// Stable across resends, so the service recognises a resent command.
+    pub id: Id,
     pub request: Request,
     pub context: Context,
     checks: u32,
@@ -60,6 +64,26 @@ fn notice(level: NoticeLevel, code: &str, message: String) -> ServiceNotice {
         code: code.to_owned(),
         message,
         scope: NoticeScope::General,
+    }
+}
+
+/// Reports an intent that produced no request; a draft save also marks the draft as failed.
+fn not_sent(intent: &Intent, code: &str, reason: &str, draft_message: String) -> Step {
+    let mut updates = Vec::new();
+    if let Intent::SaveDraft { draft_id, .. } = intent {
+        updates.push(StoreUpdate::DraftSaveFailed {
+            draft_id: draft_id.clone(),
+            message: draft_message,
+        });
+    }
+    updates.push(StoreUpdate::Notice(notice(
+        NoticeLevel::Warning,
+        code,
+        format!("{} was not sent: {reason}.", intent.label()),
+    )));
+    Step {
+        updates,
+        frames: Vec::new(),
     }
 }
 
@@ -118,10 +142,15 @@ impl Core {
         &self.uncertain
     }
 
-    fn frame(&mut self, operation_id: Option<Id>, request: Request) -> RequestFrame {
-        let request_id = (self.new_id)();
-        RequestFrame::new(request_id, operation_id, request)
-            .expect("operation_id presence follows the request name")
+    /// Frames a read-only request. Queries never carry an operation id; `submit` routes every
+    /// mutating request through [`Self::send_command`] instead.
+    fn query_frame(&mut self, request: Request) -> RequestFrame {
+        debug_assert!(!request.name().is_mutating(), "queries are read-only");
+        RequestFrame {
+            request_id: (self.new_id)(),
+            operation_id: None,
+            request,
+        }
     }
 
     fn query(
@@ -130,29 +159,26 @@ impl Core {
         request: Request,
         context: Context,
     ) -> RequestFrame {
-        let frame = self.frame(None, request);
+        let frame = self.query_frame(request);
         self.pending
             .insert(frame.request_id.clone(), Pending::Query { intent, context });
         frame
     }
 
+    /// Frames a mutating command under its stable operation id, so a resend after a lost reply
+    /// is recognised by the service as the same operation.
     fn send_command(&mut self, operation: Operation) -> RequestFrame {
-        let frame = self.frame(
-            Some(operation.operation_id.clone()),
-            operation.request.clone(),
+        debug_assert!(
+            operation.request.name().is_mutating(),
+            "commands are mutating"
         );
+        let frame = RequestFrame {
+            request_id: (self.new_id)(),
+            operation_id: Some(operation.id.clone()),
+            request: operation.request.clone(),
+        };
         self.pending
             .insert(frame.request_id.clone(), Pending::Command(operation));
-        frame
-    }
-
-    fn recover(&mut self, operation: Operation) -> RequestFrame {
-        let request = Request::OperationGet(OperationGetQuery {
-            operation_id: operation.operation_id.clone(),
-        });
-        let frame = self.frame(None, request);
-        self.pending
-            .insert(frame.request_id.clone(), Pending::Recover(operation));
         frame
     }
 
@@ -170,98 +196,23 @@ impl Core {
     }
 
     pub fn submit(&mut self, intent: Intent) -> Step {
-        let mut step = Step::default();
         let (request, context) = match requests::request(&intent) {
             Ok(Some(mapped)) => mapped,
-            Ok(None) => return step,
+            Ok(None) => return Step::default(),
             Err(invalid) => {
-                let message = format!("{} was not sent: {}.", intent.label(), invalid.0);
-                if let Intent::SaveDraft { draft_id, .. } = &intent {
-                    step.updates.push(StoreUpdate::DraftSaveFailed {
-                        draft_id: draft_id.clone(),
-                        message: invalid.0.clone(),
-                    });
-                }
-                step.updates.push(StoreUpdate::Notice(notice(
-                    NoticeLevel::Warning,
-                    "invalid_request",
-                    message,
-                )));
-                return step;
+                return not_sent(&intent, "invalid_request", &invalid.0, invalid.0.clone());
             }
         };
         let mutating = request.name().is_mutating();
-        if !self.connected
-            && let Some(objective_id) = intent.terminal_objective()
-        {
-            step.updates.push(StoreUpdate::TerminalProblem {
-                objective_id: objective_id.clone(),
-                message: format!(
-                    "{} was not sent: the window is not connected to the service.",
-                    intent.label()
-                ),
-            });
-            return step;
-        }
         if !self.connected {
-            if mutating {
-                let message = format!(
-                    "{} was not sent: the window is not connected to the service.",
-                    intent.label()
-                );
-                if let Intent::SaveDraft { draft_id, .. } = &intent {
-                    step.updates.push(StoreUpdate::DraftSaveFailed {
-                        draft_id: draft_id.clone(),
-                        message: "not connected".into(),
-                    });
-                }
-                step.updates.push(StoreUpdate::Notice(notice(
-                    NoticeLevel::Warning,
-                    "not_connected",
-                    message,
-                )));
-            } else {
-                self.remember_query(&intent);
-            }
-            return step;
+            return self.submit_disconnected(&intent, mutating);
         }
         if !mutating {
-            if matches!(&context, Context::Drafts(o) if self.draft_pages.contains_key(o))
-                || matches!(&context, Context::Inputs(o) if self.input_pages.contains_key(o))
-            {
-                return step;
-            }
-            match &intent {
-                Intent::LoadObjective { objective_id } => self.focused = Some(objective_id.clone()),
-                Intent::LoadActivity {
-                    objective_id,
-                    before: None,
-                } => {
-                    self.activity_loaded.insert(objective_id.clone());
-                }
-                Intent::LoadDrafts { objective_id } => {
-                    self.drafts_requested.insert(objective_id.clone());
-                }
-                _ => {}
-            }
-            let frame = self.query(Some(intent), request, context.clone());
-            match context {
-                Context::Drafts(o) => {
-                    self.draft_pages
-                        .insert(o.clone(), Pages::new(frame.request_id.clone()));
-                    self.drafts_reconciled.remove(&o);
-                }
-                Context::Inputs(o) => {
-                    self.input_pages
-                        .insert(o, Pages::new(frame.request_id.clone()));
-                }
-                _ => {}
-            }
-            step.frames.push(frame);
-            return step;
+            return self.submit_query(intent, request, context);
         }
+        let mut step = Step::default();
         let operation = Operation {
-            operation_id: (self.new_id)(),
+            id: (self.new_id)(),
             request,
             context,
             checks: 0,
@@ -279,6 +230,64 @@ impl Core {
         }
         step.frames.push(self.send_command(operation));
         step
+    }
+
+    /// Terminal intents are refused, commands fail with a notice, and queries wait for the
+    /// next connection.
+    fn submit_disconnected(&mut self, intent: &Intent, mutating: bool) -> Step {
+        const REASON: &str = "the window is not connected to the service";
+        if let Some(objective_id) = intent.terminal_objective() {
+            return Step {
+                updates: vec![StoreUpdate::TerminalProblem {
+                    objective_id: objective_id.clone(),
+                    message: format!("{} was not sent: {REASON}.", intent.label()),
+                }],
+                frames: Vec::new(),
+            };
+        }
+        if mutating {
+            return not_sent(intent, "not_connected", REASON, "not connected".into());
+        }
+        self.remember_query(intent);
+        Step::default()
+    }
+
+    fn submit_query(&mut self, intent: Intent, request: Request, context: Context) -> Step {
+        if matches!(&context, Context::Drafts(o) if self.draft_pages.contains_key(o))
+            || matches!(&context, Context::Inputs(o) if self.input_pages.contains_key(o))
+        {
+            return Step::default();
+        }
+        match &intent {
+            Intent::LoadObjective { objective_id } => self.focused = Some(objective_id.clone()),
+            Intent::LoadActivity {
+                objective_id,
+                before: None,
+            } => {
+                self.activity_loaded.insert(objective_id.clone());
+            }
+            Intent::LoadDrafts { objective_id } => {
+                self.drafts_requested.insert(objective_id.clone());
+            }
+            _ => {}
+        }
+        let frame = self.query(Some(intent), request, context.clone());
+        match context {
+            Context::Drafts(o) => {
+                self.draft_pages
+                    .insert(o.clone(), Pages::new(frame.request_id.clone()));
+                self.drafts_reconciled.remove(&o);
+            }
+            Context::Inputs(o) => {
+                self.input_pages
+                    .insert(o, Pages::new(frame.request_id.clone()));
+            }
+            _ => {}
+        }
+        Step {
+            updates: Vec::new(),
+            frames: vec![frame],
+        }
     }
 
     fn remember_query(&mut self, intent: &Intent) {
@@ -399,183 +408,14 @@ impl Core {
             Pending::Query {
                 context: Context::Drafts(o),
                 ..
-            } => self.draft_page(o, reply.request_id, reply.result),
+            } => self.draft_page(o, &reply.request_id, reply.result),
             Pending::Query {
                 context: Context::Inputs(o),
                 ..
-            } => self.input_page(o, reply.request_id, reply.result),
+            } => self.input_page(o, &reply.request_id, reply.result),
             Pending::Query { context, .. } => self.settle(&context, reply.result),
             Pending::Command(operation) => self.settle(&operation.context, reply.result),
             Pending::Recover(operation) => self.recovered(operation, reply.result),
-        }
-    }
-
-    fn invalid_page(&mut self, context: &Context) -> Step {
-        self.settle(
-            context,
-            ReplyResult::Rejected {
-                name: None,
-                rejection: Rejection::new(
-                    ErrorCode::InvalidRequest,
-                    SafeAction::None,
-                    "The service returned an invalid history page. Refresh to try again.",
-                ),
-            },
-        )
-    }
-
-    fn draft_page(
-        &mut self,
-        objective_id: ObjectiveId,
-        request_id: Id,
-        result: ReplyResult,
-    ) -> Step {
-        if !self
-            .draft_pages
-            .get(&objective_id)
-            .is_some_and(|p| p.request_id == request_id)
-        {
-            return Step::default();
-        }
-        let mut pages = self
-            .draft_pages
-            .remove(&objective_id)
-            .expect("checked active page");
-        let context = Context::Drafts(objective_id.clone());
-        let data = match result {
-            ReplyResult::Ok(data) => match *data {
-                ReplyData::DraftsList(data) => data,
-                _ => return self.invalid_page(&context),
-            },
-            rejected => return self.settle(&context, rejected),
-        };
-        if data
-            .drafts
-            .iter()
-            .any(|draft| draft.objective_id.as_str() != objective_id.as_str())
-        {
-            return self.invalid_page(&context);
-        }
-        if let Some(next) = &data.next_after {
-            let advances = pages.after.as_ref().is_none_or(|after| {
-                (&next.created_at, &next.draft_id) > (&after.created_at, &after.draft_id)
-            });
-            if !advances
-                || data
-                    .drafts
-                    .last()
-                    .is_none_or(|draft| draft.draft_id != next.draft_id)
-            {
-                return self.invalid_page(&context);
-            }
-        }
-        pages.page(
-            data.drafts
-                .iter()
-                .map(convert::draft)
-                .map(|draft| (draft.draft_id.clone(), draft)),
-        );
-        if let Some(next) = data.next_after {
-            let intent = Intent::LoadDrafts {
-                objective_id: objective_id.clone(),
-            };
-            let (mut request, _) = requests::request(&intent)
-                .expect("validated objective")
-                .expect("load query");
-            let Request::DraftsList(query) = &mut request else {
-                unreachable!()
-            };
-            query.after = Some(next.clone());
-            let frame = self.query(Some(intent), request, context);
-            pages.request_id = frame.request_id.clone();
-            pages.after = Some(next);
-            self.draft_pages.insert(objective_id, pages);
-            return Step {
-                updates: Vec::new(),
-                frames: vec![frame],
-            };
-        }
-        let mut step = Step {
-            updates: vec![StoreUpdate::Drafts {
-                objective_id: objective_id.clone(),
-                drafts: pages.complete(),
-            }],
-            frames: Vec::new(),
-        };
-        self.finish_drafts(&objective_id, None, &mut step);
-        step
-    }
-
-    fn input_page(
-        &mut self,
-        objective_id: ObjectiveId,
-        request_id: Id,
-        result: ReplyResult,
-    ) -> Step {
-        if !self
-            .input_pages
-            .get(&objective_id)
-            .is_some_and(|p| p.request_id == request_id)
-        {
-            return Step::default();
-        }
-        let mut pages = self
-            .input_pages
-            .remove(&objective_id)
-            .expect("checked active page");
-        let context = Context::Inputs(objective_id.clone());
-        let data = match result {
-            ReplyResult::Ok(data) => match *data {
-                ReplyData::InputsList(data) => data,
-                _ => return self.invalid_page(&context),
-            },
-            rejected => return self.settle(&context, rejected),
-        };
-        if data
-            .inputs
-            .iter()
-            .any(|input| input.objective_id.as_str() != objective_id.as_str())
-        {
-            return self.invalid_page(&context);
-        }
-        if let Some(next) = &data.next_after
-            && (data.inputs.is_empty()
-                || next.value() <= pages.after.as_ref().map_or(0, Counter::value))
-        {
-            return self.invalid_page(&context);
-        }
-        pages.page(
-            data.inputs
-                .iter()
-                .map(convert::input)
-                .map(|input| (input.input_id.clone(), input)),
-        );
-        if let Some(next) = data.next_after {
-            let intent = Intent::LoadInputs {
-                objective_id: objective_id.clone(),
-            };
-            let (mut request, _) = requests::request(&intent)
-                .expect("validated objective")
-                .expect("load query");
-            let Request::InputsList(query) = &mut request else {
-                unreachable!()
-            };
-            query.after = Some(next.clone());
-            let frame = self.query(Some(intent), request, context);
-            pages.request_id = frame.request_id.clone();
-            pages.after = Some(next);
-            self.input_pages.insert(objective_id, pages);
-            return Step {
-                updates: Vec::new(),
-                frames: vec![frame],
-            };
-        }
-        Step {
-            updates: vec![StoreUpdate::Inputs {
-                objective_id,
-                inputs: pages.complete(),
-            }],
-            frames: Vec::new(),
         }
     }
 
@@ -588,7 +428,7 @@ impl Core {
                     self.last_sequence = Some(snapshot.sequence.value());
                 }
                 self.observe_reply(context, &data);
-                (requests::reply_effects(context, data), None)
+                (requests::reply_effects(context, &data), None)
             }
             ReplyResult::Rejected { rejection, .. } => {
                 if matches!(context, Context::Snapshot) {
@@ -664,7 +504,7 @@ impl Core {
         }
     }
 
-    /// The event counterpart of observe_reply.
+    /// The event counterpart of `observe_reply`.
     fn observe_event(&mut self, event: &Event) {
         match event {
             Event::DraftChanged(draft) => self.draft_changed(convert::draft(draft)),
@@ -685,137 +525,6 @@ impl Core {
         }
     }
 
-    fn settle_recovered(&mut self, context: &Context, data: ReplyData) -> Step {
-        let refresh = match &data {
-            ReplyData::DraftSave(draft) => vec![Intent::LoadDrafts {
-                objective_id: ObjectiveId::new(draft.objective_id.as_str()),
-            }],
-            ReplyData::DraftDelete(_) => self
-                .drafts_requested
-                .iter()
-                .map(|objective_id| Intent::LoadDrafts {
-                    objective_id: objective_id.clone(),
-                })
-                .collect(),
-            ReplyData::MessageSend(input) | ReplyData::FeedbackSubmit(input) => {
-                vec![Intent::LoadInputs {
-                    objective_id: ObjectiveId::new(input.objective_id.as_str()),
-                }]
-            }
-            _ => return self.settle(context, ReplyResult::Ok(Box::new(data))),
-        };
-        let mut effects = requests::recovered_effects(context, data);
-        effects.follow_ups.extend(refresh);
-        self.apply_effects(effects)
-    }
-
-    fn recovered(&mut self, mut operation: Operation, result: ReplyResult) -> Step {
-        let label = operation.context.label();
-        let objective = operation.context.objective_id().cloned();
-        let (state, outcome, note) = match result {
-            ReplyResult::Ok(data) => match *data {
-                ReplyData::OperationGet(OperationStatus { state, outcome }) => {
-                    (state, outcome, None)
-                }
-                _ => return Step::default(),
-            },
-            ReplyResult::Rejected { rejection, .. } => (
-                OperationState::Unknown,
-                None,
-                Some(requests::rejection_message(
-                    &format!("check the outcome of “{label}”"),
-                    &rejection,
-                )),
-            ),
-        };
-        match outcome {
-            Some(Outcome::Ok(data)) => {
-                let mut step = self.settle_recovered(&operation.context, *data);
-                step.updates.push(StoreUpdate::Notice(notice(
-                    NoticeLevel::Info,
-                    "operation_recovered",
-                    format!("{label} had completed before the connection dropped."),
-                )));
-                return step;
-            }
-            Some(Outcome::Rejected { name, rejection }) => {
-                return self.settle(
-                    &operation.context,
-                    ReplyResult::Rejected {
-                        name: Some(name),
-                        rejection,
-                    },
-                );
-            }
-            None => {}
-        }
-        let mut step = Step::default();
-        let (level, code, message) = match state {
-            OperationState::Accepted | OperationState::Pending
-                if operation.checks < MAX_RECHECKS =>
-            {
-                operation.checks += 1;
-                self.rechecks.push(operation.clone());
-                (
-                    NoticeLevel::Info,
-                    "query_operation",
-                    format!("Checking outcome of “{label}”… the service is still working on it."),
-                )
-            }
-            OperationState::Accepted | OperationState::Pending | OperationState::Uncertain => (
-                NoticeLevel::Warning,
-                "uncertain",
-                format!("The outcome of “{label}” is uncertain. Refresh before repeating it."),
-            ),
-            OperationState::Blocked => (
-                NoticeLevel::Warning,
-                "blocked",
-                format!("“{label}” is blocked by the service."),
-            ),
-            OperationState::Completed => (
-                NoticeLevel::Info,
-                "operation_recovered",
-                format!("{label} had completed before the connection dropped."),
-            ),
-            OperationState::Unknown => {
-                if let Context::Command {
-                    draft_id: Some(draft_id),
-                    objective_id: Some(_),
-                    ..
-                } = &operation.context
-                {
-                    step.updates.push(StoreUpdate::DraftSaveFailed {
-                        draft_id: draft_id.clone(),
-                        message: "the save did not reach the service".into(),
-                    });
-                }
-                (
-                    NoticeLevel::Warning,
-                    "unknown_operation",
-                    note.unwrap_or_else(|| {
-                        format!(
-                            "{label} did not reach the service before the connection dropped; nothing was changed. Try again."
-                        )
-                    }),
-                )
-            }
-        };
-        let note = notice(level, code, message);
-        if let Some(o) = &objective {
-            step.updates.push(StoreUpdate::CommandStatus {
-                objective_id: o.clone(),
-                status: Some(note.clone()),
-            });
-            step.extend(self.submit(Intent::LoadObjective {
-                objective_id: o.clone(),
-            }));
-        }
-        if level != NoticeLevel::Info {
-            step.updates.push(StoreUpdate::Notice(note));
-        }
-        step
-    }
-
     pub fn unsendable(&mut self, request_id: &Id, rejection: &Rejection) -> Step {
         let context = match self.pending.remove(request_id) {
             Some(Pending::Query {
@@ -824,7 +533,7 @@ impl Core {
             }) => {
                 return self.draft_page(
                     o,
-                    request_id.clone(),
+                    request_id,
                     ReplyResult::Rejected {
                         name: None,
                         rejection: rejection.clone(),
@@ -837,7 +546,7 @@ impl Core {
             }) => {
                 return self.input_page(
                     o,
-                    request_id.clone(),
+                    request_id,
                     ReplyResult::Rejected {
                         name: None,
                         rejection: rejection.clone(),
@@ -918,63 +627,6 @@ impl Core {
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
-}
-
-pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
-    vec![match event {
-        Event::ObjectiveChanged(s) => StoreUpdate::ObjectiveChanged(convert::summary(&s)),
-        Event::ObjectiveDetail(d) => StoreUpdate::ObjectiveDetail(Box::new(convert::detail(&d))),
-        Event::ActivityAppended(a) => StoreUpdate::ActivityAppended {
-            objective_id: ObjectiveId::new(a.objective_id.as_str()),
-            items: a.items.iter().map(convert::activity_item).collect(),
-        },
-        Event::ActivityDelta(d) => StoreUpdate::ActivityDelta {
-            objective_id: ObjectiveId::new(d.objective_id.as_str()),
-            item_id: crate::presentation::state::model::ActivityItemId::new(d.item_id.as_str()),
-            append_text: d.append_text,
-        },
-        Event::DraftChanged(d) => StoreUpdate::DraftChanged(convert::draft(&d)),
-        Event::InputChanged(i) => {
-            let input = convert::input(&i);
-            StoreUpdate::InputChanged {
-                objective_id: input.objective_id.clone(),
-                input,
-            }
-        }
-        Event::WorktreeChanged(w) => StoreUpdate::WorktreeChanged {
-            objective_id: ObjectiveId::new(w.objective_id.as_str()),
-        },
-        Event::VerificationChanged(v) => {
-            StoreUpdate::VerificationChanged(convert::verification(&v))
-        }
-        Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
-        Event::SessionChanged(s) => {
-            let (objective_id, session) = super::agent_session::session(&s);
-            StoreUpdate::AgentSession(AgentSessionUpdate::Session {
-                objective_id,
-                session,
-            })
-        }
-        Event::UiRequest(r) => StoreUpdate::AgentSession(AgentSessionUpdate::DialogOpened(
-            super::agent_session::dialog(&r),
-        )),
-        Event::UiClosed(c) => StoreUpdate::AgentSession(AgentSessionUpdate::DialogClosed {
-            ui_id: c.ui_id.as_str().to_owned(),
-        }),
-        Event::ResourcesChanged(i) => StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(
-            super::agent_session::inventory(&i),
-        )),
-        Event::TerminalOutput(o) => StoreUpdate::TerminalOutput {
-            terminal_id: o.terminal_id.as_str().to_owned(),
-            seq: o.seq.value(),
-            data: o.data,
-            dropped: o.dropped_bytes.value(),
-        },
-        Event::TerminalClosed(c) => StoreUpdate::TerminalClosed {
-            terminal_id: c.terminal_id.as_str().to_owned(),
-            end: convert::terminal_end(&c),
-        },
-    }]
 }
 
 #[cfg(test)]

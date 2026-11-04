@@ -8,15 +8,17 @@ use lade_protocol::client::{
 use lade_protocol::types::{Counter, Digest, GitAlgorithm, GitId, Id, Timestamp};
 use lade_protocol::{Framing, encode};
 
+use super::rejection::refusal;
 use super::*;
 use crate::presentation::controller::intents::DraftRevisionRef;
 use crate::presentation::state::agent_session::{
     AgentSessionUpdate, ForkPosition, ThinkingLevel, UiAnswerView,
 };
 use crate::presentation::state::model::{
-    ApprovalId, ArtifactDigest, CandidateId, CaptureId, DeliveryMode, ModelRef, Reference,
-    ReferenceVersion, SessionId, WorkspaceId,
+    ApprovalId, ArtifactDigest, CandidateId, CaptureId, DeliveryMode, ModelRef, NoticeScope,
+    Reference, ReferenceVersion, Refusal, SessionId, WorkspaceId,
 };
+use crate::transport::convert;
 
 pub(crate) const O: &str = "0b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 pub(crate) const W: &str = "1b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
@@ -732,7 +734,7 @@ fn query_replies_carry_their_request_context() {
     let context = Context::Diff(oid(), Basis::Working, path.clone());
     let effects = reply_effects(
         &context,
-        ReplyData::DiffGet(wire::FileDiff {
+        &ReplyData::DiffGet(wire::FileDiff {
             binary: false,
             hunks: vec![wire::DiffHunk {
                 old_start: Counter::new(0),
@@ -765,7 +767,7 @@ fn query_replies_carry_their_request_context() {
 
     let page = reply_effects(
         &Context::File(oid(), Basis::Working, path.clone(), Side::New),
-        ReplyData::FileRead(wire::FileContent {
+        &ReplyData::FileRead(wire::FileContent {
             artifact_digest: Digest::from_bytes([1; 32]),
             total_bytes: Counter::new(3),
             offset: Counter::new(0),
@@ -787,7 +789,7 @@ fn query_replies_carry_their_request_context() {
 fn objective_create_selects_and_loads_the_new_objective() {
     let effects = reply_effects(
         &Context::command("Create Objective", None),
-        ReplyData::ObjectiveCreate(Box::new(wire_detail(O))),
+        &ReplyData::ObjectiveCreate(Box::new(wire_detail(O))),
     );
     assert!(
         effects
@@ -842,7 +844,7 @@ fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface()
     }));
     let ok = reply_effects(
         &context,
-        ReplyData::ReviewFreeze(wire_detail(O).candidates[0].clone()),
+        &ReplyData::ReviewFreeze(wire_detail(O).candidates[0].clone()),
     );
     assert!(ok.updates.contains(&StoreUpdate::CommandStatus {
         objective_id: oid(),
@@ -1100,7 +1102,7 @@ fn settings_offer_known_models_with_the_default_selected() {
 fn agent_session_replies_and_events_reach_the_store() {
     let models = reply_effects(
         &Context::Models(Some("lade-fixture".into())),
-        ReplyData::ModelsList(wire::ModelCatalog {
+        &ReplyData::ModelsList(wire::ModelCatalog {
             sdk_version: "1.5.0".into(),
             providers: vec![wire::ProviderInfo {
                 provider: "openai-codex".into(),
@@ -1148,7 +1150,7 @@ fn agent_session_replies_and_events_reach_the_store() {
     };
     let forked = reply_effects(
         &Context::command("Fork session", Some(&oid())),
-        ReplyData::SessionFork(state.clone()),
+        &ReplyData::SessionFork(state.clone()),
     );
     assert!(forked.updates.iter().any(|u| matches!(
         u,
@@ -1182,7 +1184,7 @@ fn agent_session_replies_and_events_reach_the_store() {
     ));
     let snapshot = reply_effects(
         &Context::Snapshot,
-        ReplyData::Snapshot(wire::SnapshotData {
+        &ReplyData::Snapshot(wire::SnapshotData {
             service_epoch: Id::parse(O).unwrap(),
             sequence: Counter::new(0),
             workspaces: Vec::new(),
@@ -1207,7 +1209,7 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
     let context = Context::Terminal(oid(), "Open terminal");
     let effects = reply_effects(
         &context,
-        ReplyData::TerminalOpen(wire::TerminalInfo {
+        &ReplyData::TerminalOpen(wire::TerminalInfo {
             terminal_id: Id::parse(T.to_owned()).unwrap(),
             objective_id: Id::parse(O.to_owned()).unwrap(),
             mode: wire::TerminalMode::ReadOnly,
@@ -1243,7 +1245,7 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
             },
         }]
     );
-    let stopped = reply_effects(&Context::Stop, ReplyData::ServiceStop(wire::Empty {}));
+    let stopped = reply_effects(&Context::Stop, &ReplyData::ServiceStop(wire::Empty {}));
     assert_eq!(stopped.updates, vec![StoreUpdate::ServiceStopped]);
     let closed =
         crate::transport::core::event_updates(wire::Event::TerminalClosed(wire::TerminalClosed {

@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use lade_protocol::client::{
-    self as wire, Empty, ErrorCode, EventFrame, OperationStatus, Rejection, SafeAction,
+    self as wire, Empty, ErrorCode, EventFrame, OperationState, OperationStatus, Outcome,
+    Rejection, SafeAction,
 };
 use lade_protocol::types::{Counter, Id};
 
