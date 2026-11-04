@@ -4,6 +4,8 @@
 
 mod closing;
 mod integrate;
+#[cfg(test)]
+mod tests;
 
 use std::time::Instant;
 
