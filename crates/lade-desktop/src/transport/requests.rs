@@ -797,6 +797,26 @@ fn refresh_objective(objective_id: &ObjectiveId) -> Intent {
 }
 
 pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
+    effects_for(context, data, Records::Current)
+}
+
+/// Effects of a command outcome recovered after the connection dropped. The
+/// outcome holds the record as it was when the command completed, while current
+/// pages and events may already hold newer metadata, even at the same draft
+/// revision, so the changed draft or input record is left out and reconciled
+/// from current service state instead.
+pub fn recovered_effects(context: &Context, data: ReplyData) -> Effects {
+    effects_for(context, data, Records::AsCompleted)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Records {
+    Current,
+    AsCompleted,
+}
+
+fn effects_for(context: &Context, data: ReplyData, records: Records) -> Effects {
+    let current = records == Records::Current;
     let mut effects = Effects::default();
     let updates = &mut effects.updates;
     if let Context::Command {
@@ -910,10 +930,12 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
         (_, ReplyData::MessageSend(i) | ReplyData::FeedbackSubmit(i)) => {
             let input = convert::input(&i);
             let objective_id = input.objective_id.clone();
-            updates.push(StoreUpdate::InputChanged {
-                objective_id: objective_id.clone(),
-                input,
-            });
+            if current {
+                updates.push(StoreUpdate::InputChanged {
+                    objective_id: objective_id.clone(),
+                    input,
+                });
+            }
             if matches!(context, Context::Command { batch, .. } if !batch.is_empty()) {
                 effects.follow_ups.push(Intent::LoadDrafts {
                     objective_id: objective_id.clone(),
@@ -921,9 +943,13 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             }
             effects.follow_ups.push(refresh_objective(&objective_id));
         }
-        (_, ReplyData::DraftSave(d)) => updates.push(StoreUpdate::DraftChanged(convert::draft(&d))),
+        (_, ReplyData::DraftSave(d)) => {
+            if current {
+                updates.push(StoreUpdate::DraftChanged(convert::draft(&d)));
+            }
+        }
         (Context::Command { draft_id, .. }, ReplyData::DraftDelete(_)) => {
-            if let Some(draft_id) = draft_id {
+            if let Some(draft_id) = draft_id.as_ref().filter(|_| current) {
                 updates.push(StoreUpdate::DraftDeleted {
                     draft_id: draft_id.clone(),
                 });

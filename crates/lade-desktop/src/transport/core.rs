@@ -587,6 +587,7 @@ impl Core {
                     self.snapshot_in_flight = false;
                     self.last_sequence = Some(snapshot.sequence.value());
                 }
+                self.observe_reply(context, &data);
                 (requests::reply_effects(context, data), None)
             }
             ReplyResult::Rejected { rejection, .. } => {
@@ -630,7 +631,6 @@ impl Core {
     }
 
     fn apply_effects(&mut self, effects: Effects) -> Step {
-        self.observe_updates(&effects.updates);
         let mut step = Step {
             updates: effects.updates,
             frames: Vec::new(),
@@ -641,29 +641,47 @@ impl Core {
         step
     }
 
-    fn observe_updates(&mut self, updates: &[StoreUpdate]) {
-        for update in updates {
-            match update {
-                StoreUpdate::DraftChanged(draft) => {
-                    if let Some(pages) = self.draft_pages.get_mut(&draft.objective_id) {
-                        pages.change(draft.draft_id.clone(), draft.clone());
-                    }
-                }
-                StoreUpdate::DraftDeleted { draft_id } => {
+    /// Keeps draft and input pages that are still loading current with a
+    /// record this reply changed.
+    fn observe_reply(&mut self, context: &Context, data: &ReplyData) {
+        match data {
+            ReplyData::DraftSave(draft) => self.draft_changed(convert::draft(draft)),
+            ReplyData::DraftDelete(_) => {
+                if let Context::Command {
+                    draft_id: Some(draft_id),
+                    ..
+                } = context
+                {
                     for pages in self.draft_pages.values_mut() {
                         pages.remove(draft_id.clone());
                     }
                 }
-                StoreUpdate::InputChanged {
-                    objective_id,
-                    input,
-                } => {
-                    if let Some(pages) = self.input_pages.get_mut(objective_id) {
-                        pages.change(input.input_id.clone(), input.clone());
-                    }
-                }
-                _ => {}
             }
+            ReplyData::MessageSend(input) | ReplyData::FeedbackSubmit(input) => {
+                self.input_changed(convert::input(input));
+            }
+            _ => {}
+        }
+    }
+
+    /// The event counterpart of observe_reply.
+    fn observe_event(&mut self, event: &Event) {
+        match event {
+            Event::DraftChanged(draft) => self.draft_changed(convert::draft(draft)),
+            Event::InputChanged(input) => self.input_changed(convert::input(input)),
+            _ => {}
+        }
+    }
+
+    fn draft_changed(&mut self, draft: Draft) {
+        if let Some(pages) = self.draft_pages.get_mut(&draft.objective_id) {
+            pages.change(draft.draft_id.clone(), draft);
+        }
+    }
+
+    fn input_changed(&mut self, input: InputSummary) {
+        if let Some(pages) = self.input_pages.get_mut(&input.objective_id) {
+            pages.change(input.input_id.clone(), input);
         }
     }
 
@@ -686,18 +704,7 @@ impl Core {
             }
             _ => return self.settle(context, ReplyResult::Ok(Box::new(data))),
         };
-        let mut effects = requests::reply_effects(context, data);
-        // An operation outcome contains the record as it was when the command
-        // completed. Current pages/events may already contain newer metadata,
-        // even at the same draft revision. Reconcile from current service state.
-        effects.updates.retain(|update| {
-            !matches!(
-                update,
-                StoreUpdate::DraftChanged(_)
-                    | StoreUpdate::DraftDeleted { .. }
-                    | StoreUpdate::InputChanged { .. }
-            )
-        });
+        let mut effects = requests::recovered_effects(context, data);
         effects.follow_ups.extend(refresh);
         self.apply_effects(effects)
     }
@@ -871,9 +878,8 @@ impl Core {
         if !resync && let Some(last) = self.last_sequence.as_mut() {
             *last = sequence;
         }
-        let updates = event_updates(frame.event);
-        self.observe_updates(&updates);
-        step.updates.extend(updates);
+        self.observe_event(&frame.event);
+        step.updates.extend(event_updates(frame.event));
         if resync {
             step.extend(self.resync());
         }
