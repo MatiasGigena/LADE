@@ -6,7 +6,7 @@ use lade_protocol::types::{Counter, Id};
 use crate::presentation::state::model::DraftId;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
-use crate::transport::requests::tests::{epoch, oid};
+use crate::transport::requests::tests::{epoch, input_summary, oid, wire_draft};
 
 #[test]
 fn lost_command_reply_is_recovered_with_the_same_operation_id() {

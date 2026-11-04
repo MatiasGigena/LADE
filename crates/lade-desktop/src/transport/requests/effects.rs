@@ -353,3 +353,6 @@ fn terminal_opened(objective_id: &ObjectiveId, info: &wire::TerminalInfo) -> Sto
         rows: size(&info.rows),
     }
 }
+
+#[cfg(test)]
+mod tests;

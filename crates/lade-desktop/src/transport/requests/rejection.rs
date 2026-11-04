@@ -171,3 +171,6 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     }
     effects
 }
+
+#[cfg(test)]
+mod tests;

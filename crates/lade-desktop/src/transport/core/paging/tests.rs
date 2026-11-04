@@ -4,7 +4,9 @@ use lade_protocol::types::{Counter, Id};
 use crate::presentation::state::model::DraftId;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
-use crate::transport::requests::tests::{epoch, event, oid, snapshot_data};
+use crate::transport::requests::tests::{
+    epoch, event, input_summary, oid, snapshot_data, wire_draft,
+};
 
 #[test]
 fn draft_pages_do_not_reconcile_or_release_saves_before_completion() {

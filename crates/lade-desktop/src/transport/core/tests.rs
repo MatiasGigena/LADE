@@ -7,7 +7,7 @@ use super::*;
 use crate::presentation::state::model::{
     ArtifactDigest, CaptureId, DeliveryMode, DraftId, Reference, ReferenceVersion, RepoPath, Side,
 };
-use crate::transport::requests::tests::{O, epoch, event, oid, snapshot_data};
+use crate::transport::requests::tests::{O, epoch, event, input_summary, oid, snapshot_data};
 
 pub(super) fn ids() -> impl FnMut() -> Id + Send + 'static {
     static NEXT: AtomicU8 = AtomicU8::new(1);
@@ -36,19 +36,6 @@ pub(super) fn send_message() -> Intent {
         objective_id: oid(),
         text: "lade-fixture: write hello.txt hi".into(),
         mode: DeliveryMode::Prompt,
-    }
-}
-
-pub(super) fn input_summary(operation_id: &Id) -> wire::InputSummary {
-    wire::InputSummary {
-        input_id: Id::from_random_bytes([0x77; 16]),
-        objective_id: Id::parse(O).unwrap(),
-        operation_id: operation_id.clone(),
-        mode: lade_protocol::types::DeliveryMode::Prompt,
-        text_preview: "lade-fixture: write".into(),
-        accepted_at: lade_protocol::types::Timestamp::parse("2026-10-10T12:00:00.000Z").unwrap(),
-        delivery: wire::DeliveryState::Queued,
-        blocked_reason: None,
     }
 }
 
@@ -296,20 +283,6 @@ fn replies_to_unknown_requests_are_ignored() {
         ReplyData::DraftDelete(Empty {}),
     ));
     assert!(step.updates.is_empty() && step.frames.is_empty());
-}
-
-pub(super) fn wire_draft(byte: u8) -> wire::Draft {
-    wire::Draft {
-        draft_id: Id::from_random_bytes([byte; 16]),
-        objective_id: Id::parse(O).unwrap(),
-        destination_session_id: Id::from_random_bytes([99; 16]),
-        reference: crate::transport::convert::to_reference(&reference()).unwrap(),
-        body: format!("draft {byte}"),
-        revision: Counter::new(1),
-        state: wire::DraftState::Unsent,
-        stale: false,
-        input_id: None,
-    }
 }
 
 pub(super) fn draft_list(drafts: Vec<wire::Draft>, more: bool) -> ReplyData {

@@ -579,3 +579,6 @@ fn profile_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
         _ => return Err(Invalid("not an Agent Session intent".into())),
     })
 }
+
+#[cfg(test)]
+mod tests;
