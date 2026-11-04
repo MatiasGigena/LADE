@@ -34,6 +34,12 @@ use crate::adapters::sandbox::{
 };
 
 pub const NODE_ARGS: &[&str] = &["--disable-wasm-trap-handler"];
+/// The pi switches every worker spawn (session worker and model catalogue) runs with.
+pub const PI_FLAGS: [(&str, &str); 3] = [
+    ("PI_OFFLINE", "1"),
+    ("PI_SKIP_VERSION_CHECK", "1"),
+    ("PI_TELEMETRY", "0"),
+];
 
 pub const WRITE_QUEUE_FRAMES: usize = 256;
 pub const WRITE_QUEUE_BYTES: usize = 8 << 20;
@@ -321,6 +327,9 @@ impl WorkerLauncher for SandboxLauncher {
             .and_then(|s| s.env("LANG", "C.UTF-8"))
             .and_then(|s| s.env("PI_CODING_AGENT_DIR", scratch))
             .map_err(sandbox)?;
+        for (name, value) in PI_FLAGS {
+            spec.env(name, value).map_err(sandbox)?;
+        }
         if let Some(models) = models {
             spec.ro_bind(models).map_err(sandbox)?;
         }
@@ -391,16 +400,16 @@ impl WorkerLauncher for SandboxLauncher {
             repo_common_dir,
             session_dir,
             gateway_socket: socket,
-            pi_env: vec![
+            pi_env: [
                 ("PI_CODING_AGENT_DIR".into(), session.join("agent").into()),
                 (
                     "PI_CODING_AGENT_SESSION_DIR".into(),
                     session.join("sessions").into(),
                 ),
-                ("PI_OFFLINE".into(), "1".into()),
-                ("PI_SKIP_VERSION_CHECK".into(), "1".into()),
-                ("PI_TELEMETRY".into(), "0".into()),
-            ],
+            ]
+            .into_iter()
+            .chain(PI_FLAGS.map(|(name, value)| (name.into(), value.into())))
+            .collect(),
             credentials: credentials
                 .vars
                 .iter()

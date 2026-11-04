@@ -23,6 +23,7 @@ use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 use lade_system::service::{self, RunningService, ServiceConfig};
 use lade_system::supervision::credentials::{CredentialSource, FIXTURE_SWITCH};
+use lade_system::supervision::launcher::PI_FLAGS;
 use lade_system::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,
 };
@@ -324,6 +325,7 @@ impl WorkerLauncher for NodeLauncher {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", scratch)
             .env("PI_CODING_AGENT_DIR", scratch)
+            .envs(PI_FLAGS)
             .env(FIXTURE_SWITCH, "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -350,6 +352,12 @@ impl WorkerLauncher for NodeLauncher {
             .env("HOME", &request.session_dir)
             .env("LANG", "C.UTF-8")
             .env("TERM", "dumb")
+            .env("PI_CODING_AGENT_DIR", request.session_dir.join("agent"))
+            .env(
+                "PI_CODING_AGENT_SESSION_DIR",
+                request.session_dir.join("sessions"),
+            )
+            .envs(PI_FLAGS)
             .env(FIXTURE_SWITCH, "1")
             .current_dir(&request.worktree)
             .stdin(Stdio::piped())
