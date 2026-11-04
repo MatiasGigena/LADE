@@ -50,7 +50,7 @@ impl<R: Read> FrameReader<R> {
 
     pub fn read_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
         if self.failed {
-            return Err(WireError("closed").into());
+            return Err(WireError::Closed.into());
         }
         let result = self.next();
         if result.is_err() {
@@ -116,7 +116,7 @@ impl<W: Write> FrameWriter<W> {
     }
     pub fn write<M: Message>(&mut self, message: &M) -> Result<(), TransportError> {
         if self.failed {
-            return Err(WireError("closed").into());
+            return Err(WireError::Closed.into());
         }
         let bytes = encode(message, self.framing)?;
         self.inner

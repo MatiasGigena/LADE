@@ -98,9 +98,9 @@ fn stream<M: Message + PartialEq + Debug>(
                     count += 1;
                     Ok(())
                 }),
-                Err(WireError("closed"))
+                Err(WireError::Closed)
             );
-            assert_eq!(decoder.finish(), Err(WireError("closed")));
+            assert_eq!(decoder.finish(), Err(WireError::Closed));
             assert_eq!(
                 count, 0,
                 "a failed connection must not deliver later valid messages"
@@ -187,7 +187,7 @@ pub fn run(case: &Value) -> Result<(), WireError> {
                     Ok(Some(bytes)) => output.extend(bytes),
                     Ok(None) => (),
                     Err(e) => {
-                        assert_eq!(chunks.accept(&frame.body).unwrap_err().0, "closed");
+                        assert_eq!(chunks.accept(&frame.body).unwrap_err(), WireError::Closed);
                         return Err(e);
                     }
                 }
@@ -221,7 +221,7 @@ pub fn report() -> Vec<Value> {
     corpus()
         .iter()
         .map(|case| {
-            let actual = run(case).map(|_| "ok").unwrap_or_else(|e| e.0);
+            let actual = run(case).map(|_| "ok").unwrap_or_else(WireError::as_str);
             assert_eq!(actual, case["expected"].as_str().unwrap(), "{}", case["id"]);
             json!({"id":case["id"], "outcome":actual})
         })

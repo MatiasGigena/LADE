@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lade_protocol::client::{ClientBody, ClientEnvelope, ErrorCode, Event, Rejection, SafeAction};
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Capability, Id};
-use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError};
+use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError, WireError};
 
 use super::core::{Core, Step};
 use crate::presentation::controller::intents::Intent;
@@ -179,7 +179,7 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
             body: ClientBody::Hello,
             ..
         })) => {}
-        Err(TransportError::Wire(e)) if e.0 == "version_mismatch" => {
+        Err(TransportError::Wire(WireError::VersionMismatch)) => {
             return Err(ConnectError::Protocol(
                 "the service speaks a different LADE version".into(),
             ));

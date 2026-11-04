@@ -32,11 +32,37 @@ pub const MAX_CHUNK: usize = 64 * 1024;
 pub const MAX_TRANSFER: usize = 8 * 1024 * 1024;
 pub const MAX_TRANSFERS: usize = 2;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WireError(pub &'static str);
+macro_rules! wire_errors {
+    ($($variant:ident = $code:literal,)*) => {
+        /// Why a frame or transfer was refused below the request layer; `as_str` is the stable wire code.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum WireError { $($variant),* }
+        impl WireError {
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $code),* }
+            }
+        }
+    };
+}
+wire_errors! {
+    Closed = "closed",
+    TruncatedFrame = "truncated_frame",
+    FrameSize = "frame_size",
+    InvalidUtf8 = "invalid_utf8",
+    InvalidJson = "invalid_json",
+    DuplicateKey = "duplicate_key",
+    InvalidSchema = "invalid_schema",
+    VersionMismatch = "version_mismatch",
+    LimitReached = "limit_reached",
+    StaleExecution = "stale_execution",
+    ChunkOrder = "chunk_order",
+    ChunkLength = "chunk_length",
+    ChunkChecksum = "chunk_checksum",
+    DuplicateConflict = "duplicate_conflict",
+}
 impl std::fmt::Display for WireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.0)
+        f.write_str(self.as_str())
     }
 }
 impl std::error::Error for WireError {}
@@ -51,7 +77,7 @@ pub trait Message: Serialize + DeserializeOwned + Sized {
         let value = bounded_json(bytes)?;
         check_version(&value)?;
         schema::validate(&value, Self::CONTRACT)?;
-        serde_json::from_value(value).map_err(|_| WireError("invalid_schema"))
+        serde_json::from_value(value).map_err(|_| WireError::InvalidSchema)
     }
 }
 
@@ -59,7 +85,7 @@ fn check_version(value: &serde_json::Value) -> Result<(), WireError> {
     if value.get("protocol") != Some(&serde_json::json!(VERSION))
         || value.get("bundle").and_then(|v| v.as_str()) != Some(BUNDLE)
     {
-        return Err(WireError("version_mismatch"));
+        return Err(WireError::VersionMismatch);
     }
     Ok(())
 }
@@ -72,7 +98,7 @@ impl Message for ClientEnvelope {
     fn precheck(&self) -> Result<(), WireError> {
         match &self.body {
             ClientBody::ChunkData { hex, .. } if !schema::format(hex, "chunk-hex") => {
-                Err(WireError("invalid_schema"))
+                Err(WireError::InvalidSchema)
             }
             _ => Ok(()),
         }
@@ -101,7 +127,7 @@ pub fn decode_client_frame(bytes: &[u8]) -> Result<ClientEnvelope, FrameRejectio
     let error = match schema::validate(&value, Contract::Client) {
         Ok(()) => match serde_json::from_value(value.clone()) {
             Ok(envelope) => return Ok(envelope),
-            Err(_) => WireError("invalid_schema"),
+            Err(_) => WireError::InvalidSchema,
         },
         Err(error) => error,
     };

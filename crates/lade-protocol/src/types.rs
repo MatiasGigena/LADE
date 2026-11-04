@@ -22,7 +22,7 @@ macro_rules! wire_string {
                 if schema::format(&value, $format) {
                     Ok(Self(value))
                 } else {
-                    Err(WireError("invalid_schema"))
+                    Err(WireError::InvalidSchema)
                 }
             }
         }
@@ -199,7 +199,7 @@ impl TryFrom<RawGitId> for GitId {
                 hex: raw.hex,
             })
         } else {
-            Err(WireError("invalid_schema"))
+            Err(WireError::InvalidSchema)
         }
     }
 }
@@ -231,7 +231,7 @@ impl WirePath {
     pub fn from_bytes(bytes: impl Into<Vec<u8>>) -> Result<Self, WireError> {
         let bytes = bytes.into();
         if bytes.is_empty() || bytes.len() > MAX_PATH_BYTES {
-            return Err(WireError("invalid_schema"));
+            return Err(WireError::InvalidSchema);
         }
         let display = String::from_utf8_lossy(&bytes)
             .chars()
@@ -265,12 +265,12 @@ impl WirePath {
 impl TryFrom<RawPath> for WirePath {
     type Error = WireError;
     fn try_from(raw: RawPath) -> Result<Self, WireError> {
-        let bytes = base64::decode(&raw.b64).ok_or(WireError("invalid_schema"))?;
+        let bytes = base64::decode(&raw.b64).ok_or(WireError::InvalidSchema)?;
         if bytes.is_empty()
             || bytes.len() > MAX_PATH_BYTES
             || raw.display.chars().count() > MAX_DISPLAY_CHARS
         {
-            return Err(WireError("invalid_schema"));
+            return Err(WireError::InvalidSchema);
         }
         Ok(Self {
             bytes,

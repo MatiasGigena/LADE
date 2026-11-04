@@ -14,7 +14,7 @@ fn to_value(value: &impl Serialize) -> Value {
     serde_json::to_value(value).expect("wire DTOs serialize to JSON")
 }
 fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, WireError> {
-    serde_json::from_value(value).map_err(|_| WireError("invalid_schema"))
+    serde_json::from_value(value).map_err(|_| WireError::InvalidSchema)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -232,7 +232,7 @@ impl RequestFrame {
         request: Request,
     ) -> Result<Self, WireError> {
         if operation_id.is_some() != request.name().is_mutating() {
-            return Err(WireError("invalid_schema"));
+            return Err(WireError::InvalidSchema);
         }
         Ok(Self {
             request_id,
@@ -414,7 +414,7 @@ impl TryFrom<RawReply> for Reply {
                     detail,
                 },
             },
-            (None, RawResult::Ok { .. }) => return Err(WireError("invalid_schema")),
+            (None, RawResult::Ok { .. }) => return Err(WireError::InvalidSchema),
         };
         Ok(Self {
             request_id: raw.request_id,
@@ -455,7 +455,7 @@ impl TryFrom<RawOutcome> for Outcome {
     type Error = WireError;
     fn try_from(raw: RawOutcome) -> Result<Self, WireError> {
         if !raw.name.is_mutating() {
-            return Err(WireError("invalid_schema"));
+            return Err(WireError::InvalidSchema);
         }
         Ok(match typed_result(raw.name, raw.result)? {
             Ok(data) => Self::Ok(Box::new(data)),

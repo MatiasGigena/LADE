@@ -555,10 +555,10 @@ fn monitor(
                     }
                 }
                 Ok(_) => break Ending::Violation("service_body_from_worker"),
-                Err(e) => break Ending::Violation(e.0),
+                Err(e) => break Ending::Violation(e.as_str()),
             },
             Ok(None) => break Ending::Eof,
-            Err(TransportError::Wire(e)) => break Ending::Violation(e.0),
+            Err(TransportError::Wire(e)) => break Ending::Violation(e.as_str()),
             Err(TransportError::Io(_)) => break Ending::Eof,
         }
     };
@@ -716,7 +716,7 @@ impl WorkerControl for SandboxWorker {
             return Err(gone());
         }
         let frame = encode(&WorkerEnvelope::new(body), Framing::Worker)
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, e.0))?;
+            .map_err(|e| io::Error::new(ErrorKind::InvalidData, e.as_str()))?;
         let len = frame.len();
         let full = || io::Error::new(ErrorKind::WouldBlock, "worker_queue_full");
         if self.queued.fetch_add(len, Ordering::SeqCst) + len > WRITE_QUEUE_BYTES {

@@ -82,7 +82,7 @@ fn cancellation_releases_capacity_and_disconnect_revokes_the_reassembler() {
         chunks
             .accept(&message(json!({"kind":"chunk.end","transfer_id":id(4)})).body)
             .unwrap_err()
-            .0,
+            .as_str(),
         "closed"
     );
 }
@@ -119,7 +119,7 @@ fn correlation_overflow_never_evicts_the_original_outcome() {
         history
             .observe(&send(1256, 2256, "x"), original.clone())
             .unwrap_err()
-            .0,
+            .as_str(),
         "limit_reached"
     );
     assert_eq!(
@@ -185,7 +185,7 @@ fn well_formed_invalid_requests_are_recoverable_and_others_are_not() {
     let unknown =
         wire(json!({"kind":"request","request_id":id(4),"name":"shell.execute","payload":{}}));
     let rejection = decode_client_frame(&unknown).unwrap_err();
-    assert_eq!(rejection.error.0, "invalid_schema");
+    assert_eq!(rejection.error.as_str(), "invalid_schema");
     assert_eq!(rejection.request_id, Some(typed_id(4)));
     let bad_id = wire(json!({"kind":"request","request_id":"x","name":"snapshot","payload":{}}));
     assert_eq!(decode_client_frame(&bad_id).unwrap_err().request_id, None);
@@ -197,7 +197,7 @@ fn well_formed_invalid_requests_are_recoverable_and_others_are_not() {
     let old = br#"{"protocol":1,"bundle":"0.1.0-imp001","body":{"kind":"request","request_id":"00000000-0000-4000-8000-000000000004"}}"#;
     let version = decode_client_frame(old).unwrap_err();
     assert_eq!(
-        (version.error.0, version.request_id),
+        (version.error.as_str(), version.request_id),
         ("version_mismatch", None)
     );
     assert!(decode_client_frame(&wire(json!({"kind":"hello"}))).is_ok());
@@ -215,14 +215,17 @@ fn downstream_backpressure_stops_decoding_without_delivering_later_frames() {
             decoder
                 .push(&bytes, |_| {
                     calls += 1;
-                    Err(WireError("limit_reached"))
+                    Err(WireError::LimitReached)
                 })
                 .unwrap_err()
-                .0,
+                .as_str(),
             "limit_reached"
         );
         assert_eq!(calls, 1);
-        assert_eq!(decoder.push(&bytes, |_| Ok(())).unwrap_err().0, "closed");
+        assert_eq!(
+            decoder.push(&bytes, |_| Ok(())).unwrap_err().as_str(),
+            "closed"
+        );
     }
 }
 
@@ -234,7 +237,7 @@ fn oversized_outbound_content_is_rejected() {
         *hex = "a".repeat(2 * MAX_FRAME);
     }
     assert_eq!(
-        encode(&frame, Framing::Client).unwrap_err().0,
+        encode(&frame, Framing::Client).unwrap_err().as_str(),
         "invalid_schema"
     );
     let text = "\u{1}".repeat(lade_protocol::MAX_STRING);
@@ -242,7 +245,10 @@ fn oversized_outbound_content_is_rejected() {
         item_id: typed_id(4),
         append_text: text,
     });
-    assert_eq!(encode(&item, Framing::Worker).unwrap_err().0, "frame_size");
+    assert_eq!(
+        encode(&item, Framing::Worker).unwrap_err().as_str(),
+        "frame_size"
+    );
 }
 
 struct Trickle<'a>(&'a [u8], usize);
@@ -289,11 +295,11 @@ fn blocking_reader_and_writer_frame_one_message_at_a_time() {
         truncated.read_frame().unwrap().unwrap();
         assert!(matches!(
             truncated.read_frame(),
-            Err(TransportError::Wire(WireError("truncated_frame")))
+            Err(TransportError::Wire(WireError::TruncatedFrame))
         ));
         assert!(matches!(
             truncated.read_frame(),
-            Err(TransportError::Wire(WireError("closed")))
+            Err(TransportError::Wire(WireError::Closed))
         ));
     }
 }
@@ -305,11 +311,11 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     let mut reader = FrameReader::new(&bytes[..], Framing::Worker);
     assert!(matches!(
         reader.read::<WorkerEnvelope>(),
-        Err(TransportError::Wire(WireError("version_mismatch")))
+        Err(TransportError::Wire(WireError::VersionMismatch))
     ));
     assert!(matches!(
         reader.read::<WorkerEnvelope>(),
-        Err(TransportError::Wire(WireError("closed")))
+        Err(TransportError::Wire(WireError::Closed))
     ));
 
     let mut writer = FrameWriter::new(Vec::new(), Framing::Worker);
@@ -320,7 +326,7 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     });
     assert!(matches!(
         writer.write(&invalid),
-        Err(TransportError::Wire(WireError("invalid_schema")))
+        Err(TransportError::Wire(WireError::InvalidSchema))
     ));
     writer
         .write(&WorkerEnvelope::new(WorkerBody::Shutdown))
@@ -335,7 +341,7 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     stale.bundle = "0.1.0-imp001".to_owned();
     assert!(matches!(
         writer.write(&stale),
-        Err(TransportError::Wire(WireError("version_mismatch")))
+        Err(TransportError::Wire(WireError::VersionMismatch))
     ));
 }
 
@@ -345,7 +351,7 @@ fn oversized_declared_client_length_fails_before_allocation() {
     let mut reader = FrameReader::new(&header[..], Framing::Client);
     assert!(matches!(
         reader.read_frame(),
-        Err(TransportError::Wire(WireError("frame_size")))
+        Err(TransportError::Wire(WireError::FrameSize))
     ));
 }
 
@@ -412,13 +418,13 @@ fn record_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
             _ => panic!("expected a record page"),
         }
         assert_eq!(
-            encode(&decoded, Framing::Client).unwrap_err().0,
+            encode(&decoded, Framing::Client).unwrap_err().as_str(),
             "frame_size"
         );
         assert_eq!(
             ClientEnvelope::decode(&serde_json::to_vec(&decoded).unwrap())
                 .unwrap_err()
-                .0,
+                .as_str(),
             "frame_size"
         );
     }

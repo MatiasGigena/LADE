@@ -30,7 +30,7 @@ impl Reassembler {
     }
     pub fn accept(&mut self, body: &Body) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
-            return Err(WireError("closed"));
+            return Err(WireError::Closed);
         }
         let result = self.apply(body);
         if result.is_err() {
@@ -52,17 +52,17 @@ impl Reassembler {
                 sha256,
             } => {
                 if owner != &self.owner || execution_generation != &self.generation {
-                    return Err(WireError("stale_execution"));
+                    return Err(WireError::StaleExecution);
                 }
                 if self.transfers.contains_key(transfer_id) {
-                    return Err(WireError("chunk_order"));
+                    return Err(WireError::ChunkOrder);
                 }
                 let total = total_bytes
                     .as_str()
                     .parse::<usize>()
-                    .map_err(|_| WireError("limit_reached"))?;
+                    .map_err(|_| WireError::LimitReached)?;
                 if total == 0 || total > MAX_TRANSFER || self.transfers.len() == MAX_TRANSFERS {
-                    return Err(WireError("limit_reached"));
+                    return Err(WireError::LimitReached);
                 }
                 self.transfers.insert(
                     transfer_id.clone(),
@@ -82,15 +82,15 @@ impl Reassembler {
                 let t = self
                     .transfers
                     .get_mut(transfer_id)
-                    .ok_or(WireError("chunk_order"))?;
+                    .ok_or(WireError::ChunkOrder)?;
                 if index.as_str().parse::<u64>().ok() != Some(t.next) {
-                    return Err(WireError("chunk_order"));
+                    return Err(WireError::ChunkOrder);
                 }
                 if !crate::schema::format(hex, "chunk-hex")
                     || hex.len() / 2 > MAX_CHUNK
                     || t.bytes.len() + hex.len() / 2 > t.total
                 {
-                    return Err(WireError("limit_reached"));
+                    return Err(WireError::LimitReached);
                 }
                 if t.bytes.capacity() < t.bytes.len() + hex.len() / 2 {
                     let capacity = (t.bytes.capacity() * 2)
@@ -108,21 +108,21 @@ impl Reassembler {
                 let t = self
                     .transfers
                     .remove(transfer_id)
-                    .ok_or(WireError("chunk_order"))?;
+                    .ok_or(WireError::ChunkOrder)?;
                 if t.bytes.len() != t.total {
-                    return Err(WireError("chunk_length"));
+                    return Err(WireError::ChunkLength);
                 }
                 if Sha256Digest::from_bytes(Sha256::digest(&t.bytes).into()) != t.digest {
-                    return Err(WireError("chunk_checksum"));
+                    return Err(WireError::ChunkChecksum);
                 }
                 return Ok(Some(t.bytes));
             }
             Body::ChunkCancel { transfer_id } => {
                 self.transfers
                     .remove(transfer_id)
-                    .ok_or(WireError("chunk_order"))?;
+                    .ok_or(WireError::ChunkOrder)?;
             }
-            _ => return Err(WireError("invalid_schema")),
+            _ => return Err(WireError::InvalidSchema),
         }
         Ok(None)
     }

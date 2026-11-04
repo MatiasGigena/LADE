@@ -25,7 +25,7 @@ pub fn validate(value: &Value, contract: Contract) -> Result<(), WireError> {
     if matches(value, root, root) {
         Ok(())
     } else {
-        Err(WireError("invalid_schema"))
+        Err(WireError::InvalidSchema)
     }
 }
 

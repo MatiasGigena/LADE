@@ -27,7 +27,7 @@ impl Deframer {
 
     pub fn next_frame(&mut self, input: &mut &[u8]) -> Result<Option<Vec<u8>>, WireError> {
         if self.failed {
-            return Err(WireError("closed"));
+            return Err(WireError::Closed);
         }
         let result = self.consume(input);
         if result.is_err() {
@@ -59,7 +59,7 @@ impl Deframer {
                                 as usize;
                         self.header.clear();
                         if size == 0 || size > MAX_FRAME {
-                            return Err(WireError("frame_size"));
+                            return Err(WireError::FrameSize);
                         }
                         self.body.reserve_exact(size);
                         self.expected = Some(size);
@@ -77,7 +77,7 @@ impl Deframer {
                     let end = input.iter().position(|b| *b == b'\n');
                     let n = end.unwrap_or(input.len());
                     if self.body.len() + n > MAX_FRAME {
-                        return Err(WireError("frame_size"));
+                        return Err(WireError::FrameSize);
                     }
                     if self.body.capacity() < self.body.len() + n {
                         let capacity = (self.body.capacity() * 2)
@@ -90,7 +90,7 @@ impl Deframer {
                     if end.is_some() {
                         *input = &input[1..];
                         if self.body.is_empty() {
-                            return Err(WireError("frame_size"));
+                            return Err(WireError::FrameSize);
                         }
                         return Ok(Some(std::mem::take(&mut self.body)));
                     }
@@ -102,13 +102,13 @@ impl Deframer {
 
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
-            return Err(WireError("closed"));
+            return Err(WireError::Closed);
         }
         let incomplete =
             !self.header.is_empty() || !self.body.is_empty() || self.expected.is_some();
         self.poison();
         if incomplete {
-            Err(WireError("truncated_frame"))
+            Err(WireError::TruncatedFrame)
         } else {
             Ok(())
         }
@@ -134,7 +134,7 @@ impl<M: Message> Decoder<M> {
         mut emit: impl FnMut(M) -> Result<(), WireError>,
     ) -> Result<(), WireError> {
         if self.failed {
-            return Err(WireError("closed"));
+            return Err(WireError::Closed);
         }
         let result = (|| {
             while !input.is_empty() {
@@ -152,7 +152,7 @@ impl<M: Message> Decoder<M> {
     }
     pub fn finish(&mut self) -> Result<(), WireError> {
         if self.failed {
-            return Err(WireError("closed"));
+            return Err(WireError::Closed);
         }
         self.failed = true;
         self.deframer.finish()
@@ -161,7 +161,7 @@ impl<M: Message> Decoder<M> {
 
 pub fn encode<M: Message>(frame: &M, framing: Framing) -> Result<Vec<u8>, WireError> {
     if frame.identity() != (crate::VERSION, crate::BUNDLE) {
-        return Err(WireError("version_mismatch"));
+        return Err(WireError::VersionMismatch);
     }
     frame.precheck()?;
     struct BoundedWriter(Vec<u8>);
@@ -184,7 +184,7 @@ pub fn encode<M: Message>(frame: &M, framing: Framing) -> Result<Vec<u8>, WireEr
         }
     }
     let mut writer = BoundedWriter(Vec::new());
-    serde_json::to_writer(&mut writer, frame).map_err(|_| WireError("frame_size"))?;
+    serde_json::to_writer(&mut writer, frame).map_err(|_| WireError::FrameSize)?;
     let body = writer.0;
     M::decode(&body)?;
     let mut result = Vec::with_capacity(body.len() + 4);
