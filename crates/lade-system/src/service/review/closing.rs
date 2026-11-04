@@ -85,7 +85,7 @@ impl Service {
             st.review
                 .complete_without_changes(&mut st.row.objective, empty, ts_now())
                 .map_err(domain_rejection)?;
-            let data = ReplyData::ObjectiveComplete(Box::new(self.detail_of(&st)));
+            let data = ReplyData::ObjectiveComplete(Box::new(self.fresh_detail(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)?;
             Ok(data)
         })();
@@ -104,7 +104,7 @@ impl Service {
         st.review
             .discard(&mut st.row.objective, ts_now())
             .map_err(domain_rejection)?;
-        let data = ReplyData::ObjectiveDiscard(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ObjectiveDiscard(Box::new(self.fresh_detail(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
         Ok(data)
@@ -215,7 +215,7 @@ impl Service {
             result?;
             let mut st = self.obj(oid)?.clone();
             st.row.history_deleted = true;
-            let data = ReplyData::ObjectiveDeleteHistory(Box::new(self.detail_of(&st)));
+            let data = ReplyData::ObjectiveDeleteHistory(Box::new(self.fresh_detail(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)
                 .map_err(|_| durability("history deleted but not recorded; query the objective"))?;
             Ok(data)
@@ -243,7 +243,7 @@ impl Service {
                 .cleanup(unsent, confirm, ts_now())
                 .map_err(domain_rejection)?;
             st.row.worktree = None;
-            let data = ReplyData::ObjectiveCleanup(Box::new(self.detail_of(&st)));
+            let data = ReplyData::ObjectiveCleanup(Box::new(self.fresh_detail(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)
                 .map_err(|_| durability("cleanup done but not recorded; query the objective"))?;
             Ok(data)

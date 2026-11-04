@@ -215,7 +215,7 @@ impl Service {
             .complete_integration(&mut st.row.objective, plan, ts_now())
             .map_err(domain_rejection)?;
         st.row.integration_conflict = false;
-        let data = ReplyData::ReviewIntegrate(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ReviewIntegrate(Box::new(self.fresh_detail(&st)));
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
             Self::save_tx(tx, &st)?;

@@ -76,7 +76,7 @@ impl Service {
             Request::ObjectiveGet(ObjectiveSelector { objective_id }) => {
                 self.objective_id(&objective_id).map(|oid| {
                     let st = self.objectives[&oid].clone();
-                    ReplyData::ObjectiveGet(Box::new(self.detail_of(&st)))
+                    ReplyData::ObjectiveGet(Box::new(self.fresh_detail(&st)))
                 })
             }
             Request::DraftsList(query) => self.drafts_list(&ctx.request_id, &query),

@@ -65,7 +65,7 @@ impl Service {
         if let Some(thinking) = cmd.thinking {
             self.record_start_thinking(oid, thinking)?;
         }
-        let data = ReplyData::ExecutionStart(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ExecutionStart(Box::new(self.fresh_detail(&st)));
         let association = st.objective().execution().session().cloned();
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
@@ -111,7 +111,7 @@ impl Service {
         st.objective_mut()
             .request_stop(ts_now())
             .map_err(domain_rejection)?;
-        let data = ReplyData::ExecutionCancel(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ExecutionCancel(Box::new(self.fresh_detail(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.stop_worker(oid);
         self.emit_objective(oid);
@@ -154,7 +154,7 @@ impl Service {
                 requeued.push(input.clone());
             }
         }
-        let data = ReplyData::ExecutionResume(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ExecutionResume(Box::new(self.fresh_detail(&st)));
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
             Self::save_tx(tx, &st)?;

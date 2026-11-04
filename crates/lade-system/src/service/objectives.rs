@@ -148,7 +148,7 @@ impl Service {
             capture: None,
             tails: HashMap::new(),
         };
-        let detail = self.detail_of(&st);
+        let detail = self.fresh_detail(&st);
         self.check_intent_representation(&detail)?;
         self.check_snapshot_representation(&self.settings, Some(&st), None)?;
         let data = ReplyData::ObjectiveCreate(Box::new(detail));
@@ -178,7 +178,7 @@ impl Service {
                 lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
             )
             .map_err(domain_rejection)?;
-        let detail = self.detail_of(&st);
+        let detail = self.fresh_detail(&st);
         self.check_intent_representation(&detail)?;
         let data = ReplyData::ObjectiveUpdateIntent(Box::new(detail));
         self.commit_obj(Some(ctx), Some(&data), st)?;

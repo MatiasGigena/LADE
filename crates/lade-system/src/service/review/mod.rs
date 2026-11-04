@@ -226,7 +226,7 @@ impl Service {
         st.review
             .return_for_revision(&mut st.row.objective, candidate, ts_now())
             .map_err(domain_rejection)?;
-        let data = ReplyData::ReviewReturn(Box::new(self.detail_of(&st)));
+        let data = ReplyData::ReviewReturn(Box::new(self.fresh_detail(&st)));
         self.commit_obj(Some(ctx), Some(&data), st)?;
         self.emit_objective(oid);
         Ok(data)

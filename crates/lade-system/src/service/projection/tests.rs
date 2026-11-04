@@ -22,7 +22,7 @@ fn a_defined_objective_offers_start_and_explains_what_it_cannot_do_yet() {
     let mut harness = Harness::new("project-defined");
     let (_, oid) = harness.create_objective("Defined");
     let st = harness.service.objectives[&oid].clone();
-    let detail = harness.service.detail_of(&st);
+    let detail = harness.service.fresh_detail(&st);
     assert!(action(&detail, ActionName::ExecutionStart).enabled);
     let message = action(&detail, ActionName::MessageSend);
     assert!(!message.enabled);
@@ -68,7 +68,7 @@ fn a_busy_objective_disables_its_actions_with_the_busy_reason() {
     );
     assert!(freeze_blocker(&st).is_none());
     harness.service.rt(oid).busy = Some("freeze");
-    let detail = harness.service.detail_of(&st);
+    let detail = harness.service.fresh_detail(&st);
     let freeze = action(&detail, ActionName::ReviewFreeze);
     assert!(!freeze.enabled);
     assert_eq!(freeze.reason.as_deref(), Some(BUSY));

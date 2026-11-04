@@ -492,7 +492,7 @@ mod tests {
         let mut harness = Harness::new("budget-detail");
         let (id, oid) = harness.create_objective("Budget");
         let st = harness.service.objectives[&oid].clone();
-        let detail = harness.service.detail_of(&st);
+        let detail = harness.service.fresh_detail(&st);
         assert!(harness.service.check_intent_representation(&detail).is_ok());
         assert!(
             harness

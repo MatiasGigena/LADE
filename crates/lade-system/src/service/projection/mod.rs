@@ -126,11 +126,14 @@ impl Service {
         }
     }
 
+    /// The summary against the cached Integration Target; runs no Git.
     pub(crate) fn summary(&self, st: &ObjState) -> ObjectiveSummary {
         Self::summary_with(st, self.cached_target(st).as_ref())
     }
 
-    pub(crate) fn detail_of(&mut self, st: &ObjState) -> ObjectiveDetail {
+    /// The detail against the Integration Target resolved now: runs Git and refreshes the
+    /// cached target that later summaries read.
+    pub(crate) fn fresh_detail(&mut self, st: &ObjState) -> ObjectiveDetail {
         let target = self.fresh_target(st);
         self.detail_with(st, target.as_ref())
     }
@@ -243,7 +246,7 @@ impl Service {
         let Some(st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        let detail = self.detail_of(&st);
+        let detail = self.fresh_detail(&st);
         self.emit(Event::ObjectiveChanged(detail.summary()));
         self.emit(Event::ObjectiveDetail(Box::new(detail)));
         self.enforce_terminal_scope(oid);
