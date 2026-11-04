@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use lade_core::DomainError;
 use lade_core::domain::execution::ExecutionState;
-use lade_core::domain::ids::{ApprovalId, CandidateId, ObjectiveId, Timestamp, VerificationId};
+use lade_core::domain::ids::{ApprovalId, CandidateId, ObjectiveId, VerificationId};
 use lade_core::domain::inspection::ArtifactDigest;
 use lade_core::domain::objectives::Lifecycle;
 use lade_core::domain::review::{
@@ -30,13 +30,9 @@ use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::projection::actions::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
-use crate::support::{new_uuid, now_ms};
+use crate::support::{new_uuid, ts_now};
 
 pub(crate) use integrate::Integrations;
-
-fn ts_now() -> Timestamp {
-    Timestamp::from_unix_ms(now_ms())
-}
 
 impl Service {
     fn candidate_id(id: &Id) -> Result<CandidateId, Rejection> {

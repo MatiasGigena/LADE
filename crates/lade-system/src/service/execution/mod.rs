@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use lade_core::domain::execution::{ExecutionGeneration, ExecutionState, ModelRef};
 use lade_core::domain::feedback::{BlockedReason, DeliveryState};
-use lade_core::domain::ids::{ObjectiveId, SessionId, Timestamp};
+use lade_core::domain::ids::{ObjectiveId, SessionId};
 use lade_protocol::client::{
     ErrorCode, Event, ExecutionStartCommand, NoticeCode, NoticeLevel, Rejection, ReplyData,
     SafeAction,
@@ -29,7 +29,7 @@ use super::convert::wire_input;
 use super::convert::{domain_rejection, preview, wire_id};
 use super::jobs::{self, LaunchInput, ProfileSnapshot, Provision};
 use super::{Completed, ReqCtx, Service};
-use crate::support::{new_uuid, now_ms};
+use crate::support::{new_uuid, now_ms, ts_now};
 
 pub(crate) use activity::{LiveActivity, wire_activity};
 pub(crate) use writable::{LIMIT_REACHED, StorageUsage};
@@ -37,10 +37,6 @@ pub(crate) use writable::{LIMIT_REACHED, StorageUsage};
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 pub const AGENT_SANDBOX_UNAVAILABLE: &str =
     "LADE can't run agents on this computer because the sandbox check failed.";
-
-fn ts_now() -> Timestamp {
-    Timestamp::from_unix_ms(now_ms())
-}
 
 impl Service {
     pub(crate) fn execution_start(

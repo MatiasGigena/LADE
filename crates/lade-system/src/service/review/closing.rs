@@ -16,8 +16,7 @@ use crate::service::jobs;
 use crate::service::projection::actions::delete_history_blocker;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage;
-
-use super::ts_now;
+use crate::support::ts_now;
 
 impl Service {
     pub(crate) fn objective_complete(&mut self, ctx: ReqCtx, id: &Id) -> Flow {

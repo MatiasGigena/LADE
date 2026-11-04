@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use lade_core::domain::ids::Uuid;
+use lade_core::domain::ids::{self as core_ids, Uuid};
 use lade_protocol::types::Timestamp;
 
 #[must_use]
@@ -17,6 +17,12 @@ pub fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// The current time as a domain timestamp.
+#[must_use]
+pub fn ts_now() -> core_ids::Timestamp {
+    core_ids::Timestamp::from_unix_ms(now_ms())
 }
 
 /// The wire timestamp for `ms` milliseconds since the Unix epoch, or the epoch itself when `ms`

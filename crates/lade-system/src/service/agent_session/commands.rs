@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use lade_core::domain::execution::{ExecutionState, ModelRef};
-use lade_core::domain::ids::{ObjectiveId, Timestamp};
+use lade_core::domain::ids::ObjectiveId;
 use lade_protocol::client::{
     ErrorCode, NoticeCode, NoticeLevel, Rejection, ReplyData, SafeAction, SessionCompactCommand,
     SessionConfigureCommand, SessionForkCommand, SessionImportCommand, SessionNavigateCommand,
@@ -28,7 +28,7 @@ use crate::service::convert::{
 };
 use crate::service::resources::snapshot;
 use crate::service::{Completed, Flow, ReqCtx, Service};
-use crate::support::{new_uuid, now_ms};
+use crate::support::{new_uuid, now_ms, ts_now};
 
 impl Service {
     fn command_target(&mut self, oid: ObjectiveId, op: Op) -> Result<(), Rejection> {
@@ -310,7 +310,7 @@ impl Service {
     ) -> Result<ReplyData, Rejection> {
         let mut st = self.obj(oid)?.clone();
         st.objective_mut()
-            .select_model(model, Timestamp::from_unix_ms(now_ms()))
+            .select_model(model, ts_now())
             .map_err(domain_rejection)?;
         let previous_model = self.objectives.insert(oid, st.clone());
         let previous = self.agent_sessions.thinking.insert(oid, thinking);

@@ -23,7 +23,7 @@ use super::handlers::sql;
 use super::jobs::{self};
 use super::state::{ObjState, WsState};
 use super::{ReqCtx, Service};
-use crate::support::{new_uuid, now_ms};
+use crate::support::{new_uuid, now_ms, ts_now};
 
 const REPLY_BRANCHES: usize = 256;
 
@@ -131,7 +131,7 @@ impl Service {
                 integration_target: target,
                 start_commit,
             },
-            lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
+            ts_now(),
         );
         let st = ObjState {
             row: ObjectiveRow {
@@ -175,7 +175,7 @@ impl Service {
             .update_intent(
                 Revision::new(cmd.expected_intent_revision.value()),
                 intent,
-                lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
+                ts_now(),
             )
             .map_err(domain_rejection)?;
         let detail = self.fresh_detail(&st);

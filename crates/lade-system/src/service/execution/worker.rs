@@ -11,12 +11,11 @@ use crate::storage;
 use crate::supervision::{SupervisorEvent, WorkerEvent};
 
 use super::activity::ActivityUpdate;
-use super::ts_now;
 use crate::service::capture::CapturePurpose;
 use crate::service::convert::{parse_uuid, wire_id, wire_input, wire_mode};
 use crate::service::jobs;
 use crate::service::{Completed, Service};
-use crate::support::now_ms;
+use crate::support::{now_ms, ts_now};
 
 impl Service {
     pub(crate) fn on_supervisor(&mut self, event: SupervisorEvent) {

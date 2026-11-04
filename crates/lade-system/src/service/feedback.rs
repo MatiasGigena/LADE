@@ -33,7 +33,7 @@ use super::jobs::{self, CaptureOut};
 use super::state::ObjState;
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::fault::{self, Fault};
-use crate::support::{new_uuid, now_ms, wire_ts};
+use crate::support::{new_uuid, now_ms, ts_now, wire_ts};
 
 fn reply_json_len(request_id: &Id, data: ReplyData) -> usize {
     json_len(&ClientEnvelope::new(ClientBody::Reply(Reply::ok(
@@ -267,7 +267,7 @@ impl Service {
                 reference,
                 body: cmd.body.clone(),
             },
-            lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
+            ts_now(),
         )
         .map_err(domain_rejection)?;
         let mut st = st.clone();
@@ -409,13 +409,8 @@ impl Service {
             let oid = self.objective_id(&cmd.objective_id)?;
             let st = self.obj(oid)?;
             let acceptance = Self::acceptance(st, &ctx, cmd.mode, None)?;
-            let input = accept_message(
-                st.objective(),
-                acceptance,
-                cmd.text.clone(),
-                lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
-            )
-            .map_err(domain_rejection)?;
+            let input = accept_message(st.objective(), acceptance, cmd.text.clone(), ts_now())
+                .map_err(domain_rejection)?;
             Ok((st.clone(), input))
         })();
         match result {
@@ -525,7 +520,7 @@ impl Service {
                 acceptance,
                 &mut batch,
                 cmd.note.clone(),
-                lade_core::domain::ids::Timestamp::from_unix_ms(now_ms()),
+                ts_now(),
             )
             .map_err(domain_rejection)?;
             drop(batch);

@@ -16,9 +16,7 @@ use crate::service::convert::{
 use crate::service::state::ObjState;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage::{self, JournalRow, JournalState, OperationState};
-use crate::support::{new_uuid, now_ms};
-
-use super::ts_now;
+use crate::support::{new_uuid, now_ms, ts_now};
 
 /// Integrations in flight, keyed by workspace and target branch: requests queued behind the
 /// running one, and the last target commit seen per key.

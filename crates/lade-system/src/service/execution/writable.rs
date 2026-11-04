@@ -7,9 +7,9 @@ use lade_core::domain::execution::ExecutionGeneration;
 use lade_core::domain::ids::ObjectiveId;
 use lade_protocol::client::{NoticeCode, NoticeLevel};
 
-use super::ts_now;
 use crate::service::jobs;
 use crate::service::{Completed, Service};
+use crate::support::ts_now;
 
 pub(crate) const LIMIT_REACHED: &str = "limit_reached";
 
