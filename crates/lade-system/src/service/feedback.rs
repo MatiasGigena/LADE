@@ -554,3 +554,139 @@ fn input_reply(
         _ => ReplyData::MessageSend(summary),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::client::{
+        DraftDeleteCommand, ExecutionStartCommand, InputsListQuery, Request,
+    };
+    use lade_protocol::types::{Counter, DeliveryMode, Model, PageLimit};
+
+    use super::*;
+    use crate::service::test_harness::Harness;
+    use crate::supervision::WorkerEvent;
+
+    fn start(harness: &mut Harness, id: &Id) {
+        harness
+            .call(Request::ExecutionStart(ExecutionStartCommand {
+                objective_id: id.clone(),
+                model: Model {
+                    provider: "anthropic".into(),
+                    id: "m".into(),
+                },
+                thinking: None,
+            }))
+            .expect("start");
+    }
+
+    fn send(harness: &mut Harness, id: &Id, text: &str) -> Result<ReplyData, Rejection> {
+        harness.call(Request::MessageSend(MessageSendCommand {
+            objective_id: id.clone(),
+            text: text.into(),
+            mode: DeliveryMode::Prompt,
+        }))
+    }
+
+    fn delivered(log: &std::sync::Mutex<crate::service::test_harness::WorkerLog>) -> Vec<String> {
+        log.lock()
+            .expect("log")
+            .sent
+            .iter()
+            .filter_map(|body| match body {
+                lade_protocol::worker::WorkerBody::Deliver { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn messages_need_a_started_agent_and_wait_until_it_is_ready() {
+        let mut harness = Harness::new("feedback-message");
+        let (id, oid) = harness.create_objective("Message");
+        let refused = send(&mut harness, &id, "too early").expect_err("not started");
+        assert_eq!(
+            refused.code,
+            ErrorCode::ExecutionUnavailable,
+            "no session to address"
+        );
+
+        start(&mut harness, &id);
+        let Ok(ReplyData::MessageSend(summary)) = send(&mut harness, &id, "first") else {
+            panic!("accepted");
+        };
+        assert_eq!(summary.text_preview, "first");
+        let (_, log) = harness.last_worker();
+        assert!(delivered(&log).is_empty(), "the worker is not ready yet");
+        harness.worker_event(
+            oid,
+            WorkerEvent::Body(lade_protocol::worker::WorkerBody::Ready {
+                pi_session_id: "pi".into(),
+                session_file: "/s.jsonl".into(),
+            }),
+        );
+        assert_eq!(delivered(&log), ["first"]);
+        let input_id = harness.service.objectives[&oid].inputs[0].1.id;
+        harness.worker_event(
+            oid,
+            WorkerEvent::Body(lade_protocol::worker::WorkerBody::Received {
+                input_id: crate::service::convert::wire_id(input_id.uuid()),
+            }),
+        );
+        assert!(matches!(
+            harness.service.objectives[&oid].inputs[0].1.delivery,
+            lade_core::domain::feedback::DeliveryState::Received { .. }
+        ));
+        send(&mut harness, &id, "second").expect("accepted while idle");
+        assert_eq!(delivered(&log), ["first", "second"]);
+        assert_eq!(harness.service.input_seq, 2);
+        let stored = storage::load_inputs(harness.service.store.conn()).expect("inputs");
+        assert_eq!(stored.len(), 2);
+    }
+
+    #[test]
+    fn inputs_page_forward_from_a_sequence_cursor() {
+        let mut harness = Harness::new("feedback-inputs");
+        let (id, _) = harness.create_objective("Inputs");
+        start(&mut harness, &id);
+        for n in 0..3 {
+            send(&mut harness, &id, &format!("message {n}")).expect("accepted");
+        }
+        let page = |harness: &mut Harness, after: Option<u64>| {
+            let Ok(ReplyData::InputsList(list)) =
+                harness.call(Request::InputsList(InputsListQuery {
+                    objective_id: id.clone(),
+                    limit: PageLimit::parse("2").expect("limit"),
+                    after: after.map(Counter::new),
+                }))
+            else {
+                panic!("inputs list");
+            };
+            list
+        };
+        let first = page(&mut harness, None);
+        let texts = |list: &lade_protocol::client::InputList| {
+            list.inputs
+                .iter()
+                .map(|i| i.text_preview.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&first), ["message 0", "message 1"]);
+        let cursor = first.next_after.clone().expect("more inputs");
+        let rest = page(&mut harness, Some(cursor.value()));
+        assert_eq!(texts(&rest), ["message 2"]);
+        assert!(rest.next_after.is_none());
+    }
+
+    #[test]
+    fn deleting_an_unknown_draft_is_not_found() {
+        let mut harness = Harness::new("feedback-drafts");
+        harness.create_objective("Drafts");
+        let missing = harness
+            .call(Request::DraftDelete(DraftDeleteCommand {
+                draft_id: crate::service::convert::wire_id(crate::support::new_uuid()),
+                expected_revision: Counter::new(1),
+            }))
+            .expect_err("unknown draft");
+        assert_eq!(missing.code, ErrorCode::NotFound);
+    }
+}
