@@ -517,7 +517,7 @@ impl App {
 
     pub fn logout(&self) {
         self.controller.flush_drafts(widgets::monotonic_ms());
-        self.controller.exit(StopReason::Logout);
+        self.controller.request_service_stop(StopReason::Logout);
     }
 
     fn guard_unsaved(self: &Rc<Self>, after: CloseAfter) -> bool {
@@ -619,7 +619,7 @@ impl App {
                 self.window.close();
             }
             CloseAfter::Exit => {
-                if !self.controller.exit(StopReason::Exit) {
+                if !self.controller.request_service_stop(StopReason::Exit) {
                     self.close_confirmed.set(true);
                     self.quit();
                 }

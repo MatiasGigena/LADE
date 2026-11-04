@@ -1244,7 +1244,7 @@ impl Controller {
         });
     }
 
-    pub fn exit(&self, reason: StopReason) -> bool {
+    pub fn request_service_stop(&self, reason: StopReason) -> bool {
         let connected = self.store.state().connection.is_connected();
         if connected {
             self.emit(Intent::StopService { reason });
@@ -1544,9 +1544,9 @@ mod tests {
     }
 
     #[test]
-    fn exit_stops_the_service_only_with_control() {
+    fn service_stop_is_requested_only_with_control() {
         let (controller, sink) = setup();
-        assert!(controller.exit(StopReason::Exit));
+        assert!(controller.request_service_stop(StopReason::Exit));
         assert!(sink.intents.borrow().contains(&Intent::StopService {
             reason: StopReason::Exit
         }));
@@ -1554,7 +1554,7 @@ mod tests {
         controller
             .store
             .apply(StoreUpdate::Connection(ConnectionState::LeaseHeld));
-        assert!(!controller.exit(StopReason::Logout));
+        assert!(!controller.request_service_stop(StopReason::Logout));
         assert!(
             sink.intents.borrow().is_empty(),
             "no authority, nothing sent"
