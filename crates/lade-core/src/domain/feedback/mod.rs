@@ -3,9 +3,9 @@
 
 mod delivery;
 mod draft;
-mod input;
 #[cfg(test)]
-mod tests;
+mod fixtures;
+mod input;
 
 pub use delivery::{BlockedReason, DeliveryState, DispatchDecision};
 pub use draft::{Draft, DraftRecord, DraftState, SaveDraft, save_draft};
