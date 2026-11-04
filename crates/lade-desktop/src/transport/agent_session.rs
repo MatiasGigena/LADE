@@ -2,7 +2,7 @@ use lade_protocol::client as wire;
 use lade_protocol::types as wt;
 
 use super::convert::{counter, model};
-use crate::presentation::state::compat::{
+use crate::presentation::state::agent_session::{
     Catalog, ForkPosition, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
     ResourceState, ResourceView, SessionTree, SessionView, ThinkingLevel, TreeNode, UiAnswerView,
     UiDialog, UiPromptView,

@@ -396,7 +396,7 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
             association_revision: counter(&s.association_revision),
             execution_generation: counter(&s.execution_generation),
             model: model(&s.model),
-            thinking: s.thinking.map(super::compat::thinking),
+            thinking: s.thinking.map(super::agent_session::thinking),
         }),
         candidates: d.candidates.iter().map(candidate).collect(),
         approval: d.approval.as_ref().map(approval),

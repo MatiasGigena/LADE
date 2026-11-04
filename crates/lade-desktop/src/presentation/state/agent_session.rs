@@ -361,7 +361,7 @@ impl Readiness {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct CompatState {
+pub struct AgentSessionState {
     pub catalog: Option<Catalog>,
     pub models: std::collections::HashMap<String, Vec<ModelView>>,
     pub sessions: std::collections::HashMap<ObjectiveId, SessionView>,
@@ -373,7 +373,7 @@ pub struct CompatState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CompatUpdate {
+pub enum AgentSessionUpdate {
     Catalog(Catalog),
     Models {
         provider: String,
@@ -400,25 +400,25 @@ pub enum CompatUpdate {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CompatChange {
+pub enum AgentSessionChange {
     Catalog,
     Session(ObjectiveId),
     Resources,
     Dialogs,
 }
 
-impl CompatState {
-    pub fn apply(&mut self, update: CompatUpdate) -> Vec<CompatChange> {
+impl AgentSessionState {
+    pub fn apply(&mut self, update: AgentSessionUpdate) -> Vec<AgentSessionChange> {
         match update {
-            CompatUpdate::Catalog(catalog) => {
+            AgentSessionUpdate::Catalog(catalog) => {
                 self.catalog = Some(catalog);
-                vec![CompatChange::Catalog]
+                vec![AgentSessionChange::Catalog]
             }
-            CompatUpdate::Models { provider, models } => {
+            AgentSessionUpdate::Models { provider, models } => {
                 self.models.insert(provider, models);
-                vec![CompatChange::Catalog]
+                vec![AgentSessionChange::Catalog]
             }
-            CompatUpdate::Session {
+            AgentSessionUpdate::Session {
                 objective_id,
                 session,
             } => {
@@ -430,42 +430,42 @@ impl CompatState {
                     return Vec::new();
                 }
                 self.sessions.insert(objective_id.clone(), session);
-                vec![CompatChange::Session(objective_id)]
+                vec![AgentSessionChange::Session(objective_id)]
             }
-            CompatUpdate::Tree { objective_id, tree } => {
+            AgentSessionUpdate::Tree { objective_id, tree } => {
                 self.trees.insert(objective_id.clone(), tree);
-                vec![CompatChange::Session(objective_id)]
+                vec![AgentSessionChange::Session(objective_id)]
             }
-            CompatUpdate::Inventory(inventory) => {
+            AgentSessionUpdate::Inventory(inventory) => {
                 self.inventory = Some(inventory);
-                vec![CompatChange::Resources]
+                vec![AgentSessionChange::Resources]
             }
-            CompatUpdate::DialogOpened(dialog) => {
+            AgentSessionUpdate::DialogOpened(dialog) => {
                 if self.dialogs.iter().any(|d| d.ui_id == dialog.ui_id) {
                     return Vec::new();
                 }
                 self.dialogs.push(dialog);
-                vec![CompatChange::Dialogs]
+                vec![AgentSessionChange::Dialogs]
             }
-            CompatUpdate::DialogClosed { ui_id } => {
+            AgentSessionUpdate::DialogClosed { ui_id } => {
                 let before = self.dialogs.len();
                 self.dialogs.retain(|d| d.ui_id != ui_id);
                 if self.dialogs.len() == before {
                     Vec::new()
                 } else {
-                    vec![CompatChange::Dialogs]
+                    vec![AgentSessionChange::Dialogs]
                 }
             }
-            CompatUpdate::Exported { objective_id, path } => {
+            AgentSessionUpdate::Exported { objective_id, path } => {
                 self.exports.insert(objective_id.clone(), path);
-                vec![CompatChange::Session(objective_id)]
+                vec![AgentSessionChange::Session(objective_id)]
             }
-            CompatUpdate::Choice(choice) => {
+            AgentSessionUpdate::Choice(choice) => {
                 if self.choice == choice {
                     return Vec::new();
                 }
                 self.choice = choice;
-                vec![CompatChange::Catalog]
+                vec![AgentSessionChange::Catalog]
             }
         }
     }
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn older_generations_never_replace_newer_session_reports() {
-        let mut state = CompatState::default();
+        let mut state = AgentSessionState::default();
         let objective = ObjectiveId::new("o");
         let session = |generation| SessionView {
             generation,
@@ -536,13 +536,13 @@ mod tests {
             pi_session_id: None,
             leaf_id: None,
         };
-        state.apply(CompatUpdate::Session {
+        state.apply(AgentSessionUpdate::Session {
             objective_id: objective.clone(),
             session: session(3),
         });
         assert!(
             state
-                .apply(CompatUpdate::Session {
+                .apply(AgentSessionUpdate::Session {
                     objective_id: objective.clone(),
                     session: session(2),
                 })
@@ -559,13 +559,17 @@ mod tests {
             },
         };
         assert_eq!(
-            state.apply(CompatUpdate::DialogOpened(dialog.clone())),
-            [CompatChange::Dialogs]
+            state.apply(AgentSessionUpdate::DialogOpened(dialog.clone())),
+            [AgentSessionChange::Dialogs]
         );
-        assert!(state.apply(CompatUpdate::DialogOpened(dialog)).is_empty());
+        assert!(
+            state
+                .apply(AgentSessionUpdate::DialogOpened(dialog))
+                .is_empty()
+        );
         assert_eq!(
-            state.apply(CompatUpdate::DialogClosed { ui_id: "u".into() }),
-            [CompatChange::Dialogs]
+            state.apply(AgentSessionUpdate::DialogClosed { ui_id: "u".into() }),
+            [AgentSessionChange::Dialogs]
         );
         assert!(state.dialogs.is_empty());
     }

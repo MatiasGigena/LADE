@@ -1,4 +1,4 @@
-use super::state::compat::{Catalog, ProviderStatus};
+use super::state::agent_session::{Catalog, ProviderStatus};
 use super::state::model::{
     ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
 };

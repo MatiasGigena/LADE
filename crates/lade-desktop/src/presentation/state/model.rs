@@ -261,7 +261,7 @@ pub struct SessionInfo {
     pub association_revision: u64,
     pub execution_generation: u64,
     pub model: ModelRef,
-    pub thinking: Option<super::compat::ThinkingLevel>,
+    pub thinking: Option<super::agent_session::ThinkingLevel>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

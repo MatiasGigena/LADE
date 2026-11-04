@@ -283,7 +283,8 @@ impl Inspector {
         if let Some(approval) = &detail.approval {
             next_area.append(&label(format::approval_label(approval.state), &["meta"]));
         }
-        let blocker = panel::start_blocker(self.controller.store.state().compat.catalog.as_ref());
+        let blocker =
+            panel::start_blocker(self.controller.store.state().agent_session.catalog.as_ref());
         let pointer = panel::agent_pointer(&detail, blocker.as_deref());
         if let Some(pointer) = &pointer {
             let row = vbox(space::TIGHT);

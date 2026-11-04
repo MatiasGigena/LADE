@@ -10,7 +10,9 @@ use lade_protocol::{Framing, encode};
 
 use super::*;
 use crate::presentation::controller::intents::DraftRevisionRef;
-use crate::presentation::state::compat::{CompatUpdate, ForkPosition, ThinkingLevel, UiAnswerView};
+use crate::presentation::state::agent_session::{
+    AgentSessionUpdate, ForkPosition, ThinkingLevel, UiAnswerView,
+};
 use crate::presentation::state::model::{
     ApprovalId, ArtifactDigest, CandidateId, CaptureId, DeliveryMode, ModelRef, Reference,
     ReferenceVersion, SessionId, WorkspaceId,
@@ -1044,7 +1046,7 @@ fn settings_offer_known_models_with_the_default_selected() {
 }
 
 #[test]
-fn compat_replies_and_events_reach_the_store() {
+fn agent_session_replies_and_events_reach_the_store() {
     let models = reply_effects(
         &Context::Models(Some("lade-fixture".into())),
         ReplyData::ModelsList(wire::ModelCatalog {
@@ -1072,9 +1074,9 @@ fn compat_replies_and_events_reach_the_store() {
     assert!(matches!(
         models.updates.as_slice(),
         [
-            StoreUpdate::Compat(CompatUpdate::Catalog(c)),
-            StoreUpdate::Compat(CompatUpdate::Models { provider, models }),
-        ] if c.providers[0].status == crate::presentation::state::compat::ProviderStatus::Restricted
+            StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(c)),
+            StoreUpdate::AgentSession(AgentSessionUpdate::Models { provider, models }),
+        ] if c.providers[0].status == crate::presentation::state::agent_session::ProviderStatus::Restricted
             && c.providers[0].reason.is_some()
             && provider == "lade-fixture"
             && models.len() == 1
@@ -1099,7 +1101,7 @@ fn compat_replies_and_events_reach_the_store() {
     );
     assert!(forked.updates.iter().any(|u| matches!(
         u,
-        StoreUpdate::Compat(CompatUpdate::Session { session, .. }) if session.generation == 2
+        StoreUpdate::AgentSession(AgentSessionUpdate::Session { session, .. }) if session.generation == 2
     )));
     assert!(
         forked
@@ -1110,7 +1112,9 @@ fn compat_replies_and_events_reach_the_store() {
     let changed = crate::transport::core::event_updates(wire::Event::SessionChanged(state));
     assert!(matches!(
         changed.as_slice(),
-        [StoreUpdate::Compat(CompatUpdate::Session { .. })]
+        [StoreUpdate::AgentSession(
+            AgentSessionUpdate::Session { .. }
+        )]
     ));
     let opened = crate::transport::core::event_updates(wire::Event::UiRequest(wire::UiRequest {
         objective_id: Id::parse(O).unwrap(),
@@ -1123,7 +1127,7 @@ fn compat_replies_and_events_reach_the_store() {
     }));
     assert!(matches!(
         opened.as_slice(),
-        [StoreUpdate::Compat(CompatUpdate::DialogOpened(d))] if d.generation == 2
+        [StoreUpdate::AgentSession(AgentSessionUpdate::DialogOpened(d))] if d.generation == 2
     ));
     let snapshot = reply_effects(
         &Context::Snapshot,

@@ -10,7 +10,7 @@ use lade_protocol::types::{Counter, Id};
 use super::convert;
 use super::requests::{self, Context, Effects};
 use crate::presentation::controller::intents::Intent;
-use crate::presentation::state::compat::CompatUpdate;
+use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
     ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, ObjectiveId, ServiceNotice,
 };
@@ -941,21 +941,21 @@ pub fn event_updates(event: Event) -> Vec<StoreUpdate> {
         }
         Event::ServiceNotice(n) => StoreUpdate::Notice(convert::notice(&n)),
         Event::SessionChanged(s) => {
-            let (objective_id, session) = super::compat::session(&s);
-            StoreUpdate::Compat(CompatUpdate::Session {
+            let (objective_id, session) = super::agent_session::session(&s);
+            StoreUpdate::AgentSession(AgentSessionUpdate::Session {
                 objective_id,
                 session,
             })
         }
-        Event::UiRequest(r) => {
-            StoreUpdate::Compat(CompatUpdate::DialogOpened(super::compat::dialog(&r)))
-        }
-        Event::UiClosed(c) => StoreUpdate::Compat(CompatUpdate::DialogClosed {
+        Event::UiRequest(r) => StoreUpdate::AgentSession(AgentSessionUpdate::DialogOpened(
+            super::agent_session::dialog(&r),
+        )),
+        Event::UiClosed(c) => StoreUpdate::AgentSession(AgentSessionUpdate::DialogClosed {
             ui_id: c.ui_id.as_str().to_owned(),
         }),
-        Event::ResourcesChanged(i) => {
-            StoreUpdate::Compat(CompatUpdate::Inventory(super::compat::inventory(&i)))
-        }
+        Event::ResourcesChanged(i) => StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(
+            super::agent_session::inventory(&i),
+        )),
         Event::TerminalOutput(o) => StoreUpdate::TerminalOutput {
             terminal_id: o.terminal_id.as_str().to_owned(),
             seq: o.seq.value(),

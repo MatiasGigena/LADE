@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
-use super::state::compat::Readiness;
+use super::state::agent_session::Readiness;
 use super::state::drafts::{DraftEditor, Millis, SaveStatus};
 use super::state::model::{
     ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId, ExecutionState,
@@ -19,7 +19,7 @@ use super::text::format;
 use super::text::map::{MappedSelection, SelectionError};
 use intents::{DraftRevisionRef, Intent, IntentSink, StartPoint, StopReason};
 
-mod compat;
+mod agent_session;
 pub mod intents;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -805,7 +805,7 @@ impl Controller {
     pub fn start_execution(
         &self,
         model: ModelRef,
-        thinking: Option<super::state::compat::ThinkingLevel>,
+        thinking: Option<super::state::agent_session::ThinkingLevel>,
     ) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         let is_default = self.store.state().settings.default_model.as_ref() == Some(&model);

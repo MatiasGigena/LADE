@@ -18,7 +18,8 @@ equal what this build's egress and credential tables decide).
 
 Test locations: **W** = `packages/pi-worker/test/worker-compat.test.ts`, **S** =
 `crates/lade-system/tests/service_compat.rs`, **D** = `crates/lade-desktop` unit tests
-(`presentation/compat.rs`, `presentation/controller_compat.rs`, `transport/requests/tests.rs`).
+(`presentation/state/agent_session.rs`, `presentation/controller/agent_session.rs`,
+`transport/requests/tests.rs`).
 
 ## Profile separation
 

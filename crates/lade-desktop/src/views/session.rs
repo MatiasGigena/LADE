@@ -10,7 +10,7 @@ use super::widgets::{
     self, Dialog, MessageKind, field, hbox, label, set_accessible_label, set_focus_key, space, vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::state::compat::{
+use crate::presentation::state::agent_session::{
     ForkPosition, ModelChoice, ProviderStatus, Readiness, ResourceKind, ResourceState,
     ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
 };
@@ -54,14 +54,14 @@ const IMPORT_PROFILE_TOOLTIP: &str = "Copies AGENTS.md, skills, prompts, extensi
 pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     let block = vbox(space::GROUP);
     let state = controller.store.state();
-    let compat = &state.compat;
-    let Some(catalog) = compat.catalog.clone() else {
+    let agent_session = &state.agent_session;
+    let Some(catalog) = agent_session.catalog.clone() else {
         block.append(&label("Loading the available models…", &["meta"]));
         return block;
     };
-    let readiness = compat.readiness();
-    let choice = compat.choice.clone();
-    let models = compat.chosen_models().to_vec();
+    let readiness = agent_session.readiness();
+    let choice = agent_session.choice.clone();
+    let models = agent_session.chosen_models().to_vec();
     drop(state);
 
     if catalog.providers.is_empty() {
@@ -221,7 +221,12 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
     let controller_for_thinking = controller.clone();
     thinking.connect_selected_notify(move |d| {
         if let Some(level) = thinking_levels.get(d.selected() as usize) {
-            let mut choice = controller_for_thinking.store.state().compat.choice.clone();
+            let mut choice = controller_for_thinking
+                .store
+                .state()
+                .agent_session
+                .choice
+                .clone();
             choice.thinking = *level;
             controller_for_thinking.choose_model(choice);
         }
@@ -253,9 +258,9 @@ pub fn session_section(
     let (session, tree, export) = {
         let state = controller.store.state();
         (
-            state.compat.sessions.get(&objective).cloned(),
-            state.compat.trees.get(&objective).cloned(),
-            state.compat.exports.get(&objective).cloned(),
+            state.agent_session.sessions.get(&objective).cloned(),
+            state.agent_session.trees.get(&objective).cloned(),
+            state.agent_session.exports.get(&objective).cloned(),
         )
     };
     match &session {
@@ -416,7 +421,7 @@ pub const RESOURCES_TITLE: &str = "LADE profile resources";
 
 pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     let s = vbox(space::GROUP);
-    let Some(inventory) = controller.store.state().compat.inventory.clone() else {
+    let Some(inventory) = controller.store.state().agent_session.inventory.clone() else {
         s.append(&label("Loading the LADE profile…", &["meta"]));
         return s;
     };
@@ -497,7 +502,7 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     }
     let actions = hbox(space::ITEM);
     let no_providers = matches!(
-        controller.store.state().compat.readiness(),
+        controller.store.state().agent_session.readiness(),
         Readiness::NoProviders { .. }
     );
     if !no_providers {
@@ -522,7 +527,7 @@ pub struct DialogHost {
 
 impl DialogHost {
     pub fn sync(&self, opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) {
-        let dialogs = controller.store.state().compat.dialogs.clone();
+        let dialogs = controller.store.state().agent_session.dialogs.clone();
         let stale: Vec<String> = self
             .open
             .borrow()

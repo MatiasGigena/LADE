@@ -582,14 +582,14 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
         objective_id: id(MAIN_OBJECTIVE),
         inputs: inputs(now),
     });
-    updates.extend(compat_fixture());
+    updates.extend(agent_session_fixture());
     updates
 }
 
-fn compat_fixture() -> Vec<StoreUpdate> {
-    use super::state::compat::{
-        Catalog, CompatUpdate, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
-        ResourceState, ResourceView, SessionView, ThinkingLevel,
+fn agent_session_fixture() -> Vec<StoreUpdate> {
+    use super::state::agent_session::{
+        AgentSessionUpdate, Catalog, Inventory, ModelView, ProviderStatus, ProviderView,
+        ResourceKind, ResourceState, ResourceView, SessionView, ThinkingLevel,
     };
     let provider =
         |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderView {
@@ -602,7 +602,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
             models: 1,
         };
     vec![
-        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
             sdk_version: "1.5.0".into(),
             providers: vec![
                 provider(
@@ -629,7 +629,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
             ],
             error: None,
         })),
-        StoreUpdate::Compat(CompatUpdate::Models {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Models {
             provider: "test-provider".into(),
             models: vec![ModelView {
                 provider: "test-provider".into(),
@@ -639,7 +639,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
                 thinking: vec![ThinkingLevel::Off],
             }],
         }),
-        StoreUpdate::Compat(CompatUpdate::Session {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Session {
             objective_id: id(MAIN_OBJECTIVE),
             session: SessionView {
                 generation: 2,
@@ -651,7 +651,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
                 leaf_id: None,
             },
         }),
-        StoreUpdate::Compat(CompatUpdate::Inventory(Inventory {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(Inventory {
             profile_dir: "~/.local/state/lade/profile".into(),
             entries: vec![
                 ResourceView {

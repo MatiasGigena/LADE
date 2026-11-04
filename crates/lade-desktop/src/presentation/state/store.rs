@@ -2,7 +2,7 @@ use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use super::compat::{CompatChange, CompatState, CompatUpdate};
+use super::agent_session::{AgentSessionChange, AgentSessionState, AgentSessionUpdate};
 use super::drafts::DraftEditor;
 use super::model::{
     ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
@@ -111,7 +111,7 @@ pub enum StoreUpdate {
         objective_id: ObjectiveId,
         surface: ActionSurface,
     },
-    Compat(CompatUpdate),
+    AgentSession(AgentSessionUpdate),
     TerminalOpened {
         objective_id: ObjectiveId,
         terminal_id: String,
@@ -312,7 +312,7 @@ pub struct PresentationState {
     pub command_status: HashMap<ObjectiveId, ServiceNotice>,
     refusals: HashMap<(ObjectiveId, ActionSurface), KeptRefusal>,
     pub ui: UiState,
-    pub compat: CompatState,
+    pub agent_session: AgentSessionState,
     pub terminals: Vec<TerminalSession>,
     pub service_stopped: bool,
     pub notifications_unavailable: Option<String>,
@@ -361,7 +361,7 @@ impl PresentationState {
             command_status: HashMap::new(),
             refusals: HashMap::new(),
             ui: UiState::default(),
-            compat: CompatState::default(),
+            agent_session: AgentSessionState::default(),
             terminals: Vec::new(),
             service_stopped: false,
             notifications_unavailable: None,
@@ -568,8 +568,8 @@ impl PresentationState {
                             changes.push(Change::Terminal(session.objective_id.clone()));
                         }
                     }
-                    if !self.compat.dialogs.is_empty() {
-                        self.compat.dialogs.clear();
+                    if !self.agent_session.dialogs.is_empty() {
+                        self.agent_session.dialogs.clear();
                         changes.push(Change::Dialogs);
                     }
                 }
@@ -964,15 +964,15 @@ impl PresentationState {
                 Some(_) => refusal_changes(objective_id, surface),
                 None => Vec::new(),
             },
-            StoreUpdate::Compat(update) => self
-                .compat
+            StoreUpdate::AgentSession(update) => self
+                .agent_session
                 .apply(update)
                 .into_iter()
                 .map(|change| match change {
-                    CompatChange::Catalog => Change::Catalog,
-                    CompatChange::Session(id) => Change::Session(id),
-                    CompatChange::Resources => Change::Resources,
-                    CompatChange::Dialogs => Change::Dialogs,
+                    AgentSessionChange::Catalog => Change::Catalog,
+                    AgentSessionChange::Session(id) => Change::Session(id),
+                    AgentSessionChange::Resources => Change::Resources,
+                    AgentSessionChange::Dialogs => Change::Dialogs,
                 })
                 .collect(),
             StoreUpdate::TerminalOpened {
@@ -1487,10 +1487,10 @@ mod tests {
 
     #[test]
     fn extension_dialogs_are_dropped_with_the_link_and_reannounced_after_it() {
-        use crate::presentation::state::compat::{UiDialog, UiPromptView};
+        use crate::presentation::state::agent_session::{UiDialog, UiPromptView};
         let mut state = PresentationState::new(ConnectionState::Connected);
         let dialog = |id: &str| {
-            StoreUpdate::Compat(CompatUpdate::DialogOpened(UiDialog {
+            StoreUpdate::AgentSession(AgentSessionUpdate::DialogOpened(UiDialog {
                 objective_id: ObjectiveId::new("o"),
                 ui_id: id.to_owned(),
                 generation: 1,
@@ -1506,11 +1506,11 @@ mod tests {
             attempt: 1,
         }));
         assert!(changes.contains(&Change::Dialogs));
-        assert!(state.compat.dialogs.is_empty());
+        assert!(state.agent_session.dialogs.is_empty());
         state.apply(StoreUpdate::Connection(ConnectionState::Connected));
         assert_eq!(state.apply(dialog("still-open")), vec![Change::Dialogs]);
         let open: Vec<&str> = state
-            .compat
+            .agent_session
             .dialogs
             .iter()
             .map(|d| d.ui_id.as_str())

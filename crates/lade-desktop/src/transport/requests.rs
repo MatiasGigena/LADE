@@ -1,10 +1,10 @@
 use lade_protocol::client::{self as wire, Rejection, ReplyData, Request};
 use lade_protocol::types::{Counter, GitId, PageLimit, ReadLimit};
 
-use super::compat as compat_wire;
+use super::agent_session;
 use super::convert::{self, Invalid, id, to_basis, to_path};
 use crate::presentation::controller::intents::{Intent, StartPoint, StopReason};
-use crate::presentation::state::compat::CompatUpdate;
+use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
     self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath,
     SearchScope, ServiceNotice, Side,
@@ -335,7 +335,7 @@ fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             Request::ExecutionStart(wire::ExecutionStartCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 model: convert::to_model(model),
-                thinking: thinking.map(compat_wire::to_thinking),
+                thinking: thinking.map(agent_session::to_thinking),
             }),
             Context::command(intent.label(), Some(objective_id)),
         ),
@@ -569,12 +569,12 @@ fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::Stop,
         ),
-        _ => return compat_request(intent).map(Some),
+        _ => return agent_session_request(intent).map(Some),
     };
     Ok(Some(mapped))
 }
 
-fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
     use Intent as I;
     let command = |objective_id: &ObjectiveId| Context::command(intent.label(), Some(objective_id));
     let text = |value: &str, what: &str| {
@@ -617,7 +617,7 @@ fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             Request::SessionFork(wire::SessionForkCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 entry_id: text(entry_id, "the entry id")?,
-                position: compat_wire::to_fork(*position),
+                position: agent_session::to_fork(*position),
             }),
             command(objective_id),
         ),
@@ -654,7 +654,7 @@ fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             Request::SessionConfigure(wire::SessionConfigureCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 model: convert::to_model(model),
-                thinking: compat_wire::to_thinking(*thinking),
+                thinking: agent_session::to_thinking(*thinking),
             }),
             command(objective_id),
         ),
@@ -688,33 +688,33 @@ fn compat_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 ui_id: id(ui_id, "dialog id")?,
                 generation: Counter::new(*generation),
-                answer: compat_wire::to_answer(answer),
+                answer: agent_session::to_answer(answer),
             }),
             command(objective_id),
         ),
-        _ => return Err(Invalid("not an IMP-011 intent".into())),
+        _ => return Err(Invalid("not an Agent Session intent".into())),
     })
 }
 
-fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) -> bool {
+fn agent_session_effects(context: &Context, data: &ReplyData, effects: &mut Effects) -> bool {
     let updates = &mut effects.updates;
     match data {
         ReplyData::ModelsList(catalog) => {
-            updates.push(StoreUpdate::Compat(CompatUpdate::Catalog(
-                compat_wire::catalog(catalog),
+            updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(
+                agent_session::catalog(catalog),
             )));
             if let Context::Models(Some(provider)) = context {
-                updates.push(StoreUpdate::Compat(CompatUpdate::Models {
+                updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Models {
                     provider: provider.clone(),
-                    models: compat_wire::models(catalog),
+                    models: agent_session::models(catalog),
                 }));
             }
         }
         ReplyData::SessionTree(tree) => {
             if let Context::Tree(objective_id) = context {
-                updates.push(StoreUpdate::Compat(CompatUpdate::Tree {
+                updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Tree {
                     objective_id: objective_id.clone(),
-                    tree: compat_wire::tree(tree),
+                    tree: agent_session::tree(tree),
                 }));
             }
         }
@@ -724,8 +724,8 @@ fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) ->
         | ReplyData::SessionCompact(state)
         | ReplyData::SessionReload(state)
         | ReplyData::SessionConfigure(state) => {
-            let (objective_id, session) = compat_wire::session(state);
-            updates.push(StoreUpdate::Compat(CompatUpdate::Session {
+            let (objective_id, session) = agent_session::session(state);
+            updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Session {
                 objective_id: objective_id.clone(),
                 session,
             }));
@@ -735,19 +735,19 @@ fn compat_effects(context: &Context, data: &ReplyData, effects: &mut Effects) ->
             effects.follow_ups.push(refresh_objective(&objective_id));
         }
         ReplyData::SessionExport(export) => {
-            updates.push(StoreUpdate::Compat(CompatUpdate::Exported {
+            updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Exported {
                 objective_id: ObjectiveId::new(export.objective_id.as_str()),
                 path: export.path.display().to_owned(),
             }));
         }
         ReplyData::ResourcesList(inventory) | ReplyData::ResourceDecide(inventory) => {
-            updates.push(StoreUpdate::Compat(CompatUpdate::Inventory(
-                compat_wire::inventory(inventory),
+            updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(
+                agent_session::inventory(inventory),
             )));
         }
         ReplyData::ProfileImport(result) => {
-            updates.push(StoreUpdate::Compat(CompatUpdate::Inventory(
-                compat_wire::inventory(&result.inventory),
+            updates.push(StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(
+                agent_session::inventory(&result.inventory),
             )));
             updates.push(StoreUpdate::Notice(ServiceNotice {
                 level: NoticeLevel::Info,
@@ -804,7 +804,7 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
             });
         }
     }
-    if compat_effects(context, &data, &mut effects) {
+    if agent_session_effects(context, &data, &mut effects) {
         return effects;
     }
     let updates = &mut effects.updates;

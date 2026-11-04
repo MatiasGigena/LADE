@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::Controller;
 use super::intents::Intent;
-use crate::presentation::state::compat::{
+use crate::presentation::state::agent_session::{
     ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView,
 };
 use crate::presentation::state::model::{ExecutionState, ModelRef, ObjectiveId};
@@ -21,10 +21,10 @@ impl Controller {
         let needs_models = choice
             .provider
             .as_ref()
-            .filter(|p| !self.store.state().compat.models.contains_key(*p))
+            .filter(|p| !self.store.state().agent_session.models.contains_key(*p))
             .cloned();
-        self.store.apply_all(vec![StoreUpdate::Compat(
-            crate::presentation::state::compat::CompatUpdate::Choice(choice),
+        self.store.apply_all(vec![StoreUpdate::AgentSession(
+            crate::presentation::state::agent_session::AgentSessionUpdate::Choice(choice),
         )]);
         if let Some(provider) = needs_models {
             self.load_models(Some(provider));
@@ -43,11 +43,11 @@ impl Controller {
     pub(super) fn picker_defaults(&self) {
         let (choice, missing) = {
             let state = self.store.state();
-            let compat = &state.compat;
-            let Some(catalog) = &compat.catalog else {
+            let agent_session = &state.agent_session;
+            let Some(catalog) = &agent_session.catalog else {
                 return;
             };
-            if compat
+            if agent_session
                 .choice
                 .provider
                 .as_ref()
@@ -70,7 +70,7 @@ impl Controller {
                         .iter()
                         .find(|p| {
                             p.status
-                                == crate::presentation::state::compat::ProviderStatus::Available
+                                == crate::presentation::state::agent_session::ProviderStatus::Available
                         })
                         .or_else(|| catalog.providers.first())
                         .map(|p| p.id.clone())
@@ -88,12 +88,12 @@ impl Controller {
             let missing = choice
                 .provider
                 .as_ref()
-                .filter(|p| !compat.models.contains_key(*p))
+                .filter(|p| !agent_session.models.contains_key(*p))
                 .cloned();
             (choice, missing)
         };
-        self.store.apply_all(vec![StoreUpdate::Compat(
-            crate::presentation::state::compat::CompatUpdate::Choice(choice),
+        self.store.apply_all(vec![StoreUpdate::AgentSession(
+            crate::presentation::state::agent_session::AgentSessionUpdate::Choice(choice),
         )]);
         if let Some(provider) = missing {
             self.load_models(Some(provider));
@@ -101,7 +101,7 @@ impl Controller {
     }
 
     pub fn readiness(&self) -> Readiness {
-        self.store.state().compat.readiness()
+        self.store.state().agent_session.readiness()
     }
 
     pub fn chosen_model(&self) -> Result<(ModelRef, ThinkingLevel), String> {
@@ -219,7 +219,7 @@ impl Controller {
         let dialog = self
             .store
             .state()
-            .compat
+            .agent_session
             .dialogs
             .iter()
             .find(|d| d.ui_id == ui_id)
@@ -237,7 +237,7 @@ impl Controller {
     pub fn session_line(&self) -> Option<String> {
         let state = self.store.state();
         let id = state.ui.selected.as_ref()?;
-        let session = state.compat.sessions.get(id)?;
+        let session = state.agent_session.sessions.get(id)?;
         Some(format!(
             "pi session generation {} · thinking {} · {}",
             session.generation,
@@ -246,7 +246,7 @@ impl Controller {
         ))
     }
 
-    pub fn compat_changes_for(&self, changes: &[Change]) -> bool {
+    pub fn agent_session_changes_for(&self, changes: &[Change]) -> bool {
         let selected = self.store.state().ui.selected.clone();
         changes.iter().any(|c| match c {
             Change::Catalog | Change::Resources => true,
@@ -262,8 +262,9 @@ mod tests {
 
     use super::*;
     use crate::presentation::controller::intents::RecordingSink;
-    use crate::presentation::state::compat::{
-        Catalog, CompatUpdate, ModelView, ProviderStatus, ProviderView, UiDialog, UiPromptView,
+    use crate::presentation::state::agent_session::{
+        AgentSessionUpdate, Catalog, ModelView, ProviderStatus, ProviderView, UiDialog,
+        UiPromptView,
     };
     use crate::presentation::state::model::ConnectionState;
     use crate::presentation::state::store::{PresentationState, Store};
@@ -285,9 +286,8 @@ mod tests {
     #[test]
     fn the_picker_uses_the_service_catalogue_and_loads_models_on_demand() {
         let (controller, sink) = setup();
-        controller
-            .store
-            .apply_all(vec![StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+        controller.store.apply_all(vec![StoreUpdate::AgentSession(
+            AgentSessionUpdate::Catalog(Catalog {
                 sdk_version: "1.5.0".into(),
                 providers: vec![ProviderView {
                     id: "local-llm".into(),
@@ -299,7 +299,8 @@ mod tests {
                     models: 1,
                 }],
                 error: None,
-            }))]);
+            }),
+        )]);
         assert_eq!(
             sink.intents.borrow().as_slice(),
             [Intent::LoadModels {
@@ -316,9 +317,8 @@ mod tests {
             controller.chosen_model().unwrap_err(),
             "Loading Fixture's models…"
         );
-        controller
-            .store
-            .apply_all(vec![StoreUpdate::Compat(CompatUpdate::Models {
+        controller.store.apply_all(vec![StoreUpdate::AgentSession(
+            AgentSessionUpdate::Models {
                 provider: "local-llm".into(),
                 models: vec![ModelView {
                     provider: "local-llm".into(),
@@ -327,14 +327,15 @@ mod tests {
                     reasoning: false,
                     thinking: vec![ThinkingLevel::Off],
                 }],
-            })]);
+            },
+        )]);
         let (model, thinking) = controller.chosen_model().unwrap();
         assert_eq!(model, ModelRef::new("local-llm", "scripted"));
         assert_eq!(thinking, ThinkingLevel::Off);
     }
 
     fn catalog(providers: Vec<ProviderView>, error: Option<&str>) -> StoreUpdate {
-        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
             sdk_version: "1.5.0".into(),
             providers,
             error: error.map(str::to_owned),
@@ -345,7 +346,7 @@ mod tests {
     fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
         let (controller, sink) = setup();
         controller.store.update(|s| {
-            s.compat = Default::default();
+            s.agent_session = Default::default();
             ((), Vec::new())
         });
         assert_eq!(controller.readiness(), Readiness::CatalogLoading);
@@ -377,12 +378,18 @@ mod tests {
             None,
         ));
         assert_eq!(
-            controller.store.state().compat.choice.provider.as_deref(),
+            controller
+                .store
+                .state()
+                .agent_session
+                .choice
+                .provider
+                .as_deref(),
             Some("anthropic")
         );
         controller
             .store
-            .apply(StoreUpdate::Compat(CompatUpdate::Models {
+            .apply(StoreUpdate::AgentSession(AgentSessionUpdate::Models {
                 provider: "anthropic".into(),
                 models: Vec::new(),
             }));
@@ -433,19 +440,17 @@ mod tests {
                 .answer_dialog("missing", UiAnswerView::Cancel)
                 .is_err()
         );
-        controller
-            .store
-            .apply_all(vec![StoreUpdate::Compat(CompatUpdate::DialogOpened(
-                UiDialog {
-                    objective_id: ObjectiveId::new(test_fixture::MAIN_OBJECTIVE),
-                    ui_id: "00000000-0000-4000-8000-000000000042".into(),
-                    generation: 3,
-                    prompt: UiPromptView::Confirm {
-                        title: "Proceed?".into(),
-                        message: "m".into(),
-                    },
+        controller.store.apply_all(vec![StoreUpdate::AgentSession(
+            AgentSessionUpdate::DialogOpened(UiDialog {
+                objective_id: ObjectiveId::new(test_fixture::MAIN_OBJECTIVE),
+                ui_id: "00000000-0000-4000-8000-000000000042".into(),
+                generation: 3,
+                prompt: UiPromptView::Confirm {
+                    title: "Proceed?".into(),
+                    message: "m".into(),
                 },
-            ))]);
+            }),
+        )]);
         controller
             .answer_dialog(
                 "00000000-0000-4000-8000-000000000042",
