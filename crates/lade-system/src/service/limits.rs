@@ -162,3 +162,80 @@ impl Service {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::client::Event;
+
+    use super::*;
+    use crate::service::test_harness::Harness;
+
+    fn notices(harness: &mut Harness) -> Vec<NoticeCode> {
+        harness
+            .take_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                Event::ServiceNotice(n) => Some(n.code),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn limits_describe_themselves_in_mebibytes() {
+        assert_eq!(
+            ResourceLimits::default().to_string(),
+            "max_workers=16 max_terminals=16 storage_warn=2048 MiB storage_reserve=512 MiB"
+        );
+    }
+
+    #[test]
+    fn free_space_moves_between_levels_and_announces_each_change_once() {
+        let mut harness = Harness::new("limits-storage");
+        assert!(harness.service.storage_blocker().is_none());
+        harness.service.limits.storage_warn_bytes = u64::MAX;
+        harness.service.check_free_space();
+        assert_eq!(harness.service.storage.free_space.level, Pressure::Low);
+        assert!(harness.service.storage.free_space.free.is_some());
+        harness.service.check_free_space();
+        assert_eq!(
+            notices(&mut harness),
+            [NoticeCode::StorageLow],
+            "only the change"
+        );
+
+        harness.service.limits.storage_reserve_bytes = u64::MAX;
+        harness.service.check_free_space();
+        assert_eq!(harness.service.storage.free_space.level, Pressure::Critical);
+        assert_eq!(notices(&mut harness), [NoticeCode::StorageCritical]);
+        let blocker = harness.service.storage_blocker().expect("critical blocks");
+        assert!(blocker.contains("MiB free"), "{blocker}");
+        let (_, oid) = harness.create_objective("Blocked");
+        assert_eq!(harness.service.worker_blocker(oid), Some(blocker));
+
+        harness.service.limits = ResourceLimits {
+            storage_warn_bytes: 0,
+            storage_reserve_bytes: 0,
+            ..ResourceLimits::default()
+        };
+        harness.service.check_free_space();
+        assert_eq!(harness.service.storage.free_space.level, Pressure::Normal);
+        assert_eq!(notices(&mut harness), [NoticeCode::StorageOk]);
+        harness.service.announce_storage(false);
+        assert!(
+            notices(&mut harness).is_empty(),
+            "normal is announced only as a transition"
+        );
+    }
+
+    #[test]
+    fn free_bytes_reads_the_volume_and_fails_soft() {
+        assert!(free_bytes(Path::new("/")).is_some());
+        assert_eq!(free_bytes(Path::new("/lade/no/such/volume")), None);
+        assert_eq!(mib(3 * MIB - 1), 2);
+        assert_eq!(
+            Service::quota_rejection("full").code,
+            ErrorCode::LimitReached
+        );
+    }
+}

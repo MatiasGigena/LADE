@@ -402,3 +402,152 @@ impl Service {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::MAX_STRING;
+    use lade_protocol::client::{ObjectiveSelector, Request};
+
+    use super::*;
+    use crate::service::test_harness::Harness;
+
+    #[test]
+    fn json_nodes_count_every_value() {
+        assert_eq!(nodes(&serde_json::json!(1)), 1);
+        assert_eq!(nodes(&serde_json::json!([1, [2, 3]])), 5);
+        assert_eq!(nodes(&serde_json::json!({"a": {"b": null}, "c": []})), 4);
+    }
+
+    #[test]
+    fn bounded_text_charges_json_escapes_and_keeps_the_head_or_tail() {
+        assert_eq!(bounded_text("abc", 10, false), ("abc".into(), 3));
+        assert_eq!(bounded_text("abcdef", 4, false), ("abcd".into(), 4));
+        assert_eq!(bounded_text("abcdef", 4, true), ("cdef".into(), 4));
+        assert_eq!(
+            bounded_text("a\"b", 3, false),
+            ("a\"".into(), 3),
+            "a quote costs two"
+        );
+        assert_eq!(
+            bounded_text("\u{1}x", 6, false),
+            ("\u{1}".into(), 6),
+            "control chars cost six"
+        );
+        assert_eq!(
+            bounded_text("é", 1, false),
+            (String::new(), 0),
+            "never splits a character"
+        );
+        assert_eq!(bounded_text("x\ny", 3, true), ("\ny".into(), 3));
+    }
+
+    fn verification(tail: String, command: Vec<String>) -> VerificationSummary {
+        let id = crate::service::convert::wire_id(crate::support::new_uuid());
+        VerificationSummary {
+            verification_id: id.clone(),
+            objective_id: id.clone(),
+            candidate_id: id,
+            command,
+            state: VerificationState::Failed,
+            started_at: crate::support::wire_ts(0),
+            output_tail: tail,
+            truncated: false,
+            provenance: Provenance::ServiceObserved,
+            exit_code: None,
+            ended_at: None,
+        }
+    }
+
+    #[test]
+    fn an_oversized_verification_command_is_cut_to_fit_and_marked_truncated() {
+        let small = budget_verification(verification("ok\n".into(), vec!["true".into()]));
+        assert_eq!(small.output_tail, "ok\n");
+        assert!(!small.truncated);
+
+        let arg = "\u{1}".repeat(4096);
+        let command = vec![arg.clone(); 256];
+        let budgeted = budget_verification(verification("the end".into(), command));
+        assert!(budgeted.truncated);
+        assert_eq!(budgeted.command[0], arg, "earlier arguments are kept whole");
+        assert!(budgeted.command.len() < 256);
+        for frame in reply_frames(
+            ReplyData::ReviewVerify(budgeted.clone()),
+            &budgeted.objective_id,
+        ) {
+            let encoded = encode(&frame, Framing::Client);
+            assert!(
+                encoded.is_ok(),
+                "the reply fits a frame: {:?}",
+                encoded.err()
+            );
+        }
+    }
+
+    #[test]
+    fn details_and_snapshots_of_ordinary_objectives_are_representable() {
+        let mut harness = Harness::new("budget-detail");
+        let (id, oid) = harness.create_objective("Budget");
+        let st = harness.service.objectives[&oid].clone();
+        let detail = harness.service.detail_of(&st);
+        assert!(harness.service.check_intent_representation(&detail).is_ok());
+        assert!(
+            harness
+                .service
+                .check_snapshot_representation(&harness.service.settings.clone(), Some(&st), None)
+                .is_ok()
+        );
+        let mut verifying = detail.clone();
+        let tail = "\u{1}".repeat(4096);
+        verifying.verifications = vec![verification(tail, vec!["sh".into()]); DETAIL_LIST_MAX];
+        let budgeted = harness.service.budget_detail(verifying);
+        assert!(budgeted.verifications.iter().all(|v| v.truncated));
+        assert!(
+            budgeted
+                .verifications
+                .iter()
+                .all(|v| !v.output_tail.is_empty()),
+            "each keeps a share"
+        );
+        for frame in frames(&budgeted, &harness.service.epoch) {
+            assert!(encode(&frame, Framing::Client).is_ok());
+        }
+        assert!(
+            harness
+                .call(Request::ObjectiveGet(ObjectiveSelector {
+                    objective_id: id
+                }))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn snapshot_budgets_cut_long_outcomes_but_keep_every_row() {
+        let mut harness = Harness::new("budget-snapshot");
+        for n in 0..6 {
+            harness.create_objective(&format!("Objective {n}"));
+        }
+        let mut data =
+            harness
+                .service
+                .snapshot_data(&harness.service.settings.clone(), None, None, 64);
+        for summary in &mut data.objectives {
+            summary.outcome = "o".repeat(MAX_STRING - 1);
+        }
+        let budgeted = Service::budget_snapshot(data.clone());
+        assert_eq!(budgeted.objectives.len(), data.objectives.len());
+        assert!(
+            budgeted
+                .objectives
+                .iter()
+                .all(|o| o.outcome.len() < MAX_STRING - 1)
+        );
+        assert!(
+            budgeted
+                .objectives
+                .iter()
+                .all(|o| o.outcome.starts_with('o'))
+        );
+        assert_eq!(budgeted.workspaces[0].branches, data.workspaces[0].branches);
+        assert!(capacity(snapshot_frames(budgeted)).is_some());
+    }
+}

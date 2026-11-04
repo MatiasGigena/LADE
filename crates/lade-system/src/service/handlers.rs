@@ -283,3 +283,109 @@ impl Service {
         Ok(ReplyData::OperationGet(status))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::client::{Empty, ServiceStopCommand, StopReason};
+
+    use super::*;
+    use crate::service::test_harness::Harness;
+
+    #[test]
+    fn snapshots_list_the_most_recently_updated_objectives_first() {
+        let mut harness = Harness::new("handlers-snapshot");
+        let (_, first) = harness.create_objective("First");
+        let (_, second) = harness.create_objective("Second");
+        let mut st = harness.service.objectives[&first].clone();
+        st.row.objective = {
+            let mut record = st.row.objective.clone().into_record();
+            record.updated_at = lade_core::domain::ids::Timestamp::from_unix_ms(i64::MAX);
+            lade_core::domain::objectives::Objective::restore(record).expect("objective")
+        };
+        harness.service.objectives.insert(first, st);
+        let Ok(ReplyData::Snapshot(snapshot)) = harness.call(Request::Snapshot(Empty {})) else {
+            panic!("snapshot");
+        };
+        assert_eq!(snapshot.workspaces.len(), 1);
+        let order: Vec<_> = snapshot
+            .objectives
+            .iter()
+            .map(|o| {
+                harness
+                    .service
+                    .objective_id(&o.objective_id)
+                    .expect("known")
+            })
+            .collect();
+        assert_eq!(order, [first, second]);
+        assert_eq!(snapshot.service_epoch, harness.service.epoch);
+    }
+
+    #[test]
+    fn lookups_reject_unknown_and_malformed_objectives() {
+        let mut harness = Harness::new("handlers-lookup");
+        let unknown = harness
+            .call(Request::ObjectiveGet(ObjectiveSelector {
+                objective_id: crate::service::convert::wire_id(crate::support::new_uuid()),
+            }))
+            .expect_err("unknown");
+        assert_eq!(unknown.code, lade_protocol::client::ErrorCode::NotFound);
+        let (_, oid) = harness.create_objective("Busy");
+        assert!(harness.service.check_idle(oid).is_ok());
+        harness.service.rt(oid).busy = Some("freeze");
+        assert_eq!(
+            harness.service.check_idle(oid).expect_err("busy").detail,
+            super::super::project::BUSY
+        );
+    }
+
+    #[test]
+    fn operation_status_reports_unknown_pending_and_completed_operations() {
+        let mut harness = Harness::new("handlers-operation");
+        let get = |id: &Id| {
+            Request::OperationGet(OperationGetQuery {
+                operation_id: id.clone(),
+            })
+        };
+        let unknown = Id::from_random_bytes([1; 16]);
+        let Ok(ReplyData::OperationGet(status)) = harness.call(get(&unknown)) else {
+            panic!("operation");
+        };
+        assert_eq!(status.state, OperationState::Unknown);
+        assert!(status.outcome.is_none());
+
+        let ctx = Harness::ctx(lade_protocol::client::RequestName::ServiceStop);
+        let op = ctx
+            .op
+            .clone()
+            .expect("mutating requests carry an operation");
+        harness.service.dispatch(
+            ctx,
+            Request::ServiceStop(ServiceStopCommand {
+                reason: StopReason::Exit,
+            }),
+        );
+        assert!(
+            harness.service.stopping,
+            "service.stop asks the loop to end"
+        );
+        let Ok(ReplyData::OperationGet(status)) = harness.call(get(&op.id)) else {
+            panic!("operation");
+        };
+        assert_eq!(status.state, OperationState::Completed);
+        assert!(matches!(
+            status.outcome,
+            Some(lade_protocol::client::Outcome::Ok(ref data)) if matches!(**data, ReplyData::ServiceStop(_))
+        ));
+    }
+
+    #[test]
+    fn sql_failures_reject_as_durability_failures() {
+        let failure = sql::<()>(Err(rusqlite::Error::InvalidQuery)).expect_err("failure");
+        assert_eq!(
+            failure.code,
+            lade_protocol::client::ErrorCode::DurabilityFailure
+        );
+        assert_eq!(sql(Ok(3)).expect("ok"), 3);
+    }
+}

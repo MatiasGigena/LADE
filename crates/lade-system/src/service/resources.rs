@@ -225,3 +225,140 @@ pub(crate) fn snapshot(
             .collect(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use lade_protocol::client::{Request, ResourceDecideCommand, ResourceKind};
+
+    use super::*;
+    use crate::service::test_harness::Harness;
+
+    fn entry<'a>(
+        inventory: &'a ResourceInventory,
+        name: &str,
+    ) -> &'a lade_protocol::client::ResourceEntry {
+        inventory
+            .entries
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("{name} is listed"))
+    }
+
+    fn decide(
+        harness: &mut Harness,
+        sha256: &Digest,
+        approve: bool,
+    ) -> Result<ReplyData, Rejection> {
+        harness.call(Request::ResourceDecide(ResourceDecideCommand {
+            name: "tool.ts".into(),
+            sha256: sha256.clone(),
+            approve,
+        }))
+    }
+
+    #[test]
+    fn extensions_need_approval_of_their_exact_content() {
+        let mut harness = Harness::new("resources-decide");
+        let profile = harness.service.profile_dir();
+        fs::write(profile.join("AGENTS.md"), "context").expect("context");
+        fs::create_dir(profile.join("extensions")).expect("extensions");
+        fs::write(profile.join("extensions/tool.ts"), "export {}").expect("extension");
+        let inventory = harness.service.inventory();
+        assert_eq!(entry(&inventory, "AGENTS.md").state, ResourceState::Active);
+        let tool = entry(&inventory, "tool.ts");
+        assert_eq!(tool.kind, ResourceKind::Extension);
+        assert_eq!(tool.state, ResourceState::PendingApproval);
+        let sha = tool.sha256.clone().expect("hashed");
+        assert_eq!(inventory.restrictions.len(), RESTRICTIONS.len());
+
+        let Ok(ReplyData::ResourceDecide(approved)) = decide(&mut harness, &sha, true) else {
+            panic!("approve");
+        };
+        assert_eq!(entry(&approved, "tool.ts").state, ResourceState::Active);
+        assert_eq!(
+            harness.service.approved_extensions(),
+            [("tool.ts".to_string(), sha.as_str().to_string())]
+        );
+        let Ok(ReplyData::ResourceDecide(rejected)) = decide(&mut harness, &sha, false) else {
+            panic!("reject");
+        };
+        assert_eq!(entry(&rejected, "tool.ts").state, ResourceState::Rejected);
+        assert!(harness.service.approved_extensions().is_empty());
+        let stored = storage::load_approvals(harness.service.store.conn()).expect("approvals");
+        assert_eq!(stored.len(), 1);
+        assert!(!stored[0].approved);
+
+        fs::write(
+            profile.join("extensions/tool.ts"),
+            "export const changed = 1",
+        )
+        .expect("edit");
+        assert_eq!(
+            entry(&harness.service.inventory(), "tool.ts").state,
+            ResourceState::PendingApproval,
+            "changed content needs a new decision"
+        );
+        let stale = decide(&mut harness, &sha, true).expect_err("stale hash");
+        assert_eq!(stale.code, ErrorCode::StaleReference);
+    }
+
+    #[test]
+    fn snapshots_carry_only_approved_extensions() {
+        let harness = Harness::new("resources-snapshot");
+        let profile = harness.service.profile_dir();
+        fs::create_dir(profile.join("extensions")).expect("extensions");
+        fs::write(profile.join("extensions/kept.ts"), "export {}").expect("kept");
+        fs::write(profile.join("extensions/dropped.ts"), "export const x = 1").expect("dropped");
+        let sha = |name: &str| {
+            harness
+                .service
+                .inventory()
+                .entries
+                .into_iter()
+                .find(|e| e.name == name)
+                .and_then(|e| e.sha256)
+                .expect("hash")
+                .as_str()
+                .to_string()
+        };
+        let dest = harness.root().join("snapshot");
+        let resources =
+            snapshot(&profile, &dest, &[("kept.ts".into(), sha("kept.ts"))]).expect("snapshot");
+        let names: Vec<_> = resources
+            .extensions
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        assert_eq!(names, ["kept.ts"]);
+        assert_eq!(resources.profile_dir, dest.to_string_lossy());
+        assert!(PathBuf::from(&resources.extensions[0].path).starts_with(&dest));
+    }
+
+    #[test]
+    fn profile_imports_need_an_absolute_folder_outside_the_profile() {
+        let mut harness = Harness::new("resources-import");
+        let import = |path: &Path| {
+            Request::ProfileImport(ProfileImportCommand {
+                source: WirePath::from_os_str(path.as_os_str()).expect("path"),
+            })
+        };
+        let relative = harness.call(import(Path::new("pi"))).expect_err("relative");
+        assert_eq!(relative.code, ErrorCode::InvalidRequest);
+        let inside = harness.service.profile_dir().join("skills");
+        assert!(harness.call(import(&inside)).is_err(), "inside the profile");
+        let source = harness.root().join("pi-home");
+        fs::create_dir_all(source.join("prompts")).expect("source");
+        fs::write(source.join("prompts/review.md"), "Review this").expect("prompt");
+        let Ok(ReplyData::ProfileImport(result)) = harness.call(import(&source)) else {
+            panic!("import");
+        };
+        assert!(
+            result.copied.iter().any(|c| c.contains("review")),
+            "{:?}",
+            result.copied
+        );
+        assert!(result.inventory.entries.iter().any(|e| e.name == "review"));
+    }
+}
