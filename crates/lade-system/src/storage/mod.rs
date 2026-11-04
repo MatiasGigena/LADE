@@ -1,5 +1,6 @@
 pub mod backup;
-mod compat;
+mod preferences;
+mod reference;
 mod rows;
 
 use std::fs::{File, OpenOptions};
@@ -11,7 +12,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
-pub use compat::*;
+pub use preferences::*;
 pub use rows::*;
 
 pub const LOCK_FILE: &str = "lade.lock";
@@ -35,7 +36,7 @@ pub fn lock_state(state: &Path) -> io::Result<File> {
     Err(io::ErrorKind::WouldBlock.into())
 }
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, compat::SCHEMA_V2), (3, SCHEMA_V3)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, SCHEMA_V1), (2, preferences::SCHEMA_V2), (3, SCHEMA_V3)];
 
 const SCHEMA_V3: &str = r"
 ALTER TABLE objectives ADD COLUMN history_deleted INTEGER NOT NULL DEFAULT 0;

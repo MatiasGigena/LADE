@@ -285,13 +285,13 @@ impl Service {
     pub(crate) fn load_compat(&mut self) -> Result<(), String> {
         ensure_private_dir(&self.profile_dir()).map_err(|e| format!("profile: {}", e.kind()))?;
         let conn = self.store.conn();
-        for (oid, level) in storage::load_thinking(conn).map_err(|e| e.to_string())? {
-            if let Some(level) = ThinkingLevel::parse(&level) {
-                self.compat.thinking.insert(oid, level);
-            }
-        }
-        for (name, sha, approved) in storage::load_approvals(conn).map_err(|e| e.to_string())? {
-            self.compat.approvals.insert((name, sha), approved);
+        self.compat
+            .thinking
+            .extend(storage::load_thinking(conn).map_err(|e| e.to_string())?);
+        for row in storage::load_approvals(conn).map_err(|e| e.to_string())? {
+            self.compat
+                .approvals
+                .insert((row.name, row.sha256), row.approved);
         }
         Ok(())
     }
@@ -508,7 +508,15 @@ impl Service {
         let data = ReplyData::ResourceDecide(inventory.clone());
         let now = now_ms();
         self.commit(Some(ctx), Some(&data), |tx| {
-            storage::save_approval(tx, &key.0, &key.1, cmd.approve, now)
+            storage::save_approval(
+                tx,
+                &storage::ApprovalRow {
+                    name: key.0.clone(),
+                    sha256: key.1.clone(),
+                    approved: cmd.approve,
+                },
+                now,
+            )
         })?;
         self.compat.approvals.insert(key, cmd.approve);
         self.emit(Event::ResourcesChanged(inventory));
@@ -855,7 +863,7 @@ impl Service {
         let now = now_ms();
         let committed = self.commit(ctx, Some(&data), |tx| {
             Self::save_tx(tx, &st)?;
-            storage::save_thinking(tx, oid, thinking.as_str(), now)
+            storage::save_thinking(tx, oid, thinking, now)
         });
         if let Err(rejection) = committed {
             match previous {
@@ -1361,7 +1369,7 @@ impl Service {
         sql(storage::save_thinking(
             self.store.conn(),
             oid,
-            thinking.as_str(),
+            thinking,
             now,
         ))?;
         self.compat.thinking.insert(oid, thinking);

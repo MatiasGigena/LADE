@@ -17,7 +17,7 @@ use lade_protocol::client::{
 use lade_protocol::types::Id;
 
 use crate::adapters::git::{self, GitError, SquashRequest};
-use crate::storage::{self, JournalRow};
+use crate::storage::{self, JournalRow, JournalState, OperationState};
 
 use super::convert::{
     adapter_git, conflict, domain_rejection, durability, from_wire_git, git_rejection, invalid,
@@ -620,32 +620,30 @@ impl Service {
         };
         let record = st.objective().record();
         let journal = JournalRow {
-            id: new_uuid().to_string(),
+            id: new_uuid(),
             objective_id: oid,
             approval_id: plan.approval_id,
             candidate_id: plan.candidate_id,
             target_branch: record.integration_target.as_str().to_string(),
             expected_target: plan.expected_target.clone(),
             candidate_tree: plan.candidate_tree.clone(),
-            state: "intent".into(),
+            state: JournalState::Intent,
             result_commit: None,
+            message: format!(
+                "{}\n\nIntegrated by LADE from objective {oid} (candidate {}).",
+                record.title.as_str(),
+                plan.candidate_id
+            ),
+            commit_time: now_ms() / 1000,
         };
-        let message = format!(
-            "{}\n\nIntegrated by LADE from objective {oid} (candidate {}).",
-            record.title.as_str(),
-            plan.candidate_id
-        );
-        let commit_time = now_ms() / 1000;
         let op = ctx.op.clone();
         let journaled = self.commit(None, None, |tx| {
-            storage::insert_journal(tx, &journal, &message, commit_time, now_ms())?;
+            storage::insert_journal(tx, &journal, now_ms())?;
             if let Some(op) = &op {
                 storage::record_operation(
                     tx,
-                    op.id.as_str(),
-                    &op.digest,
-                    ctx.name.as_str(),
-                    "pending",
+                    op.key(ctx.name),
+                    OperationState::Pending,
                     None,
                     now_ms(),
                 )?;
@@ -661,8 +659,8 @@ impl Service {
             target_branch: journal.target_branch.clone(),
             expected_target: adapter_git(&plan.expected_target),
             candidate_tree: adapter_git(&plan.candidate_tree),
-            message,
-            timestamp: Some(commit_time),
+            message: journal.message,
+            timestamp: Some(journal.commit_time),
         };
         self.rt(oid).busy = Some("integrate");
         if let Some(key) = self.integration_key(oid) {
@@ -685,7 +683,7 @@ impl Service {
         oid: ObjectiveId,
         mut ctx: ReqCtx,
         plan: &IntegrationPlan,
-        journal_id: &str,
+        journal_id: lade_core::domain::ids::Uuid,
         result: Result<crate::adapters::git::SquashOutcome, GitError>,
     ) {
         self.rt(oid).busy = None;
@@ -702,7 +700,14 @@ impl Service {
                 let data = ReplyData::ReviewIntegrate(Box::new(self.detail_of(&st)));
                 self.commit(Some(&mut ctx), Some(&data), |tx| {
                     Self::save_tx(tx, &st)?;
-                    storage::update_journal(tx, journal_id, "done", Some(&commit), None, now)
+                    storage::update_journal(
+                        tx,
+                        journal_id,
+                        JournalState::Done,
+                        Some(&commit),
+                        None,
+                        now,
+                    )
                 })?;
                 self.objectives.insert(oid, st);
                 Ok(data)
@@ -711,7 +716,7 @@ impl Service {
                 let _ = storage::update_journal(
                     self.store.conn(),
                     journal_id,
-                    "failed",
+                    JournalState::Failed,
                     None,
                     Some(error.code()),
                     now,

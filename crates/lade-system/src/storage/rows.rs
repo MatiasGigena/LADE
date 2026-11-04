@@ -11,20 +11,23 @@ use lade_core::domain::feedback::{
     InputMode,
 };
 use lade_core::domain::ids::{
-    ApprovalId, CandidateId, CaptureId, DraftId, GitId, InputId, ObjectiveId, OperationId,
-    SessionId, Timestamp, Uuid, VerificationId, WorkspaceId,
+    ApprovalId, CandidateId, CaptureId, DraftId, GitAlgorithm, GitId, InputId, ObjectiveId,
+    OperationId, SessionId, Timestamp, Uuid, VerificationId, WorkspaceId,
 };
 use lade_core::domain::inspection::ArtifactDigest;
-use lade_core::domain::objectives::{BranchName, Intent, Objective, ObjectiveRecord, Title};
+use lade_core::domain::objectives::{
+    BranchName, Intent, Lifecycle, Objective, ObjectiveRecord, Title,
+};
 use lade_core::domain::review::{
     Approval, ApprovalState, Candidate, CandidateStatus, ChangeCounts, InvalidationReason,
     Provenance, Review, Verification, VerificationOutcome,
 };
-use lade_protocol::client::{self as wire, Outcome};
+use lade_protocol::client::{self as wire, Outcome, RequestName};
+use lade_protocol::types::Id;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde_json::{Value, json};
 
-use crate::service::convert::{core_reference, hex_git, parse_lifecycle, wire_reference};
+use super::reference;
 
 type Sql<T> = rusqlite::Result<T>;
 
@@ -36,8 +39,18 @@ fn uuid(text: &str) -> Sql<Uuid> {
     Uuid::parse(text).map_err(|_| corrupt("uuid"))
 }
 
+/// Git ids are stored as bare hex; the length tells SHA-1 (40) from SHA-256 (64).
 fn git(text: &str) -> Sql<GitId> {
-    hex_git(text).ok_or_else(|| corrupt("git id"))
+    let algorithm = if text.len() == 40 {
+        GitAlgorithm::Sha1
+    } else {
+        GitAlgorithm::Sha256
+    };
+    GitId::new(algorithm, text).map_err(|_| corrupt("git id"))
+}
+
+fn count(value: i64, what: &'static str) -> Sql<u64> {
+    u64::try_from(value).map_err(|_| corrupt(what))
 }
 
 fn rev(value: i64) -> Sql<Revision> {
@@ -231,8 +244,17 @@ fn objective_from_row(row: &Row<'_>) -> Sql<ObjectiveRow> {
     let generation = u64::try_from(row.get::<_, i64>(15)?).map_err(|_| corrupt("generation"))?;
     let execution = Execution::restore(state, ExecutionGeneration::new(generation), session)
         .map_err(|_| corrupt("execution"))?;
-    let start = crate::service::convert::stored_git(&text(8)?, &text(9)?)
-        .ok_or_else(|| corrupt("start commit"))?;
+    let start_algorithm = match text(8)?.as_str() {
+        "sha1" => GitAlgorithm::Sha1,
+        "sha256" => GitAlgorithm::Sha256,
+        _ => return Err(corrupt("start commit")),
+    };
+    let start = GitId::new(start_algorithm, &text(9)?).map_err(|_| corrupt("start commit"))?;
+    let lifecycle = text(11)?;
+    let lifecycle = Lifecycle::ALL
+        .into_iter()
+        .find(|l| l.code() == lifecycle)
+        .ok_or_else(|| corrupt("lifecycle"))?;
     let record = ObjectiveRecord {
         id: ObjectiveId::new(uuid(&text(0)?)?),
         workspace_id: WorkspaceId::new(uuid(&text(1)?)?),
@@ -242,7 +264,7 @@ fn objective_from_row(row: &Row<'_>) -> Sql<ObjectiveRow> {
         integration_target: BranchName::new(&text(7)?).map_err(|_| corrupt("target"))?,
         start_commit: start,
         branch: BranchName::new(&text(10)?).map_err(|_| corrupt("branch"))?,
-        lifecycle: parse_lifecycle(&text(11)?).ok_or_else(|| corrupt("lifecycle"))?,
+        lifecycle,
         execution,
         cleaned_up: row.get(20)?,
         created_at: ts(row.get(21)?),
@@ -349,8 +371,8 @@ fn capture_from_row(row: &Row<'_>) -> Sql<CaptureRow> {
         target_commit: git(&row.get::<_, String>(3)?)?,
         counts: ChangeCounts {
             files: row.get(4)?,
-            added: u64::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
-            removed: u64::try_from(row.get::<_, i64>(6)?).unwrap_or(0),
+            added: count(row.get(5)?, "added")?,
+            removed: count(row.get(6)?, "removed")?,
         },
         retention_ref: row.get(7)?,
         created_at: row.get(8)?,
@@ -386,13 +408,13 @@ pub fn latest_captures(conn: &Connection) -> Sql<Vec<CaptureRow>> {
     rows.collect()
 }
 
-fn reference_json(draft: &DraftRecord) -> Sql<String> {
-    serde_json::to_string(&wire_reference(&draft.reference)).map_err(|_| corrupt("reference"))
+fn parse_reference(value: &Value) -> Sql<lade_core::domain::inspection::Reference> {
+    reference::decode(value).ok_or_else(|| corrupt("reference"))
 }
 
 pub fn save_draft(conn: &Connection, draft: &Draft, record_revision: bool) -> Sql<()> {
     let r = draft.record();
-    let reference = reference_json(r)?;
+    let reference = reference::encode(&r.reference).to_string();
     let (state, input) = match r.state {
         DraftState::Unsent => ("unsent", None),
         DraftState::Submitted { input_id } => ("submitted", Some(input_id.to_string())),
@@ -449,7 +471,7 @@ pub fn load_drafts(conn: &Connection) -> Sql<Vec<Draft>> {
     )?;
     let rows = stmt.query_map([], |row| {
         let reference: String = row.get(3)?;
-        let reference: wire::Reference =
+        let reference: Value =
             serde_json::from_str(&reference).map_err(|_| corrupt("reference"))?;
         let state = match (
             row.get::<_, String>(6)?.as_str(),
@@ -465,7 +487,7 @@ pub fn load_drafts(conn: &Connection) -> Sql<Vec<Draft>> {
             id: DraftId::new(uuid(&row.get::<_, String>(0)?)?),
             objective_id: ObjectiveId::new(uuid(&row.get::<_, String>(1)?)?),
             destination_session_id: SessionId::new(uuid(&row.get::<_, String>(2)?)?),
-            reference: core_reference(&reference).map_err(|_| corrupt("reference"))?,
+            reference: parse_reference(&reference)?,
             body: row.get(4)?,
             revision: rev(row.get(5)?)?,
             state,
@@ -475,10 +497,6 @@ pub fn load_drafts(conn: &Connection) -> Sql<Vec<Draft>> {
         Draft::restore(record).map_err(|_| corrupt("draft"))
     })?;
     rows.collect()
-}
-
-fn mode_code(mode: InputMode) -> &'static str {
-    mode.code()
 }
 
 fn parse_mode(code: &str) -> Sql<InputMode> {
@@ -498,8 +516,7 @@ fn items_json(items: &[FeedbackItem]) -> Value {
                 json!({
                     "draft_id": item.draft_id.to_string(),
                     "draft_revision": item.draft_revision.value(),
-                    "reference": serde_json::to_value(wire_reference(&item.reference))
-                        .unwrap_or(Value::Null),
+                    "reference": reference::encode(&item.reference),
                     "body": item.body,
                 })
             })
@@ -516,12 +533,10 @@ fn parse_items(text: &str) -> Sql<Vec<FeedbackItem>> {
         .into_iter()
         .map(|item| {
             let field = |name: &str| item.get(name).cloned().ok_or_else(|| corrupt("item"));
-            let reference: wire::Reference =
-                serde_json::from_value(field("reference")?).map_err(|_| corrupt("item"))?;
             Ok(FeedbackItem {
                 draft_id: DraftId::new(uuid(field("draft_id")?.as_str().unwrap_or_default())?),
                 draft_revision: Revision::new(field("draft_revision")?.as_u64().unwrap_or(1)),
-                reference: core_reference(&reference).map_err(|_| corrupt("item"))?,
+                reference: parse_reference(&field("reference")?)?,
                 body: field("body")?.as_str().unwrap_or_default().to_string(),
             })
         })
@@ -539,7 +554,7 @@ pub fn insert_input(conn: &Connection, input: &AcceptedInput, seq: u64) -> Sql<(
             input.objective_id.to_string(),
             input.session_id.to_string(),
             u(input.association_revision.value()),
-            mode_code(input.mode),
+            input.mode.code(),
             items_json(&input.items).to_string(),
             input.note,
             input.rendered_text,
@@ -617,7 +632,7 @@ pub fn load_inputs(conn: &Connection) -> Sql<Vec<(u64, AcceptedInput)>> {
          FROM accepted_inputs a JOIN input_delivery d ON d.input_id = a.id ORDER BY a.seq",
     )?;
     let rows = stmt.query_map([], |row| {
-        let seq = u64::try_from(row.get::<_, i64>(10)?).map_err(|_| corrupt("seq"))?;
+        let seq = count(row.get(10)?, "seq")?;
         Ok((
             seq,
             AcceptedInput {
@@ -638,24 +653,59 @@ pub fn load_inputs(conn: &Connection) -> Sql<Vec<(u64, AcceptedInput)>> {
     rows.collect()
 }
 
+/// Where a journaled client operation stands. `Uncertain` means its outcome could not be
+/// recorded (or the service restarted first), so the client must re-read state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperationState {
+    Pending,
+    Uncertain,
+    Completed,
+}
+
+impl OperationState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Uncertain => "uncertain",
+            Self::Completed => "completed",
+        }
+    }
+
+    fn parse(code: &str) -> Sql<Self> {
+        Ok(match code {
+            "pending" => Self::Pending,
+            "uncertain" => Self::Uncertain,
+            "completed" => Self::Completed,
+            _ => return Err(corrupt("operation state")),
+        })
+    }
+}
+
+/// Identifies one client operation in the journal: its id, the digest of the request that
+/// created it, and the request name.
+#[derive(Clone, Copy, Debug)]
+pub struct OperationKey<'a> {
+    pub id: &'a Id,
+    pub digest: &'a str,
+    pub name: RequestName,
+}
+
 #[derive(Clone, Debug)]
 pub struct OperationRow {
     pub digest: String,
-    pub name: String,
-    pub state: String,
+    pub state: OperationState,
     pub outcome: Option<Outcome>,
 }
 
-pub fn load_operation(conn: &Connection, operation_id: &str) -> Sql<Option<OperationRow>> {
+pub fn load_operation(conn: &Connection, operation_id: &Id) -> Sql<Option<OperationRow>> {
     conn.query_row(
-        "SELECT digest, name, state, outcome FROM operations WHERE operation_id = ?1",
-        params![operation_id],
+        "SELECT digest, state, outcome FROM operations WHERE operation_id = ?1",
+        params![operation_id.as_str()],
         |row| {
-            let outcome: Option<String> = row.get(3)?;
+            let outcome: Option<String> = row.get(2)?;
             Ok(OperationRow {
                 digest: row.get(0)?,
-                name: row.get(1)?,
-                state: row.get(2)?,
+                state: OperationState::parse(&row.get::<_, String>(1)?)?,
                 outcome: outcome
                     .map(|text| serde_json::from_str(&text).map_err(|_| corrupt("outcome")))
                     .transpose()?,
@@ -667,10 +717,8 @@ pub fn load_operation(conn: &Connection, operation_id: &str) -> Sql<Option<Opera
 
 pub fn record_operation(
     conn: &Connection,
-    operation_id: &str,
-    digest: &str,
-    name: &str,
-    state: &str,
+    key: OperationKey<'_>,
+    state: OperationState,
     outcome: Option<&Outcome>,
     now: i64,
 ) -> Sql<()> {
@@ -682,15 +730,36 @@ pub fn record_operation(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
          ON CONFLICT(operation_id) DO UPDATE SET state = excluded.state,
             outcome = excluded.outcome, updated_at = excluded.updated_at",
-        params![operation_id, digest, name, state, outcome, now],
+        params![
+            key.id.as_str(),
+            key.digest,
+            key.name.as_str(),
+            state.as_str(),
+            outcome,
+            now
+        ],
     )?;
     Ok(())
 }
 
-pub fn pending_operations(conn: &Connection) -> Sql<Vec<(String, String, String)>> {
+#[derive(Clone, Debug)]
+pub struct PendingOperation {
+    pub id: Id,
+    pub digest: String,
+    /// `None` when the stored request name is no longer part of the protocol.
+    pub name: Option<RequestName>,
+}
+
+pub fn pending_operations(conn: &Connection) -> Sql<Vec<PendingOperation>> {
     let mut stmt =
         conn.prepare("SELECT operation_id, digest, name FROM operations WHERE state = 'pending'")?;
-    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    let rows = stmt.query_map([], |row| {
+        Ok(PendingOperation {
+            id: Id::parse(row.get::<_, String>(0)?).map_err(|_| corrupt("operation id"))?,
+            digest: row.get(1)?,
+            name: RequestName::parse(&row.get::<_, String>(2)?),
+        })
+    })?;
     rows.collect()
 }
 
@@ -841,8 +910,8 @@ pub fn load_review(conn: &Connection, objective: ObjectiveId) -> Sql<Review> {
                     .map_err(|_| corrupt("manifest"))?,
                 changes: ChangeCounts {
                     files: row.get(6)?,
-                    added: u64::try_from(row.get::<_, i64>(7)?).unwrap_or(0),
-                    removed: u64::try_from(row.get::<_, i64>(8)?).unwrap_or(0),
+                    added: count(row.get(7)?, "added")?,
+                    removed: count(row.get(8)?, "removed")?,
                 },
                 created_at: ts(row.get(9)?),
                 status: candidate_status(&row.get::<_, String>(10)?)?,
@@ -943,7 +1012,7 @@ pub fn upsert_activity(conn: &Connection, objective: ObjectiveId, item: &Activit
 fn activity_from_row(row: &Row<'_>) -> Sql<ActivityRow> {
     Ok(ActivityRow {
         item_id: row.get(0)?,
-        seq: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+        seq: count(row.get(1)?, "seq")?,
         at: row.get(2)?,
         role: row.get(3)?,
         title: row.get(4)?,
@@ -1001,49 +1070,80 @@ pub fn max_activity_seq(conn: &Connection) -> Sql<Vec<(ObjectiveId, u64)>> {
     let rows = stmt.query_map([], |row| {
         Ok((
             ObjectiveId::new(uuid(&row.get::<_, String>(0)?)?),
-            u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+            count(row.get(1)?, "seq")?,
         ))
     })?;
     rows.collect()
 }
 
+/// Progress of one integration in the write-ahead integration journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JournalState {
+    /// Recorded before the squash ran; restart reconciliation resolves it.
+    Intent,
+    Done,
+    Failed,
+    ReconciledDone,
+    ReconciledAborted,
+}
+
+impl JournalState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Intent => "intent",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::ReconciledDone => "reconciled_done",
+            Self::ReconciledAborted => "reconciled_aborted",
+        }
+    }
+
+    fn parse(code: &str) -> Sql<Self> {
+        Ok(match code {
+            "intent" => Self::Intent,
+            "done" => Self::Done,
+            "failed" => Self::Failed,
+            "reconciled_done" => Self::ReconciledDone,
+            "reconciled_aborted" => Self::ReconciledAborted,
+            _ => return Err(corrupt("journal state")),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct JournalRow {
-    pub id: String,
+    pub id: Uuid,
     pub objective_id: ObjectiveId,
     pub approval_id: ApprovalId,
     pub candidate_id: CandidateId,
     pub target_branch: String,
     pub expected_target: GitId,
     pub candidate_tree: GitId,
-    pub state: String,
+    pub state: JournalState,
     pub result_commit: Option<GitId>,
+    /// The squash commit message and time, so reconciliation can rebuild the exact commit.
+    pub message: String,
+    pub commit_time: i64,
 }
 
-pub fn insert_journal(
-    conn: &Connection,
-    row: &JournalRow,
-    message: &str,
-    commit_time: i64,
-    now: i64,
-) -> Sql<()> {
+pub fn insert_journal(conn: &Connection, row: &JournalRow, now: i64) -> Sql<()> {
     conn.execute(
         "INSERT INTO integration_journal (id, objective_id, approval_id, candidate_id,
             target_branch, expected_target, candidate_tree, state, created_at, updated_at,
             message, commit_time)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, ?10, ?11)",
         params![
-            row.id,
+            row.id.to_string(),
             row.objective_id.to_string(),
             row.approval_id.to_string(),
             row.candidate_id.to_string(),
             row.target_branch,
             row.expected_target.hex(),
             row.candidate_tree.hex(),
-            row.state,
+            row.state.as_str(),
             now,
-            message,
-            commit_time
+            row.message,
+            row.commit_time
         ],
     )?;
     Ok(())
@@ -1051,8 +1151,8 @@ pub fn insert_journal(
 
 pub fn update_journal(
     conn: &Connection,
-    id: &str,
-    state: &str,
+    id: Uuid,
+    state: JournalState,
     result: Option<&GitId>,
     detail: Option<&str>,
     now: i64,
@@ -1060,33 +1160,50 @@ pub fn update_journal(
     conn.execute(
         "UPDATE integration_journal SET state = ?2, result_commit = ?3, detail = ?4,
             updated_at = ?5 WHERE id = ?1",
-        params![id, state, result.map(GitId::hex), detail, now],
+        params![
+            id.to_string(),
+            state.as_str(),
+            result.map(GitId::hex),
+            detail,
+            now
+        ],
     )?;
     Ok(())
 }
 
-pub fn open_journal(conn: &Connection) -> Sql<Vec<(JournalRow, String, i64)>> {
+pub fn open_journal(conn: &Connection) -> Sql<Vec<JournalRow>> {
     let mut stmt = conn.prepare(
         "SELECT id, objective_id, approval_id, candidate_id, target_branch, expected_target,
             candidate_tree, state, result_commit, message, commit_time
          FROM integration_journal WHERE state = 'intent' ORDER BY created_at",
     )?;
     let rows = stmt.query_map([], |row| {
-        let journal = JournalRow {
-            id: row.get(0)?,
+        Ok(JournalRow {
+            id: uuid(&row.get::<_, String>(0)?)?,
             objective_id: ObjectiveId::new(uuid(&row.get::<_, String>(1)?)?),
             approval_id: ApprovalId::new(uuid(&row.get::<_, String>(2)?)?),
             candidate_id: CandidateId::new(uuid(&row.get::<_, String>(3)?)?),
             target_branch: row.get(4)?,
             expected_target: git(&row.get::<_, String>(5)?)?,
             candidate_tree: git(&row.get::<_, String>(6)?)?,
-            state: row.get(7)?,
+            state: JournalState::parse(&row.get::<_, String>(7)?)?,
             result_commit: row
                 .get::<_, Option<String>>(8)?
                 .map(|hex| git(&hex))
                 .transpose()?,
-        };
-        Ok((journal, row.get(9)?, row.get(10)?))
+            message: row.get(9)?,
+            commit_time: row.get(10)?,
+        })
     })?;
     rows.collect()
+}
+
+pub fn pi_session_file(conn: &Connection, session: SessionId) -> Sql<Option<String>> {
+    conn.query_row(
+        "SELECT session_file FROM sessions WHERE session_id = ?1",
+        params![session.to_string()],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
 }

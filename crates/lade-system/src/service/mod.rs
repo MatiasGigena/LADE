@@ -36,7 +36,7 @@ use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::sandbox::{
     STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxTools, WRITABLE_STORAGE_BYTES,
 };
-use crate::storage::{self, Store, StoreError};
+use crate::storage::{self, OperationKey, OperationState, Store, StoreError};
 use crate::supervision::launcher::RESERVED_GENERATION;
 use crate::supervision::{
     GATEWAY_SOCKET_DIR, SupervisorEvent, WorkerLauncher, gateway_socket_path, socket_path_fits,
@@ -178,6 +178,16 @@ pub(crate) struct ReqCtx {
 pub(crate) struct OpInfo {
     pub id: Id,
     pub digest: String,
+}
+
+impl OpInfo {
+    pub(crate) fn key(&self, name: RequestName) -> OperationKey<'_> {
+        OperationKey {
+            id: &self.id,
+            digest: &self.digest,
+            name,
+        }
+    }
 }
 
 pub(crate) enum Flow {
@@ -683,7 +693,7 @@ impl Service {
             digest: hex(&digest),
         });
         if let Some(op) = &op {
-            match storage::load_operation(self.store.conn(), op.id.as_str()) {
+            match storage::load_operation(self.store.conn(), &op.id) {
                 Err(_) => {
                     let reply = Reply::rejected(
                         frame.request_id,
@@ -716,10 +726,8 @@ impl Service {
         {
             let recorded = storage::record_operation(
                 self.store.conn(),
-                op.id.as_str(),
-                &op.digest,
-                name.as_str(),
-                "pending",
+                op.key(name),
+                OperationState::Pending,
                 None,
                 now_ms(),
             );
@@ -786,15 +794,13 @@ impl Service {
                 Err(_) => None,
             };
             let state = if outcome.is_some() {
-                "completed"
+                OperationState::Completed
             } else {
-                "uncertain"
+                OperationState::Uncertain
             };
             let recorded = storage::record_operation(
                 self.store.conn(),
-                op.id.as_str(),
-                &op.digest,
-                ctx.name.as_str(),
+                op.key(ctx.name),
                 state,
                 outcome.as_ref(),
                 now_ms(),
@@ -837,10 +843,8 @@ impl Service {
         {
             storage::record_operation(
                 &tx,
-                op.id.as_str(),
-                &op.digest,
-                ctx.name.as_str(),
-                "completed",
+                op.key(ctx.name),
+                OperationState::Completed,
                 Some(&Outcome::Ok(Box::new(data.clone()))),
                 now,
             )

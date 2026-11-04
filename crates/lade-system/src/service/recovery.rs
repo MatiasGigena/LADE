@@ -6,10 +6,10 @@ use std::path::Path;
 use lade_core::domain::ids::{ObjectiveId, Timestamp};
 use lade_core::domain::recovery::recover_after_restart;
 use lade_core::domain::review::IntegrationPlan;
-use lade_protocol::client::{ErrorCode, Outcome, Rejection, RequestName, SafeAction, Settings};
+use lade_protocol::client::{ErrorCode, Outcome, Rejection, SafeAction, Settings};
 
 use crate::adapters::git::CommitSpec;
-use crate::storage;
+use crate::storage::{self, JournalState, OperationKey, OperationState};
 
 use super::Service;
 use super::convert::{adapter_git, core_git};
@@ -103,10 +103,8 @@ impl Service {
 
     pub(crate) fn recover(&mut self) -> Result<(), String> {
         let now = now_ms();
-        for (operation, digest, name) in
-            storage::pending_operations(self.store.conn()).map_err(|e| sql_text(&e))?
-        {
-            let Some(name) = RequestName::parse(&name) else {
+        for operation in storage::pending_operations(self.store.conn()).map_err(|e| sql_text(&e))? {
+            let Some(name) = operation.name else {
                 continue;
             };
             let outcome = Outcome::Rejected {
@@ -119,10 +117,12 @@ impl Service {
             };
             storage::record_operation(
                 self.store.conn(),
-                &operation,
-                &digest,
-                name.as_str(),
-                "uncertain",
+                OperationKey {
+                    id: &operation.id,
+                    digest: &operation.digest,
+                    name,
+                },
+                OperationState::Uncertain,
                 Some(&outcome),
                 now,
             )
@@ -169,7 +169,7 @@ impl Service {
 
     fn reconcile_journal(&mut self) -> Result<(), String> {
         let open = storage::open_journal(self.store.conn()).map_err(|e| sql_text(&e))?;
-        for (row, message, commit_time) in open {
+        for row in open {
             let now = now_ms();
             let Some(st) = self.objectives.get(&row.objective_id).cloned() else {
                 continue;
@@ -187,8 +187,8 @@ impl Service {
                 .commit_tree(&CommitSpec {
                     tree: adapter_git(&row.candidate_tree),
                     parents: vec![adapter_git(&row.expected_target)],
-                    message: message.clone(),
-                    timestamp: Some(commit_time),
+                    message: row.message.clone(),
+                    timestamp: Some(row.commit_time),
                 })
                 .ok();
             let integrated = current.is_some() && current == expected_commit;
@@ -218,8 +218,8 @@ impl Service {
                 }
                 storage::update_journal(
                     &tx,
-                    &row.id,
-                    "reconciled_done",
+                    row.id,
+                    JournalState::ReconciledDone,
                     commit.as_ref(),
                     Some("integration found completed after restart"),
                     now,
@@ -255,8 +255,8 @@ impl Service {
             } else {
                 storage::update_journal(
                     self.store.conn(),
-                    &row.id,
-                    "reconciled_aborted",
+                    row.id,
+                    JournalState::ReconciledAborted,
                     None,
                     Some("target does not hold the intended squash commit"),
                     now,

@@ -67,7 +67,7 @@ pub(crate) enum Pending {
         oid: ObjectiveId,
         ctx: ReqCtx,
         plan: IntegrationPlan,
-        journal_id: String,
+        journal_id: lade_core::domain::ids::Uuid,
     },
     Cleanup {
         oid: ObjectiveId,
@@ -317,7 +317,7 @@ impl Service {
                     journal_id,
                 },
                 JobOutput::Integrate(result),
-            ) => self.integrate_done(oid, ctx, &plan, &journal_id, result),
+            ) => self.integrate_done(oid, ctx, &plan, journal_id, result),
             (Pending::Cleanup { oid, ctx, confirm }, JobOutput::Unit(result)) => {
                 self.cleanup_done(oid, ctx, confirm, result);
             }
@@ -549,7 +549,7 @@ impl Service {
     fn operation_get(&self, query: &OperationGetQuery) -> Result<ReplyData, Rejection> {
         let row = sql(storage::load_operation(
             self.store.conn(),
-            query.operation_id.as_str(),
+            &query.operation_id,
         ))?;
         let status = match row {
             None => OperationStatus {
@@ -557,10 +557,10 @@ impl Service {
                 outcome: None,
             },
             Some(row) => OperationStatus {
-                state: match row.state.as_str() {
-                    "pending" => OperationState::Pending,
-                    "uncertain" => OperationState::Uncertain,
-                    _ => OperationState::Completed,
+                state: match row.state {
+                    storage::OperationState::Pending => OperationState::Pending,
+                    storage::OperationState::Uncertain => OperationState::Uncertain,
+                    storage::OperationState::Completed => OperationState::Completed,
                 },
                 outcome: row.outcome,
             },

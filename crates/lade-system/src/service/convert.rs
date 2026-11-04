@@ -193,24 +193,6 @@ pub fn from_wire_git(id: &wire_types::GitId) -> Result<core_ids::GitId, Rejectio
     core_ids::GitId::new(algorithm, id.hex()).map_err(|e| domain_rejection(&e))
 }
 
-pub fn stored_git(algorithm: &str, hex: &str) -> Option<core_ids::GitId> {
-    let algorithm = match algorithm {
-        "sha1" => GitAlgorithm::Sha1,
-        "sha256" => GitAlgorithm::Sha256,
-        _ => return None,
-    };
-    core_ids::GitId::new(algorithm, hex).ok()
-}
-
-pub fn hex_git(hex: &str) -> Option<core_ids::GitId> {
-    let algorithm = if hex.len() == 40 {
-        GitAlgorithm::Sha1
-    } else {
-        GitAlgorithm::Sha256
-    };
-    core_ids::GitId::new(algorithm, hex).ok()
-}
-
 pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
     match lifecycle {
         Lifecycle::Defined => wire::Lifecycle::Defined,
@@ -221,10 +203,6 @@ pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
         Lifecycle::CompletedNoChanges => wire::Lifecycle::CompletedNoChanges,
         Lifecycle::Discarded => wire::Lifecycle::Discarded,
     }
-}
-
-pub fn parse_lifecycle(code: &str) -> Option<Lifecycle> {
-    Lifecycle::ALL.into_iter().find(|l| l.code() == code)
 }
 
 pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Option<String>) {
