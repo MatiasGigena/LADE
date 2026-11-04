@@ -12,6 +12,8 @@ mod closing;
 mod launch;
 mod pool;
 mod read;
+#[cfg(test)]
+mod tests;
 mod verify;
 
 pub use candidate::{

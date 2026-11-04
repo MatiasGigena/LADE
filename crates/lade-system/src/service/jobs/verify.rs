@@ -61,7 +61,7 @@ pub struct VerifyOut {
 
 const TAIL_CHARS: usize = 4096;
 
-fn tail_text(bytes: &[u8]) -> String {
+pub(super) fn tail_text(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let count = text.chars().count();
     text.chars()
