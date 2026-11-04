@@ -18,7 +18,8 @@ use lade_protocol::types::{Id, WirePath};
 use lade_protocol::worker::WorkerBody;
 
 use super::adapters_support::{TempDir, init_repo};
-use super::{Controller, Msg, Paths, ReqCtx, ResourceLimits, Service, ServiceConfig};
+use super::link::Controller;
+use super::{Msg, Paths, ReqCtx, ResourceLimits, Service, ServiceConfig};
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::sandbox::WRITABLE_STORAGE_BYTES;
 use crate::storage::Store;
