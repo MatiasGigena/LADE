@@ -9,7 +9,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::{TempDir, git, init_repo};
+use adapters_support::{TempDir, git, init_repo, skip_without_sandbox};
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use lade_protocol::worker::{TurnState, WorkerBody};
 use lade_system::adapters::sandbox::SandboxTools;
@@ -29,13 +29,13 @@ const WAIT: Duration = Duration::from_secs(90);
 
 fn prerequisites() -> Option<PathBuf> {
     if let Err(e) = SandboxTools::locate() {
-        eprintln!("skipping launcher test: {e}");
+        skip_without_sandbox(e);
         return None;
     }
     match resolve_node(None) {
         Ok(node) => Some(node),
         Err(e) => {
-            eprintln!("skipping launcher test: {e:?}");
+            skip_without_sandbox(e.detail());
             None
         }
     }

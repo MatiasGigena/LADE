@@ -20,7 +20,10 @@ jobs:
           bwrap --unshare-all --die-with-parent --new-session --ro-bind / / --proc /proc --dev /dev true
       - run: ./scripts/bootstrap-rust
       - run: npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund
-      - run: ./scripts/verify
+      - name: Verify (sandbox tests must run, not skip)
+        env:
+          LADE_REQUIRE_SANDBOX: "1"
+        run: ./scripts/verify
       - name: Throwaway signing key (this runner only; the release key and trust bootstrap are pending)
         run: |
           mkdir -m 700 "$RUNNER_TEMP/keys"

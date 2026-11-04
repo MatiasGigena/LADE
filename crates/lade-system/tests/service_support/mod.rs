@@ -417,9 +417,17 @@ impl WorkerLauncher for NodeLauncher {
     }
 }
 
+/// Whether the bubblewrap sandbox works here; a test that needs it skips otherwise, and fails
+/// under `LADE_REQUIRE_SANDBOX=1`.
 pub fn sandbox_works() -> bool {
     use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
-    SandboxTools::locate().is_ok_and(|tools| sandbox_available(&tools).is_ok())
+    match SandboxTools::locate().and_then(|tools| sandbox_available(&tools)) {
+        Ok(()) => true,
+        Err(e) => {
+            adapters_support::skip_without_sandbox(e);
+            false
+        }
+    }
 }
 
 pub fn best_launcher(env: &Env) -> (Arc<dyn WorkerLauncher>, bool) {

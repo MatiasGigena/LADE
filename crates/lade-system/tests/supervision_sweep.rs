@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::TempDir;
+use adapters_support::{TempDir, skip_without_sandbox};
 use lade_system::adapters::sandbox::{Limits, SandboxTools, VerificationLaunch, verification_spec};
 use lade_system::supervision::sweep::{
     PidRecord, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
@@ -53,9 +53,9 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
 
 #[test]
 fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
-    let Ok(tools) = SandboxTools::locate() else {
-        eprintln!("skipping sweep test: bubblewrap/prlimit not installed");
-        return;
+    let tools = match SandboxTools::locate() {
+        Ok(tools) => tools,
+        Err(e) => return skip_without_sandbox(e),
     };
     let tmp = TempDir::new("sweep");
     let run = tmp.path().join("run");
@@ -136,9 +136,9 @@ fn shell_line(cmd: &Command) -> String {
 #[test]
 fn forced_supervisor_loss_races_leave_no_survivors() {
     const RUNS: usize = 40;
-    let Ok(tools) = SandboxTools::locate() else {
-        eprintln!("skipping race test: bubblewrap/prlimit not installed");
-        return;
+    let tools = match SandboxTools::locate() {
+        Ok(tools) => tools,
+        Err(e) => return skip_without_sandbox(e),
     };
     let tmp = TempDir::new("sweep-race");
     let run = tmp.path().join("run");

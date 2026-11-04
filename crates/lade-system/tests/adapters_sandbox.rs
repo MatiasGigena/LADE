@@ -10,7 +10,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::TempDir;
+use adapters_support::{TempDir, skip_without_sandbox};
 use lade_system::adapters::sandbox::{
     Limits, RunOutcome, SandboxSpec, SandboxTools, VerificationLaunch, WorkerLaunch, run_bounded,
     sandbox_available, verification_spec, worker_spec,
@@ -20,7 +20,7 @@ fn tools() -> Option<SandboxTools> {
     match SandboxTools::locate() {
         Ok(tools) => Some(tools),
         Err(e) => {
-            eprintln!("skipping sandbox test: {e} (bubblewrap/prlimit not installed)");
+            skip_without_sandbox(e);
             None
         }
     }
@@ -680,7 +680,7 @@ fn node() -> Option<PathBuf> {
 fn worker_sandbox_runs_node_with_gateway_socket_only() {
     let Some(tools) = tools() else { return };
     let Some(node) = node() else {
-        eprintln!("skipping worker sandbox test: node not installed");
+        skip_without_sandbox("node is not installed");
         return;
     };
     let tmp = TempDir::new("sbx-worker");

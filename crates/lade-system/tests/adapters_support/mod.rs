@@ -7,6 +7,17 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Reports a test skipped because a sandbox prerequisite (bubblewrap, prlimit, working user
+/// namespaces, or the node runtime of the worker tests) is missing. With `LADE_REQUIRE_SANDBOX=1`,
+/// as CI sets it, the missing prerequisite fails the test instead of skipping it.
+pub fn skip_without_sandbox(why: impl std::fmt::Display) {
+    assert!(
+        std::env::var_os("LADE_REQUIRE_SANDBOX").is_none_or(|v| v != "1"),
+        "LADE_REQUIRE_SANDBOX=1, but the sandbox prerequisites are missing: {why}"
+    );
+    eprintln!("skipping: sandbox prerequisites missing ({why})");
+}
+
 pub struct TempDir(PathBuf);
 
 impl TempDir {

@@ -76,8 +76,14 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 
 `laded serve` runs in the foreground until killed (redacted diagnostics on stderr and in the bounded `$STATE/logs`, see [service.md](service.md#diagnostics)) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` test model (a test-only provider: the harnesses enable it with `LADE_TEST_FIXTURE_PROVIDER=1`, see [service.md](service.md#test-only-fixture-provider)) through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
+Tests that need the sandbox (bubblewrap, prlimit and working user namespaces; the worker launcher tests also need
+node) print a `skipping:` note and pass when it is missing. With `LADE_REQUIRE_SANDBOX=1` they fail instead, and the
+tests that choose between the bubblewrap launcher and the unsandboxed test launcher refuse the fallback; CI sets it for
+`scripts/verify`, so a CI run never passes with the sandbox tests silently skipped. Some sandbox tests assume a
+non-root user (root is exempt from `RLIMIT_NPROC`).
+
 IMP-013 adds `service_concurrency.rs` and `service_crash.rs` (part of `scripts/verify`; the crash tests run the real
-`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and skip without bubblewrap) and the long
+`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and need bubblewrap) and the long
 procedures, which are **not** part of `scripts/verify`:
 
 ```sh
