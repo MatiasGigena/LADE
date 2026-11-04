@@ -152,7 +152,7 @@ impl std::fmt::Debug for Outbound {
 pub struct Overflow;
 
 impl Outbound {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             shared: Arc::new((Mutex::new(OutState::default()), Condvar::new())),
         }
@@ -212,6 +212,15 @@ impl Outbound {
             }
             state = wake.wait(state).unwrap_or_else(PoisonError::into_inner);
         }
+    }
+
+    /// Takes every queued frame without waiting, as a link writer would.
+    #[cfg(test)]
+    pub(crate) fn drain(&self) -> Vec<Vec<u8>> {
+        let (lock, _) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        state.bytes = 0;
+        state.frames.drain(..).collect()
     }
 
     fn mark_dead(&self) {

@@ -16,6 +16,8 @@ mod resources;
 mod review;
 mod state;
 mod terminal;
+#[cfg(test)]
+mod test_harness;
 
 /// The repository fixtures shared with the adapter integration tests, for unit tests here.
 #[cfg(test)]

@@ -1,101 +1,17 @@
 use std::fs;
-use std::sync::{Arc, mpsc};
 
-use lade_protocol::client::{
-    Intent, ObjectiveCreateCommand, ReplyData, RequestName, Start, WorkspaceOpenCommand,
-};
-use lade_protocol::types::WirePath;
+use lade_protocol::client::ReplyData;
 
 use super::*;
-use crate::adapters::artifacts::ArtifactStore;
 use crate::service::convert::parse_uuid;
-use crate::service::{Paths, ResourceLimits, ServiceConfig, adapters_support};
-use crate::storage::Store;
-use crate::supervision::{
-    LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
-};
-
-struct NoLaunch;
-
-impl WorkerLauncher for NoLaunch {
-    fn launch(
-        &self,
-        _request: LaunchRequest,
-        _events: mpsc::SyncSender<SupervisorEvent>,
-    ) -> Result<Box<dyn WorkerControl>, LaunchError> {
-        panic!("capture registration does not launch workers")
-    }
-}
+use crate::service::test_harness::Harness;
 
 #[test]
 fn reused_capture_registration_keeps_its_original_identity_after_a_newer_capture() {
-    let root = adapters_support::TempDir::new("capture-completion-order");
-    let repo = adapters_support::init_repo(root.path(), "sha1");
-    let (queue_tx, _) = mpsc::sync_channel(16);
-    let (supervisor_tx, _) = mpsc::sync_channel(16);
-    let paths = Paths {
-        state: root.path().to_path_buf(),
-        worktrees: root.path().join("worktrees"),
-        sessions: root.path().join("sessions"),
-        verify: root.path().join("verify"),
-        tmp: root.path().join("tmp"),
-        run: root.path().join("run"),
-        sockets: root.path().join("sockets"),
-    };
-    crate::support::fs::ensure_private_dir(&paths.tmp).unwrap();
-    let tmp = paths.tmp.clone();
-    let config = ServiceConfig {
-        state_dir: root.path().to_path_buf(),
-        runtime_dir: root.path().join("run"),
-        limits: ResourceLimits::default(),
-        storage_limit_bytes: crate::adapters::sandbox::WRITABLE_STORAGE_BYTES,
-        cgroups: None,
-        test_fixture_provider: false,
-    };
-    let mut service = Service::new(
-        &config,
-        Store::open(&root.path().join("lade.db")).unwrap(),
-        paths,
-        Arc::new(ArtifactStore::open(&root.path().join("artifacts"), &tmp).unwrap()),
-        Arc::new(NoLaunch),
-        supervisor_tx,
-        queue_tx,
-    );
-    let ReplyData::WorkspaceOpen(workspace) = service
-        .workspace_open(&WorkspaceOpenCommand {
-            path: WirePath::from_os_str(repo.as_os_str()).unwrap(),
-        })
-        .unwrap()
-    else {
-        panic!("expected workspace")
-    };
-    let mut ctx = ReqCtx {
-        conn: 1,
-        request_id: wire_id(new_uuid()),
-        name: RequestName::ObjectiveCreate,
-        op: None,
-        recorded: false,
-    };
-    let ReplyData::ObjectiveCreate(objective) = service
-        .objective_create(
-            &mut ctx,
-            &ObjectiveCreateCommand {
-                workspace_id: workspace.workspace_id,
-                title: "Capture completion order".into(),
-                intent: Intent {
-                    outcome: "Capture identifiers resolve the bytes they name".into(),
-                    constraints: String::new(),
-                    acceptance: String::new(),
-                },
-                integration_target: "main".into(),
-                start: Start::Target,
-            },
-        )
-        .unwrap()
-    else {
-        panic!("expected objective")
-    };
-    let oid = service.objective_id(&objective.objective_id).unwrap();
+    let mut harness = Harness::new("capture-completion-order");
+    let (_, oid) = harness.create_objective("Capture completion order");
+    let repo = harness.repo.clone();
+    let service = &mut harness.service;
     let input = service
         .capture_input(service.obj(oid).unwrap(), repo.clone(), Vec::new())
         .unwrap();

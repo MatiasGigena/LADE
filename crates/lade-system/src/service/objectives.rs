@@ -218,3 +218,230 @@ impl Service {
         Ok(data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::client::{Intent, ObjectiveSelector, Request};
+    use lade_protocol::types::{Counter, GitId, Id, Model, WirePath};
+
+    use super::*;
+    use crate::service::adapters_support::{commit_all, git};
+    use crate::service::test_harness::Harness;
+
+    fn open(harness: &mut Harness, path: &std::path::Path) -> Result<ReplyData, Rejection> {
+        harness.call(Request::WorkspaceOpen(WorkspaceOpenCommand {
+            path: WirePath::from_os_str(path.as_os_str()).expect("path"),
+        }))
+    }
+
+    fn create(
+        harness: &mut Harness,
+        workspace: &Id,
+        title: &str,
+        target: &str,
+        start: Start,
+    ) -> Result<ReplyData, Rejection> {
+        harness.call(Request::ObjectiveCreate(ObjectiveCreateCommand {
+            workspace_id: workspace.clone(),
+            title: title.into(),
+            intent: Intent {
+                outcome: "outcome".into(),
+                constraints: String::new(),
+                acceptance: String::new(),
+            },
+            integration_target: target.into(),
+            start,
+        }))
+    }
+
+    #[test]
+    fn a_workspace_opens_once_and_only_from_the_top_of_an_absolute_work_tree() {
+        let mut harness = Harness::new("objectives-open");
+        let repo = harness.repo.clone();
+        let Ok(ReplyData::WorkspaceOpen(first)) = open(&mut harness, &repo) else {
+            panic!("open");
+        };
+        assert_eq!(first.default_branch.as_deref(), Some("main"));
+        assert_eq!(first.branches, ["main"]);
+        std::fs::create_dir(repo.join("sub")).expect("subdir");
+        assert!(
+            open(&mut harness, &repo.join("sub")).is_err(),
+            "only the top of a work tree opens"
+        );
+        let Ok(ReplyData::WorkspaceOpen(again)) = open(&mut harness, &repo.join(".")) else {
+            panic!("reopen");
+        };
+        assert_eq!(again.workspace_id, first.workspace_id);
+        let rows = storage::load_workspaces(harness.service.store.conn()).expect("rows");
+        assert_eq!(rows.len(), 1, "reopening records nothing new");
+
+        let relative = open(&mut harness, std::path::Path::new("relative/repo"));
+        assert_eq!(
+            relative.expect_err("relative").code,
+            ErrorCode::InvalidRequest
+        );
+        let plain = harness.root().join("plain");
+        std::fs::create_dir(&plain).expect("plain dir");
+        assert!(open(&mut harness, &plain).is_err(), "not a repository");
+    }
+
+    #[test]
+    fn objectives_start_at_the_target_or_a_named_commit_and_are_recorded() {
+        let mut harness = Harness::new("objectives-create");
+        let workspace = harness.open_workspace();
+        let first = git(&harness.repo, &["rev-parse", "HEAD"]);
+        std::fs::write(harness.repo.join("next"), "next\n").expect("write");
+        let second = commit_all(&harness.repo, "second");
+
+        let Ok(ReplyData::ObjectiveCreate(at_target)) =
+            create(&mut harness, &workspace, "At target", "main", Start::Target)
+        else {
+            panic!("create at target");
+        };
+        assert_eq!(at_target.start_commit.hex(), second.trim());
+        let named = Start::Commit {
+            commit: at_target.start_commit.clone(),
+        };
+        let Ok(ReplyData::ObjectiveCreate(at_commit)) = create(
+            &mut harness,
+            &workspace,
+            "At commit",
+            "main",
+            Start::Commit {
+                commit: GitId::from_hex(first.trim()).expect("git id"),
+            },
+        ) else {
+            panic!("create at commit");
+        };
+        assert_eq!(at_commit.start_commit.hex(), first.trim());
+        assert!(create(&mut harness, &workspace, "Named", "main", named).is_ok());
+
+        let stored = storage::load_objectives(harness.service.store.conn()).expect("load");
+        assert_eq!(stored.len(), 3);
+        assert!(
+            stored.iter().all(|row| row.objective.lifecycle()
+                == lade_core::domain::objectives::Lifecycle::Defined)
+        );
+    }
+
+    #[test]
+    fn objective_definitions_are_validated_before_anything_is_recorded() {
+        let mut harness = Harness::new("objectives-invalid");
+        let workspace = harness.open_workspace();
+        let unknown = super::super::wire_id(new_uuid());
+        let missing = create(&mut harness, &unknown, "t", "main", Start::Target);
+        assert_eq!(
+            missing.expect_err("unknown workspace").code,
+            ErrorCode::NotFound
+        );
+        assert!(create(&mut harness, &workspace, "", "main", Start::Target).is_err());
+        assert!(
+            create(
+                &mut harness,
+                &workspace,
+                "t",
+                "no-such-branch",
+                Start::Target
+            )
+            .is_err()
+        );
+        let not_utf8 = create(&mut harness, &workspace, "t", "bad\\xff", Start::Target);
+        assert_eq!(
+            not_utf8.expect_err("non-UTF-8 target").code,
+            ErrorCode::UnsupportedContent
+        );
+        assert!(
+            storage::load_objectives(harness.service.store.conn())
+                .expect("load")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn intent_updates_need_the_current_revision() {
+        let mut harness = Harness::new("objectives-intent");
+        let (id, oid) = harness.create_objective("Intent");
+        let update = |revision: u64, outcome: &str| {
+            Request::ObjectiveUpdateIntent(UpdateIntentCommand {
+                objective_id: id.clone(),
+                expected_intent_revision: Counter::new(revision),
+                intent: Intent {
+                    outcome: outcome.into(),
+                    constraints: "c".into(),
+                    acceptance: "a".into(),
+                },
+            })
+        };
+        let Ok(ReplyData::ObjectiveUpdateIntent(detail)) = harness.call(update(1, "better")) else {
+            panic!("update");
+        };
+        assert_eq!(detail.intent_revision.value(), 2);
+        assert_eq!(detail.intent.outcome, "better");
+        let stale = harness.call(update(1, "stale"));
+        assert_eq!(stale.expect_err("stale revision").code, ErrorCode::Conflict);
+        assert_eq!(
+            harness.service.objectives[&oid]
+                .objective()
+                .record()
+                .intent
+                .outcome(),
+            "better"
+        );
+        harness.service.rt(oid).busy = Some("freeze");
+        let busy = harness.call(update(2, "busy"));
+        assert_eq!(busy.expect_err("busy").code, ErrorCode::Conflict);
+        let get = harness.call(Request::ObjectiveGet(ObjectiveSelector {
+            objective_id: id,
+        }));
+        let Ok(ReplyData::ObjectiveGet(detail)) = get else {
+            panic!("get");
+        };
+        assert_eq!(detail.intent.outcome, "better");
+    }
+
+    #[test]
+    fn settings_reject_commands_without_a_program_and_persist_valid_ones() {
+        let mut harness = Harness::new("objectives-settings");
+        let update = |commands: Vec<Vec<String>>, model: Option<Model>| {
+            Request::SettingsUpdate(SettingsUpdateCommand {
+                default_model: model,
+                verification_commands: Some(commands),
+            })
+        };
+        for bad in [
+            vec![Vec::new()],
+            vec![vec![String::new()]],
+            vec![vec!["cargo".into(), "te\0st".into()]],
+        ] {
+            let rejected = harness.call(update(bad, None));
+            assert_eq!(
+                rejected.expect_err("invalid").code,
+                ErrorCode::InvalidRequest
+            );
+        }
+        let model = Model {
+            provider: "anthropic".into(),
+            id: "claude".into(),
+        };
+        let good = vec![vec!["cargo".to_string(), "test".to_string()]];
+        let Ok(ReplyData::SettingsUpdate(saved)) = harness.call(update(good.clone(), Some(model)))
+        else {
+            panic!("settings");
+        };
+        assert_eq!(saved.verification_commands, good);
+        assert_eq!(harness.service.settings, saved);
+        assert_eq!(
+            storage::load_settings(harness.service.store.conn()).expect("load"),
+            Some(saved)
+        );
+        let bad_model = Model {
+            provider: String::new(),
+            id: "x".into(),
+        };
+        assert!(harness.call(update(Vec::new(), Some(bad_model))).is_err());
+        assert_eq!(
+            harness.service.settings.verification_commands, good,
+            "unchanged"
+        );
+    }
+}
