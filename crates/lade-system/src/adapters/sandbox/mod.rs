@@ -462,7 +462,7 @@ impl SandboxCommand {
 
     /// The command that spawns the sandbox, for inspecting its arguments.
     #[must_use]
-    pub fn get_command(&self) -> &Command {
+    pub fn command(&self) -> &Command {
         &self.command
     }
 

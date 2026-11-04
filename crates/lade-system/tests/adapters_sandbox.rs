@@ -329,7 +329,7 @@ fn probe_succeeds_while_the_user_runs_more_processes_than_the_limit() {
     drop(busy);
     let spec = SandboxSpec::new(vec!["/bin/true".into()], Path::new("/"), Limits::WORKER).unwrap();
     let command = spec.command(&tools).unwrap();
-    let args: Vec<_> = command.get_command().get_args().collect();
+    let args: Vec<_> = command.command().get_args().collect();
     assert!(
         !args
             .iter()
