@@ -95,7 +95,7 @@ impl Repository {
     pub(crate) fn linked_admin_dir(&self, path: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(self.common_dir().join("worktrees")).ok()?;
         entries.flatten().map(|e| e.path()).find(|admin| {
-            fs::read(admin.join("gitdir")).ok().is_some_and(|content| {
+            fs::read(admin.join("gitdir")).is_ok_and(|content| {
                 let target = PathBuf::from(OsString::from_vec(
                     content.strip_suffix(b"\n").unwrap_or(&content).to_vec(),
                 ));

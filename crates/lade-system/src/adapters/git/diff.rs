@@ -272,12 +272,11 @@ impl Repository {
                         new_id.hex(),
                     ])
                     .run()?;
-                match parse_patch(&patch, old, new)? {
-                    Some(parsed) => parsed,
-                    None => {
-                        diff.binary = true;
-                        return Ok(diff);
-                    }
+                if let Some(parsed) = parse_patch(&patch, old, new)? {
+                    parsed
+                } else {
+                    diff.binary = true;
+                    return Ok(diff);
                 }
             }
             _ => (Vec::new(), false),
@@ -288,17 +287,17 @@ impl Repository {
     }
 }
 
-fn line_starts(bytes: &[u8]) -> Vec<u64> {
+fn line_starts(bytes: &[u8]) -> Vec<usize> {
     if bytes.is_empty() {
         return Vec::new();
     }
-    let mut starts = vec![0u64];
+    let mut starts = vec![0];
     starts.extend(
         bytes
             .iter()
             .enumerate()
             .filter(|(i, b)| **b == b'\n' && i + 1 < bytes.len())
-            .map(|(i, _)| i as u64 + 1),
+            .map(|(i, _)| i + 1),
     );
     starts
 }
@@ -314,12 +313,13 @@ fn whole_file(bytes: &[u8], kind: LineKind) -> (Vec<Hunk>, bool) {
         .take(MAX_DIFF_LINES)
         .enumerate()
         .map(|(i, &start)| {
-            let rest = &bytes[start as usize..];
+            let rest = &bytes[start..];
             let end = rest.iter().position(|b| *b == b'\n');
             let no = Some(i as u64 + 1);
+            let start = Some(start as u64);
             let (old_no, new_no, old_byte_start, new_byte_start) = match kind {
-                LineKind::Del => (no, None, Some(start), None),
-                _ => (None, no, None, Some(start)),
+                LineKind::Del => (no, None, start, None),
+                _ => (None, no, None, start),
             };
             DiffLine {
                 kind,
@@ -359,18 +359,36 @@ fn parse_range(text: &str) -> Option<(u64, u64)> {
     }
 }
 
+/// The empty hunk that the header `@@ -<old range> +<new range> @@` opens, given the header
+/// without its `@@ -` prefix.
+fn open_hunk(header: &[u8]) -> Option<Hunk> {
+    let (ranges, _) = std::str::from_utf8(header).ok()?.split_once(" @@")?;
+    let (old_range, new_range) = ranges.split_once(" +")?;
+    let (old_start, old_lines) = parse_range(old_range)?;
+    let (new_start, new_lines) = parse_range(new_range)?;
+    Some(Hunk {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+        lines: Vec::new(),
+    })
+}
+
 fn parse_patch(patch: &[u8], old: &[u8], new: &[u8]) -> Result<Option<(Vec<Hunk>, bool)>> {
     let bad = |what| GitError::Parse { op: "diff", what };
     let old_starts = line_starts(old);
     let new_starts = line_starts(new);
-    let locate = |starts: &[u64], blob: &[u8], no: u64, text: &[u8]| -> Result<u64> {
-        let start = *starts
-            .get(no.checked_sub(1).ok_or(bad("line number"))? as usize)
+    let locate = |starts: &[usize], blob: &[u8], no: u64, text: &[u8]| -> Result<u64> {
+        let start = *no
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| starts.get(index))
             .ok_or(bad("line number"))?;
-        let rest = &blob[start as usize..];
+        let rest = &blob[start..];
         let terminated = rest.get(text.len()).is_none_or(|b| *b == b'\n');
         if rest.starts_with(text) && terminated {
-            Ok(start)
+            Ok(start as u64)
         } else {
             Err(bad("line offset"))
         }
@@ -382,21 +400,11 @@ fn parse_patch(patch: &[u8], old: &[u8], new: &[u8]) -> Result<Option<(Vec<Hunk>
     while let Some(line) = records.next() {
         if old_left == 0 && new_left == 0 {
             if let Some(header) = line.strip_prefix(b"@@ -") {
-                let header = std::str::from_utf8(header).map_err(|_| bad("hunk header"))?;
-                let (ranges, _) = header.split_once(" @@").ok_or(bad("hunk header"))?;
-                let (old_range, new_range) = ranges.split_once(" +").ok_or(bad("hunk header"))?;
-                let (os, ol) = parse_range(old_range).ok_or(bad("hunk header"))?;
-                let (ns, nl) = parse_range(new_range).ok_or(bad("hunk header"))?;
-                hunks.push(Hunk {
-                    old_start: os,
-                    old_lines: ol,
-                    new_start: ns,
-                    new_lines: nl,
-                    lines: Vec::new(),
-                });
-                (old_left, new_left) = (ol, nl);
-                old_no = if ol == 0 { os + 1 } else { os };
-                new_no = if nl == 0 { ns + 1 } else { ns };
+                let hunk = open_hunk(header).ok_or(bad("hunk header"))?;
+                (old_left, new_left) = (hunk.old_lines, hunk.new_lines);
+                old_no = hunk.old_start + u64::from(hunk.old_lines == 0);
+                new_no = hunk.new_start + u64::from(hunk.new_lines == 0);
+                hunks.push(hunk);
                 continue;
             }
             if line.starts_with(b"\\") {
@@ -475,7 +483,7 @@ mod tests {
 
     #[test]
     fn line_starts_handle_trailing_newline_and_crlf() {
-        assert_eq!(line_starts(b""), Vec::<u64>::new());
+        assert_eq!(line_starts(b""), Vec::<usize>::new());
         assert_eq!(line_starts(b"a\r\nb"), vec![0, 3]);
         assert_eq!(line_starts(b"a\nb\n"), vec![0, 2]);
     }

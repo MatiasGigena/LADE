@@ -119,7 +119,7 @@ impl fmt::Display for CredentialError {
                      Secret Service (laded credentials set {provider}) or the credentials file",
                     vars.join(" or ")
                 )?;
-                unavailable_note(f, secret_service)
+                unavailable_note(f, secret_service.as_deref())
             }
             Self::MissingCustom {
                 provider,
@@ -133,7 +133,7 @@ impl fmt::Display for CredentialError {
                      NAME) or the credentials file",
                     vars.join(" and ")
                 )?;
-                unavailable_note(f, secret_service)
+                unavailable_note(f, secret_service.as_deref())
             }
             Self::InsecureFile { path, reason } => {
                 write!(f, "credentials file {} refused: {reason}", path.display())
@@ -147,7 +147,7 @@ impl fmt::Display for CredentialError {
 
 impl std::error::Error for CredentialError {}
 
-fn unavailable_note(f: &mut fmt::Formatter<'_>, reason: &Option<String>) -> fmt::Result {
+fn unavailable_note(f: &mut fmt::Formatter<'_>, reason: Option<&str>) -> fmt::Result {
     match reason {
         Some(reason) => write!(f, " (Secret Service unavailable: {reason})"),
         None => Ok(()),

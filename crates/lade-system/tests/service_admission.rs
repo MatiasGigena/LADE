@@ -18,7 +18,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
         runtime_dir: env.root.path().join("run"),
         ..env.config()
     };
-    let running = lade_system::service::start(config, FakeLauncher::shared()).expect("starts");
+    let running = lade_system::service::start(&config, FakeLauncher::shared()).expect("starts");
     running.shutdown();
     let long_runtime = env.root.path().join("r".repeat(100));
     let config = lade_system::service::ServiceConfig {
@@ -26,7 +26,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
         runtime_dir: long_runtime.clone(),
         ..env.config()
     };
-    let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
+    let Err(error) = lade_system::service::start(&config, FakeLauncher::shared()) else {
         panic!("service started with an unbindable socket path");
     };
     assert!(
@@ -190,7 +190,7 @@ fn second_service_on_the_same_runtime_dir_leaves_admission_intact() {
         state_dir: env.root.path().join("other-state"),
         ..env.config()
     };
-    let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
+    let Err(error) = lade_system::service::start(&config, FakeLauncher::shared()) else {
         panic!("a second service started on the same runtime directory");
     };
     assert!(

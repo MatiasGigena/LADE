@@ -2,9 +2,11 @@ use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::feedback::DeliveryState;
 use lade_core::domain::ids::{GitId, WorkspaceId};
 use lade_core::domain::objectives::{
-    AttentionFacts, Badge as CoreBadge, Lifecycle, derive_attention,
+    AttentionFacts, Badge as CoreBadge, Lifecycle, ObjectiveRecord, derive_attention,
 };
-use lade_core::domain::review::{CandidateStatus, Evidence, VerificationOutcome};
+use lade_core::domain::review::{
+    Candidate, CandidateStatus, Evidence, Review, VerificationOutcome,
+};
 use lade_protocol::client::{
     self as wire, ActionName, AvailableAction, Badge, ChangeCounts, Event, ObjectiveDetail,
     ObjectiveSummary, SessionInfo, TargetRef, Workspace,
@@ -132,7 +134,7 @@ impl Service {
         self.resolve_target(record.workspace_id, &branch)
     }
 
-    fn facts(&self, st: &ObjState, target: Option<&GitId>) -> AttentionFacts {
+    fn facts(st: &ObjState, target: Option<&GitId>) -> AttentionFacts {
         AttentionFacts {
             delivery_uncertain: st
                 .inputs
@@ -149,10 +151,10 @@ impl Service {
         }
     }
 
-    pub(crate) fn summary_with(&self, st: &ObjState, target: Option<&GitId>) -> ObjectiveSummary {
+    pub(crate) fn summary_with(st: &ObjState, target: Option<&GitId>) -> ObjectiveSummary {
         let objective = st.objective();
         let record = objective.record();
-        let view = derive_attention(objective, &self.facts(st, target));
+        let view = derive_attention(objective, &Self::facts(st, target));
         let mut badges: Vec<Badge> = view.badges.into_iter().filter_map(wire_badge).collect();
         if matches!(
             record.execution.state(),
@@ -203,7 +205,7 @@ impl Service {
     }
 
     pub(crate) fn summary(&self, st: &ObjState) -> ObjectiveSummary {
-        self.summary_with(st, self.cached_target(st).as_ref())
+        Self::summary_with(st, self.cached_target(st).as_ref())
     }
 
     pub(crate) fn detail_of(&mut self, st: &ObjState) -> ObjectiveDetail {
@@ -212,7 +214,7 @@ impl Service {
     }
 
     pub(crate) fn detail_with(&self, st: &ObjState, target: Option<&GitId>) -> ObjectiveDetail {
-        let summary = self.summary_with(st, target);
+        let summary = Self::summary_with(st, target);
         let record = st.objective().record();
         let review = &st.review;
         let session = record.execution.session().map(|s| SessionInfo {
@@ -290,297 +292,15 @@ impl Service {
     }
 
     fn actions(&self, st: &ObjState, target: Option<&GitId>) -> Vec<AvailableAction> {
-        let oid = st.objective().id();
-        let record = st.objective().record();
-        let lifecycle = record.lifecycle;
-        let state = record.execution.state();
-        let live = state.is_live();
-        let busy = self.runtime.get(&oid).and_then(|r| r.busy);
-        let review = &st.review;
-        let current = review.current_candidate();
-        let running_verification = review
-            .verifications()
-            .iter()
-            .any(|v| v.outcome == VerificationOutcome::Running);
-        let busy_reason = busy.map(|_| BUSY);
-        let terminal = lifecycle.is_terminal();
-        let target_moved = match (current, target) {
-            (Some(c), Some(t)) => c.base_target_commit != *t,
-            _ => false,
-        };
-        let worker_blocker = self.worker_blocker(oid);
-        let storage_blocker = self.storage_blocker();
+        let facts = ActionFacts::new(self, st, target);
         let mut out = Vec::with_capacity(17);
-        out.push(gate(
-            ActionName::ObjectiveUpdateIntent,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen => None,
-                Lifecycle::Approved => Some(
-                    "The intent can't change after approval. Return the candidate for revision first.",
-                ),
-                _ => Some(CLOSED),
-            }),
-        ));
-        out.push(gate(
-            ActionName::ExecutionStart,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Defined | Lifecycle::Active if *state == ExecutionState::None => {
-                    worker_blocker.as_deref()
-                }
-                Lifecycle::Defined | Lifecycle::Active if live => {
-                    Some("The agent is already running.")
-                }
-                Lifecycle::Defined | Lifecycle::Active => {
-                    Some("The agent has already started. Use Resume instead.")
-                }
-                Lifecycle::Frozen | Lifecycle::Approved => {
-                    Some("Return the candidate for revision before starting the agent.")
-                }
-                _ => Some(CLOSED),
-            }),
-        ));
-        out.push(gate(
-            ActionName::ExecutionCancel,
-            match state {
-                ExecutionState::Starting | ExecutionState::Running | ExecutionState::Idle => None,
-                ExecutionState::Stopping => Some("The agent is already stopping."),
-                _ => Some("The agent isn't running."),
-            },
-        ));
-        out.push(gate(
-            ActionName::ExecutionResume,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Active
-                    if matches!(
-                        state,
-                        ExecutionState::Cancelled { .. } | ExecutionState::Failed { .. }
-                    ) =>
-                {
-                    worker_blocker.as_deref()
-                }
-                Lifecycle::Active if live => Some("The agent is already running."),
-                Lifecycle::Defined | Lifecycle::Active => Some("Start the agent first."),
-                Lifecycle::Frozen | Lifecycle::Approved => {
-                    Some("Return the candidate for revision before resuming the agent.")
-                }
-                _ => Some(CLOSED),
-            }),
-        ));
-        let has_session = record.execution.session().is_some();
-        let input_note = (!live && lifecycle == Lifecycle::Active && has_session).then_some(
-            "The agent is stopped. Your input is kept and delivered after you resume it.",
-        );
-        let input = |action: ActionName, blocker: Option<&str>| match (blocker, input_note) {
-            (None, Some(note)) => AvailableAction {
-                action,
-                enabled: true,
-                reason: Some(note.into()),
-            },
-            (blocker, _) => gate(action, blocker),
-        };
-        out.push(input(
-            ActionName::MessageSend,
-            input_blocker(
-                lifecycle,
-                has_session,
-                "Start the agent before sending messages.",
-            ),
-        ));
-        out.push(input(
-            ActionName::FeedbackSubmit,
-            input_blocker(
-                lifecycle,
-                has_session,
-                "Start the agent before submitting feedback.",
-            )
-            .or(st
-                .row
-                .worktree
-                .is_none()
-                .then_some("There is no agent work to give feedback on yet."))
-            .or((st.unsent_drafts() == 0).then_some("There are no saved drafts to submit.")),
-        ));
-        let stopping =
-            (*state == ExecutionState::Stopping).then_some("Wait until the agent has stopped.");
-        out.push(gate(
-            ActionName::ReviewFreeze,
-            busy_reason.or(freeze_blocker(st)).or(stopping),
-        ));
-        let latest_returnable = review
-            .latest_candidate()
-            .is_some_and(|c| c.status != CandidateStatus::Historical);
-        out.push(gate(
-            ActionName::ReviewReturn,
-            busy_reason.or(
-                if !matches!(lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
-                    Some("There is no frozen candidate to return.")
-                } else if !latest_returnable {
-                    Some(NO_CURRENT_CANDIDATE)
-                } else {
-                    None
-                },
-            ),
-        ));
-        out.push(gate(
-            ActionName::ReviewVerify,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Frozen if current.is_none() => Some(NO_CURRENT_CANDIDATE),
-                Lifecycle::Frozen => match storage_blocker.as_deref() {
-                    Some(why) => Some(why),
-                    None if self.sandbox_tools().is_none() => {
-                        Some(VERIFICATION_SANDBOX_UNAVAILABLE)
-                    }
-                    None => None,
-                },
-                Lifecycle::Approved => Some(
-                    "The candidate is already approved. Return it for revision to run more checks.",
-                ),
-                Lifecycle::Defined | Lifecycle::Active => {
-                    Some("Freeze the work for review before running checks.")
-                }
-                _ => Some(CLOSED),
-            }),
-        ));
-        let approve = match (lifecycle, current) {
-            (Lifecycle::Frozen, Some(c)) if busy.is_none() => {
-                if target_moved {
-                    disabled(
-                        ActionName::ReviewApprove,
-                        "The Integration Target moved. Refresh the candidate first.",
-                    )
-                } else {
-                    match review.evidence(c.id) {
-                        Evidence::Passed => enabled(ActionName::ReviewApprove),
-                        Evidence::Running => disabled(ActionName::ReviewApprove, CHECK_RUNNING),
-                        Evidence::Missing => AvailableAction {
-                            action: ActionName::ReviewApprove,
-                            enabled: true,
-                            reason: Some(
-                                "No checks have run. Give a reason to approve anyway.".into(),
-                            ),
-                        },
-                        Evidence::Failed => AvailableAction {
-                            action: ActionName::ReviewApprove,
-                            enabled: true,
-                            reason: Some("A check failed. Give a reason to approve anyway.".into()),
-                        },
-                    }
-                }
-            }
-            (Lifecycle::Frozen, Some(_)) => disabled(ActionName::ReviewApprove, BUSY),
-            (Lifecycle::Frozen, None) => disabled(ActionName::ReviewApprove, NO_CURRENT_CANDIDATE),
-            (Lifecycle::Approved, _) => disabled(
-                ActionName::ReviewApprove,
-                "Already approved. Integrate it, or return it for revision.",
-            ),
-            (Lifecycle::Defined | Lifecycle::Active, _) => disabled(
-                ActionName::ReviewApprove,
-                "Freeze the work for review before approving.",
-            ),
-            _ => disabled(ActionName::ReviewApprove, CLOSED),
-        };
-        out.push(approve);
-        out.push(gate(
-            ActionName::ReviewRefresh,
-            busy_reason.or(
-                if !matches!(lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
-                    Some("Only a frozen candidate can be refreshed.")
-                } else if current.is_none() {
-                    Some(NO_CURRENT_CANDIDATE)
-                } else if !target_moved {
-                    Some("The Integration Target hasn't moved, so there is nothing to refresh.")
-                } else {
-                    None
-                },
-            ),
-        ));
-        out.push(gate(
-            ActionName::ReviewIntegrate,
-            busy_reason.or(if lifecycle != Lifecycle::Approved {
-                Some("Approve the candidate before integrating.")
-            } else if review.valid_approval().is_none() {
-                Some("The approval is no longer valid. Approve again.")
-            } else if target_moved
-                || review
-                    .valid_approval()
-                    .zip(target)
-                    .is_some_and(|(a, t)| a.target_commit != *t)
-            {
-                Some("The Integration Target moved after approval. Refresh the candidate and approve again.")
-            } else {
-                None
-            }),
-        ));
-        let has_changes = lifecycle == Lifecycle::Frozen
-            || st.capture.as_ref().is_some_and(|c| c.counts.files > 0);
-        out.push(gate(
-            ActionName::ObjectiveComplete,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen => {
-                    if live {
-                        Some(STOP_AGENT_FIRST)
-                    } else if running_verification {
-                        Some(CHECK_RUNNING)
-                    } else if has_changes {
-                        Some("There are changes. Freeze them for review, or discard the Objective.")
-                    } else {
-                        None
-                    }
-                }
-                Lifecycle::Approved => {
-                    Some("The candidate is approved. Integrate it, or discard the Objective.")
-                }
-                _ => Some(CLOSED),
-            }),
-        ));
-        out.push(gate(
-            ActionName::ObjectiveDiscard,
-            busy_reason.or(if terminal {
-                Some(CLOSED)
-            } else if live {
-                Some(STOP_AGENT_FIRST)
-            } else if running_verification {
-                Some(CHECK_RUNNING)
-            } else {
-                None
-            }),
-        ));
-        out.push(gate(
-            ActionName::ObjectiveCleanup,
-            busy_reason.or(if !terminal {
-                Some("Clean up becomes available once the Objective is integrated, completed or discarded.")
-            } else if record.cleaned_up {
-                Some("This Objective is already cleaned up.")
-            } else if live {
-                Some(STOP_AGENT_FIRST)
-            } else {
-                None
-            }),
-        ));
-        out.push(gate(
-            ActionName::ObjectiveDeleteHistory,
-            busy_reason.or(delete_history_blocker(st)),
-        ));
-        out.push(match terminal_blocker(st) {
-            Some(why) => disabled(ActionName::TerminalOpen, why),
-            None if self.sandbox_tools().is_none() => {
-                disabled(ActionName::TerminalOpen, TERMINAL_SANDBOX_UNAVAILABLE)
-            }
-            None if matches!(lifecycle, Lifecycle::Frozen | Lifecycle::Approved)
-                || busy == Some("freeze") =>
-            {
-                AvailableAction {
-                    action: ActionName::TerminalOpen,
-                    enabled: true,
-                    reason: Some("Opens read-only while the work is frozen for review.".into()),
-                }
-            }
-            None => enabled(ActionName::TerminalOpen),
-        });
+        facts.execution_actions(&mut out);
+        facts.review_actions(&mut out);
+        facts.closing_actions(&mut out);
         out
     }
 
-    pub(crate) fn wire_workspace(&self, ws: &WsState, max_branches: usize) -> Workspace {
+    pub(crate) fn wire_workspace(ws: &WsState, max_branches: usize) -> Workspace {
         let mut branches: Vec<String> = if max_branches == 0 {
             Vec::new()
         } else {
@@ -619,6 +339,342 @@ impl Service {
 
 /// Why `review.freeze` is refused for this Objective, if it is. The action list and the
 /// request handler both use it, so the disabled reason is the rejection detail.
+/// What the availability of every action depends on, gathered once per Objective summary.
+struct ActionFacts<'a> {
+    service: &'a Service,
+    st: &'a ObjState,
+    record: &'a ObjectiveRecord,
+    target: Option<&'a GitId>,
+    lifecycle: Lifecycle,
+    state: &'a ExecutionState,
+    live: bool,
+    busy: Option<&'static str>,
+    busy_reason: Option<&'static str>,
+    review: &'a Review,
+    current: Option<&'a Candidate>,
+    running_verification: bool,
+    terminal: bool,
+    target_moved: bool,
+    worker_blocker: Option<String>,
+    storage_blocker: Option<String>,
+}
+
+impl<'a> ActionFacts<'a> {
+    fn new(service: &'a Service, st: &'a ObjState, target: Option<&'a GitId>) -> Self {
+        let oid = st.objective().id();
+        let record = st.objective().record();
+        let state = record.execution.state();
+        let busy = service.runtime.get(&oid).and_then(|r| r.busy);
+        let review = &st.review;
+        let current = review.current_candidate();
+        Self {
+            service,
+            st,
+            record,
+            target,
+            lifecycle: record.lifecycle,
+            state,
+            live: state.is_live(),
+            busy,
+            busy_reason: busy.map(|_| BUSY),
+            review,
+            current,
+            running_verification: review
+                .verifications()
+                .iter()
+                .any(|v| v.outcome == VerificationOutcome::Running),
+            terminal: record.lifecycle.is_terminal(),
+            target_moved: match (current, target) {
+                (Some(c), Some(t)) => c.base_target_commit != *t,
+                _ => false,
+            },
+            worker_blocker: service.worker_blocker(oid),
+            storage_blocker: service.storage_blocker(),
+        }
+    }
+
+    /// Intent editing, the agent's execution and input to it.
+    fn execution_actions(&self, out: &mut Vec<AvailableAction>) {
+        out.push(gate(
+            ActionName::ObjectiveUpdateIntent,
+            self.busy_reason.or(match self.lifecycle {
+                Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen => None,
+                Lifecycle::Approved => Some(
+                    "The intent can't change after approval. Return the candidate for revision first.",
+                ),
+                _ => Some(CLOSED),
+            }),
+        ));
+        out.push(gate(
+            ActionName::ExecutionStart,
+            self.busy_reason.or(match self.lifecycle {
+                Lifecycle::Defined | Lifecycle::Active if *self.state == ExecutionState::None => {
+                    self.worker_blocker.as_deref()
+                }
+                Lifecycle::Defined | Lifecycle::Active if self.live => {
+                    Some("The agent is already running.")
+                }
+                Lifecycle::Defined | Lifecycle::Active => {
+                    Some("The agent has already started. Use Resume instead.")
+                }
+                Lifecycle::Frozen | Lifecycle::Approved => {
+                    Some("Return the candidate for revision before starting the agent.")
+                }
+                _ => Some(CLOSED),
+            }),
+        ));
+        out.push(gate(
+            ActionName::ExecutionCancel,
+            match self.state {
+                ExecutionState::Starting | ExecutionState::Running | ExecutionState::Idle => None,
+                ExecutionState::Stopping => Some("The agent is already stopping."),
+                _ => Some("The agent isn't running."),
+            },
+        ));
+        out.push(gate(
+            ActionName::ExecutionResume,
+            self.busy_reason.or(match self.lifecycle {
+                Lifecycle::Active
+                    if matches!(
+                        self.state,
+                        ExecutionState::Cancelled { .. } | ExecutionState::Failed { .. }
+                    ) =>
+                {
+                    self.worker_blocker.as_deref()
+                }
+                Lifecycle::Active if self.live => Some("The agent is already running."),
+                Lifecycle::Defined | Lifecycle::Active => Some("Start the agent first."),
+                Lifecycle::Frozen | Lifecycle::Approved => {
+                    Some("Return the candidate for revision before resuming the agent.")
+                }
+                _ => Some(CLOSED),
+            }),
+        ));
+        let has_session = self.record.execution.session().is_some();
+        let input_note = (!self.live && self.lifecycle == Lifecycle::Active && has_session)
+            .then_some(
+                "The agent is stopped. Your input is kept and delivered after you resume it.",
+            );
+        let input = |action: ActionName, blocker: Option<&str>| match (blocker, input_note) {
+            (None, Some(note)) => AvailableAction {
+                action,
+                enabled: true,
+                reason: Some(note.into()),
+            },
+            (blocker, _) => gate(action, blocker),
+        };
+        out.push(input(
+            ActionName::MessageSend,
+            input_blocker(
+                self.lifecycle,
+                has_session,
+                "Start the agent before sending messages.",
+            ),
+        ));
+        out.push(input(
+            ActionName::FeedbackSubmit,
+            input_blocker(
+                self.lifecycle,
+                has_session,
+                "Start the agent before submitting feedback.",
+            )
+            .or(self
+                .st
+                .row
+                .worktree
+                .is_none()
+                .then_some("There is no agent work to give feedback on yet."))
+            .or((self.st.unsent_drafts() == 0).then_some("There are no saved drafts to submit.")),
+        ));
+    }
+
+    /// Freezing, checking, approving, refreshing and integrating a candidate.
+    fn review_actions(&self, out: &mut Vec<AvailableAction>) {
+        let stopping = (*self.state == ExecutionState::Stopping)
+            .then_some("Wait until the agent has stopped.");
+        out.push(gate(
+            ActionName::ReviewFreeze,
+            self.busy_reason.or(freeze_blocker(self.st)).or(stopping),
+        ));
+        let latest_returnable = self
+            .review
+            .latest_candidate()
+            .is_some_and(|c| c.status != CandidateStatus::Historical);
+        out.push(gate(
+            ActionName::ReviewReturn,
+            self.busy_reason.or(
+                if !matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
+                    Some("There is no frozen candidate to return.")
+                } else if !latest_returnable {
+                    Some(NO_CURRENT_CANDIDATE)
+                } else {
+                    None
+                },
+            ),
+        ));
+        out.push(gate(
+            ActionName::ReviewVerify,
+            self.busy_reason.or(match self.lifecycle {
+                Lifecycle::Frozen if self.current.is_none() => Some(NO_CURRENT_CANDIDATE),
+                Lifecycle::Frozen => match self.storage_blocker.as_deref() {
+                    Some(why) => Some(why),
+                    None if self.service.sandbox_tools().is_none() => {
+                        Some(VERIFICATION_SANDBOX_UNAVAILABLE)
+                    }
+                    None => None,
+                },
+                Lifecycle::Approved => Some(
+                    "The candidate is already approved. Return it for revision to run more checks.",
+                ),
+                Lifecycle::Defined | Lifecycle::Active => {
+                    Some("Freeze the work for review before running checks.")
+                }
+                _ => Some(CLOSED),
+            }),
+        ));
+        let approve = match (self.lifecycle, self.current) {
+            (Lifecycle::Frozen, Some(c)) if self.busy.is_none() => {
+                if self.target_moved {
+                    disabled(
+                        ActionName::ReviewApprove,
+                        "The Integration Target moved. Refresh the candidate first.",
+                    )
+                } else {
+                    match self.review.evidence(c.id) {
+                        Evidence::Passed => enabled(ActionName::ReviewApprove),
+                        Evidence::Running => disabled(ActionName::ReviewApprove, CHECK_RUNNING),
+                        Evidence::Missing => AvailableAction {
+                            action: ActionName::ReviewApprove,
+                            enabled: true,
+                            reason: Some(
+                                "No checks have run. Give a reason to approve anyway.".into(),
+                            ),
+                        },
+                        Evidence::Failed => AvailableAction {
+                            action: ActionName::ReviewApprove,
+                            enabled: true,
+                            reason: Some("A check failed. Give a reason to approve anyway.".into()),
+                        },
+                    }
+                }
+            }
+            (Lifecycle::Frozen, Some(_)) => disabled(ActionName::ReviewApprove, BUSY),
+            (Lifecycle::Frozen, None) => disabled(ActionName::ReviewApprove, NO_CURRENT_CANDIDATE),
+            (Lifecycle::Approved, _) => disabled(
+                ActionName::ReviewApprove,
+                "Already approved. Integrate it, or return it for revision.",
+            ),
+            (Lifecycle::Defined | Lifecycle::Active, _) => disabled(
+                ActionName::ReviewApprove,
+                "Freeze the work for review before approving.",
+            ),
+            _ => disabled(ActionName::ReviewApprove, CLOSED),
+        };
+        out.push(approve);
+        out.push(gate(
+            ActionName::ReviewRefresh,
+            self.busy_reason.or(
+                if !matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
+                    Some("Only a frozen candidate can be refreshed.")
+                } else if self.current.is_none() {
+                    Some(NO_CURRENT_CANDIDATE)
+                } else if !self.target_moved {
+                    Some("The Integration Target hasn't moved, so there is nothing to refresh.")
+                } else {
+                    None
+                },
+            ),
+        ));
+        out.push(gate(
+            ActionName::ReviewIntegrate,
+            self.busy_reason.or(if self.lifecycle != Lifecycle::Approved {
+                Some("Approve the candidate before integrating.")
+            } else if self.review.valid_approval().is_none() {
+                Some("The approval is no longer valid. Approve again.")
+            } else if self.target_moved
+                || self.review
+                    .valid_approval()
+                    .zip(self.target)
+                    .is_some_and(|(a, t)| a.target_commit != *t)
+            {
+                Some("The Integration Target moved after approval. Refresh the candidate and approve again.")
+            } else {
+                None
+            }),
+        ));
+    }
+
+    /// Ending the Objective, cleaning up after it, and the self.terminal.
+    fn closing_actions(&self, out: &mut Vec<AvailableAction>) {
+        let has_changes = self.lifecycle == Lifecycle::Frozen
+            || self.st.capture.as_ref().is_some_and(|c| c.counts.files > 0);
+        out.push(gate(
+            ActionName::ObjectiveComplete,
+            self.busy_reason.or(match self.lifecycle {
+                Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen => {
+                    if self.live {
+                        Some(STOP_AGENT_FIRST)
+                    } else if self.running_verification {
+                        Some(CHECK_RUNNING)
+                    } else if has_changes {
+                        Some("There are changes. Freeze them for review, or discard the Objective.")
+                    } else {
+                        None
+                    }
+                }
+                Lifecycle::Approved => {
+                    Some("The candidate is approved. Integrate it, or discard the Objective.")
+                }
+                _ => Some(CLOSED),
+            }),
+        ));
+        out.push(gate(
+            ActionName::ObjectiveDiscard,
+            self.busy_reason.or(if self.terminal {
+                Some(CLOSED)
+            } else if self.live {
+                Some(STOP_AGENT_FIRST)
+            } else if self.running_verification {
+                Some(CHECK_RUNNING)
+            } else {
+                None
+            }),
+        ));
+        out.push(gate(
+            ActionName::ObjectiveCleanup,
+            self.busy_reason.or(if !self.terminal {
+                Some("Clean up becomes available once the Objective is integrated, completed or discarded.")
+            } else if self.record.cleaned_up {
+                Some("This Objective is already cleaned up.")
+            } else if self.live {
+                Some(STOP_AGENT_FIRST)
+            } else {
+                None
+            }),
+        ));
+        out.push(gate(
+            ActionName::ObjectiveDeleteHistory,
+            self.busy_reason.or(delete_history_blocker(self.st)),
+        ));
+        out.push(match terminal_blocker(self.st) {
+            Some(why) => disabled(ActionName::TerminalOpen, why),
+            None if self.service.sandbox_tools().is_none() => {
+                disabled(ActionName::TerminalOpen, TERMINAL_SANDBOX_UNAVAILABLE)
+            }
+            None if matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved)
+                || self.busy == Some("freeze") =>
+            {
+                AvailableAction {
+                    action: ActionName::TerminalOpen,
+                    enabled: true,
+                    reason: Some("Opens read-only while the work is frozen for review.".into()),
+                }
+            }
+            None => enabled(ActionName::TerminalOpen),
+        });
+    }
+}
+
 pub(crate) fn freeze_blocker(st: &ObjState) -> Option<&'static str> {
     match st.objective().lifecycle() {
         Lifecycle::Active if st.row.worktree.is_none() => {

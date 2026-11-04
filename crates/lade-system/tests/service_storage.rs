@@ -12,7 +12,7 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
         storage_limit_bytes: 256 << 10,
         ..env.config()
     };
-    let service = lade_system::service::start(config, FakeLauncher::shared()).unwrap();
+    let service = lade_system::service::start(&config, FakeLauncher::shared()).unwrap();
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
     let objective = create_objective(&mut client, &ws.workspace_id, "Fill the disk");

@@ -772,33 +772,30 @@ impl Service {
             self.finish(ctx, Ok(data));
             return Flow::Done;
         }
-        match (&query.objective_id, &query.basis) {
-            (Some(objective_id), basis) => {
-                let oid = self.objective_id(objective_id);
-                let basis = basis.clone().unwrap_or(Basis::Working);
-                let q = query.clone();
-                self.query_on_basis(
-                    ctx,
-                    oid,
-                    &basis,
-                    Request::Search(query),
-                    move |repo, _, resolved| search_tree(&repo, &resolved.new, &q, &resolved.label),
-                )
-            }
-            (None, _) => {
-                let branch = ws.default_branch.clone().unwrap_or_else(|| "main".into());
-                let Some(tree) = self.resolve_target(workspace, &branch) else {
-                    self.finish(ctx, Err(not_found("default branch")));
-                    return Flow::Done;
-                };
-                let label = format!("branch {branch} at {}", &tree.hex()[..12]);
-                let repo = ws.repo.clone();
-                self.spawn(move || Completed::Query {
-                    ctx,
-                    result: search_tree(&repo, &tree, &query, &label),
-                });
-                Flow::Deferred
-            }
+        if let (Some(objective_id), basis) = (&query.objective_id, &query.basis) {
+            let oid = self.objective_id(objective_id);
+            let basis = basis.clone().unwrap_or(Basis::Working);
+            let q = query.clone();
+            self.query_on_basis(
+                ctx,
+                oid,
+                &basis,
+                Request::Search(query),
+                move |repo, _, resolved| search_tree(&repo, &resolved.new, &q, &resolved.label),
+            )
+        } else {
+            let branch = ws.default_branch.clone().unwrap_or_else(|| "main".into());
+            let Some(tree) = self.resolve_target(workspace, &branch) else {
+                self.finish(ctx, Err(not_found("default branch")));
+                return Flow::Done;
+            };
+            let label = format!("branch {branch} at {}", &tree.hex()[..12]);
+            let repo = ws.repo.clone();
+            self.spawn(move || Completed::Query {
+                ctx,
+                result: search_tree(&repo, &tree, &query, &label),
+            });
+            Flow::Deferred
         }
     }
 
@@ -807,10 +804,7 @@ impl Service {
         let (rows, mut has_more) = sql(storage::activity_page(
             self.store.conn(),
             oid,
-            query
-                .before
-                .as_ref()
-                .map(lade_protocol::types::Counter::value),
+            query.before.as_ref().map(Counter::value),
             query.limit.value(),
         ))?;
         let mut budget = MAX_ACTIVITY_BYTES;
@@ -897,8 +891,8 @@ mod tests {
                     path: path(format!("new-{index}")),
                     old_path: Some(path(format!("old-{index}"))),
                     status: git::ChangeStatus::Renamed { similarity: 100 },
-                    old_mode: 0o100644,
-                    new_mode: 0o100644,
+                    old_mode: 0o100_644,
+                    new_mode: 0o100_644,
                     old_id: None,
                     new_id: None,
                     added: 2,

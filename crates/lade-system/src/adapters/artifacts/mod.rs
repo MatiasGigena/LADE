@@ -56,7 +56,7 @@ impl ArtifactDigest {
 
     #[must_use]
     pub fn to_hex(&self) -> String {
-        self.0.iter().map(|b| format!("{b:02x}")).collect()
+        crate::support::hex(&self.0)
     }
 }
 

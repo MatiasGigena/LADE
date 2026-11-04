@@ -204,8 +204,9 @@ fn percent_decode(text: &str) -> Vec<u8> {
         if bytes[i] == b'%'
             && i + 2 < bytes.len()
             && let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+            && let Ok(byte) = u8::try_from(h * 16 + l)
         {
-            out.push((h * 16 + l) as u8);
+            out.push(byte);
             i += 3;
             continue;
         }
@@ -447,7 +448,7 @@ impl Gateway {
         let accept_shared = Arc::clone(&shared);
         let accept = thread::Builder::new()
             .name("lade-gateway".into())
-            .spawn(move || accept_loop(listener, accept_shared))?;
+            .spawn(move || accept_loop(&listener, &accept_shared))?;
         Ok(Self {
             socket: socket.to_path_buf(),
             shared,
@@ -493,7 +494,7 @@ impl Drop for Gateway {
     }
 }
 
-fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
+fn accept_loop(listener: &UnixListener, shared: &Arc<Shared>) {
     for stream in listener.incoming() {
         if shared.stopped.load(Ordering::SeqCst) {
             break;
@@ -510,7 +511,7 @@ fn accept_loop(listener: UnixListener, shared: Arc<Shared>) {
             let _ = write_refusal(&mut stream, refusal);
             continue;
         }
-        let worker_shared = Arc::clone(&shared);
+        let worker_shared = Arc::clone(shared);
         let spawned = thread::Builder::new()
             .name("lade-gateway-conn".into())
             .spawn(move || {

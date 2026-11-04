@@ -30,8 +30,8 @@ fn verification_outcome(code: &str) -> Sql<VerificationOutcome> {
     })
 }
 
-fn invalidation(code: Option<String>) -> Sql<InvalidationReason> {
-    Ok(match code.as_deref() {
+fn invalidation(code: Option<&str>) -> Sql<InvalidationReason> {
+    Ok(match code {
         Some("returned_for_revision") => InvalidationReason::ReturnedForRevision,
         Some("target_moved") => InvalidationReason::TargetMoved,
         Some("candidate_changed") => InvalidationReason::CandidateChanged,
@@ -226,7 +226,7 @@ pub fn load_review(conn: &Connection, objective: ObjectiveId) -> Sql<Review> {
                 "valid" => ApprovalState::Valid,
                 "consumed" => ApprovalState::Consumed,
                 "invalidated" => ApprovalState::Invalidated {
-                    reason: invalidation(row.get(5)?)?,
+                    reason: invalidation(row.get::<_, Option<String>>(5)?.as_deref())?,
                 },
                 _ => return Err(corrupt("approval state")),
             };

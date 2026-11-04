@@ -126,7 +126,7 @@ fn the_fixture_provider_is_absent_and_refused_without_the_test_switch() {
             test_fixture_provider: false,
             ..env.config()
         };
-        let service = service::start(config, launcher).expect("service starts");
+        let service = service::start(&config, launcher).expect("service starts");
         let mut client = env.connect();
         let (providers, _) = provider_ids(&mut client, None);
         assert!(!providers.iter().any(|p| p == "lade-fixture"), "{tag}");

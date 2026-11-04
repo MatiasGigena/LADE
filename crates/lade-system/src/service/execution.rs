@@ -33,10 +33,13 @@ fn human_bytes(bytes: u64) -> String {
     const KIB: u64 = 1 << 10;
     const MIB: u64 = 1 << 20;
     const GIB: u64 = 1 << 30;
-    let tenths = |unit: u64| (bytes.saturating_mul(10) / unit) as f64 / 10.0;
+    let tenths = |unit: u64| {
+        let tenths = bytes.saturating_mul(10) / unit;
+        format!("{}.{}", tenths / 10, tenths % 10)
+    };
     match bytes {
-        b if b >= GIB => format!("{:.1} GiB", tenths(GIB)),
-        b if b >= MIB => format!("{:.1} MiB", tenths(MIB)),
+        b if b >= GIB => format!("{} GiB", tenths(GIB)),
+        b if b >= MIB => format!("{} MiB", tenths(MIB)),
         b => format!("{} KiB", b.div_ceil(KIB)),
     }
 }
@@ -128,7 +131,7 @@ impl Service {
             .start_execution(session, model, ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
-            return Err(Self::quota_rejection(why));
+            return Err(Self::quota_rejection(&why));
         }
         self.preflight(&cmd.model.provider)?;
         if let Some(thinking) = cmd.thinking {
@@ -201,7 +204,7 @@ impl Service {
             .resume_execution(ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
-            return Err(Self::quota_rejection(why));
+            return Err(Self::quota_rejection(&why));
         }
         if let Some(session) = st.objective().execution().session() {
             self.preflight(session.model.provider())?;
@@ -329,7 +332,7 @@ impl Service {
             Ok(control) => {
                 if out.provisioned_branch.is_some() {
                     let recorded = self.commit_obj(None, None, st);
-                    self.persisted("the provisioned worktree", oid, recorded);
+                    Self::persisted("the provisioned worktree", oid, recorded);
                 }
                 if current && state.is_live() {
                     self.rt(oid).control = Some(control);
@@ -352,7 +355,7 @@ impl Service {
                         ts_now(),
                     );
                     let recorded = self.commit_obj(None, None, st);
-                    self.persisted("the launch failure", oid, recorded);
+                    Self::persisted("the launch failure", oid, recorded);
                     self.notice(
                         NoticeLevel::Error,
                         NoticeCode::ExecutionFailed,
@@ -367,7 +370,7 @@ impl Service {
                     self.continue_freeze(oid);
                 } else if out.provisioned_branch.is_some() {
                     let recorded = self.commit_obj(None, None, st);
-                    self.persisted("the provisioned worktree", oid, recorded);
+                    Self::persisted("the provisioned worktree", oid, recorded);
                 }
             }
         }
@@ -398,7 +401,7 @@ impl Service {
                 .is_ok()
         {
             let recorded = self.commit_obj(None, None, st);
-            if self.persisted("the stopped execution", oid, recorded) {
+            if Self::persisted("the stopped execution", oid, recorded) {
                 self.continue_freeze(oid);
             }
         }
@@ -465,7 +468,7 @@ impl Service {
                     }
                     Ok(())
                 });
-                if self.persisted("the ready worker", oid, committed) {
+                if Self::persisted("the ready worker", oid, committed) {
                     self.objectives.insert(oid, st);
                     self.emit_objective(oid);
                     self.dispatch_queued(oid, None);
@@ -537,7 +540,7 @@ impl Service {
                     return;
                 }
                 let recorded = self.commit_obj(None, None, st);
-                if self.persisted("the turn state", oid, recorded) {
+                if Self::persisted("the turn state", oid, recorded) {
                     self.emit_objective(oid);
                     if !running {
                         self.request_capture(oid);
@@ -608,7 +611,7 @@ impl Service {
             }
             Ok(())
         });
-        if !self.persisted("the worker exit", oid, committed) {
+        if !Self::persisted("the worker exit", oid, committed) {
             return;
         }
         self.objectives.insert(oid, st);
@@ -650,19 +653,16 @@ impl Service {
                     self.dispatch_one(oid, id, true);
                     continue;
                 };
-                match self.capture_input(st, worktree, references) {
-                    Ok(capture) => {
-                        self.rt(oid).dispatching = true;
-                        self.spawn(move || Completed::Capture {
-                            oid,
-                            purpose: CapturePurpose::DispatchCheck(id),
-                            result: jobs::capture(&capture),
-                        });
-                    }
-                    Err(_) => {
-                        self.dispatch_one(oid, id, true);
-                        continue;
-                    }
+                if let Ok(capture) = self.capture_input(st, worktree, references) {
+                    self.rt(oid).dispatching = true;
+                    self.spawn(move || Completed::Capture {
+                        oid,
+                        purpose: CapturePurpose::DispatchCheck(id),
+                        result: jobs::capture(&capture),
+                    });
+                } else {
+                    self.dispatch_one(oid, id, true);
+                    continue;
                 }
                 return;
             }
@@ -687,9 +687,8 @@ impl Service {
         let Some(input) = st.inputs.iter_mut().map(|(_, i)| i).find(|i| i.id == id) else {
             return true;
         };
-        let decision = match input.dispatch(objective, stale) {
-            Ok(decision) => decision,
-            Err(_) => return true,
+        let Ok(decision) = input.dispatch(objective, stale) else {
+            return true;
         };
         if decision == DispatchDecision::Wait {
             return false;
@@ -699,7 +698,7 @@ impl Service {
         let recorded = self.commit(None, None, |tx| {
             storage::save_delivery(tx, id, &input.delivery, now)
         });
-        if !self.persisted(&format!("the dispatch of input {id}"), oid, recorded) {
+        if !Self::persisted(&format!("the dispatch of input {id}"), oid, recorded) {
             return false;
         }
         if let DispatchDecision::Dispatch { .. } = decision {
@@ -719,7 +718,7 @@ impl Service {
                 let recorded = self.commit(None, None, |tx| {
                     storage::save_delivery(tx, id, &input.delivery, now)
                 });
-                self.persisted(&format!("the lost delivery of input {id}"), oid, recorded);
+                Self::persisted(&format!("the lost delivery of input {id}"), oid, recorded);
             }
         }
         if let Some(slot) = st.input_mut(id) {
@@ -909,17 +908,17 @@ impl Service {
         self.storage.measuring = false;
         for measured in usage {
             if measured.bytes > self.storage.writable_limit {
-                self.storage_exceeded(measured);
+                self.storage_exceeded(&measured);
             }
         }
     }
 
-    fn storage_exceeded(&mut self, measured: StorageUsage) {
+    fn storage_exceeded(&mut self, measured: &StorageUsage) {
         let StorageUsage {
             oid,
             generation,
             bytes,
-        } = measured;
+        } = *measured;
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
@@ -940,7 +939,7 @@ impl Service {
             return;
         }
         let recorded = self.commit_obj(None, None, st);
-        if !self.persisted("the storage limit", oid, recorded) {
+        if !Self::persisted("the storage limit", oid, recorded) {
             return;
         }
         eprintln!("laded: writable storage limit reached objective={oid} bytes={bytes}");

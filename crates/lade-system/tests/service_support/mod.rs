@@ -62,7 +62,7 @@ impl Env {
     }
 
     pub fn start(&self, launcher: Arc<dyn WorkerLauncher>) -> RunningService {
-        service::start(self.config(), launcher).expect("service starts")
+        service::start(&self.config(), launcher).expect("service starts")
     }
 
     pub fn start_limited(
@@ -72,7 +72,7 @@ impl Env {
     ) -> RunningService {
         let mut config = self.config();
         config.limits = limits;
-        service::start(config, launcher).expect("service starts")
+        service::start(&config, launcher).expect("service starts")
     }
 
     pub fn capability(&self) -> String {

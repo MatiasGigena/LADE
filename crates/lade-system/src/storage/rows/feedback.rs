@@ -225,7 +225,7 @@ pub fn save_delivery(
 fn parse_delivery(
     state: &str,
     generation: Option<i64>,
-    reason: Option<String>,
+    reason: Option<&str>,
 ) -> Sql<DeliveryState> {
     let generation = || {
         generation
@@ -245,7 +245,7 @@ fn parse_delivery(
             generation: generation()?,
         },
         "blocked" => DeliveryState::Blocked {
-            reason: match reason.as_deref() {
+            reason: match reason {
                 Some("execution_unavailable") => BlockedReason::ExecutionUnavailable,
                 Some("stale_association") => BlockedReason::StaleAssociation,
                 Some("stale_reference") => BlockedReason::StaleReference,
@@ -285,7 +285,11 @@ pub fn load_inputs(conn: &Connection) -> Sql<Vec<(u64, AcceptedInput)>> {
                 note: row.get(7)?,
                 rendered_text: row.get(8)?,
                 accepted_at: ts(row.get(9)?),
-                delivery: parse_delivery(&row.get::<_, String>(11)?, row.get(12)?, row.get(13)?)?,
+                delivery: parse_delivery(
+                    &row.get::<_, String>(11)?,
+                    row.get(12)?,
+                    row.get::<_, Option<String>>(13)?.as_deref(),
+                )?,
             },
         ))
     })?;

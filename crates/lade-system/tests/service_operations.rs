@@ -20,7 +20,7 @@ fn corrupt_store_refuses_to_start_and_is_not_reset() {
     fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
     let garbage = vec![0x5a_u8; 8192];
     fs::write(state.join("lade.db"), &garbage).unwrap();
-    let error = lade_system::service::start(env.config(), FakeLauncher::shared())
+    let error = lade_system::service::start(&env.config(), FakeLauncher::shared())
         .err()
         .expect("refused");
     assert!(

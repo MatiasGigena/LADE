@@ -564,13 +564,12 @@ fn spawn_threads(
                 }
             }
         })?;
-    let stderr_label = label.clone();
     thread::Builder::new()
         .name("lade-worker-stderr".into())
-        .spawn(move || forward_stderr(stderr, &stderr_label, &mut io::stderr()))?;
+        .spawn(move || forward_stderr(stderr, &label, &mut io::stderr()))?;
     thread::Builder::new()
         .name("lade-worker-monitor".into())
-        .spawn(move || monitor(&shared, binding, stdout, &events))?;
+        .spawn(move || monitor(&shared, &binding, stdout, &events))?;
     Ok(())
 }
 
@@ -582,7 +581,7 @@ enum Ending {
 
 fn monitor(
     shared: &Shared,
-    binding: LaunchBinding,
+    binding: &LaunchBinding,
     stdout: ChildStdout,
     events: &SyncSender<SupervisorEvent>,
 ) {
@@ -605,9 +604,8 @@ fn monitor(
                 Ok(_) => break Ending::Violation("service_body_from_worker"),
                 Err(e) => break Ending::Violation(e.as_str()),
             },
-            Ok(None) => break Ending::Eof,
+            Ok(None) | Err(TransportError::Io(_)) => break Ending::Eof,
             Err(TransportError::Wire(e)) => break Ending::Violation(e.as_str()),
-            Err(TransportError::Io(_)) => break Ending::Eof,
         }
     };
     drop(reader);

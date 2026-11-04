@@ -465,10 +465,10 @@ fn service_paths(config: &ServiceConfig) -> Result<Paths, StartError> {
 /// paths, another service holds the state lock or answers on the socket, the store or artifact
 /// store cannot be opened, restart recovery fails, or a thread cannot be spawned.
 pub fn start(
-    config: ServiceConfig,
+    config: &ServiceConfig,
     launcher: Arc<dyn WorkerLauncher>,
 ) -> Result<RunningService, StartError> {
-    let paths = service_paths(&config)?;
+    let paths = service_paths(config)?;
     let lock = storage::lock_state(&paths.state).map_err(|e| match e.kind() {
         io::ErrorKind::WouldBlock => StartError::AlreadyRunning,
         kind => StartError::StateDir(format!("lock: {kind}")),
@@ -480,7 +480,7 @@ pub fn start(
     let (queue_tx, queue_rx) = mpsc::sync_channel::<Msg>(8192);
     let (supervisor_tx, supervisor_rx) = mpsc::sync_channel::<SupervisorEvent>(1024);
     let mut service = Service::new(
-        &config,
+        config,
         store,
         paths,
         Arc::new(artifacts),
@@ -831,7 +831,7 @@ impl Service {
                     return;
                 }
                 Ok(Some(row)) => {
-                    let reply = self.duplicate_reply(frame.request_id, name, op, &row);
+                    let reply = Self::duplicate_reply(frame.request_id, name, op, &row);
                     self.send_reply(conn, reply);
                     return;
                 }
@@ -868,7 +868,6 @@ impl Service {
     }
 
     fn duplicate_reply(
-        &self,
         request_id: Id,
         name: RequestName,
         op: &OpInfo,
@@ -986,12 +985,7 @@ impl Service {
     /// Applies the policy for state changes that have no request to reject (worker events,
     /// job completions): a failed write is logged once with what was lost and its cause, and
     /// the caller sees `false` and decides whether to go on without it.
-    pub(crate) fn persisted(
-        &self,
-        what: &str,
-        oid: ObjectiveId,
-        result: Result<(), Rejection>,
-    ) -> bool {
+    pub(crate) fn persisted(what: &str, oid: ObjectiveId, result: Result<(), Rejection>) -> bool {
         match result {
             Ok(()) => true,
             Err(rejection) => {

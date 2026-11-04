@@ -127,7 +127,7 @@ impl Service {
                 ));
             }
             if writable && let Some(why) = self.storage_blocker() {
-                return Err(Self::quota_rejection(why));
+                return Err(Self::quota_rejection(&why));
             }
             let tools = self
                 .sandbox_tools()

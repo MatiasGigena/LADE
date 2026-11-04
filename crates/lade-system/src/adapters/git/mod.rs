@@ -6,7 +6,7 @@ mod tree;
 mod worktree;
 
 use std::ffi::{OsStr, OsString};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
@@ -208,7 +208,7 @@ impl GitVersion {
             .map(str::parse::<u32>);
         let major = parts.next()?.ok()?;
         let minor = parts.next()?.ok()?;
-        let patch = parts.next().and_then(|p| p.ok()).unwrap_or(0);
+        let patch = parts.next().and_then(std::result::Result::ok).unwrap_or(0);
         Some(Self::new(major, minor, patch))
     }
 }
@@ -829,7 +829,7 @@ pub fn escape_branch_name(raw: &[u8]) -> String {
     for chunk in raw.utf8_chunks() {
         out.push_str(chunk.valid());
         for byte in chunk.invalid() {
-            out.push_str(&format!("\\x{byte:02x}"));
+            let _ = write!(out, "\\x{byte:02x}");
         }
     }
     out
@@ -860,6 +860,10 @@ pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
 /// # Errors
 ///
 /// Returns [`GitError::InvalidRefName`] when it is not.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "a ref component may not end in `.lock`, which Git checks case-sensitively"
+)]
 pub fn validate_refname(name: &str) -> Result<()> {
     let valid = name.starts_with("refs/")
         && name.len() <= 1024
@@ -903,8 +907,7 @@ fn unique_suffix() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.subsec_nanos());
     format!("{}-{nanos}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 

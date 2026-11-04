@@ -194,8 +194,7 @@ pub(crate) fn kill_record(record: &PidRecord) -> bool {
 pub fn sandbox_marker(run_dir: &Path) -> String {
     let canonical = fs::canonicalize(run_dir).unwrap_or_else(|_| run_dir.to_path_buf());
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
-    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    format!("LADE_SANDBOX_{hex}")
+    format!("LADE_SANDBOX_{}", crate::support::hex(&digest[..8]))
 }
 
 fn marked(marker: &str) -> Vec<u32> {
@@ -251,6 +250,10 @@ pub struct SweepReport {
 /// # Errors
 ///
 /// Returns the operating system's error when `run_dir` exists but cannot be listed.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "the pidfile and socket names are the exact names this service writes"
+)]
 pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     let mut report = SweepReport::default();
     let entries = match fs::read_dir(run_dir) {

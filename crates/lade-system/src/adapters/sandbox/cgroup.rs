@@ -234,6 +234,10 @@ fn delegation(
     }
 }
 
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "systemd unit type suffixes are case-sensitive"
+)]
 fn user_manager_unit(own: &str, euid: u32) -> Option<&str> {
     let (_, below) = own.split_once(&format!("/user@{euid}.service/"))?;
     let unit = below.rsplit('/').next()?;

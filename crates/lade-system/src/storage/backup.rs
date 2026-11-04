@@ -59,12 +59,14 @@ impl std::fmt::Display for BackupError {
 
 impl std::error::Error for BackupError {}
 
-fn io_err(what: &'static str) -> impl Fn(io::Error) -> BackupError {
-    move |e| BackupError::Io(what, e.kind())
+impl From<rusqlite::Error> for BackupError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sql(error.to_string())
+    }
 }
 
-fn sql_err(e: rusqlite::Error) -> BackupError {
-    BackupError::Sql(e.to_string())
+fn io_err(what: &'static str) -> impl Fn(io::Error) -> BackupError {
+    move |e| BackupError::Io(what, e.kind())
 }
 
 fn backup_dir(state: &Path) -> PathBuf {
@@ -165,7 +167,7 @@ pub(crate) fn before_migration(
             "VACUUM INTO CAST(?1 AS TEXT)",
             [path.as_os_str().as_encoded_bytes()],
         )
-        .map_err(sql_err)
+        .map_err(BackupError::from)
         .and_then(|_| {
             File::open(&path)
                 .and_then(|f| f.sync_all())
@@ -226,19 +228,16 @@ pub fn database_schema(path: &Path) -> Result<Option<i64>, BackupError> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(sql_err)?;
+    )?;
     schema_of(&conn).map(Some)
 }
 
 fn schema_of(conn: &Connection) -> Result<i64, BackupError> {
-    let has_table: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
+    let has_table: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+        [],
+        |row| row.get(0),
+    )?;
     if has_table == 0 {
         return Ok(0);
     }
@@ -247,7 +246,7 @@ fn schema_of(conn: &Connection) -> Result<i64, BackupError> {
         [],
         |row| row.get(0),
     )
-    .map_err(sql_err)
+    .map_err(BackupError::from)
 }
 
 #[derive(Debug)]
@@ -294,11 +293,8 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
         .ok_or(BackupError::NoBackup(schema))?;
     let source = dir.join(&backup.file);
     {
-        let conn = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(sql_err)?;
-        let check: String = conn
-            .query_row("PRAGMA quick_check", [], |row| row.get(0))
-            .map_err(sql_err)?;
+        let conn = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if check != "ok" {
             return Err(BackupError::Invalid("integrity check failed".into()));
         }
@@ -309,10 +305,8 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
     }
 
     {
-        let conn =
-            Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(sql_err)?;
-        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
-            .map_err(sql_err)?;
+        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
     }
     let staged = state.join(format!("{DATABASE}.restore.tmp"));
     let _ = fs::remove_file(&staged);

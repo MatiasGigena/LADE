@@ -351,7 +351,7 @@ impl Service {
         }
     }
 
-    pub(crate) fn budget_snapshot(&self, data: SnapshotData) -> SnapshotData {
+    pub(crate) fn budget_snapshot(data: SnapshotData) -> SnapshotData {
         let mut result = minimal_snapshot(data.clone(), false);
         let Some((mut bytes, mut remaining_nodes)) = capacity(snapshot_frames(result.clone()))
         else {

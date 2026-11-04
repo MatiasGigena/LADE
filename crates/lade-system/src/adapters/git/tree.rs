@@ -270,7 +270,7 @@ impl Repository {
             .git("cat-file")
             .read_only()
             .args(["cat-file", "blob", id.hex()])
-            .stdout_limit(size as usize)
+            .stdout_limit(usize::try_from(size).unwrap_or(usize::MAX))
             .run()?;
         Ok(Some(data))
     }

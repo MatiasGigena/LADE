@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::OwnedFd;
@@ -202,19 +203,18 @@ impl RotatingLog {
     }
 
     fn open_current(&mut self) -> io::Result<&mut (File, u64)> {
-        let current = match self.current.take() {
-            Some(current) => current,
-            None => {
-                ensure_private_dir(&self.dir)?;
-                let file = OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .mode(0o600)
-                    .open(self.path(0))?;
-                file.set_permissions(fs::Permissions::from_mode(0o600))?;
-                let len = file.metadata()?.len();
-                (file, len)
-            }
+        let current = if let Some(current) = self.current.take() {
+            current
+        } else {
+            ensure_private_dir(&self.dir)?;
+            let file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .mode(0o600)
+                .open(self.path(0))?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            let len = file.metadata()?.len();
+            (file, len)
         };
         Ok(self.current.insert(current))
     }
@@ -284,9 +284,12 @@ pub fn record(line: &str) -> String {
     .to_string()
 }
 
+/// The group and other permission bits, none of which a private directory may have.
+const GROUP_OTHER_BITS: u32 = 0o077;
+
 fn state_is_private(state: &Path) -> bool {
     fs::symlink_metadata(state)
-        .is_ok_and(|m| m.is_dir() && m.uid() == service_uid() && m.mode() & 0o077 == 0)
+        .is_ok_and(|m| m.is_dir() && m.uid() == service_uid() && m.mode() & GROUP_OTHER_BITS == 0)
 }
 
 pub struct StderrCapture {
@@ -444,17 +447,19 @@ fn write_export(
     let kernel = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
     let mut text = String::new();
     text.push_str("LADE diagnostics export (redacted; review before sharing)\n");
-    text.push_str(&format!("created={}\n", wire_ts(now_ms()).as_str()));
-    text.push_str(&format!(
-        "laded={} protocol={}\n",
+    let _ = writeln!(text, "created={}", wire_ts(now_ms()).as_str());
+    let _ = writeln!(
+        text,
+        "laded={} protocol={}",
         lade_protocol::BUNDLE,
         lade_protocol::VERSION
-    ));
-    text.push_str(&format!(
-        "supported_schema={} database_schema={database}\n",
+    );
+    let _ = writeln!(
+        text,
+        "supported_schema={} database_schema={database}",
         crate::storage::SCHEMA_VERSION
-    ));
-    text.push_str(&format!("kernel={}\n", kernel.trim()));
+    );
+    let _ = writeln!(text, "kernel={}", kernel.trim());
     text.push_str(
         "included: service logs (already redacted, redacted again), migration journal\n\
          excluded: database contents, prompts, source, tool output, terminal output, \
@@ -480,7 +485,7 @@ fn write_export(
         let Some(lines) = read_lines_lossy(&path).map_err(read_err)? else {
             continue;
         };
-        text.push_str(&format!("\n=== {section} ({} lines) ===\n", lines.len()));
+        let _ = writeln!(text, "\n=== {section} ({} lines) ===", lines.len());
         for line in &lines {
             text.push_str(&redact(line, home));
             text.push('\n');

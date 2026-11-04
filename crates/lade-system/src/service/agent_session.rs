@@ -3,6 +3,7 @@
 //! selection, and the session reports the worker sends back.
 
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{ErrorKind, Write as _};
 use std::os::unix::fs::OpenOptionsExt;
@@ -599,7 +600,7 @@ impl Service {
             } => self.session_changed(
                 oid,
                 generation,
-                PiState {
+                &PiState {
                     generation: pi_generation.value(),
                     reason,
                     pi_session_id,
@@ -630,7 +631,7 @@ impl Service {
             WorkerBody::ResourcesLoaded {
                 generation: pi_generation,
                 resources,
-            } => self.resources_loaded(oid, pi_generation.value(), resources),
+            } => self.resources_loaded(oid, pi_generation.value(), &resources),
             WorkerBody::UiRequest {
                 ui_id,
                 generation: pi_generation,
@@ -673,7 +674,7 @@ impl Service {
         &mut self,
         oid: ObjectiveId,
         generation: ExecutionGeneration,
-        pi: PiState,
+        pi: &PiState,
         session_file: &str,
     ) {
         let reason = pi.reason;
@@ -810,7 +811,7 @@ impl Service {
         &mut self,
         oid: ObjectiveId,
         generation: u64,
-        resources: Vec<LoadedResource>,
+        resources: &[LoadedResource],
     ) {
         if self.live(oid).reported == Some(generation) {
             return;
@@ -841,7 +842,8 @@ impl Service {
         let mut problem = false;
         for refused in resources.iter().filter(|r| r.status != LoadStatus::Loaded) {
             problem = true;
-            text.push_str(&format!(
+            let _ = write!(
+                text,
                 "\n{} {} was {}: {}",
                 match refused.kind {
                     LoadedKind::Extension => "Extension",
@@ -856,7 +858,7 @@ impl Service {
                     "not loaded"
                 },
                 refused.message.as_deref().unwrap_or("no detail")
-            ));
+            );
         }
         self.system_item(oid, "Session resources", &text, problem);
     }
@@ -971,8 +973,7 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     let bytes = fs::read(source).map_err(unreadable)?;
     let header = bytes.split(|b| *b == b'\n').next().unwrap_or_default();
     let is_session = serde_json::from_slice::<Value>(header)
-        .ok()
-        .is_some_and(|v| v.get("type").and_then(Value::as_str) == Some("session"));
+        .is_ok_and(|v| v.get("type").and_then(Value::as_str) == Some("session"));
     if !is_session {
         return Err(invalid(
             "This isn't a pi session file (its first line must be a session header).",

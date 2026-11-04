@@ -106,14 +106,13 @@ pub fn run_bounded_with(
     });
     let deadline = start + timeout;
     let mut timed_out = false;
-    let status = match wait_until(&mut child, deadline)? {
-        Some(status) => status,
-        None => {
-            timed_out = true;
-            kill_group(pgid);
-            let _ = child.kill();
-            child.wait()?
-        }
+    let status = if let Some(status) = wait_until(&mut child, deadline)? {
+        status
+    } else {
+        timed_out = true;
+        kill_group(pgid);
+        let _ = child.kill();
+        child.wait()?
     };
     let elapsed = start.elapsed();
     if done_rx.recv_timeout(DRAIN_GRACE).is_err() {

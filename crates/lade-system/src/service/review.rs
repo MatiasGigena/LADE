@@ -248,7 +248,7 @@ impl Service {
         self.check_idle(oid)?;
         let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
         if let Some(why) = self.storage_blocker() {
-            return Err(Self::quota_rejection(why));
+            return Err(Self::quota_rejection(&why));
         }
         let tools = self.sandbox_tools().ok_or_else(|| {
             Rejection::new(
@@ -304,7 +304,7 @@ impl Service {
         self.spawn_verify(move || Completed::Verify {
             oid,
             verification_id,
-            out: jobs::verify(input),
+            out: jobs::verify(&input),
         });
         Ok(data)
     }
@@ -313,7 +313,7 @@ impl Service {
         &mut self,
         oid: ObjectiveId,
         verification_id: VerificationId,
-        out: jobs::VerifyOut,
+        out: &jobs::VerifyOut,
     ) {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;

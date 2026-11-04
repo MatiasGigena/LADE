@@ -112,8 +112,8 @@ impl Service {
         })
     }
 
-    pub(crate) fn quota_rejection(detail: String) -> Rejection {
-        Rejection::new(ErrorCode::LimitReached, SafeAction::Refresh, &detail)
+    pub(crate) fn quota_rejection(detail: &str) -> Rejection {
+        Rejection::new(ErrorCode::LimitReached, SafeAction::Refresh, detail)
     }
 
     pub(crate) fn check_free_space(&mut self) {

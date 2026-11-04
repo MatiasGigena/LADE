@@ -39,13 +39,15 @@ impl Service {
         let repo = jobs::open_repository(&path).map_err(git_rejection)?;
         let top = repo.work_tree().to_path_buf();
         if let Some(existing) = self.workspaces.values().find(|ws| ws.path == top) {
-            return Ok(ReplyData::WorkspaceOpen(
-                self.wire_workspace(existing, REPLY_BRANCHES),
-            ));
+            return Ok(ReplyData::WorkspaceOpen(Self::wire_workspace(
+                existing,
+                REPLY_BRANCHES,
+            )));
         }
-        let (row, fresh) = match sql(storage::workspace_by_path(self.store.conn(), &top))? {
-            Some(row) => (row, false),
-            None => {
+        let (row, fresh) =
+            if let Some(row) = sql(storage::workspace_by_path(self.store.conn(), &top))? {
+                (row, false)
+            } else {
                 let row = WorkspaceRow {
                     id: WorkspaceId::new(new_uuid()),
                     path: top.clone(),
@@ -57,8 +59,7 @@ impl Service {
                     opened_at: now_ms(),
                 };
                 (row, true)
-            }
-        };
+            };
         let ws = WsState {
             id: row.id,
             repo,
@@ -70,7 +71,7 @@ impl Service {
         if fresh {
             sql(storage::insert_workspace(self.store.conn(), &row))?;
         }
-        let reply = self.wire_workspace(&ws, REPLY_BRANCHES);
+        let reply = Self::wire_workspace(&ws, REPLY_BRANCHES);
         self.workspaces.insert(ws.id, ws);
         Ok(ReplyData::WorkspaceOpen(reply))
     }

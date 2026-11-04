@@ -117,7 +117,7 @@ impl Service {
         query: &InputsListQuery,
     ) -> Result<ReplyData, Rejection> {
         let st = self.obj(self.objective_id(&query.objective_id)?)?;
-        let after = query.after.as_ref().map_or(0, |cursor| cursor.value());
+        let after = query.after.as_ref().map_or(0, Counter::value);
         let mut eligible: Vec<_> = st.inputs.iter().filter(|(seq, _)| *seq > after).collect();
         eligible.sort_by_key(|(seq, _)| *seq);
         let mut inputs = Vec::new();
@@ -343,14 +343,14 @@ impl Service {
             .op
             .as_ref()
             .ok_or_else(|| invalid("operation id required"))?;
-        let (session_id, association_revision) = match session {
-            Some(pair) => pair,
-            None => {
-                let current = st.objective().execution().session().ok_or_else(|| {
+        let (session_id, association_revision) = if let Some(pair) = session {
+            pair
+        } else {
+            let current =
+                st.objective().execution().session().ok_or_else(|| {
                     domain_rejection(lade_core::DomainError::ExecutionUnavailable)
                 })?;
-                (current.session_id, current.association_revision)
-            }
+            (current.session_id, current.association_revision)
         };
         Ok(Acceptance {
             input_id: InputId::new(new_uuid()),
@@ -366,7 +366,7 @@ impl Service {
         mut ctx: ReqCtx,
         mut st: ObjState,
         input: lade_core::domain::feedback::AcceptedInput,
-        submitted: Vec<lade_core::domain::feedback::Draft>,
+        submitted: &[lade_core::domain::feedback::Draft],
         checked: bool,
     ) {
         let oid = st.objective().id();
@@ -375,7 +375,7 @@ impl Service {
         let data = input_reply(ctx.name, summary.clone());
         let committed = self.commit(Some(&mut ctx), Some(&data), |tx| {
             storage::insert_input(tx, &input, seq)?;
-            for draft in &submitted {
+            for draft in submitted {
                 storage::save_draft(tx, draft, false)?;
             }
             Ok(())
@@ -386,12 +386,13 @@ impl Service {
         }
         crate::fault::point("input.accepted");
         self.input_seq = seq;
-        for draft in &submitted {
+        for draft in submitted {
             if let Some(slot) = st.drafts.iter_mut().find(|d| d.id() == draft.id()) {
                 *slot = draft.clone();
             }
         }
-        st.inputs.push((seq, input.clone()));
+        let input_id = input.id;
+        st.inputs.push((seq, input));
         let drafts: Vec<_> = submitted.iter().map(|d| wire_draft(&st, d)).collect();
         self.objectives.insert(oid, st);
         self.finish(ctx, Ok(data));
@@ -399,11 +400,11 @@ impl Service {
         for draft in drafts {
             self.emit(Event::DraftChanged(draft));
         }
-        self.dispatch_queued(oid, checked.then_some(input.id));
+        self.dispatch_queued(oid, checked.then_some(input_id));
         self.emit_objective(oid);
     }
 
-    pub(super) fn message_send(&mut self, ctx: ReqCtx, cmd: MessageSendCommand) -> Flow {
+    pub(super) fn message_send(&mut self, ctx: ReqCtx, cmd: &MessageSendCommand) -> Flow {
         let result = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;
             let st = self.obj(oid)?;
@@ -418,7 +419,7 @@ impl Service {
             Ok((st.clone(), input))
         })();
         match result {
-            Ok((st, input)) => self.accept_and_dispatch(ctx, st, input, Vec::new(), true),
+            Ok((st, input)) => self.accept_and_dispatch(ctx, st, input, &[], true),
             Err(rejection) => self.finish(ctx, Err(rejection)),
         }
         Flow::Done
@@ -537,7 +538,7 @@ impl Service {
                         .iter()
                         .all(|d| matches!(d.record().state, DraftState::Submitted { .. }))
                 );
-                self.accept_and_dispatch(ctx, st, input, drafts, true);
+                self.accept_and_dispatch(ctx, st, input, &drafts, true);
             }
             Err(rejection) => self.finish(ctx, Err(rejection)),
         }

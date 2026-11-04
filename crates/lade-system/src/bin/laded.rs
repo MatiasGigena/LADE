@@ -365,7 +365,7 @@ fn serve(parsed: &Args) -> ExitCode {
         );
     }
     let launcher = make_launcher(&config);
-    let code = match service::start(config, launcher) {
+    let code = match service::start(&config, launcher) {
         Ok(running) => {
             eprintln!("laded: serving epoch={}", running.service_epoch());
             running.wait();

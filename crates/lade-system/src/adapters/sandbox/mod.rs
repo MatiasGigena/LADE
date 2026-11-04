@@ -415,11 +415,11 @@ impl SandboxSpec {
     pub fn command(&self, tools: &SandboxTools) -> Result<SandboxCommand, SandboxError> {
         let program = seccomp::program().ok_or(SandboxError::InvalidSpec { what: "seccomp" })?;
         let io = |e: io::Error| SandboxError::Io { kind: e.kind() };
-        let (filter, mut filler) = io::pipe().map_err(io)?;
-        filler.write_all(&program).map_err(io)?;
-        drop(filler);
+        let (filter_reader, mut filter_writer) = io::pipe().map_err(io)?;
+        filter_writer.write_all(&program).map_err(io)?;
+        drop(filter_writer);
         let (gate_reader, gate) = io::pipe().map_err(io)?;
-        let args = self.bwrap_args(filter.as_raw_fd(), gate_reader.as_raw_fd());
+        let args = self.bwrap_args(filter_reader.as_raw_fd(), gate_reader.as_raw_fd());
         let mut command = Command::new(&tools.prlimit);
         command
             .env_clear()
@@ -432,7 +432,7 @@ impl SandboxSpec {
             .args(args);
         Ok(SandboxCommand {
             command,
-            inherit: vec![filter, gate_reader],
+            inherit: vec![filter_reader, gate_reader],
             gate: Some(gate),
         })
     }

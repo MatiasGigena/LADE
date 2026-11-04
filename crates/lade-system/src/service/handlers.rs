@@ -93,7 +93,7 @@ impl Service {
             Request::SettingsUpdate(cmd) => self.settings_update(&mut ctx, cmd),
             Request::DraftSave(cmd) => self.draft_save(&mut ctx, &cmd),
             Request::DraftDelete(cmd) => self.draft_delete(&mut ctx, &cmd),
-            Request::MessageSend(cmd) => return self.message_send(ctx, cmd),
+            Request::MessageSend(cmd) => return self.message_send(ctx, &cmd),
             Request::FeedbackSubmit(cmd) => return self.feedback_submit(ctx, cmd),
             Request::ExecutionStart(cmd) => self.execution_start(&mut ctx, &cmd),
             Request::ExecutionCancel(ObjectiveSelector { objective_id }) => {
@@ -183,7 +183,7 @@ impl Service {
                 oid,
                 verification_id,
                 out,
-            } => self.verify_done(oid, verification_id, out),
+            } => self.verify_done(oid, verification_id, &out),
             Completed::Integrate {
                 oid,
                 ctx,
@@ -218,7 +218,7 @@ impl Service {
     }
 
     fn snapshot(&self) -> ReplyData {
-        ReplyData::Snapshot(self.budget_snapshot(self.snapshot_data(
+        ReplyData::Snapshot(Self::budget_snapshot(self.snapshot_data(
             &self.settings,
             None,
             None,
@@ -238,7 +238,7 @@ impl Service {
         let workspaces = workspace_states
             .into_iter()
             .take(64)
-            .map(|ws| self.wire_workspace(ws, max_branches))
+            .map(|ws| Self::wire_workspace(ws, max_branches))
             .collect();
         let mut states: Vec<&ObjState> = self.objectives.values().chain(objective).collect();
         states.sort_by_key(|st| {

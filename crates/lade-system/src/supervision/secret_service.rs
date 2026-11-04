@@ -76,6 +76,7 @@ struct Ran {
     stderr: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
 enum RunError {
     Spawn(io::ErrorKind),
     TimedOut,

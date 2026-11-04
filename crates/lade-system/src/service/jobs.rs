@@ -9,7 +9,7 @@
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -333,8 +333,9 @@ pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> 
             .as_ref()
             .and_then(|p| WirePath::from_bytes(p.as_bytes().to_vec()).ok())
             .map_or_else(|| "-".to_string(), |p| p.b64());
-        out.push_str(&format!(
-            "{:?}\t{:o}\t{:o}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        let _ = writeln!(
+            out,
+            "{:?}\t{:o}\t{:o}\t{}\t{}\t{}\t{}\t{}\t{}",
             file.status,
             file.old_mode,
             file.new_mode,
@@ -344,7 +345,7 @@ pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> 
             file.removed,
             old,
             path
-        ));
+        );
     }
     out.into_bytes()
 }
@@ -638,7 +639,7 @@ pub fn resolve_program(program: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-pub fn verify(input: VerifyInput) -> VerifyOut {
+pub fn verify(input: &VerifyInput) -> VerifyOut {
     let error = |message: &str| VerifyOut {
         end: VerificationEnd::Error,
         artifact: input
@@ -667,7 +668,7 @@ pub fn verify(input: VerifyInput) -> VerifyOut {
         Err(e) => return error(&format!("verification copy failed: {}", e.code())),
     };
     crate::fault::point("verify.copy");
-    let result = run_verification(&input, tools);
+    let result = run_verification(input, tools);
     let _ = repo.worktree_remove(&worktree, true);
     let _ = fs::remove_dir_all(&input.copy_dir);
     let _ = repo.delete_ref_cas(&format!("refs/heads/{}", input.branch), &commit);
@@ -722,9 +723,8 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
     .map_err(|e| format!("verification could not start: {}", e.kind()))?;
     drop(leaf);
     let end = match (outcome.timed_out, outcome.exit_code) {
-        (true, _) => VerificationEnd::Interrupted,
         (false, Some(code)) => VerificationEnd::Exited { code },
-        (false, None) => VerificationEnd::Interrupted,
+        (true, _) | (false, None) => VerificationEnd::Interrupted,
     };
     Ok(VerifyOut {
         end,

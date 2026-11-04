@@ -334,7 +334,7 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
         let writers = Arc::clone(writers);
         let spawned = thread::Builder::new()
             .name(format!("laded-conn-{conn}"))
-            .spawn(move || run_link(conn, stream, &capability, &tx, &pending, writers));
+            .spawn(move || run_link(conn, &stream, &capability, &tx, &pending, &writers));
         if spawned.is_err() {
             eprintln!("laded: could not start link thread");
         }
@@ -343,19 +343,18 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
 
 fn write_now(stream: &mut UnixStream, body: ClientBody) -> bool {
     encode(&ClientEnvelope::new(body), Framing::Client)
-        .ok()
-        .is_some_and(|bytes| stream.write_all(&bytes).is_ok())
+        .is_ok_and(|bytes| stream.write_all(&bytes).is_ok())
 }
 
 fn run_link<T: From<Inbound>>(
     conn: u64,
-    stream: UnixStream,
+    stream: &UnixStream,
     capability: &str,
     tx: &SyncSender<T>,
     pending: &AtomicUsize,
-    writers: Arc<Writers>,
+    writers: &Arc<Writers>,
 ) {
-    let admitted = handshake(&stream, capability);
+    let admitted = handshake(stream, capability);
     pending.fetch_sub(1, Ordering::SeqCst);
     let Some(mut reader) = admitted else {
         let _ = stream.shutdown(Shutdown::Both);
@@ -369,7 +368,7 @@ fn run_link<T: From<Inbound>>(
     let _ = write_half.set_write_timeout(Some(WRITE_STALL_TIMEOUT));
     let writer_out = out.clone();
     writers.started();
-    let writer_done = Arc::clone(&writers);
+    let writer_done = Arc::clone(writers);
     let writer = thread::Builder::new()
         .name(format!("laded-write-{conn}"))
         .spawn(move || {

@@ -136,7 +136,7 @@ impl Repository {
             if let Some(wt) = &worktree {
                 info.in_progress = in_progress(wt.admin_dir());
                 info.index_locked = wt.admin_dir().join("index.lock").exists();
-                (info.dirty, info.untracked) = self.worktree_status(wt)?;
+                (info.dirty, info.untracked) = worktree_status(wt)?;
             }
             checkouts.push(info);
         }
@@ -145,31 +145,6 @@ impl Repository {
             commit,
             checkouts,
         })
-    }
-
-    fn worktree_status(&self, worktree: &Worktree) -> Result<(bool, bool)> {
-        let out = worktree
-            .git("status")
-            .read_only()
-            .args([
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=normal",
-                "--ignore-submodules=none",
-                "--no-renames",
-            ])
-            .run()?;
-        let mut dirty = false;
-        let mut untracked = false;
-        for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-            if record.starts_with(b"?? ") {
-                untracked = true;
-            } else {
-                dirty = true;
-            }
-        }
-        Ok((dirty, untracked))
     }
 
     /// Squash-commits the candidate tree onto the target branch and updates the one work tree
@@ -393,4 +368,30 @@ fn in_progress(admin_dir: &Path) -> Vec<InProgress> {
         }
         acc
     })
+}
+
+/// Whether `worktree` has tracked changes and whether it has untracked files.
+fn worktree_status(worktree: &Worktree) -> Result<(bool, bool)> {
+    let out = worktree
+        .git("status")
+        .read_only()
+        .args([
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=normal",
+            "--ignore-submodules=none",
+            "--no-renames",
+        ])
+        .run()?;
+    let mut dirty = false;
+    let mut untracked = false;
+    for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        if record.starts_with(b"?? ") {
+            untracked = true;
+        } else {
+            dirty = true;
+        }
+    }
+    Ok((dirty, untracked))
 }

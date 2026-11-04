@@ -53,7 +53,7 @@ pub const WORKER_LIMITS: Limits = Limits {
 
 pub const TERMINAL_LIMITS: Limits = Limits::WORKER;
 
-pub const VERIFICATION_TIMEOUT: Duration = Duration::from_secs(900);
+pub const VERIFICATION_TIMEOUT: Duration = Duration::from_mins(15);
 pub const VERIFICATION_OUTPUT_LIMIT: usize = 4 << 20;
 
 pub const SANDBOX_TMP_BYTES: u64 = GIB;
