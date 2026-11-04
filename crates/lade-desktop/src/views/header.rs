@@ -400,20 +400,26 @@ impl Header {
                 }
             }
         });
-        for (button, exit) in [(&self.shortcuts_button, false), (&self.exit_button, true)] {
+        let actions = [
+            (
+                &self.shortcuts_button,
+                &self.menu_shortcuts.0,
+                Self::show_shortcuts as fn(&Self),
+            ),
+            (&self.exit_button, &self.menu_exit.0, Self::request_exit),
+        ];
+        for (wide, menu, action) in actions {
             let this = Rc::downgrade(self);
-            button.connect_clicked(move |_| {
+            wide.connect_clicked(move |_| {
                 if let Some(this) = this.upgrade() {
-                    this.run(exit);
+                    action(&this);
                 }
             });
-        }
-        for (button, exit) in [(&self.menu_shortcuts.0, false), (&self.menu_exit.0, true)] {
             let this = Rc::downgrade(self);
-            button.connect_clicked(move |_| {
+            menu.connect_clicked(move |_| {
                 if let Some(this) = this.upgrade() {
                     this.menu_button.popdown();
-                    this.run(exit);
+                    action(&this);
                 }
             });
         }
@@ -432,19 +438,14 @@ impl Header {
     }
 
     pub fn show_shortcuts(&self) {
-        self.run(false);
+        self.invoke_opener(self.on_shortcuts.borrow().clone(), &self.shortcuts_button);
     }
 
     pub fn request_exit(&self) {
-        self.run(true);
+        self.invoke_opener(self.on_exit.borrow().clone(), &self.exit_button);
     }
 
-    fn run(&self, exit: bool) {
-        let (handler, wide) = if exit {
-            (self.on_exit.borrow().clone(), &self.exit_button)
-        } else {
-            (self.on_shortcuts.borrow().clone(), &self.shortcuts_button)
-        };
+    fn invoke_opener(&self, handler: Option<OpenerHandler>, wide: &gtk::Button) {
         let opener: gtk::Widget = if self.compact.get() {
             self.menu_button.clone().upcast()
         } else {
