@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use adapters_support::TempDir;
 use lade_system::adapters::sandbox::{
-    Limits, RunOutcome, SandboxCommand, SandboxSpec, SandboxTools, VerificationLaunch,
-    WorkerLaunch, run_bounded, sandbox_available, verification_spec, worker_spec,
+    Limits, RunOutcome, SandboxSpec, SandboxTools, VerificationLaunch, WorkerLaunch, run_bounded,
+    sandbox_available, verification_spec, worker_spec,
 };
 
 fn tools() -> Option<SandboxTools> {
@@ -597,14 +597,18 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
     let marker = "4444.0723";
     let script = format!("setsid nohup sleep {marker} >/dev/null 2>&1 & sleep 1000");
     let cmd = sh_spec(&script, tmp.path()).command(&tools).unwrap();
-    let mut supervisor = Command::new("/bin/sh");
-    supervisor
-        .arg("-c")
-        .arg(format!("{} & wait", shell_line(&cmd)))
-        .env_clear()
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let (mut supervisor, mut gate) = cmd.spawn_via(supervisor).unwrap();
+    let (mut supervisor, mut gate) = cmd
+        .spawn_via(|sandbox| {
+            let mut supervisor = Command::new("/bin/sh");
+            supervisor
+                .arg("-c")
+                .arg(format!("{} & wait", shell_line(sandbox)))
+                .env_clear()
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            supervisor
+        })
+        .unwrap();
     gate.open().unwrap();
     assert!(wait_until(Duration::from_secs(10), || !processes_with(
         marker
@@ -618,8 +622,7 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
     );
 }
 
-fn shell_line(cmd: &SandboxCommand) -> String {
-    let cmd = cmd.get_command();
+fn shell_line(cmd: &Command) -> String {
     let mut line = shell_quote(cmd.get_program().as_encoded_bytes());
     for arg in cmd.get_args() {
         line.push(' ');

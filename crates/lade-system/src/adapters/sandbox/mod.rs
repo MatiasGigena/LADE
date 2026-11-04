@@ -423,8 +423,19 @@ impl SandboxCommand {
         spawn_inheriting(&inherit, || command.spawn()).map(|child| (child, Gate(gate)))
     }
 
-    pub fn spawn_via(self, mut supervisor: Command) -> io::Result<(Child, Gate)> {
-        let Self { inherit, gate, .. } = self;
+    /// Spawns a supervisor that runs this sandbox itself, instead of the sandbox directly:
+    /// `supervisor` builds that process from the sandbox command, and the sandbox's inherited
+    /// descriptors and gate carry over to it.
+    pub fn spawn_via(
+        self,
+        supervisor: impl FnOnce(&Command) -> Command,
+    ) -> io::Result<(Child, Gate)> {
+        let Self {
+            command,
+            inherit,
+            gate,
+        } = self;
+        let mut supervisor = supervisor(&command);
         spawn_inheriting(&inherit, || supervisor.spawn()).map(|child| (child, Gate(gate)))
     }
 }

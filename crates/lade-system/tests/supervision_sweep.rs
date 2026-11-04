@@ -7,9 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use adapters_support::TempDir;
-use lade_system::adapters::sandbox::{
-    Limits, SandboxCommand, SandboxTools, VerificationLaunch, verification_spec,
-};
+use lade_system::adapters::sandbox::{Limits, SandboxTools, VerificationLaunch, verification_spec};
 use lade_system::supervision::sweep::{
     PidRecord, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
 };
@@ -122,14 +120,13 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
     );
 }
 
-fn shell_line(cmd: &SandboxCommand) -> String {
+fn shell_line(cmd: &Command) -> String {
     let quote = |arg: &std::ffi::OsStr| {
         format!(
             "'{}'",
             arg.to_str().expect("utf-8 argument").replace('\'', "'\\''")
         )
     };
-    let cmd = cmd.get_command();
     std::iter::once(quote(cmd.get_program()))
         .chain(cmd.get_args().map(quote))
         .collect::<Vec<_>>()
@@ -159,16 +156,20 @@ fn forced_supervisor_loss_races_leave_no_survivors() {
         .unwrap();
         spec.marker(&sandbox_marker(&run)).unwrap();
         let cmd = spec.command(&tools).unwrap();
-        let mut supervisor = Command::new("/bin/sh");
-        supervisor
-            .arg("-c")
-            .arg(format!(
-                "{} </dev/null >/dev/null 2>&1 & kill -KILL $$",
-                shell_line(&cmd)
-            ))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let (mut supervisor, mut gate) = cmd.spawn_via(supervisor).unwrap();
+        let (mut supervisor, mut gate) = cmd
+            .spawn_via(|sandbox| {
+                let mut supervisor = Command::new("/bin/sh");
+                supervisor
+                    .arg("-c")
+                    .arg(format!(
+                        "{} </dev/null >/dev/null 2>&1 & kill -KILL $$",
+                        shell_line(sandbox)
+                    ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                supervisor
+            })
+            .unwrap();
         if i % 2 == 0 {
             gate.open().unwrap();
         } else {
