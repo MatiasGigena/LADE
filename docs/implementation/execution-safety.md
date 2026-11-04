@@ -35,7 +35,7 @@ Threads and bounds:
 | Thread | Behaviour | Bound |
 | --- | --- | --- |
 | writer | writes queued service→worker JSONL frames to stdin, in order | 256 frames **and** 8 MiB queued; a full queue makes `send` fail (`WouldBlock`, delivery uncertain); a failed write marks the link gone (`BrokenPipe`) |
-| monitor | `FrameReader` (worker framing, 1 MiB frames) → `decode_worker` → only worker→service bodies → `WorkerEvent::Body` on the service's bounded channel | any framing/schema failure or a service→worker body (`service_body_from_worker`) → kill sandbox, then `ProtocolViolation(code)`; EOF → 3 s grace then kill; then `Exited{code, signal}` after the process is reaped, the gateway is stopped and the pidfile removed |
+| monitor | `FrameReader` (worker framing, 1 MiB frames) → `WorkerEnvelope::decode` → only worker→service bodies → `WorkerEvent::Body` on the service's bounded channel | any framing/schema failure or a service→worker body (`service_body_from_worker`) → kill sandbox, then `ProtocolViolation(code)`; EOF → 3 s grace then kill; then `Exited{code, signal}` after the process is reaped, the gateway is stopped and the pidfile removed |
 | stderr | forwards worker stderr to `laded`'s stderr as `lade-worker[<objective>/<generation>]: <line>` | 512 bytes per line (cut marked `…`), control characters replaced, 100 lines/s (excess counted and reported as a number) |
 
 `WorkerControl::terminate` (also on `Drop`): queue `worker.shutdown`, close stdin, wait 3 s; then `SIGKILL` the

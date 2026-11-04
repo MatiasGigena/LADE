@@ -6,7 +6,7 @@ use lade_protocol::{
         ErrorCode, MessageSendCommand, ObjectiveSelector, Rejection, Reply, ReplyData, ReplyResult,
         Request, RequestFrame, RequestName, SafeAction,
     },
-    decode_client, decode_client_frame, encode,
+    decode_client_frame, encode,
     types::{DeliveryMode, Id},
 };
 use serde_json::{Value, json};
@@ -25,7 +25,7 @@ fn wire(body: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({"protocol":1,"bundle":lade_protocol::BUNDLE,"body":body})).unwrap()
 }
 fn message(body: Value) -> ClientEnvelope {
-    decode_client(&wire(body)).unwrap()
+    ClientEnvelope::decode(&wire(body)).unwrap()
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn reply_with_typed_data_round_trips() {
         &bytes[4..],
         br#"{"protocol":1,"bundle":"0.2.0","body":{"kind":"reply","request_id":"00000000-0000-4000-8000-000000000004","name":"draft.delete","result":{"status":"ok","data":{}}}}"#
     );
-    assert_eq!(decode_client(&bytes[4..]).unwrap(), reply);
+    assert_eq!(ClientEnvelope::decode(&bytes[4..]).unwrap(), reply);
     let long = Rejection::new(ErrorCode::NotFound, SafeAction::Refresh, &"é".repeat(600));
     assert_eq!(long.detail.chars().count(), 512);
     let rejected = ClientEnvelope::new(ClientBody::Reply(Reply::rejected(typed_id(4), None, long)));
@@ -394,7 +394,7 @@ fn record_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
         assert_eq!(remaining, 0);
         let bytes = serde_json::to_vec(&page).unwrap();
         assert_eq!(bytes.len(), MAX_FRAME);
-        let mut decoded = decode_client(&bytes).unwrap();
+        let mut decoded = ClientEnvelope::decode(&bytes).unwrap();
         assert_eq!(
             encode(&decoded, Framing::Client).unwrap().len(),
             MAX_FRAME + 4
@@ -416,7 +416,7 @@ fn record_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
             "frame_size"
         );
         assert_eq!(
-            decode_client(&serde_json::to_vec(&decoded).unwrap())
+            ClientEnvelope::decode(&serde_json::to_vec(&decoded).unwrap())
                 .unwrap_err()
                 .0,
             "frame_size"

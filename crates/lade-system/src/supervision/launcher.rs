@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::worker::WorkerBody;
-use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode_worker, encode};
+use lade_protocol::{FrameReader, Framing, Message, TransportError, WorkerEnvelope, encode};
 
 use super::child::{ChildStdio, SandboxedChild, lock};
 use super::credentials::{
@@ -545,7 +545,7 @@ fn monitor(
     };
     let ending = loop {
         match reader.read_frame() {
-            Ok(Some(frame)) => match decode_worker(&frame) {
+            Ok(Some(frame)) => match WorkerEnvelope::decode(&frame) {
                 Ok(envelope) if envelope.body.is_from_worker() => {
                     if events
                         .send(event(WorkerEvent::Body(envelope.body)))

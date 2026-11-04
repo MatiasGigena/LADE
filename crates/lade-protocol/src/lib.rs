@@ -85,13 +85,6 @@ impl Message for WorkerEnvelope {
     }
 }
 
-pub fn decode_client(bytes: &[u8]) -> Result<ClientEnvelope, WireError> {
-    ClientEnvelope::decode(bytes)
-}
-pub fn decode_worker(bytes: &[u8]) -> Result<WorkerEnvelope, WireError> {
-    WorkerEnvelope::decode(bytes)
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameRejection {
     pub error: WireError,
