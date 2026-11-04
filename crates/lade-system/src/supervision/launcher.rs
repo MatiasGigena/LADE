@@ -4,34 +4,35 @@ use std::fmt;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus, Stdio};
+use std::process::{ChildStderr, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::worker::WorkerBody;
 use lade_protocol::{FrameReader, Framing, TransportError, WorkerEnvelope, decode_worker, encode};
 
+use super::child::{ChildStdio, SandboxedChild, lock};
 use super::credentials::{
     CredentialError, CredentialSource, FIXTURE_PROVIDER, FIXTURE_REFUSED, FIXTURE_SWITCH,
     ReleasedCredentials,
 };
 use super::gateway::{EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies};
 use super::providers::{ProviderAccess, ProviderFacts, classify};
-use super::sweep::{PidRecord, kill_record, record_sandbox, sandbox_marker};
+use super::sweep::sandbox_marker;
 use super::{
     LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent,
     WorkerLauncher,
 };
 use crate::adapters::profile::{self, CustomProvider};
-use crate::support::fs::ensure_private_dir;
 pub use crate::adapters::sandbox::WORKER_LIMITS;
 use crate::adapters::sandbox::{
-    CgroupLeaf, Limits, SandboxCgroups, SandboxError, SandboxSpec, SandboxTools, WorkerLaunch,
-    find_program, run_bounded, sandbox_available, worker_spec,
+    Limits, SandboxCgroups, SandboxSpec, SandboxTools, WorkerLaunch, find_program, run_bounded,
+    sandbox_available, worker_spec,
 };
+use crate::support::fs::ensure_private_dir;
 
 pub const NODE_ARGS: &[&str] = &["--disable-wasm-trap-handler"];
 /// The pi switches every worker spawn (session worker and model catalogue) runs with.
@@ -46,10 +47,8 @@ pub const WRITE_QUEUE_BYTES: usize = 8 << 20;
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 pub const STDERR_LINE_BYTES: usize = 512;
 pub const STDERR_LINES_PER_SECOND: u32 = 100;
-const KILL_WAIT: Duration = Duration::from_secs(10);
 pub const CATALOG_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_CATALOG_BYTES: u64 = 4 << 20;
-const POLL: Duration = Duration::from_millis(10);
 pub const MAX_SOCKET_PATH: usize = 107;
 pub const GATEWAY_SOCKET_DIR: &str = "g";
 pub const RESERVED_GENERATION: u64 = 9_999_999;
@@ -181,8 +180,7 @@ pub struct SandboxLauncher {
 
 impl SandboxLauncher {
     pub fn new(mut config: LauncherConfig) -> Result<Self, LaunchError> {
-        let tools =
-            SandboxTools::locate().map_err(|e| LaunchError::SandboxUnavailable(e.to_string()))?;
+        let tools = SandboxTools::locate()?;
         config.node = resolve_node(Some(&config.node))?;
         config.worker_dir = config.worker_dir.canonicalize().map_err(LaunchError::Io)?;
         if !config.entry.is_absolute() || !config.entry.starts_with(&config.worker_dir) {
@@ -214,6 +212,50 @@ fn safe_id(id: &str) -> bool {
 }
 
 impl SandboxLauncher {
+    fn worker_launch(
+        &self,
+        worktree: PathBuf,
+        repo_common_dir: PathBuf,
+        session_dir: PathBuf,
+        gateway_socket: PathBuf,
+        credentials: &ReleasedCredentials,
+    ) -> WorkerLaunch {
+        let config = &self.config;
+        let pi_env = [
+            (
+                "PI_CODING_AGENT_DIR".into(),
+                session_dir.join("agent").into(),
+            ),
+            (
+                "PI_CODING_AGENT_SESSION_DIR".into(),
+                session_dir.join("sessions").into(),
+            ),
+        ]
+        .into_iter()
+        .chain(PI_FLAGS.map(|(name, value)| (name.into(), value.into())))
+        .collect();
+        WorkerLaunch {
+            node: config.node.clone(),
+            worker_dir: config.worker_dir.clone(),
+            entry: config.entry.clone(),
+            node_args: config.node_args.clone(),
+            args: Vec::new(),
+            worktree,
+            repo_common_dir,
+            session_dir,
+            gateway_socket,
+            pi_env,
+            credentials: credentials
+                .vars
+                .iter()
+                .map(|(k, v)| (k.clone(), v.expose().to_os_string()))
+                .collect(),
+            extra_ro: config.extra_ro.clone(),
+            limits: config.limits,
+            test_fixture_provider: config.test_fixture_provider,
+        }
+    }
+
     fn profile_dir(&self) -> Option<PathBuf> {
         self.config
             .run_dir
@@ -278,8 +320,7 @@ impl SandboxLauncher {
 impl WorkerLauncher for SandboxLauncher {
     fn preflight(&self, provider: &str) -> Result<(), LaunchError> {
         if !self.sandbox_ok.load(Ordering::SeqCst) {
-            sandbox_available(&self.tools)
-                .map_err(|e| LaunchError::SandboxUnavailable(e.to_string()))?;
+            sandbox_available(&self.tools)?;
             self.sandbox_ok.store(true, Ordering::SeqCst);
         }
         self.provider_ready(provider)
@@ -295,10 +336,7 @@ impl WorkerLauncher for SandboxLauncher {
     }
 
     fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
-        let sandbox = |e: crate::adapters::sandbox::SandboxError| {
-            LaunchError::SandboxUnavailable(e.to_string())
-        };
-        sandbox_available(&self.tools).map_err(sandbox)?;
+        sandbox_available(&self.tools)?;
         let config = &self.config;
         let node = config.node.canonicalize().map_err(LaunchError::Io)?;
         let prefix = node
@@ -319,26 +357,24 @@ impl WorkerLauncher for SandboxLauncher {
         if let Some(models) = models {
             argv.push(models.as_os_str().to_os_string());
         }
-        let mut spec = SandboxSpec::new(argv, scratch, config.limits).map_err(sandbox)?;
-        spec.ro_bind(&prefix)
-            .and_then(|s| s.ro_bind(&config.worker_dir))
-            .and_then(|s| s.rw_bind(scratch))
-            .and_then(|s| s.env("HOME", scratch))
-            .and_then(|s| s.env("LANG", "C.UTF-8"))
-            .and_then(|s| s.env("PI_CODING_AGENT_DIR", scratch))
-            .map_err(sandbox)?;
+        let mut spec = SandboxSpec::new(argv, scratch, config.limits)?;
+        spec.ro_bind(&prefix)?
+            .ro_bind(&config.worker_dir)?
+            .rw_bind(scratch)?
+            .env("HOME", scratch)?
+            .env("LANG", "C.UTF-8")?
+            .env("PI_CODING_AGENT_DIR", scratch)?;
         for (name, value) in PI_FLAGS {
-            spec.env(name, value).map_err(sandbox)?;
+            spec.env(name, value)?;
         }
         if let Some(models) = models {
-            spec.ro_bind(models).map_err(sandbox)?;
+            spec.ro_bind(models)?;
         }
         if config.test_fixture_provider {
-            spec.env(FIXTURE_SWITCH, "1").map_err(sandbox)?;
+            spec.env(FIXTURE_SWITCH, "1")?;
         }
-        spec.marker(&sandbox_marker(&config.run_dir))
-            .map_err(sandbox)?;
-        let command = spec.command(&self.tools).map_err(sandbox)?;
+        spec.marker(&sandbox_marker(&config.run_dir))?;
+        let command = spec.command(&self.tools)?;
         let outcome = run_bounded(command, CATALOG_TIMEOUT, 16 << 10).map_err(LaunchError::Io)?;
         if outcome.exit_code != Some(0) || outcome.timed_out {
             return Err(LaunchError::Io(io::Error::other("model catalogue failed")));
@@ -370,146 +406,54 @@ impl WorkerLauncher for SandboxLauncher {
         if !safe_id(&binding.objective_id) {
             return Err(invalid("objective id"));
         }
-        sandbox_available(&self.tools)
-            .map_err(|e| LaunchError::SandboxUnavailable(e.to_string()))?;
+        sandbox_available(&self.tools)?;
         let config = &self.config;
         let (policy, credentials) = self.resolve_provider(&provider, true)?;
 
         ensure_private_dir(&config.run_dir).map_err(LaunchError::Io)?;
-        let stem = format!("{}-{}", binding.objective_id, binding.execution_generation);
-        let socket = gateway_socket_path(
-            &config.socket_dir,
-            &binding.objective_id,
-            binding.execution_generation,
-        );
-        let pidfile = config.run_dir.join(format!("worker-{stem}.pid"));
+        let generation = binding.execution_generation;
+        let socket = gateway_socket_path(&config.socket_dir, &binding.objective_id, generation);
         if !socket_path_fits(&socket) {
             return Err(invalid("gateway socket path too long"));
         }
         let gateway = Gateway::start(&socket, policy, config.upstream_proxy.clone())
             .map_err(LaunchError::Io)?;
-
-        let session = session_dir.clone();
-        let launch = WorkerLaunch {
-            node: config.node.clone(),
-            worker_dir: config.worker_dir.clone(),
-            entry: config.entry.clone(),
-            node_args: config.node_args.clone(),
-            args: Vec::new(),
+        let mut spec = worker_spec(&self.worker_launch(
             worktree,
             repo_common_dir,
             session_dir,
-            gateway_socket: socket,
-            pi_env: [
-                ("PI_CODING_AGENT_DIR".into(), session.join("agent").into()),
-                (
-                    "PI_CODING_AGENT_SESSION_DIR".into(),
-                    session.join("sessions").into(),
-                ),
-            ]
-            .into_iter()
-            .chain(PI_FLAGS.map(|(name, value)| (name.into(), value.into())))
-            .collect(),
-            credentials: credentials
-                .vars
-                .iter()
-                .map(|(k, v)| (k.clone(), v.expose().to_os_string()))
-                .collect(),
-            extra_ro: config.extra_ro.clone(),
-            limits: config.limits,
-            test_fixture_provider: config.test_fixture_provider,
-        };
-        let spec_error = |e: SandboxError| {
-            LaunchError::Io(io::Error::new(ErrorKind::InvalidInput, e.to_string()))
-        };
-        let mut spec = worker_spec(&launch).map_err(spec_error)?;
-        drop(launch);
-        spec.marker(&sandbox_marker(&config.run_dir))
-            .map_err(spec_error)?;
+            socket,
+            &credentials,
+        ))?;
+        drop(credentials);
+        spec.marker(&sandbox_marker(&config.run_dir))?;
         let leaf = match &config.cgroups {
             Some(cgroups) => Some(
                 cgroups
-                    .leaf(
-                        &binding.objective_id,
-                        &format!("worker-{}", binding.execution_generation),
-                    )
+                    .leaf(&binding.objective_id, &format!("worker-{generation}"))
                     .map_err(LaunchError::Io)?,
             ),
             None => None,
         };
-        let mut cmd = spec.command(&self.tools).map_err(spec_error)?;
+        let mut command = spec.command(&self.tools)?;
         drop(spec);
-        cmd.command_mut()
+        command
+            .command_mut()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let (mut child, mut gate) = cmd.spawn().map_err(LaunchError::Io)?;
-        let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(invalid("missing worker pipes"));
-        };
-        let pid = child.id();
-        let label = format!("{}/{}", binding.objective_id, binding.execution_generation);
+        let pidfile = config
+            .run_dir
+            .join(format!("worker-{}-{generation}.pid", binding.objective_id));
+        let (child, stdio) =
+            SandboxedChild::spawn(command, pidfile, leaf).map_err(LaunchError::Io)?;
         let shared = Arc::new(Shared {
-            child: Mutex::new(child),
-            status: Mutex::new(None),
-            exited: Condvar::new(),
-            init: Mutex::new(None),
+            child,
             gateway: Mutex::new(Some(gateway)),
-            leaf: Mutex::new(None),
-            pidfile,
         });
-        let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
-            shared.poll_exit().is_some()
-        })
-        .and_then(|init| {
-            *lock(&shared.init) = init;
-            *lock(&shared.leaf) = leaf;
-            gate.open()
-        });
-        if let Err(e) = recorded {
-            shared.kill();
-            shared.wait_exit(KILL_WAIT);
-            shared.finish();
-            return Err(LaunchError::Io(e));
-        }
-
-        let (tx, rx) = sync_channel::<Vec<u8>>(WRITE_QUEUE_FRAMES);
-        let queued = Arc::new(AtomicUsize::new(0));
-        let link_failed = Arc::new(AtomicBool::new(false));
-        let threads = spawn_threads(
-            Arc::clone(&shared),
-            binding,
-            label,
-            events,
-            Pipes {
-                stdin,
-                stdout,
-                stderr,
-                rx,
-            },
-            Arc::clone(&queued),
-            Arc::clone(&link_failed),
-        );
-        let mut worker = SandboxWorker {
-            shared,
-            tx: Some(tx),
-            queued,
-            link_failed,
-            terminated: false,
-        };
-        if let Err(e) = threads {
-            worker.terminate();
-            return Err(LaunchError::Io(e));
-        }
-        if let Err(e) = worker.send(start) {
-            worker.terminate();
-            return Err(LaunchError::Io(e));
-        }
+        let mut worker = SandboxWorker::start(shared, stdio, binding, events)?;
+        worker.send(start).map_err(LaunchError::Io)?;
         Ok(Box::new(worker))
     }
 }
@@ -523,73 +467,18 @@ pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
 }
 
 struct Shared {
-    child: Mutex<Child>,
-    status: Mutex<Option<ExitStatus>>,
-    exited: Condvar,
-    init: Mutex<Option<PidRecord>>,
+    child: SandboxedChild,
     gateway: Mutex<Option<Gateway>>,
-    leaf: Mutex<Option<CgroupLeaf>>,
-    pidfile: PathBuf,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Shared {
-    fn poll_exit(&self) -> Option<ExitStatus> {
-        if let Some(status) = *lock(&self.status) {
-            return Some(status);
-        }
-        let status = lock(&self.child).try_wait().ok().flatten()?;
-        *lock(&self.status) = Some(status);
-        self.exited.notify_all();
-        Some(status)
-    }
-
-    fn wait_exit(&self, timeout: Duration) -> Option<ExitStatus> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.poll_exit() {
-                return Some(status);
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return None;
-            }
-            let guard = lock(&self.status);
-            let _ = self
-                .exited
-                .wait_timeout(guard, POLL.min(deadline - now))
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-    }
-
-    fn kill(&self) {
-        let mut child = lock(&self.child);
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        if let Some(init) = *lock(&self.init) {
-            kill_record(&init);
-        }
-        let _ = child.kill();
-    }
-
-    fn finish(&self) {
+    /// Tears the sandbox down (see [`SandboxedChild::terminate`]) and stops its gateway.
+    fn finish(&self) -> Option<ExitStatus> {
+        let status = self.child.terminate();
         if let Some(mut gateway) = lock(&self.gateway).take() {
             gateway.stop();
         }
-        if let Some(leaf) = lock(&self.leaf).take()
-            && leaf.oom_kills() > 0
-        {
-            eprintln!(
-                "laded: sandbox memory limit reached ({} OOM kill(s)) cgroup={}",
-                leaf.oom_kills(),
-                leaf.path().display()
-            );
-        }
-        let _ = std::fs::remove_file(&self.pidfile);
+        status
     }
 }
 
@@ -676,26 +565,16 @@ fn monitor(
     drop(reader);
     match ending {
         Ending::Violation(code) => {
-            shared.kill();
+            shared.child.kill();
             let _ = events.send(event(WorkerEvent::ProtocolViolation(code)));
         }
-        Ending::ReceiverGone => shared.kill(),
-        Ending::Eof => {
-            if shared.wait_exit(SHUTDOWN_GRACE).is_none() {
-                shared.kill();
-            }
-        }
+        Ending::ReceiverGone => shared.child.kill(),
+        Ending::Eof => drop(shared.child.wait_exit(SHUTDOWN_GRACE)),
     }
-    let status = loop {
-        if let Some(status) = shared.wait_exit(KILL_WAIT) {
-            break status;
-        }
-        shared.kill();
-    };
-    shared.finish();
+    let status = shared.finish();
     let _ = events.send(event(WorkerEvent::Exited {
-        code: status.code(),
-        signal: status.signal(),
+        code: status.and_then(|s| s.code()),
+        signal: status.and_then(|s| s.signal()),
     }));
 }
 
@@ -765,6 +644,51 @@ pub struct SandboxWorker {
     terminated: bool,
 }
 
+impl SandboxWorker {
+    /// Starts the writer, stderr and monitor threads of a spawned worker sandbox. On failure the
+    /// worker is dropped, which terminates the sandbox.
+    fn start(
+        shared: Arc<Shared>,
+        stdio: ChildStdio,
+        binding: LaunchBinding,
+        events: SyncSender<SupervisorEvent>,
+    ) -> Result<Self, LaunchError> {
+        let (tx, rx) = sync_channel::<Vec<u8>>(WRITE_QUEUE_FRAMES);
+        let worker = Self {
+            shared: Arc::clone(&shared),
+            tx: Some(tx),
+            queued: Arc::new(AtomicUsize::new(0)),
+            link_failed: Arc::new(AtomicBool::new(false)),
+            terminated: false,
+        };
+        let ChildStdio {
+            stdin: Some(stdin),
+            stdout: Some(stdout),
+            stderr: Some(stderr),
+        } = stdio
+        else {
+            return Err(invalid("missing worker pipes"));
+        };
+        let label = format!("{}/{}", binding.objective_id, binding.execution_generation);
+        spawn_threads(
+            shared,
+            binding,
+            label,
+            events,
+            Pipes {
+                stdin,
+                stdout,
+                stderr,
+                rx,
+            },
+            Arc::clone(&worker.queued),
+            Arc::clone(&worker.link_failed),
+        )
+        .map_err(LaunchError::Io)?;
+        Ok(worker)
+    }
+}
+
 impl fmt::Debug for SandboxWorker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SandboxWorker")
@@ -787,7 +711,7 @@ impl WorkerControl for SandboxWorker {
         };
         if self.terminated
             || self.link_failed.load(Ordering::SeqCst)
-            || self.shared.poll_exit().is_some()
+            || self.shared.child.poll_exit().is_some()
         {
             return Err(gone());
         }
@@ -816,17 +740,13 @@ impl WorkerControl for SandboxWorker {
         if self.terminated {
             return;
         }
-        if self.shared.poll_exit().is_none() {
+        if self.shared.child.poll_exit().is_none() {
             let _ = self.send(WorkerBody::Shutdown);
         }
         self.terminated = true;
         self.tx = None;
-        if self.shared.wait_exit(SHUTDOWN_GRACE).is_none() {
-            self.shared.kill();
-        }
-        if self.shared.wait_exit(KILL_WAIT).is_some() {
-            self.shared.finish();
-        }
+        self.shared.child.wait_exit(SHUTDOWN_GRACE);
+        self.shared.finish();
     }
 }
 

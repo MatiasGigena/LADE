@@ -1,3 +1,4 @@
+mod child;
 pub mod credentials;
 pub mod gateway;
 pub mod launcher;
@@ -10,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::SyncSender;
 
 use lade_protocol::worker::WorkerBody;
+
+use crate::adapters::sandbox::SandboxError;
 
 pub use credentials::CredentialSource;
 pub use gateway::{EgressPolicy, EgressRule, Gateway, UpstreamProxy};
@@ -72,6 +75,12 @@ impl std::fmt::Display for LaunchError {
 }
 
 impl std::error::Error for LaunchError {}
+
+impl From<SandboxError> for LaunchError {
+    fn from(error: SandboxError) -> Self {
+        Self::SandboxUnavailable(error.to_string())
+    }
+}
 
 pub trait WorkerControl: Send {
     fn send(&mut self, body: WorkerBody) -> std::io::Result<()>;

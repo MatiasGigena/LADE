@@ -44,6 +44,12 @@ namespace init (which ends every process in the PID namespace) and bwrap. Killin
 gateway is stopped (all tunnels closed) and the pidfile removed. `terminate` never waits for the service to drain
 events, so it is safe to call from the event-draining thread.
 
+Workers and terminals share one sandboxed-child teardown (`supervision/child.rs`): kill, wait up to 10 s for the
+reap, at most three kills; then the cgroup leaf is released (its `cgroup.kill` ends whatever is left in it). The
+pidfile is removed once the sandbox is reaped; a sandbox that was not reaped after the third kill keeps its pidfile
+for the next start's sweep, and `laded` logs it. A worker reported as `Exited` without a reap has neither code nor
+signal.
+
 `LauncherConfig` fields: `node` (`LADE_NODE`, an absolute path, else `node` on `PATH`), `worker_dir`
 (`LADE_WORKER_DIR`, else the bundle layout `<executable dir>/../lib/lade/pi-worker`, else — debug builds only —
 the repository's `packages/pi-worker`; release builds never use the compiled-in source tree),
@@ -437,7 +443,7 @@ process.
 Teardown: `Terminal::kill` (explicit close, freeze, lifecycle, lease loss, `service.stop`, shutdown, `Drop`) sends
 `SIGKILL` to the PID-namespace init — ending every process of the terminal, including `setsid`/double-forked
 daemons — and to bwrap, holding the `Child` so a reaped pid is never signalled, waits for the exit and removes the
-pidfile. A shell that exits ends `setsid --wait`, then the namespace init, which ends the namespace the same way.
+pidfile (the shared teardown described for the worker above). A shell that exits ends `setsid --wait`, then the namespace init, which ends the namespace the same way.
 
 Bounds: input queue 256 frames / 256 KiB (`WouldBlock` beyond); output ring 1 MiB per terminal with up to 100 ms of
 backpressure before the oldest bytes are discarded and counted; no output is logged or stored.

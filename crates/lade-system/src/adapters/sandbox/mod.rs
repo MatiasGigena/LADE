@@ -103,6 +103,18 @@ impl fmt::Display for SandboxError {
 
 impl std::error::Error for SandboxError {}
 
+impl From<SandboxError> for io::Error {
+    fn from(error: SandboxError) -> Self {
+        let kind = match &error {
+            SandboxError::ToolMissing { .. } => io::ErrorKind::NotFound,
+            SandboxError::InvalidSpec { .. } => io::ErrorKind::InvalidInput,
+            SandboxError::Unavailable { .. } => io::ErrorKind::Other,
+            SandboxError::Io { kind } => *kind,
+        };
+        io::Error::new(kind, error)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SandboxTools {
     pub bwrap: PathBuf,
