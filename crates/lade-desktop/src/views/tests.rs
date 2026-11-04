@@ -6,6 +6,18 @@ use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
 
+/// Runs the default main context for `duration`, dispatching events as they arrive, so
+/// layout, frame clock ticks and idle handlers queued by the step under test complete.
+pub(super) fn settle(duration: Duration) {
+    let context = glib::MainContext::default();
+    let elapsed = Rc::new(Cell::new(false));
+    let flag = elapsed.clone();
+    glib::timeout_add_local_once(duration, move || flag.set(true));
+    while !elapsed.get() {
+        context.iteration(true);
+    }
+}
+
 #[test]
 #[ignore = "requires a graphical display"]
 fn discarding_unsaved_feedback_closes_its_confirmation_without_reentrant_borrows() {

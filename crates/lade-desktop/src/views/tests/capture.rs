@@ -5,17 +5,11 @@ use crate::presentation::state::model::{
 };
 use crate::presentation::state::store::{InspectorTab, PresentationState};
 use crate::presentation::test_fixture;
+use crate::views::tests::settle;
 use crate::views::*;
 
-fn settle() {
-    let context = glib::MainContext::default();
-    for _ in 0..40 {
-        while context.pending() {
-            context.iteration(false);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
+/// How long each step lets GTK lay out and draw before it is checked.
+const SETTLE: Duration = Duration::from_millis(400);
 
 fn app(width: i32, height: i32) -> Rc<App> {
     load_css();
@@ -41,7 +35,7 @@ fn app(width: i32, height: i32) -> Rc<App> {
     );
     app.window.set_default_size(width, height);
     app.present();
-    settle();
+    settle(SETTLE);
     app
 }
 
@@ -181,7 +175,7 @@ fn populate(app: &App) {
 }
 
 fn shoot(window: &gtk::Window, dir: &std::path::Path, name: &str) {
-    settle();
+    settle(SETTLE);
     let paintable = gtk::WidgetPaintable::new(Some(window));
     let (width, height) = (window.width(), window.height());
     let snapshot = gtk::Snapshot::new();
@@ -217,7 +211,7 @@ fn capture_fixture_views() {
             shoot(&window, &dir, &format!("empty-{suffix}"));
             app.controller.select_objective(&main_id());
             populate(&app);
-            settle();
+            settle(SETTLE);
             shoot(&window, &dir, &format!("workbench-{suffix}"));
             app.controller.set_inspector_tab(InspectorTab::Evidence);
             shoot(&window, &dir, &format!("evidence-{suffix}"));
@@ -229,7 +223,7 @@ fn capture_fixture_views() {
             app.controller.set_view(MainView::Workbench);
             if width > 1000 {
                 dialogs::new_objective(&app.window, &app.controller);
-                settle();
+                settle(SETTLE);
                 let dialog = gtk::Window::list_toplevels()
                     .into_iter()
                     .filter_map(|w| w.downcast::<gtk::Window>().ok())
@@ -239,7 +233,7 @@ fn capture_fixture_views() {
                 dialog.close();
             }
             app.window.close();
-            settle();
+            settle(SETTLE);
         }
     });
 }

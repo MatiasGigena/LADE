@@ -3,7 +3,7 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,6 +27,11 @@ use crate::presentation::state::model::{
 use crate::presentation::state::store::StoreUpdate;
 
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// How often to look at a child `laded` process, which offers nothing to wait on for its
+/// socket appearing or, without blocking past a deadline, for its exit.
+const PROCESS_POLL: Duration = Duration::from_millis(50);
+/// How long the window must stay disconnected after `service.stop` to show it does not reconnect.
+const QUIET_AFTER_STOP: Duration = Duration::from_millis(500);
 
 struct TempDir(PathBuf);
 
@@ -76,7 +81,15 @@ fn wait_for(
         match updates.recv_timeout(left) {
             Ok(update) if pred(&update) => return update,
             Ok(update) => seen.push(format!("{update:?}").chars().take(300).collect::<String>()),
-            Err(_) => panic!("timed out waiting for {what}; saw:\n{}", seen.join("\n")),
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("timed out waiting for {what}; saw:\n{}", seen.join("\n"))
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "updates ended while waiting for {what}; saw:\n{}",
+                    seen.join("\n")
+                )
+            }
         }
     }
 }
@@ -382,7 +395,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-q", "-m", "init"]);
     let runtime = dir.0.join("run");
-    let _service = Service(
+    let mut service = Service(
         Command::new(&laded)
             .arg("serve")
             .arg("--state-dir")
@@ -398,7 +411,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !runtime.join(CONTROL_SOCKET_NAME).exists() {
         assert!(Instant::now() < deadline, "laded did not start");
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(PROCESS_POLL);
     }
 
     let (tx, updates) = start(&runtime, Some(repo.clone()));
@@ -552,7 +565,6 @@ fn real_service_workspace_objective_execution_and_change_set() {
             StoreUpdate::Connection(ConnectionState::Disconnected { .. })
         )
     });
-    let mut service = _service;
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {
         if let Some(status) = service.0.try_wait().unwrap() {
@@ -562,12 +574,14 @@ fn real_service_workspace_objective_execution_and_change_set() {
             Instant::now() < deadline,
             "laded kept running after service.stop"
         );
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(PROCESS_POLL);
     };
     assert!(status.success(), "{status:?}");
     assert!(!runtime.join(CONTROL_SOCKET_NAME).exists());
-    thread::sleep(Duration::from_millis(500));
-    while let Ok(update) = updates.try_recv() {
+    let quiet_until = Instant::now() + QUIET_AFTER_STOP;
+    while let Ok(update) =
+        updates.recv_timeout(quiet_until.saturating_duration_since(Instant::now()))
+    {
         assert!(
             !matches!(
                 update,

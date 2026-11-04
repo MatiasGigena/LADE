@@ -4,17 +4,11 @@ use crate::presentation::state::model::{
 };
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
+use crate::views::tests::settle;
 use crate::views::*;
 
-fn settle() {
-    let context = glib::MainContext::default();
-    for _ in 0..30 {
-        while context.pending() {
-            context.iteration(false);
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
+/// How long each step lets GTK lay out and draw before it is checked.
+const SETTLE: Duration = Duration::from_millis(300);
 
 fn app(width: i32, height: i32) -> Rc<App> {
     load_css();
@@ -39,7 +33,7 @@ fn app(width: i32, height: i32) -> Rc<App> {
     );
     app.window.set_default_size(width, height);
     app.present();
-    settle();
+    settle(SETTLE);
     app
 }
 
@@ -59,7 +53,7 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
     gtk::test_synced(|| {
         let app = app(800, 550);
         dialogs::new_objective(&app.window, &app.controller);
-        settle();
+        settle(SETTLE);
         let dialog = gtk::Window::list_toplevels()
             .into_iter()
             .filter_map(|w| w.downcast::<gtk::Window>().ok())
@@ -72,7 +66,7 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
             .find(|b| b.label().as_deref() == Some("Create Objective"))
             .expect("Create Objective action");
         create.emit_clicked();
-        settle();
+        settle(SETTLE);
         let error = descendants(dialog.upcast_ref())
             .into_iter()
             .filter_map(|w| w.downcast::<gtk::Label>().ok())
@@ -150,7 +144,7 @@ fn launch_qa_narrow_change_set_heading_stays_readable() {
             total_removed: 0,
             notices: vec![],
         }));
-        settle();
+        settle(SETTLE);
         let heading = descendants(app.window.upcast_ref())
             .into_iter()
             .filter_map(|w| w.downcast::<gtk::Label>().ok())
