@@ -585,18 +585,17 @@ impl Controller {
     }
 
     pub fn resolve_draft_conflict(&self, draft_id: &DraftId, keep_local: bool, now: Millis) {
-        let objective = self.store.update(|s| {
-            let objective = s.draft_mut(draft_id).map(|editor| {
-                editor.resolve_conflict(keep_local, now);
-                editor.objective_id.clone()
-            });
-            let changes = objective
-                .iter()
-                .map(|o| Change::Drafts(o.clone()))
+        self.store.update(|s| {
+            let changes = s
+                .draft_mut(draft_id)
+                .map(|editor| {
+                    editor.resolve_conflict(keep_local, now);
+                    Change::Drafts(editor.objective_id.clone())
+                })
+                .into_iter()
                 .collect();
-            (objective, changes)
+            ((), changes)
         });
-        drop(objective);
     }
 
     pub fn delete_draft(&self, draft_id: &DraftId) -> Result<(), String> {
