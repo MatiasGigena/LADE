@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use adapters_support::TempDir;
-use lade_system::adapters::sandbox::cgroup::{self, SandboxCgroups};
+use lade_system::adapters::sandbox::cgroup::{self, CgroupError, SandboxCgroups};
 use lade_system::adapters::sandbox::{
     CgroupLimits, Limits, OBJECTIVE_CGROUP_LIMITS, SandboxSpec, SandboxTools, run_bounded_with,
 };
@@ -53,9 +53,21 @@ fn without_delegation_detection_explains_the_fallback() {
     let reason = |membership: &str, mount: &Path| {
         cgroup::detect_in(membership, mount, limits, 1, no_manager).expect_err("must fall back")
     };
-    assert!(reason("4:memory:/x\n1:cpu:/\n", tmp.path()).contains("cgroup v1 or hybrid"));
-    assert!(reason("0::/lade.service\n", &tmp.path().join("missing")).contains("not mounted"));
-    let not_delegated = reason("0::/lade.service\n", tmp.path());
+    let v1 = reason("4:memory:/x\n1:cpu:/\n", tmp.path());
+    assert!(matches!(v1, CgroupError::NoV2Membership), "{v1}");
+    assert!(v1.to_string().contains("cgroup v1 or hybrid"));
+    let unmounted = reason("0::/lade.service\n", &tmp.path().join("missing"));
+    assert!(
+        matches!(unmounted, CgroupError::NotMounted(_)),
+        "{unmounted}"
+    );
+    assert!(unmounted.to_string().contains("not mounted"));
+    let error = reason("0::/lade.service\n", tmp.path());
+    assert!(
+        matches!(&error, CgroupError::NotDelegated { cgroup, .. } if cgroup == "/lade.service"),
+        "{error}"
+    );
+    let not_delegated = error.to_string();
     assert!(not_delegated.contains("not delegated"), "{not_delegated}");
     assert!(
         not_delegated.contains("not a service or scope"),
@@ -91,7 +103,9 @@ fn a_user_manager_unit_is_delegated_only_when_the_manager_says_so() {
     ];
     for (answer, expected) in refusals {
         let (tmp, dir) = fake_mount_at(&own, "cpu memory pids\n");
-        let error = detect(tmp.path(), answer).expect_err("must fall back");
+        let error = detect(tmp.path(), answer)
+            .expect_err("must fall back")
+            .to_string();
         assert!(error.contains("not delegated"), "{error}");
         assert!(error.contains(expected), "{error}");
         assert!(!dir.join("service").exists(), "{error}: nothing written");
@@ -136,7 +150,19 @@ fn a_delegated_cgroup_without_writable_interface_files_falls_back() {
     )
     .unwrap_err();
     assert!(
-        error.contains("cgroup.subtree_control is not writable"),
+        matches!(
+            error,
+            CgroupError::NotWritable {
+                file: "cgroup.subtree_control",
+                ..
+            }
+        ),
+        "{error}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("cgroup.subtree_control is not writable"),
         "{error}"
     );
     assert!(!dir.join("service").exists());
@@ -217,7 +243,11 @@ fn delegated_subtree_gets_a_service_leaf_and_limited_objective_cgroups() {
 fn missing_controllers_fall_back_with_their_names() {
     let (_tmp, own) = fake_mount("cpu io\n");
     let error = SandboxCgroups::prepare(&own, OBJECTIVE_CGROUP_LIMITS, 1).unwrap_err();
-    assert!(error.contains("memory pids"), "{error}");
+    assert!(
+        matches!(&error, CgroupError::MissingControllers(missing) if missing == &["memory", "pids"]),
+        "{error}"
+    );
+    assert!(error.to_string().contains("memory pids"), "{error}");
     assert!(!own.join("service").exists());
 }
 
@@ -226,7 +256,14 @@ fn a_cgroup_that_cannot_be_emptied_gets_no_controllers() {
     let (_tmp, own) = fake_mount("cpu memory pids\n");
     fs::write(own.join("cgroup.procs"), "99\n").unwrap();
     let error = SandboxCgroups::prepare(&own, OBJECTIVE_CGROUP_LIMITS, 4242).unwrap_err();
-    assert!(error.contains("could not be moved: [99]"), "{error}");
+    assert!(
+        matches!(&error, CgroupError::Unmovable(rest) if rest == &[99]),
+        "{error}"
+    );
+    assert!(
+        error.to_string().contains("could not be moved: [99]"),
+        "{error}"
+    );
     assert_eq!(
         fs::read_to_string(own.join("service/cgroup.procs")).unwrap(),
         "99"

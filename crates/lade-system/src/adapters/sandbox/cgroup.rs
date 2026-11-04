@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -20,6 +21,91 @@ const MOVE_PASSES: usize = 8;
 const CGROUP2_SUPER_MAGIC: i128 = 0x6367_7270;
 const SYSTEMCTL: [&str; 2] = ["/usr/bin/systemctl", "/bin/systemctl"];
 
+/// Why delegated cgroup limits are unavailable. The service reports it once at startup and runs
+/// its sandboxes with the prlimit limits only.
+#[derive(Debug)]
+pub enum CgroupError {
+    /// `LADE_CGROUPS=off` is set.
+    Disabled,
+    /// The service has no cgroup v2 membership (cgroup v1 or a hybrid hierarchy).
+    NoV2Membership,
+    /// cgroup v2 is not mounted where the membership points.
+    NotMounted(PathBuf),
+    /// The service cgroup belongs to another user.
+    NotOwned { cgroup: String },
+    /// The service cgroup is not delegated to the service; `why` names the missing evidence.
+    NotDelegated { cgroup: String, why: String },
+    /// The service cgroup is delegated, but one of its interface files is not writable.
+    NotWritable {
+        cgroup: String,
+        file: &'static str,
+        error: rustix::io::Errno,
+    },
+    /// Controllers the service unit does not delegate.
+    MissingControllers(Vec<&'static str>),
+    /// Processes left in the service cgroup that could not be moved into its leaf.
+    Unmovable(Vec<u32>),
+    /// A cgroup file could not be read or written.
+    Io { what: String, kind: ErrorKind },
+    /// The delegated limits are not enforced; `why` names the failed probe step.
+    NotEnforced(String),
+}
+
+impl CgroupError {
+    fn io(what: impl Into<String>) -> impl FnOnce(io::Error) -> Self {
+        let what = what.into();
+        move |e| Self::Io {
+            what,
+            kind: e.kind(),
+        }
+    }
+}
+
+impl fmt::Display for CgroupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => f.write_str("disabled by LADE_CGROUPS=off"),
+            Self::NoV2Membership => {
+                f.write_str("no cgroup v2 membership (cgroup v1 or hybrid hierarchy)")
+            }
+            Self::NotMounted(mount) => {
+                write!(f, "cgroup v2 is not mounted at {}", mount.display())
+            }
+            Self::NotOwned { cgroup } => write!(
+                f,
+                "the service cgroup {cgroup} is not owned by the service user"
+            ),
+            Self::NotDelegated { cgroup, why } => write!(
+                f,
+                "the service cgroup {cgroup} is not delegated ({why}; run laded from the lade.service unit, which sets Delegate=)"
+            ),
+            Self::NotWritable {
+                cgroup,
+                file,
+                error,
+            } => write!(
+                f,
+                "the service cgroup {cgroup} is delegated but its {file} is not writable ({error})"
+            ),
+            Self::MissingControllers(missing) => write!(
+                f,
+                "controllers not delegated: {} (the unit needs Delegate=memory pids cpu)",
+                missing.join(" ")
+            ),
+            Self::Unmovable(rest) => write!(
+                f,
+                "the service cgroup still holds processes that could not be moved: {rest:?}"
+            ),
+            Self::Io { what, kind } => write!(f, "{what}: {kind}"),
+            Self::NotEnforced(why) => {
+                write!(f, "delegated cgroup limits are not enforced: {why}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CgroupError {}
+
 #[derive(Debug)]
 pub struct SandboxCgroups {
     root: PathBuf,
@@ -27,12 +113,12 @@ pub struct SandboxCgroups {
     delegation: String,
 }
 
-pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, String> {
+pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, CgroupError> {
     if std::env::var_os("LADE_CGROUPS").is_some_and(|v| v == "off") {
-        return Err("disabled by LADE_CGROUPS=off".into());
+        return Err(CgroupError::Disabled);
     }
-    let membership = fs::read_to_string("/proc/self/cgroup")
-        .map_err(|e| format!("/proc/self/cgroup unreadable ({})", e.kind()))?;
+    let membership =
+        fs::read_to_string("/proc/self/cgroup").map_err(CgroupError::io("/proc/self/cgroup"))?;
     let cgroups = detect_in(
         &membership,
         Path::new(MOUNT),
@@ -50,26 +136,29 @@ pub fn detect_in(
     limits: CgroupLimits,
     pid: u32,
     user_manager: impl FnOnce(&str) -> Result<String, String>,
-) -> Result<SandboxCgroups, String> {
-    let own =
-        own_cgroup(membership).ok_or("no cgroup v2 membership (cgroup v1 or hybrid hierarchy)")?;
+) -> Result<SandboxCgroups, CgroupError> {
+    let own = own_cgroup(membership).ok_or(CgroupError::NoV2Membership)?;
     if !mount.join("cgroup.controllers").is_file() {
-        return Err(format!("cgroup v2 is not mounted at {}", mount.display()));
+        return Err(CgroupError::NotMounted(mount.to_path_buf()));
     }
     let dir = mount.join(own.trim_start_matches('/'));
     let euid = rustix::process::geteuid().as_raw();
-    let owner = fs::metadata(&dir)
-        .map_err(|e| format!("{own}: {}", e.kind()))?
-        .uid();
+    let owner = fs::metadata(&dir).map_err(CgroupError::io(own))?.uid();
     if owner != euid {
-        return Err(format!(
-            "the service cgroup {own} is not owned by the service user"
-        ));
+        return Err(CgroupError::NotOwned { cgroup: own.into() });
     }
-    let delegation = delegation(&dir, own, euid, user_manager)?;
+    let delegation =
+        delegation(&dir, own, euid, user_manager).map_err(|why| CgroupError::NotDelegated {
+            cgroup: own.into(),
+            why,
+        })?;
     for file in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control"] {
-        rustix::fs::access(dir.join(file), rustix::fs::Access::WRITE_OK).map_err(|e| {
-            format!("the service cgroup {own} is delegated but its {file} is not writable ({e})")
+        rustix::fs::access(dir.join(file), rustix::fs::Access::WRITE_OK).map_err(|error| {
+            CgroupError::NotWritable {
+                cgroup: own.into(),
+                file,
+                error,
+            }
         })?;
     }
     let cgroups = SandboxCgroups::prepare(&dir, limits, pid)?;
@@ -79,6 +168,7 @@ pub fn detect_in(
     })
 }
 
+/// Names the evidence that `own` is delegated to the service, or why it is not.
 fn delegation(
     dir: &Path,
     own: &str,
@@ -94,20 +184,15 @@ fn delegation(
     if let Some(name) = marked {
         return Ok(format!("{name} attribute on {own}"));
     }
-    let not_delegated = |why: String| {
-        format!(
-            "the service cgroup {own} is not delegated ({why}; run laded from the lade.service unit, which sets Delegate=)"
-        )
-    };
     let Some(unit) = user_manager_unit(own, euid) else {
-        return Err(not_delegated(format!(
+        return Err(format!(
             "no delegate attribute, and not a service or scope of the systemd user manager user@{euid}.service"
-        )));
+        ));
     };
     let shown = user_manager(unit).map_err(|e| {
-        not_delegated(format!(
+        format!(
             "no delegate attribute, and the systemd user manager could not be asked about {unit}: {e}"
-        ))
+        )
     })?;
     let property = |key: &str| {
         shown
@@ -116,16 +201,16 @@ fn delegation(
             .map(str::trim)
     };
     if property("ControlGroup") != Some(own) {
-        return Err(not_delegated(format!(
+        return Err(format!(
             "the systemd user manager does not place {unit} in this cgroup"
-        )));
+        ));
     }
     match property("Delegate") {
         Some("yes") => Ok(format!("systemd user manager: {unit} has Delegate=yes")),
-        other => Err(not_delegated(format!(
+        other => Err(format!(
             "the systemd user manager reports Delegate={} for {unit}",
             other.unwrap_or("?")
-        ))),
+        )),
     }
 }
 
@@ -200,10 +285,6 @@ fn own_cgroup(membership: &str) -> Option<&str> {
         .filter(|path| path.starts_with('/'))
 }
 
-fn write(path: &Path, value: &str) -> io::Result<()> {
-    fs::write(path, value)
-}
-
 fn mkdir(path: &Path) -> io::Result<()> {
     match fs::create_dir(path) {
         Err(e) if e.kind() == ErrorKind::AlreadyExists => Ok(()),
@@ -223,47 +304,41 @@ fn members(dir: &Path) -> Vec<u32> {
 }
 
 impl SandboxCgroups {
-    pub fn prepare(dir: &Path, limits: CgroupLimits, pid: u32) -> Result<Self, String> {
-        let fail = |what: &str, e: io::Error| format!("{what}: {}", e.kind());
+    pub fn prepare(dir: &Path, limits: CgroupLimits, pid: u32) -> Result<Self, CgroupError> {
         let available = fs::read_to_string(dir.join("cgroup.controllers"))
-            .map_err(|e| fail("cgroup.controllers", e))?;
+            .map_err(CgroupError::io("cgroup.controllers"))?;
         let missing: Vec<&str> = CONTROLLERS
             .iter()
             .copied()
             .filter(|c| !available.split_whitespace().any(|a| a == *c))
             .collect();
         if !missing.is_empty() {
-            return Err(format!(
-                "controllers not delegated: {} (the unit needs Delegate=memory pids cpu)",
-                missing.join(" ")
-            ));
+            return Err(CgroupError::MissingControllers(missing));
         }
         let service = dir.join(SERVICE_LEAF);
-        mkdir(&service).map_err(|e| fail("service cgroup", e))?;
+        mkdir(&service).map_err(CgroupError::io("service cgroup"))?;
         let procs = service.join("cgroup.procs");
-        write(&procs, &pid.to_string())
-            .map_err(|e| fail("moving the service into its leaf cgroup", e))?;
+        fs::write(&procs, pid.to_string())
+            .map_err(CgroupError::io("moving the service into its leaf cgroup"))?;
         for _ in 0..MOVE_PASSES {
             let rest = members(dir);
             if rest.is_empty() {
                 break;
             }
             for other in rest {
-                let _ = write(&procs, &other.to_string());
+                let _ = fs::write(&procs, other.to_string());
             }
         }
         let rest = members(dir);
         if !rest.is_empty() {
-            return Err(format!(
-                "the service cgroup still holds processes that could not be moved: {rest:?}"
-            ));
+            return Err(CgroupError::Unmovable(rest));
         }
-        write(&dir.join("cgroup.subtree_control"), ENABLE)
-            .map_err(|e| fail("enabling controllers", e))?;
+        fs::write(dir.join("cgroup.subtree_control"), ENABLE)
+            .map_err(CgroupError::io("enabling controllers"))?;
         let root = dir.join(SANDBOXES);
-        mkdir(&root).map_err(|e| fail("sandboxes cgroup", e))?;
-        write(&root.join("cgroup.subtree_control"), ENABLE)
-            .map_err(|e| fail("enabling sandbox controllers", e))?;
+        mkdir(&root).map_err(CgroupError::io("sandboxes cgroup"))?;
+        fs::write(root.join("cgroup.subtree_control"), ENABLE)
+            .map_err(CgroupError::io("enabling sandbox controllers"))?;
         Ok(Self {
             root,
             limits,
@@ -283,13 +358,13 @@ impl SandboxCgroups {
         &self.delegation
     }
 
-    fn prove_enforcement(&self) -> Result<(), String> {
+    fn prove_enforcement(&self) -> Result<(), CgroupError> {
         let probe = self.root.join(PROBE);
         kill_and_remove(&probe);
-        fs::create_dir(&probe).map_err(|e| format!("enforcement probe cgroup: {}", e.kind()))?;
+        fs::create_dir(&probe).map_err(CgroupError::io("enforcement probe cgroup"))?;
         let proved = prove_in(&probe);
         kill_and_remove(&probe);
-        proved.map_err(|why| format!("delegated cgroup limits are not enforced: {why}"))
+        proved.map_err(CgroupError::NotEnforced)
     }
 
     pub fn leaf(&self, objective: &str, name: &str) -> io::Result<CgroupLeaf> {
@@ -319,14 +394,14 @@ impl SandboxCgroups {
     fn apply_limits(&self, group: &Path) -> io::Result<()> {
         let limits = self.limits;
         let max = |v: Option<u64>| v.map_or_else(|| "max".to_string(), |v| v.to_string());
-        write(&group.join("memory.max"), &max(limits.memory_max))?;
-        write(&group.join("pids.max"), &max(limits.pids_max))?;
+        fs::write(group.join("memory.max"), max(limits.memory_max))?;
+        fs::write(group.join("pids.max"), max(limits.pids_max))?;
         let cpu = limits.cpu_max.map_or_else(
             || "max 100000".to_string(),
             |(quota, period)| format!("{quota} {period}"),
         );
-        write(&group.join("cpu.max"), &cpu)?;
-        write(&group.join("cgroup.subtree_control"), ENABLE)
+        fs::write(group.join("cpu.max"), cpu)?;
+        fs::write(group.join("cgroup.subtree_control"), ENABLE)
     }
 
     pub fn sweep(&self) -> usize {
@@ -342,6 +417,7 @@ impl SandboxCgroups {
     }
 }
 
+/// Proves on `probe` that a pids limit is enforced, or names the failed step.
 fn prove_in(probe: &Path) -> Result<(), String> {
     let fail = |what: &str, e: io::Error| format!("{what}: {}", e.kind());
     let fs_type = rustix::fs::statfs(probe)
@@ -360,7 +436,7 @@ fn prove_in(probe: &Path) -> Result<(), String> {
             "the {missing} controller is not active below the service"
         ));
     }
-    write(&probe.join("pids.max"), "1").map_err(|e| fail("pids.max", e))?;
+    fs::write(probe.join("pids.max"), "1").map_err(|e| fail("pids.max", e))?;
     let set = fs::read_to_string(probe.join("pids.max")).map_err(|e| fail("pids.max", e))?;
     if set.trim() != "1" {
         return Err(format!("pids.max reads {:?} after writing 1", set.trim()));
@@ -373,7 +449,7 @@ fn prove_in(probe: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| fail("probe shell", e))?;
-    let released = write(&probe.join("cgroup.procs"), &shell.id().to_string())
+    let released = fs::write(probe.join("cgroup.procs"), shell.id().to_string())
         .map_err(|e| fail("moving the probe shell", e))
         .and_then(|()| match shell.stdin.take() {
             Some(mut input) => input.write_all(b"\n").map_err(|e| fail("probe input", e)),
@@ -425,7 +501,7 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn kill_and_remove(leaf: &Path) {
-    let _ = write(&leaf.join("cgroup.kill"), "1");
+    let _ = fs::write(leaf.join("cgroup.kill"), "1");
     let deadline = Instant::now() + KILL_WAIT;
     while populated(leaf) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(10));
@@ -450,7 +526,7 @@ impl CgroupLeaf {
     }
 
     pub fn add(&self, pid: u32) -> io::Result<()> {
-        write(&self.path.join("cgroup.procs"), &pid.to_string())
+        fs::write(self.path.join("cgroup.procs"), pid.to_string())
     }
 
     pub fn contains(&self, pid: u32) -> bool {

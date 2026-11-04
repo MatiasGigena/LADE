@@ -14,7 +14,7 @@ use std::process::{Child, Command};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-pub use cgroup::{CgroupLeaf, SandboxCgroups};
+pub use cgroup::{CgroupError, CgroupLeaf, SandboxCgroups};
 pub use limits::{
     CgroupLimits, Limits, OBJECTIVE_CGROUP_LIMITS, SANDBOX_TMP_BYTES, STORAGE_CHECK_INTERVAL,
     TERMINAL_LIMITS, VERIFICATION_OUTPUT_LIMIT, VERIFICATION_TIMEOUT, WORKER_LIMITS,
