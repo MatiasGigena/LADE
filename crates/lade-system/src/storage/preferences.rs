@@ -7,21 +7,6 @@ use rusqlite::{Connection, params};
 
 use super::rows::{Sql, corrupt};
 
-pub(super) const SCHEMA_V2: &str = r"
-CREATE TABLE session_preferences (
-    objective_id TEXT PRIMARY KEY REFERENCES objectives(id),
-    thinking TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-CREATE TABLE resource_approvals (
-    name TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    decision TEXT NOT NULL CHECK (decision IN ('approved', 'rejected')),
-    decided_at INTEGER NOT NULL,
-    PRIMARY KEY (name, sha256)
-);
-";
-
 /// Records the thinking level chosen for `objective`.
 ///
 /// # Errors
@@ -108,4 +93,98 @@ pub fn load_approvals(conn: &Connection) -> Sql<Vec<ApprovalRow>> {
         })
     })?;
     rows.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use lade_core::domain::ids::{GitAlgorithm, GitId, Timestamp, WorkspaceId};
+    use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
+
+    use super::*;
+    use crate::storage::{ObjectiveRow, WorkspaceRow, insert_workspace, memory, save_objective};
+
+    fn objective(conn: &Connection, n: u8) -> ObjectiveId {
+        let workspace_id = WorkspaceId::new(Uuid::from_random_bytes([n; 16]));
+        insert_workspace(
+            conn,
+            &WorkspaceRow {
+                id: workspace_id,
+                path: PathBuf::from(format!("/repo/{n}")),
+                name: "w".into(),
+                default_branch: None,
+                opened_at: 0,
+            },
+        )
+        .expect("workspace");
+        let objective = Objective::define(
+            NewObjective {
+                id: ObjectiveId::new(Uuid::from_random_bytes([n + 100; 16])),
+                workspace_id,
+                title: Title::new("t").expect("title"),
+                intent: Intent::new("o", "c", "a").expect("intent"),
+                integration_target: BranchName::new("main").expect("branch"),
+                start_commit: GitId::new(GitAlgorithm::Sha1, &"a".repeat(40)).expect("commit"),
+            },
+            Timestamp::from_unix_ms(0),
+        );
+        let id = objective.id();
+        let row = ObjectiveRow {
+            objective,
+            git_branch: None,
+            worktree: None,
+            integration_conflict: false,
+            history_deleted: false,
+        };
+        save_objective(conn, &row).expect("objective");
+        id
+    }
+
+    #[test]
+    fn thinking_levels_are_replaced_per_objective_and_need_a_recorded_objective() {
+        let conn = memory();
+        let first = objective(&conn, 1);
+        let second = objective(&conn, 2);
+        save_thinking(&conn, first, ThinkingLevel::Low, 1).expect("save");
+        save_thinking(&conn, second, ThinkingLevel::Max, 1).expect("save");
+        save_thinking(&conn, first, ThinkingLevel::High, 2).expect("replace");
+        let mut levels = load_thinking(&conn).expect("load");
+        levels.sort_by_key(|(id, _)| id.to_string());
+        let mut expected = vec![(first, ThinkingLevel::High), (second, ThinkingLevel::Max)];
+        expected.sort_by_key(|(id, _)| id.to_string());
+        assert_eq!(levels, expected);
+        let unknown = ObjectiveId::new(Uuid::from_random_bytes([9; 16]));
+        assert!(save_thinking(&conn, unknown, ThinkingLevel::Off, 3).is_err());
+        conn.execute("UPDATE session_preferences SET thinking = 'loud'", [])
+            .expect("corrupt");
+        assert!(matches!(
+            load_thinking(&conn),
+            Err(rusqlite::Error::InvalidColumnType(_, what, _)) if what == "thinking level"
+        ));
+    }
+
+    #[test]
+    fn extension_decisions_are_keyed_by_name_and_content_hash() {
+        let conn = memory();
+        let decision = |sha256: &str, approved| ApprovalRow {
+            name: "ext".into(),
+            sha256: sha256.into(),
+            approved,
+        };
+        save_approval(&conn, &decision("aa", true), 1).expect("approve");
+        save_approval(&conn, &decision("bb", false), 1).expect("reject other version");
+        save_approval(&conn, &decision("aa", false), 2).expect("revoke");
+        let mut rows = load_approvals(&conn).expect("load");
+        rows.sort_by(|a, b| a.sha256.cmp(&b.sha256));
+        assert_eq!(rows, [decision("aa", false), decision("bb", false)]);
+        assert!(
+            conn.execute(
+                "INSERT INTO resource_approvals VALUES ('x', 'cc', 'maybe', 0)",
+                []
+            )
+            .is_err(),
+            "the schema only admits approved or rejected"
+        );
+    }
 }
