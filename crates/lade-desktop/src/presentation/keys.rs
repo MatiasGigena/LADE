@@ -326,6 +326,7 @@ impl Keymap {
         self.accel(action).label()
     }
 
+    #[cfg(test)]
     pub fn is_default(&self) -> bool {
         *self == Self::default()
     }

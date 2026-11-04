@@ -61,6 +61,10 @@ pub fn execution_label(execution: &Execution) -> String {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
+)]
 pub fn execution_label_for(detail: &ObjectiveDetail) -> String {
     let label = execution_label(&detail.summary.execution);
     if detail.availability(ActionName::ExecutionResume) == ActionAvailability::Enabled {
@@ -334,6 +338,10 @@ pub fn command_line(argv: &[String]) -> String {
         .join(" ")
 }
 
+#[expect(
+    dead_code,
+    reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
+)]
 pub fn verification_summary_line(v: &VerificationSummary) -> String {
     let (sign, label) = verification_result(v.state);
     match v.exit_code {

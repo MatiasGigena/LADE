@@ -271,6 +271,10 @@ pub struct Inventory {
 }
 
 impl Inventory {
+    #[expect(
+        dead_code,
+        reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
+    )]
     pub fn pending(&self) -> usize {
         self.entries
             .iter()

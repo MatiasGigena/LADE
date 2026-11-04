@@ -82,10 +82,12 @@ impl Screen {
         (self.cols, self.rows)
     }
 
+    #[cfg(test)]
     pub fn cursor(&self) -> (usize, usize) {
         (self.row, self.col)
     }
 
+    #[cfg(test)]
     pub fn scrollback_len(&self) -> usize {
         self.scrollback.len()
     }

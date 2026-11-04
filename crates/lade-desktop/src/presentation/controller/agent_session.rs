@@ -234,6 +234,10 @@ impl Controller {
         Ok(())
     }
 
+    #[expect(
+        dead_code,
+        reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
+    )]
     pub fn session_line(&self) -> Option<String> {
         let state = self.store.state();
         let id = state.ui.selected.as_ref()?;
@@ -246,6 +250,10 @@ impl Controller {
         ))
     }
 
+    #[expect(
+        dead_code,
+        reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
+    )]
     pub fn agent_session_changes_for(&self, changes: &[Change]) -> bool {
         let selected = self.store.state().ui.selected.clone();
         changes.iter().any(|c| match c {

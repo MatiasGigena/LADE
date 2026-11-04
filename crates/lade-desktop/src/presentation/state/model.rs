@@ -8,10 +8,12 @@ macro_rules! id_type {
                 Self(value.into())
             }
 
+            #[allow(dead_code, reason = "generated for every id type; not every type reads each accessor")]
             pub fn as_str(&self) -> &str {
                 &self.0
             }
 
+            #[allow(dead_code, reason = "generated for every id type; not every type reads each accessor")]
             pub fn short(&self) -> &str {
                 self.0.get(..8).unwrap_or(&self.0)
             }
@@ -50,6 +52,7 @@ pub struct GitId {
 }
 
 impl GitId {
+    #[cfg(test)]
     pub fn sha1(hex: impl Into<String>) -> Self {
         Self {
             algorithm: GitAlgorithm::Sha1,
@@ -68,6 +71,7 @@ pub struct RepoPath {
     pub display: String,
 }
 
+#[cfg(test)]
 impl RepoPath {
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         let display = String::from_utf8_lossy(&bytes).into_owned();
@@ -160,6 +164,7 @@ pub struct Execution {
 }
 
 impl Execution {
+    #[cfg(test)]
     pub fn new(state: ExecutionState, generation: u64) -> Self {
         Self {
             state,
@@ -170,7 +175,7 @@ impl Execution {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[allow(
+#[expect(
     clippy::enum_variant_names,
     reason = "mirrors the protocol's `needs_attention` attention value"
 )]

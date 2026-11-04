@@ -310,6 +310,7 @@ impl Intent {
         }
     }
 
+    #[cfg(test)]
     pub fn is_query(&self) -> bool {
         matches!(
             self,
@@ -332,11 +333,13 @@ pub trait IntentSink {
     fn submit(&self, intent: Intent);
 }
 
+#[cfg(test)]
 #[derive(Default)]
 pub struct RecordingSink {
     pub intents: std::cell::RefCell<Vec<Intent>>,
 }
 
+#[cfg(test)]
 impl IntentSink for RecordingSink {
     fn submit(&self, intent: Intent) {
         self.intents.borrow_mut().push(intent);

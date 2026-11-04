@@ -7,6 +7,7 @@ use super::text::format;
 pub const MORE_ACTIONS_TITLE: &str = "More actions";
 pub const DETAILS_TITLE: &str = "Details";
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Surface {
     Overview,
@@ -15,6 +16,7 @@ pub enum Surface {
     Activity,
 }
 
+#[cfg(test)]
 pub const ALL_ACTIONS: [ActionName; 16] = [
     ActionName::ObjectiveUpdateIntent,
     ActionName::ExecutionStart,
@@ -34,6 +36,7 @@ pub const ALL_ACTIONS: [ActionName; 16] = [
     ActionName::ObjectiveDeleteHistory,
 ];
 
+#[cfg(test)]
 pub fn home(action: ActionName) -> Surface {
     match action {
         ActionName::ExecutionStart
@@ -202,6 +205,7 @@ pub fn more_actions(
     (regular, destructive)
 }
 
+#[cfg(test)]
 pub fn overview_actions(detail: &ObjectiveDetail) -> Vec<ActionName> {
     let next = next_action(detail);
     let (regular, destructive) = more_actions(detail, next.as_ref());

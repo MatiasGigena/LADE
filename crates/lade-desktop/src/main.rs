@@ -1,13 +1,12 @@
-#[allow(
-    dead_code,
-    reason = "presentation API surface shared by tests and the live transport"
-)]
+//! The LADE desktop client: a GTK 4 application that connects to the local LADE service over its
+//! versioned protocol and presents workspaces, objectives, review evidence and Agent Sessions.
+//!
+//! The crate is layered: `transport` owns the service connection on a background thread and
+//! converts wire messages into presentation updates; `presentation` holds the GTK-free state
+//! store, controller and text formatting; `views` renders that state with GTK widgets.
+
 mod presentation;
 mod transport;
-#[allow(
-    dead_code,
-    reason = "view helpers kept for compositions not used by every launch mode"
-)]
 mod views;
 
 use std::ffi::OsString;
@@ -22,6 +21,26 @@ use transport::Transport;
 use transport::connection::{self, Config, SpawnService};
 
 const USAGE: &str = "usage: lade-desktop [--runtime-dir DIR] [--state-dir DIR] [--no-spawn] [--open PATH]\n       lade-desktop --version";
+
+/// Why the command line could not be turned into a launch configuration.
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchError {
+    /// The arguments did not match [`USAGE`].
+    Usage,
+    /// Neither the flags nor the environment name a runtime directory.
+    NoRuntimeDir,
+}
+
+impl std::fmt::Display for LaunchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Usage => f.write_str(USAGE),
+            Self::NoRuntimeDir => f.write_str(
+                "lade-desktop: no runtime directory: set XDG_RUNTIME_DIR or HOME, or pass --runtime-dir",
+            ),
+        }
+    }
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Live {
@@ -39,7 +58,7 @@ fn absolute(path: OsString) -> PathBuf {
     std::env::current_dir().map_or(path.clone(), |cwd| cwd.join(path))
 }
 
-fn parse_args(args: &[OsString]) -> Result<Live, String> {
+fn parse_args(args: &[OsString]) -> Result<Live, LaunchError> {
     let mut live = Live::default();
     let mut args = args.iter().cloned();
     while let Some(flag) = args.next() {
@@ -51,21 +70,24 @@ fn parse_args(args: &[OsString]) -> Result<Live, String> {
             Some("--runtime-dir") if live.runtime_dir.is_none() => &mut live.runtime_dir,
             Some("--state-dir") if live.state_dir.is_none() => &mut live.state_dir,
             Some("--open") if live.open.is_none() => &mut live.open,
-            _ => return Err(USAGE.into()),
+            _ => return Err(LaunchError::Usage),
         };
-        let value = args.next().filter(|v| !v.is_empty()).ok_or(USAGE)?;
+        let value = args
+            .next()
+            .filter(|v| !v.is_empty())
+            .ok_or(LaunchError::Usage)?;
         *slot = Some(absolute(value));
     }
     Ok(live)
 }
 
-fn live_config(live: &Live) -> Result<Config, String> {
+fn live_config(live: &Live) -> Result<Config, LaunchError> {
     let runtime_dir = connection::runtime_dir(
         live.runtime_dir.as_deref(),
         live.state_dir.as_deref(),
         |name| std::env::var(name).ok(),
     )
-    .ok_or("no runtime directory: set XDG_RUNTIME_DIR or HOME, or pass --runtime-dir")?;
+    .ok_or(LaunchError::NoRuntimeDir)?;
     let spawn = (!live.no_spawn)
         .then(connection::sibling_service)
         .flatten()
@@ -90,16 +112,10 @@ fn main() -> glib::ExitCode {
         );
         return glib::ExitCode::SUCCESS;
     }
-    let config = match parse_args(&args) {
-        Ok(live) => match live_config(&live) {
-            Ok(config) => config,
-            Err(message) => {
-                eprintln!("lade-desktop: {message}");
-                return glib::ExitCode::from(2);
-            }
-        },
-        Err(usage) => {
-            eprintln!("{usage}");
+    let config = match parse_args(&args).and_then(|live| live_config(&live)) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("{error}");
             return glib::ExitCode::from(2);
         }
     };
@@ -162,7 +178,7 @@ mod tests {
     #[test]
     fn default_launch_is_live() {
         assert_eq!(parse_args(&[]), Ok(Live::default()));
-        assert!(parse_args(&args(&["--preview"])).is_err());
+        assert_eq!(parse_args(&args(&["--preview"])), Err(LaunchError::Usage));
     }
 
     #[test]
@@ -182,8 +198,12 @@ mod tests {
         assert_eq!(live.state_dir, Some(PathBuf::from("/tmp/s")));
         assert_eq!(live.open, Some(PathBuf::from("/tmp/repo")));
         assert!(live.no_spawn);
-        assert!(parse_args(&args(&["--no-spawn", "--no-spawn"])).is_err());
-        assert!(parse_args(&args(&["--runtime-dir"])).is_err());
-        assert!(parse_args(&args(&["--bogus"])).is_err());
+        for bad in [
+            &["--no-spawn", "--no-spawn"][..],
+            &["--runtime-dir"],
+            &["--bogus"],
+        ] {
+            assert_eq!(parse_args(&args(bad)), Err(LaunchError::Usage));
+        }
     }
 }
