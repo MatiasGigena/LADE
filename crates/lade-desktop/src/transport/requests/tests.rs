@@ -1263,3 +1263,21 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
         }]
     );
 }
+
+#[test]
+fn history_pages_carry_their_cursor_and_the_page_limit() {
+    let Ok(Request::DraftsList(drafts)) = drafts_page(&oid(), None) else {
+        panic!("drafts page");
+    };
+    assert_eq!(drafts.limit.value(), HISTORY_PAGE);
+    assert!(drafts.after.is_none());
+    let Ok(Request::InputsList(inputs)) = inputs_page(&oid(), Some(Counter::new(7))) else {
+        panic!("inputs page");
+    };
+    assert_eq!(inputs.limit.value(), HISTORY_PAGE);
+    assert_eq!(inputs.after, Some(Counter::new(7)));
+    assert_eq!(
+        drafts_page(&ObjectiveId::new("not-a-uuid"), None),
+        Err(Invalid("invalid objective id".into()))
+    );
+}

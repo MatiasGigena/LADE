@@ -571,3 +571,28 @@ impl<S: UpdateSink> Driver<S> {
             .all(|update| self.sink.deliver(update))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_backoff_doubles_up_to_its_cap() {
+        let first: Vec<u64> = (0..6)
+            .map(|attempt| u64::try_from(backoff(attempt, false).as_millis()).unwrap())
+            .collect();
+        assert_eq!(first, [100, 200, 400, 800, 1_000, 1_000]);
+        assert_eq!(backoff(0, true), Duration::from_millis(250));
+        assert_eq!(backoff(4, true), Duration::from_millis(4_000));
+        assert_eq!(backoff(u32::MAX, true), Duration::from_millis(5_000));
+    }
+
+    #[test]
+    fn random_ids_are_distinct_version_4_uuids() {
+        let a = random_id();
+        let b = random_id();
+        assert_ne!(a, b);
+        assert!(Id::parse(a.as_str()).is_ok());
+        assert_eq!(a.as_str().as_bytes()[14], b'4');
+    }
+}

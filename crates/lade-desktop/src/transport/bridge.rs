@@ -99,3 +99,48 @@ pub fn connect(store: &Rc<Store>, capacity: usize) -> UpdateSender {
         }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::presentation::state::model::{NoticeLevel, NoticeScope, ServiceNotice};
+    use crate::presentation::state::store::PresentationState;
+
+    fn notice(n: usize) -> StoreUpdate {
+        StoreUpdate::Notice(ServiceNotice {
+            level: NoticeLevel::Info,
+            code: format!("n{n}"),
+            message: String::new(),
+            scope: NoticeScope::General,
+        })
+    }
+
+    #[test]
+    fn updates_from_another_thread_reach_the_store_in_order_past_a_full_channel() {
+        let context = glib::MainContext::default();
+        let store = Store::new(PresentationState::default());
+        let sender = connect(&store, 1);
+        let producer = std::thread::spawn(move || {
+            for n in 0..5 {
+                assert_eq!(sender.send(notice(n)), Ok(()));
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while store.state().notices.len() < 5 {
+            assert!(Instant::now() < deadline, "updates were not drained");
+            if !context.iteration(false) {
+                std::thread::yield_now();
+            }
+        }
+        producer.join().unwrap();
+        let codes: Vec<String> = store
+            .state()
+            .notices
+            .iter()
+            .map(|n| n.code.clone())
+            .collect();
+        assert_eq!(codes, ["n0", "n1", "n2", "n3", "n4"]);
+    }
+}

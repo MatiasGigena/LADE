@@ -703,3 +703,67 @@ pub fn terminal_end(c: &wire::TerminalClosed) -> crate::presentation::terminal::
         wire::TerminalCloseReason::Failed => E::Failed,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_paths_keep_their_exact_bytes_across_the_wire() {
+        let bytes = b"src/\xff.rs".to_vec();
+        let wire = to_path(&view::RepoPath {
+            bytes: bytes.clone(),
+            display: String::new(),
+        })
+        .unwrap();
+        let back = path(&wire);
+        assert_eq!(back.bytes, bytes);
+        assert!(back.display.contains('\u{fffd}'), "{}", back.display);
+        assert_eq!(
+            to_path(&view::RepoPath {
+                bytes: Vec::new(),
+                display: String::new(),
+            }),
+            Err(Invalid("invalid path".into()))
+        );
+    }
+
+    #[test]
+    fn a_basis_with_a_malformed_candidate_id_is_not_sent() {
+        assert_eq!(to_basis(&view::Basis::Working), Ok(wire::Basis::Working));
+        assert_eq!(
+            to_basis(&view::Basis::Candidate {
+                candidate_id: view::CandidateId::new("not-a-uuid"),
+            }),
+            Err(Invalid("invalid candidate id".into()))
+        );
+    }
+
+    #[test]
+    fn commit_ids_round_trip_and_reject_the_wrong_length() {
+        let sha1 = view::GitId {
+            algorithm: view::GitAlgorithm::Sha1,
+            hex: "a".repeat(40),
+        };
+        assert_eq!(git_id(&to_git_id(&sha1).unwrap()), sha1);
+        let short = view::GitId {
+            algorithm: view::GitAlgorithm::Sha256,
+            hex: "a".repeat(40),
+        };
+        assert_eq!(to_git_id(&short), Err(Invalid("invalid commit id".into())));
+    }
+
+    #[test]
+    fn delivery_modes_and_sides_round_trip() {
+        for mode in [
+            view::DeliveryMode::Prompt,
+            view::DeliveryMode::Steer,
+            view::DeliveryMode::FollowUp,
+        ] {
+            assert_eq!(delivery_mode(to_delivery_mode(mode)), mode);
+        }
+        for s in [view::Side::Old, view::Side::New] {
+            assert_eq!(side(to_side(s)), s);
+        }
+    }
+}

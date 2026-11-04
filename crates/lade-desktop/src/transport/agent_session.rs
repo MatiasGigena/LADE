@@ -217,3 +217,68 @@ pub fn dialog(r: &wire::UiRequest) -> UiDialog {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lade_protocol::types::{Id, TreeEntry, TreeEntryKind};
+
+    use super::*;
+
+    #[test]
+    fn thinking_levels_round_trip_through_the_wire() {
+        for level in ThinkingLevel::ALL {
+            assert_eq!(thinking(to_thinking(level)), level);
+        }
+    }
+
+    #[test]
+    fn dialog_answers_map_to_their_wire_form() {
+        assert_eq!(
+            to_answer(&UiAnswerView::Confirm(true)),
+            wt::UiAnswer::Confirm { confirmed: true }
+        );
+        assert_eq!(
+            to_answer(&UiAnswerView::Value("main".into())),
+            wt::UiAnswer::Value {
+                value: "main".into()
+            }
+        );
+        assert_eq!(to_answer(&UiAnswerView::Cancel), wt::UiAnswer::Cancel);
+    }
+
+    #[test]
+    fn a_tree_is_labelled_and_ordered_parent_first_with_orphans_as_roots() {
+        let entry = |id: &str, parent: Option<&str>, kind| TreeEntry {
+            entry_id: id.into(),
+            kind,
+            label: format!("{id} text"),
+            parent_id: parent.map(Into::into),
+            bookmark: None,
+        };
+        let tree = tree(&wire::SessionTree {
+            objective_id: Id::from_random_bytes([1; 16]),
+            entries: vec![
+                entry("reply", Some("ask"), TreeEntryKind::Assistant),
+                entry("ask", None, TreeEntryKind::User),
+                entry("mark", Some("pruned"), TreeEntryKind::Label),
+            ],
+            truncated: true,
+            leaf_id: Some("reply".into()),
+        });
+        let shape: Vec<(&str, usize, &str, bool)> = tree
+            .entries
+            .iter()
+            .map(|n| (n.entry_id.as_str(), n.depth, n.kind.as_str(), n.user))
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("ask", 0, "You", true),
+                ("reply", 1, "Agent", false),
+                ("mark", 0, "Bookmark", false),
+            ]
+        );
+        assert!(tree.truncated);
+        assert_eq!(tree.leaf_id.as_deref(), Some("reply"));
+    }
+}

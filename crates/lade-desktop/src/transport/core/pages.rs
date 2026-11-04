@@ -72,3 +72,39 @@ impl<K: Clone + Eq + Hash, T, C> Pages<K, T, C> {
         complete
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn events_overlay_earlier_pages_and_later_pages_win() {
+        let mut pages: Pages<u8, &str, ()> = Pages::new(Id::from_random_bytes([1; 16]));
+        pages.page([(1, "one"), (2, "two")]);
+        pages.change(3, "three from an event");
+        pages.change(2, "two from an event");
+        pages.page([(2, "two from the next page"), (4, "four")]);
+        pages.remove(1);
+        assert_eq!(
+            pages.complete(),
+            ["two from the next page", "four", "three from an event"]
+        );
+    }
+
+    #[test]
+    fn a_change_after_its_page_replaces_the_record_in_place() {
+        let mut pages: Pages<u8, &str, ()> = Pages::new(Id::from_random_bytes([2; 16]));
+        pages.page([(1, "one"), (2, "two")]);
+        pages.change(1, "one changed");
+        assert_eq!(pages.complete(), ["one changed", "two"]);
+    }
+
+    #[test]
+    fn a_removed_then_changed_record_comes_back() {
+        let mut pages: Pages<u8, &str, ()> = Pages::new(Id::from_random_bytes([3; 16]));
+        pages.page([(1, "one")]);
+        pages.remove(1);
+        pages.change(1, "one again");
+        assert_eq!(pages.complete(), ["one again"]);
+    }
+}
