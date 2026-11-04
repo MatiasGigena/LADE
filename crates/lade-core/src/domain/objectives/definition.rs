@@ -11,6 +11,12 @@ pub const MAX_BRANCH_BYTES: usize = 255;
 pub struct Title(String);
 
 impl Title {
+    /// A trimmed one-line title.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` when the trimmed title is empty, longer than `MAX_TITLE_CHARS`
+    /// characters or contains control characters.
     pub fn new(text: &str) -> Result<Self, DomainError> {
         let trimmed = text.trim();
         let count = trimmed.chars().count();
@@ -32,6 +38,13 @@ impl Title {
 pub struct BranchName(String);
 
 impl BranchName {
+    /// A branch name that git accepts.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` when git would refuse the name as a branch: empty, too long,
+    /// `@` or `HEAD`, a leading `-`, a trailing `.`, `..` or `@{`, forbidden characters, or an
+    /// empty, dot-led or `.lock` component.
     pub fn new(name: &str) -> Result<Self, DomainError> {
         let forbidden_char = |c: char| {
             c.is_control()
@@ -78,6 +91,10 @@ pub struct Intent {
 }
 
 impl Intent {
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when the outcome is blank.
+    /// - `DomainError::LimitReached` when any field is over `MAX_TEXT_BYTES`.
     pub fn new(outcome: &str, constraints: &str, acceptance: &str) -> Result<Self, DomainError> {
         if outcome.trim().is_empty() {
             return Err(DomainError::InvalidRequest(

@@ -45,6 +45,17 @@ fn check_body(body: &str) -> Result<(), DomainError> {
     Ok(())
 }
 
+/// Creates a draft (expected revision 0) or updates `existing` under optimistic concurrency.
+///
+/// # Errors
+///
+/// - `DomainError::InvalidRequest` when the request names another Objective.
+/// - `DomainError::InvalidLifecycle` when creating on a closed Objective, or updating a submitted
+///   draft.
+/// - `DomainError::ExecutionUnavailable` when creating with no session to address.
+/// - `DomainError::NotFound` when updating a draft that does not exist or belongs elsewhere.
+/// - `DomainError::Conflict` when creating over an existing draft or the revision has moved on.
+/// - `DomainError::LimitReached` when the body is too long or the revision is exhausted.
 pub fn save_draft(
     existing: Option<Draft>,
     objective: &Objective,
@@ -100,6 +111,11 @@ pub fn save_draft(
 }
 
 impl Draft {
+    /// Rebuilds a draft from its stored record.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::DurabilityFailure` when the record has revision 0 or an oversized body.
     pub fn restore(record: DraftRecord) -> Result<Self, DomainError> {
         if record.revision.value() == 0 || record.body.len() > MAX_TEXT_BYTES {
             return Err(DomainError::DurabilityFailure("inconsistent stored draft"));
@@ -146,6 +162,13 @@ impl Draft {
         Ok(())
     }
 
+    /// Replaces the reference and body of an unsent draft, returning its new revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the draft was submitted.
+    /// - `DomainError::Conflict` when `expected_revision` is not current.
+    /// - `DomainError::LimitReached` when the body is too long or the revision is exhausted.
     pub fn update(
         &mut self,
         expected_revision: Revision,
@@ -163,6 +186,13 @@ impl Draft {
         Ok(revision)
     }
 
+    /// Readdresses an unsent draft to `session_id`, returning its new revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the draft was submitted.
+    /// - `DomainError::Conflict` when `expected_revision` is not current.
+    /// - `DomainError::LimitReached` when the revision is exhausted.
     pub fn retarget(
         &mut self,
         expected_revision: Revision,
@@ -182,6 +212,12 @@ impl Draft {
         self.record.updated_at = now;
     }
 
+    /// Checks that the draft may be deleted at `expected_revision`.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the draft was submitted.
+    /// - `DomainError::Conflict` when `expected_revision` is not current.
     pub fn check_delete(&self, expected_revision: Revision) -> Result<(), DomainError> {
         self.check_editable(expected_revision)
     }

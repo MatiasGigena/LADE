@@ -133,6 +133,15 @@ impl Review {
         Ok(())
     }
 
+    /// Starts a check of the current candidate of a frozen Objective.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective or an invalid command line.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is frozen.
+    /// - `DomainError::NotFound` or `DomainError::StaleCandidate` when the candidate is not
+    ///   current.
+    /// - `DomainError::Conflict` when the verification id was used before.
     pub fn start_verification(
         &mut self,
         objective: &Objective,
@@ -176,6 +185,12 @@ impl Review {
         Ok(())
     }
 
+    /// Records how a running check ended and returns its outcome.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::NotFound` for an unknown verification.
+    /// - `DomainError::Conflict` when it already finished.
     pub fn finish_verification(
         &mut self,
         id: VerificationId,

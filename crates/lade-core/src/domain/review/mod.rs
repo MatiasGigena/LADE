@@ -41,6 +41,13 @@ impl Review {
         }
     }
 
+    /// Rebuilds a review from stored rows.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::DurabilityFailure` when the rows are inconsistent: candidates out of order or
+    /// of another Objective, more than one current candidate or valid approval, or checks and
+    /// approvals of unknown candidates.
     pub fn restore(
         objective_id: ObjectiveId,
         candidates: Vec<Candidate>,
@@ -129,6 +136,12 @@ impl Review {
         Ok(())
     }
 
+    /// Expires a valid approval and interrupts running checks after a service restart.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when `objective` is not this review's Objective.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn recover_after_restart(
         &mut self,
         objective: &mut Objective,
@@ -145,6 +158,14 @@ impl Review {
         Ok(())
     }
 
+    /// Discards the Objective, invalidating any valid approval.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when `objective` is not this review's Objective.
+    /// - `DomainError::Conflict` while a check is running.
+    /// - `DomainError::InvalidLifecycle` when the Objective is closed or its agent is live.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn discard(
         &mut self,
         objective: &mut Objective,
@@ -157,6 +178,14 @@ impl Review {
         Ok(())
     }
 
+    /// Closes an Objective that produced no changes.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when `objective` is not this review's Objective.
+    /// - `DomainError::Conflict` when there are changes or a check is running.
+    /// - `DomainError::InvalidLifecycle` after approval, once closed, or while the agent is live.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn complete_without_changes(
         &mut self,
         objective: &mut Objective,

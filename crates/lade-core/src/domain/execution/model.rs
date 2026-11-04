@@ -11,6 +11,12 @@ pub struct ModelRef {
 }
 
 impl ModelRef {
+    /// A model named by its provider and id.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` when either label is empty, longer than `MAX_LABEL_BYTES`, or
+    /// contains whitespace or control characters.
     pub fn new(provider: &str, id: &str) -> Result<Self, DomainError> {
         let valid = |text: &str| {
             !text.is_empty()

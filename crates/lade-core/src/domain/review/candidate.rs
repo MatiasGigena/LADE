@@ -129,6 +129,15 @@ impl Review {
         }
     }
 
+    /// Freezes the stopped work of an active Objective as the next current candidate.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective or an empty change set.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is active with its agent stopped.
+    /// - `DomainError::Conflict` when the candidate id was used before.
+    /// - `DomainError::LimitReached` when the candidate ordinal or the Objective's revision is
+    ///   exhausted.
     pub fn freeze(
         &mut self,
         objective: &mut Objective,
@@ -146,6 +155,15 @@ impl Review {
         Ok(self.push_candidate(new, ordinal, now))
     }
 
+    /// Returns the latest candidate for more work, invalidating its approval.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is frozen or approved.
+    /// - `DomainError::NotFound` when the candidate does not exist.
+    /// - `DomainError::StaleCandidate` when it is not the latest live candidate.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn return_for_revision(
         &mut self,
         objective: &mut Objective,
@@ -178,6 +196,14 @@ impl Review {
         Ok(())
     }
 
+    /// Invalidates the current candidate after its content changed unexpectedly.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is frozen or approved.
+    /// - `DomainError::NotFound` when there is no current candidate.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn invalidate_candidate(
         &mut self,
         objective: &mut Objective,
@@ -202,6 +228,19 @@ impl Review {
         Ok(())
     }
 
+    /// Applies a refresh onto the moved Integration Target: a rebuilt candidate replaces the
+    /// current one, and a conflict returns the Objective for revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective or an empty rebuilt change set.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is frozen or approved.
+    /// - `DomainError::NotFound` or `DomainError::StaleCandidate` when `candidate_id` is not
+    ///   current.
+    /// - `DomainError::Conflict` when the target has not moved or the rebuilt candidate id was used
+    ///   before.
+    /// - `DomainError::StaleTarget` when the rebuild is based on another target commit.
+    /// - `DomainError::LimitReached` when the ordinal or the Objective's revision is exhausted.
     pub fn refresh(
         &mut self,
         objective: &mut Objective,

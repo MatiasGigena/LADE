@@ -68,6 +68,13 @@ pub(super) fn initial_delivery(state: &ExecutionState) -> DeliveryState {
 }
 
 impl AcceptedInput {
+    /// Decides whether queued input can go to the agent now; a blocking reason is recorded on the
+    /// input.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::Conflict` when the input is not queued.
+    /// - `DomainError::InvalidRequest` when `objective` is not the input's Objective.
     pub fn dispatch(
         &mut self,
         objective: &Objective,
@@ -105,6 +112,12 @@ impl AcceptedInput {
         Ok(DispatchDecision::Dispatch { generation })
     }
 
+    /// Records the agent's receipt of input sent in `generation`.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` when it was sent in another generation.
+    /// - `DomainError::Conflict` when it was never dispatched.
     pub fn mark_received(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         match self.delivery {
             DeliveryState::Dispatched { generation: sent }
@@ -128,6 +141,11 @@ impl AcceptedInput {
         false
     }
 
+    /// Queues blocked input again after the user explicitly continues.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::Conflict` unless the input is blocked.
     pub fn requeue(&mut self) -> Result<(), DomainError> {
         if !matches!(self.delivery, DeliveryState::Blocked { .. }) {
             return Err(DomainError::Conflict("only blocked input can be re-queued"));

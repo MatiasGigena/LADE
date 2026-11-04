@@ -9,6 +9,11 @@ pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 pub struct ArtifactDigest(String);
 
 impl ArtifactDigest {
+    /// Parses a SHA-256 artifact digest.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` unless `hex` is 64 lowercase hex digits.
     pub fn parse(hex: &str) -> Result<Self, DomainError> {
         if !is_lower_hex(hex, 64) {
             return Err(DomainError::InvalidRequest(
@@ -36,6 +41,12 @@ pub struct RepoPath(Vec<u8>);
 pub const MAX_PATH_BYTES: usize = 4096;
 
 impl RepoPath {
+    /// A normalized repository-relative path.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` for an empty, oversized or NUL-containing path, or one with
+    /// empty, `.` or `..` components.
     pub fn new(bytes: Vec<u8>) -> Result<Self, DomainError> {
         let valid = !bytes.is_empty()
             && bytes.len() <= MAX_PATH_BYTES
@@ -105,6 +116,11 @@ pub struct ByteRange {
 }
 
 impl ByteRange {
+    /// The half-open byte range `start..end`.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` unless `start < end`.
     pub fn new(start: u64, end: u64) -> Result<Self, DomainError> {
         if start >= end {
             return Err(DomainError::InvalidRequest(
@@ -148,6 +164,11 @@ pub struct Reference {
 }
 
 impl Reference {
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when the selected text's length differs from the byte range
+    ///   or `line_hint` is 0.
+    /// - `DomainError::LimitReached` when the selected text is over `MAX_TEXT_BYTES`.
     pub fn new(
         artifact_digest: ArtifactDigest,
         path: RepoPath,

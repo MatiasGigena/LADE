@@ -9,6 +9,11 @@ const VERSION_SHIFT: u32 = 76;
 const VARIANT_SHIFT: u32 = 62;
 
 impl Uuid {
+    /// Parses a lowercase hyphenated version 4 UUID.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` for any other text.
     pub fn parse(text: &str) -> Result<Self, DomainError> {
         const INVALID: DomainError =
             DomainError::InvalidRequest("identifier is not a lowercase UUIDv4");
@@ -78,6 +83,10 @@ macro_rules! uuid_ids {
                 Self(uuid)
             }
 
+            /// # Errors
+            ///
+            /// `DomainError::InvalidRequest` unless `text` is a lowercase hyphenated version 4
+            /// UUID.
             pub fn parse(text: &str) -> Result<Self, DomainError> {
                 Uuid::parse(text).map(Self)
             }
@@ -139,6 +148,12 @@ pub struct GitId {
 }
 
 impl GitId {
+    /// A full object id in `algorithm`'s hex form.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` unless `hex` has the algorithm's length in lowercase hex and
+    /// is not all zeros.
     pub fn new(algorithm: GitAlgorithm, hex: &str) -> Result<Self, DomainError> {
         if !is_lower_hex(hex, algorithm.hex_len()) || hex.bytes().all(|byte| byte == b'0') {
             return Err(DomainError::InvalidRequest(

@@ -91,6 +91,15 @@ fn check_accepting(objective: &Objective, acceptance: &Acceptance) -> Result<(),
         .check_association(acceptance.session_id, acceptance.association_revision)
 }
 
+/// Accepts a typed message for the Objective's current session.
+///
+/// # Errors
+///
+/// - `DomainError::InvalidLifecycle` unless the Objective is active.
+/// - `DomainError::StaleAssociation` or `DomainError::ExecutionUnavailable` when the acceptance
+///   does not address the current session.
+/// - `DomainError::InvalidRequest` for a blank message.
+/// - `DomainError::LimitReached` for an oversized message.
 pub fn accept_message(
     objective: &Objective,
     acceptance: Acceptance,
@@ -119,6 +128,19 @@ pub fn accept_message(
     })
 }
 
+/// Accepts a batch of drafts, with an optional note, as one input and marks every draft submitted.
+/// Nothing changes when any check fails.
+///
+/// # Errors
+///
+/// - `DomainError::InvalidRequest` for an empty batch, a draft listed twice or a blank draft.
+/// - `DomainError::LimitReached` for too many drafts, an oversized note or oversized rendered text.
+/// - `DomainError::NotFound` for a draft of another Objective.
+/// - `DomainError::Conflict` for a submitted draft or one changed since review.
+/// - `DomainError::InvalidLifecycle` unless the Objective is active.
+/// - `DomainError::StaleAssociation` when the acceptance or any draft addresses a session that is
+///   no longer current, and `DomainError::ExecutionUnavailable` when none is bound.
+/// - `DomainError::StaleReference` naming every draft whose referenced content changed.
 pub fn accept_feedback(
     objective: &Objective,
     acceptance: Acceptance,

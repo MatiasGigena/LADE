@@ -85,6 +85,20 @@ impl Review {
         }
     }
 
+    /// Approves the current candidate against the current Integration Target. Missing or failed
+    /// checks need an override reason.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective, or when checks are missing or failed
+    ///   and no reason was given.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is frozen.
+    /// - `DomainError::NotFound` or `DomainError::StaleCandidate` when the candidate is not
+    ///   current.
+    /// - `DomainError::StaleTarget` when the command or the candidate is based on another target
+    ///   commit.
+    /// - `DomainError::LimitReached` for an oversized reason or an exhausted revision.
+    /// - `DomainError::Conflict` while a check is running or when the approval id was used before.
     pub fn approve(
         &mut self,
         objective: &mut Objective,
@@ -148,6 +162,13 @@ impl Review {
         Ok(command.approval_id)
     }
 
+    /// Invalidates a valid approval for `reason`, returning the Objective to frozen; returns
+    /// whether there was one.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn invalidate_approval(
         &mut self,
         objective: &mut Objective,
@@ -163,6 +184,12 @@ impl Review {
         Ok(true)
     }
 
+    /// Invalidates a valid approval when the Integration Target moved; returns whether it had
+    /// moved.
+    ///
+    /// # Errors
+    ///
+    /// Fails as `Review::invalidate_approval` does.
     pub fn observe_target(
         &mut self,
         objective: &mut Objective,
@@ -176,6 +203,17 @@ impl Review {
         Ok(stale)
     }
 
+    /// Checks that `approval_id` still authorizes integrating its candidate onto `current_target`.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` for another Objective.
+    /// - `DomainError::InvalidLifecycle` unless the Objective is approved.
+    /// - `DomainError::NotFound` for an unknown approval.
+    /// - `DomainError::Conflict` when the approval is no longer valid.
+    /// - `DomainError::NotFound` or `DomainError::StaleCandidate` when its candidate is not
+    ///   current.
+    /// - `DomainError::StaleTarget` when the target has moved.
     pub fn check_integration(
         &self,
         objective: &Objective,
@@ -213,6 +251,13 @@ impl Review {
         })
     }
 
+    /// Records a finished integration, consuming the approval and closing the Objective.
+    ///
+    /// # Errors
+    ///
+    /// - Fails as `Review::check_integration` does for the plan's approval and target.
+    /// - `DomainError::StaleCandidate` when the plan no longer matches the approved candidate.
+    /// - `DomainError::LimitReached` when the Objective's revision is exhausted.
     pub fn complete_integration(
         &mut self,
         objective: &mut Objective,

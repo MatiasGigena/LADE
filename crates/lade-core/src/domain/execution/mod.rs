@@ -37,6 +37,12 @@ impl Execution {
         }
     }
 
+    /// Rebuilds an execution from stored parts.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::DurabilityFailure` when the parts contradict each other: a never-started
+    /// generation with a state or session, or a started one without them.
     pub fn restore(
         state: ExecutionState,
         generation: ExecutionGeneration,
@@ -75,6 +81,12 @@ impl Execution {
         self.session.as_ref()
     }
 
+    /// Starts the first run, bound to `session_id`, and returns its generation.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the execution has already started.
+    /// - `DomainError::LimitReached` when the generation counter is exhausted.
     pub fn start(
         &mut self,
         session_id: SessionId,
@@ -96,6 +108,12 @@ impl Execution {
         Ok(generation)
     }
 
+    /// Starts the next generation of a cancelled or failed run on the same session.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` unless the run is cancelled or failed.
+    /// - `DomainError::LimitReached` when the generation counter is exhausted.
     pub fn resume(&mut self) -> Result<ExecutionGeneration, DomainError> {
         if !matches!(
             self.state,
@@ -111,6 +129,12 @@ impl Execution {
         Ok(generation)
     }
 
+    /// Checks that a fact reported for `generation` belongs to the current run.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::StaleExecution` when `generation` is not the current one, or nothing has
+    /// started.
     pub fn check_generation(&self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         if generation != self.generation || self.generation == ExecutionGeneration::NONE {
             return Err(DomainError::StaleExecution);
@@ -118,6 +142,13 @@ impl Execution {
         Ok(())
     }
 
+    /// Checks that input addressed to `session_id` at `association_revision` still reaches the
+    /// current session.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleAssociation` when the session or its association revision has changed.
+    /// - `DomainError::ExecutionUnavailable` when no session is bound.
     pub fn check_association(
         &self,
         session_id: SessionId,
@@ -135,6 +166,12 @@ impl Execution {
         }
     }
 
+    /// Records that the worker of `generation` is ready, moving a starting run to idle.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` for a fact from another generation.
+    /// - `DomainError::InvalidLifecycle` when the run is not starting.
     pub fn worker_ready(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         self.check_generation(generation)?;
         match self.state {
@@ -148,6 +185,12 @@ impl Execution {
         }
     }
 
+    /// Records whether the agent of `generation` is mid-turn; ignored while stopping.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` for a fact from another generation.
+    /// - `DomainError::InvalidLifecycle` unless the run is running, idle or stopping.
     pub fn observe_turn(
         &mut self,
         generation: ExecutionGeneration,
@@ -170,6 +213,11 @@ impl Execution {
         }
     }
 
+    /// Asks a starting, running or idle run to stop.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidLifecycle` when the run is not live or is already stopping.
     pub fn request_stop(&mut self) -> Result<(), DomainError> {
         match self.state {
             ExecutionState::Starting | ExecutionState::Running | ExecutionState::Idle => {
@@ -180,6 +228,12 @@ impl Execution {
         }
     }
 
+    /// Records that the run of `generation` stopped after a stop request.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` for a fact from another generation.
+    /// - `DomainError::InvalidLifecycle` when no stop was requested.
     pub fn stopped(&mut self, generation: ExecutionGeneration) -> Result<(), DomainError> {
         self.check_generation(generation)?;
         match self.state {
@@ -193,6 +247,12 @@ impl Execution {
         }
     }
 
+    /// Records that the live run of `generation` failed, keeping a clipped `reason`.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` for a fact from another generation.
+    /// - `DomainError::InvalidLifecycle` when the run is not live.
     pub fn fail(
         &mut self,
         generation: ExecutionGeneration,
@@ -216,6 +276,16 @@ impl Execution {
         true
     }
 
+    /// Moves an idle run to `session_id`, keeping its model, and returns the new association
+    /// revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::StaleExecution` for another generation.
+    /// - `DomainError::InvalidLifecycle` unless the run is idle.
+    /// - `DomainError::ExecutionUnavailable` when no session is bound.
+    /// - `DomainError::InvalidRequest` when `session_id` is the current session.
+    /// - `DomainError::LimitReached` when the association revision is exhausted.
     pub fn rebind_live_session(
         &mut self,
         generation: ExecutionGeneration,
@@ -244,6 +314,11 @@ impl Execution {
         Ok(association_revision)
     }
 
+    /// Changes the model of the bound session without changing the destination.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::ExecutionUnavailable` when no session is bound.
     pub fn select_model(&mut self, model: ModelRef) -> Result<(), DomainError> {
         let Some(current) = self.session.as_mut() else {
             return Err(DomainError::ExecutionUnavailable);
@@ -252,6 +327,14 @@ impl Execution {
         Ok(())
     }
 
+    /// Binds a stopped run to another session and model, and returns the new association revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` while the run is live.
+    /// - `DomainError::ExecutionUnavailable` when no session is bound.
+    /// - `DomainError::InvalidRequest` when `session_id` is the current session.
+    /// - `DomainError::LimitReached` when the association revision is exhausted.
     pub fn replace_session(
         &mut self,
         session_id: SessionId,

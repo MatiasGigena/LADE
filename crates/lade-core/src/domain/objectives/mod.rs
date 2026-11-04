@@ -76,6 +76,12 @@ impl Objective {
         }
     }
 
+    /// Rebuilds an Objective from its stored record.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::DurabilityFailure` when the record is inconsistent: a foreign branch name,
+    /// clean-up before close, an execution that contradicts the lifecycle, or a zero revision.
     pub fn restore(record: ObjectiveRecord) -> Result<Self, DomainError> {
         let lifecycle = record.lifecycle;
         let state = record.execution.state();
@@ -160,6 +166,13 @@ impl Objective {
         })
     }
 
+    /// Replaces the intent before approval and returns the new intent revision.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` once the Objective is approved or closed.
+    /// - `DomainError::Conflict` when `expected_intent_revision` is not current.
+    /// - `DomainError::LimitReached` when a revision is exhausted.
     pub fn update_intent(
         &mut self,
         expected_intent_revision: Revision,
@@ -184,6 +197,13 @@ impl Objective {
         })
     }
 
+    /// Starts the first agent run, activating a defined Objective.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` unless the Objective is defined or active, or when the
+    ///   agent has already started.
+    /// - `DomainError::LimitReached` when the generation or revision is exhausted.
     pub fn start_execution(
         &mut self,
         session_id: SessionId,
@@ -202,6 +222,13 @@ impl Objective {
         })
     }
 
+    /// Starts the next generation of a stopped or failed agent.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` unless the Objective is active and its agent stopped or
+    ///   failed.
+    /// - `DomainError::LimitReached` when the generation or revision is exhausted.
     pub fn resume_execution(&mut self, now: Timestamp) -> Result<ExecutionGeneration, DomainError> {
         self.update(now, |record| {
             if record.lifecycle != Lifecycle::Active {
@@ -213,10 +240,18 @@ impl Objective {
         })
     }
 
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the agent is not running.
+    /// - `DomainError::LimitReached` when the revision is exhausted.
     pub fn request_stop(&mut self, now: Timestamp) -> Result<(), DomainError> {
         self.update(now, |record| record.execution.request_stop())
     }
 
+    /// # Errors
+    ///
+    /// Fails as `Execution::worker_ready` does, or with `DomainError::LimitReached` when the
+    /// revision is exhausted.
     pub fn observe_worker_ready(
         &mut self,
         generation: ExecutionGeneration,
@@ -225,6 +260,10 @@ impl Objective {
         self.update(now, |record| record.execution.worker_ready(generation))
     }
 
+    /// # Errors
+    ///
+    /// Fails as `Execution::observe_turn` does, or with `DomainError::LimitReached` when the
+    /// revision is exhausted.
     pub fn observe_turn(
         &mut self,
         generation: ExecutionGeneration,
@@ -236,6 +275,10 @@ impl Objective {
         })
     }
 
+    /// # Errors
+    ///
+    /// Fails as `Execution::stopped` does, or with `DomainError::LimitReached` when the revision is
+    /// exhausted.
     pub fn observe_stopped(
         &mut self,
         generation: ExecutionGeneration,
@@ -244,6 +287,10 @@ impl Objective {
         self.update(now, |record| record.execution.stopped(generation))
     }
 
+    /// # Errors
+    ///
+    /// Fails as `Execution::fail` does, or with `DomainError::LimitReached` when the revision is
+    /// exhausted.
     pub fn observe_failure(
         &mut self,
         generation: ExecutionGeneration,
@@ -253,6 +300,11 @@ impl Objective {
         self.update(now, |record| record.execution.fail(generation, reason))
     }
 
+    /// Interrupts a run that was live when the service stopped; returns whether it was.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::LimitReached` when the revision is exhausted.
     pub fn interrupt_after_restart(&mut self, now: Timestamp) -> Result<bool, DomainError> {
         if !self.record.execution.state().is_live() {
             return Ok(false);
@@ -260,6 +312,11 @@ impl Objective {
         self.update(now, |record| Ok(record.execution.interrupt()))
     }
 
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` unless the Objective is active.
+    /// - Otherwise fails as `Execution::rebind_live_session` does, or with
+    ///   `DomainError::LimitReached` when the revision is exhausted.
     pub fn rebind_live_session(
         &mut self,
         generation: ExecutionGeneration,
@@ -276,6 +333,11 @@ impl Objective {
         })
     }
 
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the Objective is closed.
+    /// - `DomainError::ExecutionUnavailable` when no session is bound.
+    /// - `DomainError::LimitReached` when the revision is exhausted.
     pub fn select_model(&mut self, model: ModelRef, now: Timestamp) -> Result<(), DomainError> {
         self.update(now, |record| {
             if record.lifecycle.is_terminal() {
@@ -285,6 +347,11 @@ impl Objective {
         })
     }
 
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the Objective is closed.
+    /// - Otherwise fails as `Execution::replace_session` does, or with `DomainError::LimitReached`
+    ///   when the revision is exhausted.
     pub fn replace_session(
         &mut self,
         session_id: SessionId,
@@ -299,6 +366,13 @@ impl Objective {
         })
     }
 
+    /// Marks a closed Objective cleaned up; unsent drafts need `confirm_data_loss`.
+    ///
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidLifecycle` when the Objective is not closed or is already cleaned up.
+    /// - `DomainError::Conflict` when there are unsent drafts and loss was not confirmed.
+    /// - `DomainError::LimitReached` when the revision is exhausted.
     pub fn cleanup(
         &mut self,
         unsent_drafts: usize,

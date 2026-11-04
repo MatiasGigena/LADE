@@ -14,6 +14,12 @@ pub struct RestartRecovery {
     pub inputs_uncertain: usize,
 }
 
+/// Applies a service restart to one Objective, its review and its accepted inputs.
+///
+/// # Errors
+///
+/// Fails when the Objective's or the review's restart transition does, for a review of another
+/// Objective or an exhausted revision.
 pub fn recover_after_restart(
     objective: &mut Objective,
     review: &mut Review,
