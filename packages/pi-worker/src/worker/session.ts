@@ -35,6 +35,12 @@ export function profilePaths(sessionDir: string): ProfilePaths {
   return { agentDir: join(sessionDir, "agent"), sessionsDir: join(sessionDir, "sessions") };
 }
 
+export function piEnvironment(sessionDir: string): ReadonlyArray<readonly [string, string]> {
+  const { agentDir, sessionsDir } = profilePaths(sessionDir);
+
+  return [["PI_CODING_AGENT_DIR", agentDir], ["PI_CODING_AGENT_SESSION_DIR", sessionsDir], ["PI_OFFLINE", "1"], ["PI_SKIP_VERSION_CHECK", "1"], ["PI_TELEMETRY", "0"]];
+}
+
 function inside(parent: string, path: string): boolean {
   const rel = relative(parent, path);
 
@@ -159,11 +165,12 @@ export class SessionHost {
     const start = this.start;
 
     if (!isAbsolute(start.session_dir) || !isAbsolute(start.cwd)) throw new StartError("startup_failed", "session_dir and cwd must be absolute paths");
+    const mismatch = piEnvironment(start.session_dir).find(([name, value]) => process.env[name] !== value);
+
+    if (mismatch !== undefined) throw new StartError("startup_failed", `the worker environment must set ${mismatch[0]} for this session_dir`);
     const { agentDir, sessionsDir } = profilePaths(start.session_dir);
     mkdirSync(agentDir, { recursive: true, mode: 0o700 });
     mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_SESSION_DIR = sessionsDir;
     const profile = start.resources?.profile_dir;
 
     if (profile !== undefined && !inside(start.session_dir, profile)) throw new StartError("startup_failed", "the profile snapshot must be inside session_dir");

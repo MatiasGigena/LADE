@@ -15,12 +15,6 @@ export const EXIT_PROTOCOL = 2;
 
 export const EXIT_INTERNAL = 70;
 
-process.env.PI_OFFLINE = "1";
-
-process.env.PI_SKIP_VERSION_CHECK = "1";
-
-process.env.PI_TELEMETRY = "0";
-
 const gatewaySocket = process.env.LADE_GATEWAY_SOCKET;
 
 if (gatewaySocket) installGateway(gatewaySocket);

@@ -210,6 +210,24 @@ test("an unknown model fails worker.start with a coded error", () => withWorker(
   assert.equal(worker.kinds("worker.ready").length, 0);
 }));
 
+test("worker.start refuses a launch environment that does not match its session_dir", async () => {
+  const box = sandbox();
+  const worker = new Worker(box, { PI_CODING_AGENT_DIR: join(box.root, "elsewhere") });
+
+  try {
+    worker.send(startBody(box, false));
+    assert.equal(await worker.exited, 1);
+    const error = record(worker.kinds("worker.error")[0]);
+    assert.equal(error.code, "startup_failed");
+    assert.match(text(error.message), /PI_CODING_AGENT_DIR/);
+    assert.equal(existsSync(join(box.sessionDir, "agent")), false, "nothing is created before the environment is checked");
+  } finally {
+    worker.child.kill("SIGKILL");
+    await worker.exited;
+    cleanup(box);
+  }
+});
+
 test("without the test switch the fixture provider is not registered and worker.start is refused", async () => {
   const box = sandbox();
   const worker = new Worker(box, { [FIXTURE_SWITCH]: "" });

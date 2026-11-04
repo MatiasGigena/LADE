@@ -23,9 +23,11 @@ Environment read by the worker:
 | provider credential variables (e.g. `ANTHROPIC_API_KEY`) | Read by pi's provider auth for the selected model only; the sandbox passes only the selected provider's variables. |
 | `PATH`, `HOME`, `LANG`, `TERM` | Ordinary process environment for the built-in `bash` tool. `HOME` is the session dir in the sandbox; nothing is written under it by the worker itself. |
 
-The worker sets for itself (inherited by tool subprocesses): `PI_CODING_AGENT_DIR=<session_dir>/agent`,
+The launch environment (`laded`'s sandbox spawn) is the only source of pi's own variables, which tool
+subprocesses inherit: `PI_CODING_AGENT_DIR=<session_dir>/agent`,
 `PI_CODING_AGENT_SESSION_DIR=<session_dir>/sessions`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`,
-`PI_TELEMETRY=0`.
+`PI_TELEMETRY=0`. The worker never writes them; `worker.start` fails with `startup_failed` (naming the
+variable) when one is missing or does not match the `session_dir`, before anything is created.
 
 Files written (all under `session_dir` from `worker.start`, plus whatever the agent's tools write
 in `cwd`):
@@ -40,7 +42,8 @@ in `cwd`):
 Read only: `<session_dir>/profile/` (the service's snapshot of the LADE profile, IMP-011) and
 `<session_dir>/imports/` (service copies of sessions to import). The real `~/.pi`, `~/.agents` and the
 repository's `.pi/` are never read or written. The model catalogue for the service is produced by
-`node src/worker/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox.
+`node src/worker/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox
+(a script, not an importable module: importing it redirects stdout and disables the network).
 
 ## Protocol mapping
 
@@ -215,7 +218,7 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   prompt while streaming → follow-up; abort clears the queue and keeps the worker usable; resume
   keeps `pi_session_id`/`session_file` and history; invalid frame → exit 2 without echo; frame
   before start → exit 2; fixture failure → `provider_failed` and recovery; > 192 KiB tool item
-  truncated; stdin EOF → exit 0; unknown model → exit 1; without `LADE_TEST_FIXTURE_PROVIDER=1` the
+  truncated; stdin EOF → exit 0; unknown model → exit 1; launch environment not matching `session_dir` → exit 1; without `LADE_TEST_FIXTURE_PROVIDER=1` the
   fixture model is not registered and `worker.start` fails with `startup_failed`.
 - `test/worker-wire.test.ts` — closed inbound validation, LF fragmentation/poisoning, outbound
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
