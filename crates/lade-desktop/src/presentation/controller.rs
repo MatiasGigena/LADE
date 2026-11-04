@@ -609,17 +609,7 @@ impl Controller {
                 Err(reason) => return (Err(reason), Vec::new()),
             };
             match revision {
-                Some(0) => {
-                    let mut changes = Vec::new();
-                    for (objective, editors) in &mut s.drafts {
-                        let before = editors.len();
-                        editors.retain(|e| &e.draft_id != draft_id);
-                        if before != editors.len() {
-                            changes.push(Change::Drafts(objective.clone()));
-                        }
-                    }
-                    (Ok(None), changes)
-                }
+                Some(0) => (Ok(None), s.remove_draft(draft_id)),
                 other => (Ok(other), Vec::new()),
             }
         })?;

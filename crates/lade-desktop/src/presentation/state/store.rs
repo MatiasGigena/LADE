@@ -6,9 +6,9 @@ use super::agent_session::{AgentSessionChange, AgentSessionState, AgentSessionUp
 use super::drafts::DraftEditor;
 use super::model::{
     ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
-    DeliveryMode, Draft, DraftId, FileContent, FileDiff, FilePage, InputSummary, Load, NoticeLevel,
-    ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath, SearchResults,
-    ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
+    DeliveryMode, Draft, DraftId, DraftState, FileContent, FileDiff, FilePage, InputSummary, Load,
+    NoticeLevel, ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath,
+    SearchResults, ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
 };
 use crate::presentation::keys::Keymap;
 use crate::presentation::layout::{LayoutClass, Region};
@@ -180,6 +180,17 @@ pub enum Change {
     DesktopAttention,
 }
 
+impl From<AgentSessionChange> for Change {
+    fn from(change: AgentSessionChange) -> Self {
+        match change {
+            AgentSessionChange::Catalog => Self::Catalog,
+            AgentSessionChange::Session(id) => Self::Session(id),
+            AgentSessionChange::Resources => Self::Resources,
+            AgentSessionChange::Dialogs => Self::Dialogs,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum MainView {
     #[default]
@@ -286,6 +297,62 @@ pub struct ActivityLog {
     pub loaded: bool,
 }
 
+impl ActivityLog {
+    fn merge_page(&mut self, items: Vec<ActivityItem>, has_more: bool) {
+        let known_oldest = self.items.first().map(|i| i.seq);
+        let page_oldest = items.iter().map(|i| i.seq).min();
+        let decides = match (known_oldest, page_oldest) {
+            (Some(known), Some(page)) => page <= known,
+            _ => true,
+        };
+        let index: HashMap<ActivityItemId, usize> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (item.item_id.clone(), i))
+            .collect();
+        let mut fresh = Vec::new();
+        for item in items {
+            match index.get(&item.item_id) {
+                Some(&i) => self.items[i] = item,
+                None => fresh.push(item),
+            }
+        }
+        self.items.extend(fresh);
+        self.items.sort_by_key(|i| i.seq);
+        if decides || !self.loaded {
+            self.has_more = has_more;
+        }
+        self.loaded = true;
+    }
+
+    fn append(&mut self, items: Vec<ActivityItem>) -> ActivityChange {
+        let from_index = self.items.len();
+        let mut out_of_order = false;
+        for item in items {
+            if let Some(existing) = self.items.iter_mut().find(|i| i.item_id == item.item_id) {
+                *existing = item;
+                out_of_order = true;
+            } else {
+                out_of_order |= self.items.last().is_some_and(|last| last.seq > item.seq);
+                self.items.push(item);
+            }
+        }
+        if out_of_order {
+            self.items.sort_by_key(|i| i.seq);
+            ActivityChange::Reset
+        } else {
+            ActivityChange::Appended { from_index }
+        }
+    }
+
+    fn append_text(&mut self, item_id: &ActivityItemId, text: &str) -> Option<usize> {
+        let index = self.items.iter().position(|i| &i.item_id == item_id)?;
+        self.items[index].text.push_str(text);
+        Some(index)
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Board<'a> {
     pub groups: Vec<(Attention, Vec<&'a ObjectiveSummary>)>,
@@ -334,6 +401,27 @@ fn refusal_changes(objective_id: ObjectiveId, surface: ActionSurface) -> Vec<Cha
         _ => {}
     }
     changes
+}
+
+fn reconcile_drafts(editors: &mut Vec<DraftEditor>, drafts: &[Draft]) {
+    for draft in drafts {
+        match editors.iter_mut().find(|e| e.draft_id == draft.draft_id) {
+            Some(editor) => {
+                if draft.revision == editor.durable_revision() {
+                    editor.reconciled();
+                }
+                editor.acknowledge(draft);
+            }
+            None => editors.push(DraftEditor::from_durable(draft)),
+        }
+    }
+    let listed = |editor: &DraftEditor| drafts.iter().any(|d| d.draft_id == editor.draft_id);
+    for editor in editors.iter_mut() {
+        if editor.durable_revision() == 0 && !listed(editor) {
+            editor.reconciled();
+        }
+    }
+    editors.retain(|e| e.durable_revision() == 0 || listed(e));
 }
 
 impl PresentationState {
@@ -438,7 +526,7 @@ impl PresentationState {
             .get(id)
             .into_iter()
             .flatten()
-            .filter(|d| d.state == super::model::DraftState::Unsent)
+            .filter(|d| d.state == DraftState::Unsent)
     }
 
     pub fn draft_mut(&mut self, draft_id: &DraftId) -> Option<&mut DraftEditor> {
@@ -545,79 +633,13 @@ impl PresentationState {
 
     pub fn apply(&mut self, update: StoreUpdate) -> Vec<Change> {
         match update {
-            StoreUpdate::Connection(connection) => {
-                let connected = connection.is_connected();
-                self.connection = connection;
-                let mut changes = vec![Change::Connection];
-                if !connected {
-                    for editor in self.drafts.values_mut().flatten() {
-                        editor.connection_lost();
-                        changes.push(Change::DraftStatus(editor.draft_id.clone()));
-                    }
-                    self.terminals.retain(|t| {
-                        let pending =
-                            t.status == TerminalStatus::Opening && t.terminal_id.is_none();
-                        if pending {
-                            changes.push(Change::Terminal(t.objective_id.clone()));
-                        }
-                        !pending
-                    });
-                    for session in &mut self.terminals {
-                        if !matches!(session.status, TerminalStatus::Ended(_)) {
-                            session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
-                            changes.push(Change::Terminal(session.objective_id.clone()));
-                        }
-                    }
-                    if !self.agent_session.dialogs.is_empty() {
-                        self.agent_session.dialogs.clear();
-                        changes.push(Change::Dialogs);
-                    }
-                }
-                changes
-            }
+            StoreUpdate::Connection(connection) => self.apply_connection(connection),
             StoreUpdate::Snapshot {
                 workspaces,
                 objectives,
                 settings,
-            } => {
-                if self
-                    .active_workspace
-                    .as_ref()
-                    .is_none_or(|id| !workspaces.iter().any(|w| &w.workspace_id == id))
-                {
-                    self.active_workspace = workspaces.first().map(|w| w.workspace_id.clone());
-                }
-                self.workspaces = workspaces;
-                self.objectives = objectives;
-                self.settings = settings;
-                let mut changes = vec![Change::Workspaces, Change::Objectives];
-                if self
-                    .ui
-                    .selected
-                    .as_ref()
-                    .is_some_and(|id| self.objective(id).is_none())
-                {
-                    self.ui.selected = None;
-                    changes.push(Change::Selection);
-                }
-                changes
-            }
-            StoreUpdate::WorkspaceOpened(workspace) => {
-                self.active_workspace = Some(workspace.workspace_id.clone());
-                match self
-                    .workspaces
-                    .iter_mut()
-                    .find(|w| w.workspace_id == workspace.workspace_id)
-                {
-                    Some(existing) => *existing = workspace,
-                    None => self.workspaces.push(workspace),
-                }
-                vec![
-                    Change::Workspaces,
-                    Change::WorkspaceOpened,
-                    Change::Objectives,
-                ]
-            }
+            } => self.apply_snapshot(workspaces, objectives, settings),
+            StoreUpdate::WorkspaceOpened(workspace) => self.apply_workspace_opened(workspace),
             StoreUpdate::ObjectiveChanged(summary) => {
                 let id = summary.objective_id.clone();
                 self.objective_revised(&id, summary.revision);
@@ -647,94 +669,36 @@ impl PresentationState {
                 items,
                 has_more,
             } => {
-                let log = self.activity.entry(objective_id.clone()).or_default();
-                let known_oldest = log.items.first().map(|i| i.seq);
-                let page_oldest = items.iter().map(|i| i.seq).min();
-                let decides = match (known_oldest, page_oldest) {
-                    (Some(known), Some(page)) => page <= known,
-                    _ => true,
-                };
-                let index: HashMap<ActivityItemId, usize> = log
-                    .items
-                    .iter()
-                    .enumerate()
-                    .map(|(i, item)| (item.item_id.clone(), i))
-                    .collect();
-                let mut fresh = Vec::new();
-                for item in items {
-                    match index.get(&item.item_id) {
-                        Some(&i) => log.items[i] = item,
-                        None => fresh.push(item),
-                    }
-                }
-                log.items.extend(fresh);
-                log.items.sort_by_key(|i| i.seq);
-                if decides || !log.loaded {
-                    log.has_more = has_more;
-                }
-                log.loaded = true;
+                self.activity
+                    .entry(objective_id.clone())
+                    .or_default()
+                    .merge_page(items, has_more);
                 vec![Change::Activity(objective_id, ActivityChange::Reset)]
             }
             StoreUpdate::ActivityAppended {
                 objective_id,
                 items,
             } => {
-                let log = self.activity.entry(objective_id.clone()).or_default();
-                let from_index = log.items.len();
-                let mut out_of_order = false;
-                for item in items {
-                    if let Some(existing) = log.items.iter_mut().find(|i| i.item_id == item.item_id)
-                    {
-                        *existing = item;
-                        out_of_order = true;
-                    } else {
-                        out_of_order |= log.items.last().is_some_and(|last| last.seq > item.seq);
-                        log.items.push(item);
-                    }
-                }
-                let change = if out_of_order {
-                    log.items.sort_by_key(|i| i.seq);
-                    ActivityChange::Reset
-                } else {
-                    ActivityChange::Appended { from_index }
-                };
+                let change = self
+                    .activity
+                    .entry(objective_id.clone())
+                    .or_default()
+                    .append(items);
                 vec![Change::Activity(objective_id, change)]
             }
             StoreUpdate::ActivityDelta {
                 objective_id,
                 item_id,
                 append_text,
-            } => {
-                let log = self.activity.entry(objective_id.clone()).or_default();
-                match log.items.iter().position(|i| i.item_id == item_id) {
-                    Some(index) => {
-                        log.items[index].text.push_str(&append_text);
-                        vec![Change::Activity(
-                            objective_id,
-                            ActivityChange::Delta { index },
-                        )]
-                    }
-                    None => Vec::new(),
-                }
-            }
-            StoreUpdate::Changes(list) => {
-                let id = list.objective_id.clone();
-                let current_basis = self.objective_ui_mut(&id).basis.clone();
-                if list.basis != current_basis {
-                    return Vec::new();
-                }
-                self.working_updated.remove(&id);
-                let ui = self.objective_ui_mut(&id);
-                if ui
-                    .file
-                    .as_ref()
-                    .is_some_and(|f| !list.files.iter().any(|c| &c.path == f))
-                {
-                    ui.file = None;
-                }
-                self.changes.insert(id.clone(), Load::Loaded(list));
-                vec![Change::Changes(id)]
-            }
+            } => self
+                .activity
+                .entry(objective_id.clone())
+                .or_default()
+                .append_text(&item_id, &append_text)
+                .map(|index| Change::Activity(objective_id, ActivityChange::Delta { index }))
+                .into_iter()
+                .collect(),
+            StoreUpdate::Changes(list) => self.apply_changes(list),
             StoreUpdate::ChangesFailed {
                 objective_id,
                 basis,
@@ -785,52 +749,13 @@ impl PresentationState {
                 objective_id,
                 drafts,
             } => {
-                let editors = self.drafts.entry(objective_id.clone()).or_default();
-                for draft in &drafts {
-                    match editors.iter_mut().find(|e| e.draft_id == draft.draft_id) {
-                        Some(editor) => {
-                            if draft.revision == editor.durable_revision() {
-                                editor.reconciled();
-                            }
-                            editor.acknowledge(draft);
-                        }
-                        None => editors.push(DraftEditor::from_durable(draft)),
-                    }
-                }
-                for editor in editors.iter_mut() {
-                    if editor.durable_revision() == 0
-                        && !drafts.iter().any(|d| d.draft_id == editor.draft_id)
-                    {
-                        editor.reconciled();
-                    }
-                }
-                editors.retain(|e| {
-                    e.durable_revision() == 0 || drafts.iter().any(|d| d.draft_id == e.draft_id)
-                });
+                reconcile_drafts(
+                    self.drafts.entry(objective_id.clone()).or_default(),
+                    &drafts,
+                );
                 vec![Change::Drafts(objective_id)]
             }
-            StoreUpdate::DraftChanged(draft) => {
-                let objective_id = draft.objective_id.clone();
-                let editors = self.drafts.entry(objective_id.clone()).or_default();
-                match editors.iter_mut().find(|e| e.draft_id == draft.draft_id) {
-                    Some(editor) => {
-                        let was_unsent = editor.state == super::model::DraftState::Unsent;
-                        let had_text = editor.body.clone();
-                        editor.acknowledge(&draft);
-                        if was_unsent != (editor.state == super::model::DraftState::Unsent)
-                            || had_text != editor.body
-                        {
-                            vec![Change::Drafts(objective_id)]
-                        } else {
-                            vec![Change::DraftStatus(draft.draft_id)]
-                        }
-                    }
-                    None => {
-                        editors.push(DraftEditor::from_durable(&draft));
-                        vec![Change::Drafts(objective_id)]
-                    }
-                }
-            }
+            StoreUpdate::DraftChanged(draft) => self.apply_draft_changed(&draft),
             StoreUpdate::DraftSaveFailed { draft_id, message } => match self.draft_mut(&draft_id) {
                 Some(editor) => {
                     editor.fail(&message);
@@ -848,32 +773,9 @@ impl PresentationState {
                 }
             }
             StoreUpdate::DraftDeleteRefused { draft_id, refusal } => {
-                match self.draft_mut(&draft_id).map(|d| d.objective_id.clone()) {
-                    Some(objective_id) => {
-                        self.keep_refusal(objective_id, ActionSurface::Drafts, refusal)
-                    }
-                    None => {
-                        let code = refusal.details.split(':').next().unwrap_or_default();
-                        self.push_notice(ServiceNotice {
-                            level: NoticeLevel::Warning,
-                            code: code.to_owned(),
-                            message: refusal.message,
-                        });
-                        vec![Change::Notices]
-                    }
-                }
+                self.apply_draft_delete_refused(&draft_id, refusal)
             }
-            StoreUpdate::DraftDeleted { draft_id } => {
-                let mut changes = Vec::new();
-                for (objective_id, editors) in &mut self.drafts {
-                    let before = editors.len();
-                    editors.retain(|e| e.draft_id != draft_id);
-                    if editors.len() != before {
-                        changes.push(Change::Drafts(objective_id.clone()));
-                    }
-                }
-                changes
-            }
+            StoreUpdate::DraftDeleted { draft_id } => self.remove_draft(&draft_id),
             StoreUpdate::Inputs {
                 objective_id,
                 inputs,
@@ -937,21 +839,7 @@ impl PresentationState {
             StoreUpdate::CommandStatus {
                 objective_id,
                 status,
-            } => {
-                let changed = match status {
-                    Some(status) => {
-                        self.command_status
-                            .insert(objective_id.clone(), status.clone())
-                            != Some(status)
-                    }
-                    None => self.command_status.remove(&objective_id).is_some(),
-                };
-                if changed {
-                    vec![Change::Detail(objective_id)]
-                } else {
-                    Vec::new()
-                }
-            }
+            } => self.apply_command_status(objective_id, status),
             StoreUpdate::Refused {
                 objective_id,
                 surface,
@@ -968,12 +856,7 @@ impl PresentationState {
                 .agent_session
                 .apply(update)
                 .into_iter()
-                .map(|change| match change {
-                    AgentSessionChange::Catalog => Change::Catalog,
-                    AgentSessionChange::Session(id) => Change::Session(id),
-                    AgentSessionChange::Resources => Change::Resources,
-                    AgentSessionChange::Dialogs => Change::Dialogs,
-                })
+                .map(Change::from)
                 .collect(),
             StoreUpdate::TerminalOpened {
                 objective_id,
@@ -981,32 +864,7 @@ impl PresentationState {
                 mode,
                 cols,
                 rows,
-            } => {
-                let session = match self
-                    .terminal_for_mut(&objective_id)
-                    .filter(|t| t.status == TerminalStatus::Opening)
-                {
-                    Some(session) => session,
-                    None => {
-                        self.push_terminal(TerminalSession::opening(
-                            objective_id.clone(),
-                            usize::from(cols),
-                            usize::from(rows),
-                        ));
-                        let Some(session) = self.terminals.last_mut() else {
-                            return Vec::new();
-                        };
-                        session
-                    }
-                };
-                session.terminal_id = Some(terminal_id);
-                session.mode = Some(mode);
-                session.status = TerminalStatus::Open;
-                session.screen.resize(usize::from(cols), usize::from(rows));
-                self.refusals
-                    .remove(&(objective_id.clone(), ActionSurface::Terminal));
-                vec![Change::Terminal(objective_id)]
-            }
+            } => self.apply_terminal_opened(objective_id, terminal_id, mode, cols, rows),
             StoreUpdate::TerminalOutput {
                 terminal_id,
                 seq,
@@ -1051,6 +909,193 @@ impl PresentationState {
                 vec![Change::DesktopAttention]
             }
         }
+    }
+
+    fn apply_connection(&mut self, connection: ConnectionState) -> Vec<Change> {
+        let connected = connection.is_connected();
+        self.connection = connection;
+        let mut changes = vec![Change::Connection];
+        if connected {
+            return changes;
+        }
+        for editor in self.drafts.values_mut().flatten() {
+            editor.connection_lost();
+            changes.push(Change::DraftStatus(editor.draft_id.clone()));
+        }
+        self.terminals.retain(|t| {
+            let pending = t.status == TerminalStatus::Opening && t.terminal_id.is_none();
+            if pending {
+                changes.push(Change::Terminal(t.objective_id.clone()));
+            }
+            !pending
+        });
+        for session in &mut self.terminals {
+            if !matches!(session.status, TerminalStatus::Ended(_)) {
+                session.status = TerminalStatus::Ended(TerminalEnd::ConnectionLost);
+                changes.push(Change::Terminal(session.objective_id.clone()));
+            }
+        }
+        if !self.agent_session.dialogs.is_empty() {
+            self.agent_session.dialogs.clear();
+            changes.push(Change::Dialogs);
+        }
+        changes
+    }
+
+    fn apply_snapshot(
+        &mut self,
+        workspaces: Vec<Workspace>,
+        objectives: Vec<ObjectiveSummary>,
+        settings: Settings,
+    ) -> Vec<Change> {
+        if self
+            .active_workspace
+            .as_ref()
+            .is_none_or(|id| !workspaces.iter().any(|w| &w.workspace_id == id))
+        {
+            self.active_workspace = workspaces.first().map(|w| w.workspace_id.clone());
+        }
+        self.workspaces = workspaces;
+        self.objectives = objectives;
+        self.settings = settings;
+        let mut changes = vec![Change::Workspaces, Change::Objectives];
+        if self
+            .ui
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.objective(id).is_none())
+        {
+            self.ui.selected = None;
+            changes.push(Change::Selection);
+        }
+        changes
+    }
+
+    fn apply_workspace_opened(&mut self, workspace: Workspace) -> Vec<Change> {
+        self.active_workspace = Some(workspace.workspace_id.clone());
+        match self
+            .workspaces
+            .iter_mut()
+            .find(|w| w.workspace_id == workspace.workspace_id)
+        {
+            Some(existing) => *existing = workspace,
+            None => self.workspaces.push(workspace),
+        }
+        vec![
+            Change::Workspaces,
+            Change::WorkspaceOpened,
+            Change::Objectives,
+        ]
+    }
+
+    fn apply_changes(&mut self, list: ChangeList) -> Vec<Change> {
+        let id = list.objective_id.clone();
+        let ui = self.objective_ui_mut(&id);
+        if list.basis != ui.basis {
+            return Vec::new();
+        }
+        if ui
+            .file
+            .as_ref()
+            .is_some_and(|f| !list.files.iter().any(|c| &c.path == f))
+        {
+            ui.file = None;
+        }
+        self.working_updated.remove(&id);
+        self.changes.insert(id.clone(), Load::Loaded(list));
+        vec![Change::Changes(id)]
+    }
+
+    fn apply_draft_changed(&mut self, draft: &Draft) -> Vec<Change> {
+        let objective_id = draft.objective_id.clone();
+        let editors = self.drafts.entry(objective_id.clone()).or_default();
+        let Some(editor) = editors.iter_mut().find(|e| e.draft_id == draft.draft_id) else {
+            editors.push(DraftEditor::from_durable(draft));
+            return vec![Change::Drafts(objective_id)];
+        };
+        let was_unsent = editor.state == DraftState::Unsent;
+        let had_text = editor.body.clone();
+        editor.acknowledge(draft);
+        if was_unsent != (editor.state == DraftState::Unsent) || had_text != editor.body {
+            vec![Change::Drafts(objective_id)]
+        } else {
+            vec![Change::DraftStatus(draft.draft_id.clone())]
+        }
+    }
+
+    fn apply_draft_delete_refused(&mut self, draft_id: &DraftId, refusal: Refusal) -> Vec<Change> {
+        if let Some(objective_id) = self.draft_mut(draft_id).map(|d| d.objective_id.clone()) {
+            return self.keep_refusal(objective_id, ActionSurface::Drafts, refusal);
+        }
+        let code = refusal.details.split(':').next().unwrap_or_default();
+        self.push_notice(ServiceNotice {
+            level: NoticeLevel::Warning,
+            code: code.to_owned(),
+            message: refusal.message,
+        });
+        vec![Change::Notices]
+    }
+
+    pub fn remove_draft(&mut self, draft_id: &DraftId) -> Vec<Change> {
+        let mut changes = Vec::new();
+        for (objective_id, editors) in &mut self.drafts {
+            let before = editors.len();
+            editors.retain(|e| &e.draft_id != draft_id);
+            if editors.len() != before {
+                changes.push(Change::Drafts(objective_id.clone()));
+            }
+        }
+        changes
+    }
+
+    fn apply_command_status(
+        &mut self,
+        objective_id: ObjectiveId,
+        status: Option<ServiceNotice>,
+    ) -> Vec<Change> {
+        let changed = match status {
+            Some(status) => {
+                self.command_status
+                    .insert(objective_id.clone(), status.clone())
+                    != Some(status)
+            }
+            None => self.command_status.remove(&objective_id).is_some(),
+        };
+        if changed {
+            vec![Change::Detail(objective_id)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn apply_terminal_opened(
+        &mut self,
+        objective_id: ObjectiveId,
+        terminal_id: String,
+        mode: TerminalMode,
+        cols: u16,
+        rows: u16,
+    ) -> Vec<Change> {
+        if self
+            .terminal_for(&objective_id)
+            .is_none_or(|t| t.status != TerminalStatus::Opening)
+        {
+            self.push_terminal(TerminalSession::opening(
+                objective_id.clone(),
+                usize::from(cols),
+                usize::from(rows),
+            ));
+        }
+        let Some(session) = self.terminal_for_mut(&objective_id) else {
+            return Vec::new();
+        };
+        session.terminal_id = Some(terminal_id);
+        session.mode = Some(mode);
+        session.status = TerminalStatus::Open;
+        session.screen.resize(usize::from(cols), usize::from(rows));
+        self.refusals
+            .remove(&(objective_id.clone(), ActionSurface::Terminal));
+        vec![Change::Terminal(objective_id)]
     }
 
     fn upsert_summary(&mut self, summary: ObjectiveSummary) {
