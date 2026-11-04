@@ -11,7 +11,7 @@ use lade_protocol::client::{
     self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeLevel, Reply, ReplyData,
     Request, ServiceNotice,
 };
-use lade_protocol::types::Counter;
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 
 use super::connection::{self, Config, ConnectError, Input, random_id, spawn_driver};
@@ -85,10 +85,10 @@ const CAPABILITY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef012345
 
 fn fake_runtime(dir: &Path) -> UnixListener {
     private_dir(dir);
-    let cap = dir.join(connection::CAPABILITY_NAME);
+    let cap = dir.join(CONTROL_CAPABILITY_NAME);
     fs::write(&cap, CAPABILITY).unwrap();
     fs::set_permissions(&cap, fs::Permissions::from_mode(0o600)).unwrap();
-    UnixListener::bind(dir.join(connection::SOCKET_NAME)).unwrap()
+    UnixListener::bind(dir.join(CONTROL_SOCKET_NAME)).unwrap()
 }
 
 struct FakeLink {
@@ -281,7 +281,7 @@ fn capability_must_be_private() {
     let runtime = dir.0.join("run");
     let _listener = fake_runtime(&runtime);
     assert!(connection::read_capability(&runtime).is_ok());
-    let cap = runtime.join(connection::CAPABILITY_NAME);
+    let cap = runtime.join(CONTROL_CAPABILITY_NAME);
     fs::set_permissions(&cap, fs::Permissions::from_mode(0o644)).unwrap();
     assert!(matches!(
         connection::read_capability(&runtime),
@@ -396,7 +396,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
             .unwrap(),
     );
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !runtime.join(connection::SOCKET_NAME).exists() {
+    while !runtime.join(CONTROL_SOCKET_NAME).exists() {
         assert!(Instant::now() < deadline, "laded did not start");
         thread::sleep(Duration::from_millis(50));
     }
@@ -565,7 +565,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
         thread::sleep(Duration::from_millis(50));
     };
     assert!(status.success(), "{status:?}");
-    assert!(!runtime.join(connection::SOCKET_NAME).exists());
+    assert!(!runtime.join(CONTROL_SOCKET_NAME).exists());
     thread::sleep(Duration::from_millis(500));
     while let Ok(update) = updates.try_recv() {
         assert!(

@@ -38,7 +38,7 @@ use lade_protocol::client::{
     ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeLevel, Outcome, Rejection,
     Reply, ReplyData, ReplyResult, RequestFrame, RequestName, SafeAction, ServiceNotice, Settings,
 };
-use lade_protocol::types::{Counter, Id};
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter, Id};
 use lade_protocol::worker::WorkerResources;
 use lade_protocol::{Framing, encode};
 use rusqlite::Transaction;
@@ -403,7 +403,7 @@ fn check_socket_paths(runtime: &Path) -> Result<(), StartError> {
         "ffffffff-ffff-4fff-bfff-ffffffffffff",
         RESERVED_GENERATION,
     );
-    for path in [runtime.join(transport::SOCKET_NAME), widest] {
+    for path in [runtime.join(CONTROL_SOCKET_NAME), widest] {
         if !socket_path_fits(&path) {
             return Err(StartError::SocketPathTooLong(path));
         }
@@ -512,7 +512,7 @@ pub fn start(
     let capability =
         transport::write_capability(&config.runtime_dir).map_err(StartError::Transport)?;
     let listener = transport::bind_socket(&config.runtime_dir).map_err(StartError::Transport)?;
-    let socket = config.runtime_dir.join(transport::SOCKET_NAME);
+    let socket = config.runtime_dir.join(CONTROL_SOCKET_NAME);
     let listener = transport::serve(listener, socket.clone(), capability, queue_tx.clone());
 
     let forward = queue_tx.clone();
@@ -549,7 +549,7 @@ pub fn start(
         ticker_stop,
         ticker: Some(ticker),
         socket,
-        capability: config.runtime_dir.join(transport::CAPABILITY_NAME),
+        capability: config.runtime_dir.join(CONTROL_CAPABILITY_NAME),
         epoch,
         _lock: lock,
     })

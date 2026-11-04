@@ -43,6 +43,11 @@ wire_string!(Id, "uuid-v4");
 wire_string!(Counter, "u64");
 wire_string!(Digest, "sha256");
 wire_string!(Capability, "capability");
+
+/// File name of the control socket inside the service runtime directory.
+pub const CONTROL_SOCKET_NAME: &str = "control.sock";
+/// File name of the admission capability inside the service runtime directory.
+pub const CONTROL_CAPABILITY_NAME: &str = "control.cap";
 wire_string!(Timestamp, "timestamp");
 wire_string!(PageLimit, "page-limit");
 wire_string!(ReadLimit, "read-limit");

@@ -12,16 +12,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lade_protocol::client::{ClientBody, ClientEnvelope, ErrorCode, Event, Rejection, SafeAction};
-use lade_protocol::types::{Capability, Id};
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Capability, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError};
 
 use super::core::{Core, Step};
 use crate::presentation::controller::intents::Intent;
 use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::store::StoreUpdate;
-
-pub const SOCKET_NAME: &str = "control.sock";
-pub const CAPABILITY_NAME: &str = "control.cap";
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const START_WINDOW: Duration = Duration::from_secs(5);
@@ -126,7 +123,7 @@ pub fn read_capability(dir: &Path) -> Result<Capability, ConnectError> {
     if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
         return Err(unsafe_dir());
     }
-    let path = dir.join(CAPABILITY_NAME);
+    let path = dir.join(CONTROL_CAPABILITY_NAME);
     let meta = fs::symlink_metadata(&path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => ConnectError::NotRunning,
         _ => ConnectError::Unsafe("the capability file cannot be inspected".into()),
@@ -152,7 +149,7 @@ pub struct Link {
 }
 
 pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
-    let socket = dir.join(SOCKET_NAME);
+    let socket = dir.join(CONTROL_SOCKET_NAME);
     match fs::symlink_metadata(&socket) {
         Ok(meta) if meta.file_type().is_socket() => {}
         Ok(_) => {

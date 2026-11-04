@@ -12,14 +12,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use lade_protocol::client::{ClientBody, ClientEnvelope, RequestFrame};
-use lade_protocol::types::Id;
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Id};
 use lade_protocol::{FrameReader, Framing, decode_client_frame, encode};
 
 use crate::support::fs::service_uid;
 use crate::support::{constant_time_eq, hex, random_fill};
 
-pub const SOCKET_NAME: &str = "control.sock";
-pub const CAPABILITY_NAME: &str = "control.cap";
 pub const MAX_OUTBOUND_FRAMES: usize = 256;
 pub const MAX_OUTBOUND_BYTES: usize = 8 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -55,7 +53,7 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     let mut secret = [0u8; 32];
     random_fill(&mut secret).map_err(io_err("random"))?;
     let capability = hex(&secret);
-    let tmp = dir.join(format!("{CAPABILITY_NAME}.tmp"));
+    let tmp = dir.join(format!("{CONTROL_CAPABILITY_NAME}.tmp"));
     let _ = fs::remove_file(&tmp);
     let mut file = OpenOptions::new()
         .write(true)
@@ -67,7 +65,7 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
         .and_then(|()| file.sync_all())
         .map_err(io_err("write capability"))?;
     drop(file);
-    fs::rename(&tmp, dir.join(CAPABILITY_NAME)).map_err(io_err("publish capability"))?;
+    fs::rename(&tmp, dir.join(CONTROL_CAPABILITY_NAME)).map_err(io_err("publish capability"))?;
     fs::File::open(dir)
         .and_then(|d| d.sync_all())
         .map_err(io_err("sync runtime dir"))?;
@@ -75,7 +73,7 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
 }
 
 pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
-    let path = dir.join(SOCKET_NAME);
+    let path = dir.join(CONTROL_SOCKET_NAME);
     let socket = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket());
     if socket && UnixStream::connect(&path).is_ok() {
         return Err(TransportError::AlreadyRunning);
@@ -84,7 +82,7 @@ pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
 }
 
 pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
-    let path = dir.join(SOCKET_NAME);
+    let path = dir.join(CONTROL_SOCKET_NAME);
     if let Ok(meta) = fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
             return Err(TransportError::UnsafeSocketPath);
