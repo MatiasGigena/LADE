@@ -576,7 +576,7 @@ worker launch, which register the provider only with it. Without the switch, at 
 
 With the switch the provider is an ordinary catalogue entry (no special badge or label in the client). The Rust
 integration tests (`tests/service_support`), the worker tests, `tests/load.rs` and `scripts/e2e-gui`,
-`e2e-terminal`, `e2e-resilience` and `e2e-perf` turn it on; `tests/service_compat.rs` and
+`e2e-terminal`, `e2e-resilience` and `e2e-perf` turn it on; `tests/service_pi_integration.rs` and
 `tests/supervision_launcher.rs` check that it is absent and refused without it.
 
 ## Tests

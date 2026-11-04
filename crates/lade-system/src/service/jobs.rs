@@ -829,7 +829,7 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     let mut request = request;
     if let Some((profile, approved)) = &input.profile {
         let dest = request.session_dir.join("profile");
-        match super::compat::snapshot(profile, &dest, approved) {
+        match super::resources::snapshot(profile, &dest, approved) {
             Ok(snapshot) => {
                 if let lade_protocol::worker::WorkerBody::Start { resources, .. } =
                     &mut request.start

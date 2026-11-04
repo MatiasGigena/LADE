@@ -17,7 +17,7 @@ compatibility manifest matches the SDK catalogue": SDK version and every catalog
 equal what this build's egress and credential tables decide).
 
 Test locations: **W** = `packages/pi-worker/test/worker-compat.test.ts`, **S** =
-`crates/lade-system/tests/service_compat.rs`, **D** = `crates/lade-desktop` unit tests
+`crates/lade-system/tests/service_pi_integration.rs`, **D** = `crates/lade-desktop` unit tests
 (`presentation/state/agent_session.rs`, `presentation/controller/agent_session.rs`,
 `transport/requests/tests.rs`).
 

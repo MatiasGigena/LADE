@@ -532,7 +532,7 @@ impl Service {
             | WorkerBody::CommandResult { .. }
             | WorkerBody::ResourcesLoaded { .. }
             | WorkerBody::UiRequest { .. }
-            | WorkerBody::UiClosed { .. }) => self.on_compat_body(oid, generation, body),
+            | WorkerBody::UiClosed { .. }) => self.on_agent_session_body(oid, generation, body),
             WorkerBody::Start { .. }
             | WorkerBody::Deliver { .. }
             | WorkerBody::Abort
@@ -544,7 +544,7 @@ impl Service {
 
     fn on_worker_exit(&mut self, oid: ObjectiveId, code: Option<i32>, signal: Option<i32>) {
         self.rt(oid).control = None;
-        self.compat_worker_gone(oid);
+        self.end_agent_session(oid);
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };

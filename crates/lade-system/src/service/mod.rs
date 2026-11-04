@@ -1,4 +1,4 @@
-mod compat;
+mod agent_session;
 pub mod convert;
 mod detail_budget;
 mod execution;
@@ -6,8 +6,10 @@ mod handlers;
 mod inspect;
 mod jobs;
 mod limits;
+mod models;
 mod project;
 mod recovery;
+mod resources;
 mod review;
 mod state;
 mod terminal;
@@ -122,6 +124,12 @@ impl std::fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
+impl From<rusqlite::Error> for StartError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Store(error.into())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Paths {
     pub state: PathBuf,
@@ -158,7 +166,7 @@ pub(crate) enum JobOutput {
     Unit(Result<(), Rejection>),
     Flag(Result<bool, Rejection>),
     Query(Result<ReplyData, Rejection>),
-    Catalog(Result<compat::CatalogData, String>),
+    Catalog(Result<models::CatalogData, String>),
     Profile(Result<crate::adapters::profile::ImportReport, String>),
     Snapshot(Result<(lade_protocol::worker::WorkerResources, PathBuf), String>),
     Terminal(Result<crate::supervision::Terminal, Rejection>),
@@ -234,7 +242,9 @@ pub(crate) struct Service {
     live: execution::LiveActivity,
     ticks: u64,
     sandbox: OnceLock<Option<SandboxTools>>,
-    compat: compat::CompatState,
+    catalog: models::CatalogCache,
+    extension_approvals: HashMap<(String, String), bool>,
+    agent_sessions: agent_session::AgentSessions,
     terminals: BTreeMap<String, terminal::TermState>,
     terminals_opening: usize,
     stopping: bool,
@@ -399,7 +409,9 @@ pub fn start(
         live: execution::LiveActivity::default(),
         ticks: 0,
         sandbox: OnceLock::new(),
-        compat: compat::CompatState::default(),
+        catalog: models::CatalogCache::default(),
+        extension_approvals: HashMap::new(),
+        agent_sessions: agent_session::AgentSessions::default(),
         terminals: BTreeMap::new(),
         terminals_opening: 0,
         stopping: false,
@@ -413,9 +425,10 @@ pub fn start(
         cgroups: config.cgroups.clone(),
         test_fixture_provider: config.test_fixture_provider,
     };
-    service.load().map_err(StartError::Recovery)?;
-    service.load_compat().map_err(StartError::Recovery)?;
-    service.recover().map_err(StartError::Recovery)?;
+    service.load()?;
+    service.load_resources()?;
+    service.load_agent_sessions()?;
+    service.recover()?;
     service.check_free_space();
     eprintln!("laded: limits {}", config.limits);
 
@@ -920,7 +933,7 @@ impl Service {
             self.check_storage();
         }
         self.check_timeouts();
-        self.compat_timeouts();
+        self.expire_session_commands();
     }
 
     pub(crate) fn sandbox_tools(&self) -> Option<SandboxTools> {

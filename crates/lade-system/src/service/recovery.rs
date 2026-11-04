@@ -11,25 +11,19 @@ use lade_protocol::client::{ErrorCode, Outcome, Rejection, SafeAction, Settings}
 use crate::adapters::git::CommitSpec;
 use crate::storage::{self, JournalState, OperationKey, OperationState};
 
-use super::Service;
 use super::convert::{adapter_git, core_git};
 use super::state::{ObjState, WsState};
+use super::{Service, StartError};
 use crate::support::now_ms;
 
-fn sql_text(error: &rusqlite::Error) -> String {
-    format!("store: {error}")
-}
-
 impl Service {
-    pub(crate) fn load(&mut self) -> Result<(), String> {
+    pub(crate) fn load(&mut self) -> Result<(), StartError> {
         let conn = self.store.conn();
-        self.settings = storage::load_settings(conn)
-            .map_err(|e| sql_text(&e))?
-            .unwrap_or(Settings {
-                verification_commands: Vec::new(),
-                default_model: None,
-            });
-        for row in storage::load_workspaces(conn).map_err(|e| sql_text(&e))? {
+        self.settings = storage::load_settings(conn)?.unwrap_or(Settings {
+            verification_commands: Vec::new(),
+            default_model: None,
+        });
+        for row in storage::load_workspaces(conn)? {
             match super::jobs::open_repository(&row.path) {
                 Ok(repo) => {
                     self.workspaces.insert(
@@ -51,35 +45,33 @@ impl Service {
             }
         }
         let mut drafts: HashMap<ObjectiveId, Vec<_>> = HashMap::new();
-        for draft in storage::load_drafts(conn).map_err(|e| sql_text(&e))? {
+        for draft in storage::load_drafts(conn)? {
             drafts
                 .entry(draft.record().objective_id)
                 .or_default()
                 .push(draft);
         }
         let mut inputs: HashMap<ObjectiveId, Vec<_>> = HashMap::new();
-        for (seq, input) in storage::load_inputs(conn).map_err(|e| sql_text(&e))? {
+        for (seq, input) in storage::load_inputs(conn)? {
             self.input_seq = self.input_seq.max(seq);
             inputs
                 .entry(input.objective_id)
                 .or_default()
                 .push((seq, input));
         }
-        let mut captures: HashMap<ObjectiveId, _> = storage::latest_captures(conn)
-            .map_err(|e| sql_text(&e))?
+        let mut captures: HashMap<ObjectiveId, _> = storage::latest_captures(conn)?
             .into_iter()
             .map(|c| (c.objective_id, c))
             .collect();
-        let tails: HashMap<_, _> = storage::load_verification_tails(conn)
-            .map_err(|e| sql_text(&e))?
+        let tails: HashMap<_, _> = storage::load_verification_tails(conn)?
             .into_iter()
             .collect();
-        for (oid, seq) in storage::max_activity_seq(conn).map_err(|e| sql_text(&e))? {
+        for (oid, seq) in storage::max_activity_seq(conn)? {
             self.activity_seq.insert(oid, seq);
         }
-        for row in storage::load_objectives(conn).map_err(|e| sql_text(&e))? {
+        for row in storage::load_objectives(conn)? {
             let oid = row.objective.id();
-            let review = storage::load_review(conn, oid).map_err(|e| sql_text(&e))?;
+            let review = storage::load_review(conn, oid)?;
             let review_tails = review
                 .verifications()
                 .iter()
@@ -101,9 +93,9 @@ impl Service {
         Ok(())
     }
 
-    pub(crate) fn recover(&mut self) -> Result<(), String> {
+    pub(crate) fn recover(&mut self) -> Result<(), StartError> {
         let now = now_ms();
-        for operation in storage::pending_operations(self.store.conn()).map_err(|e| sql_text(&e))? {
+        for operation in storage::pending_operations(self.store.conn())? {
             let Some(name) = operation.name else {
                 continue;
             };
@@ -125,8 +117,7 @@ impl Service {
                 OperationState::Uncertain,
                 Some(&outcome),
                 now,
-            )
-            .map_err(|e| sql_text(&e))?;
+            )?;
         }
         self.reconcile_journal()?;
         let ids: Vec<ObjectiveId> = self.objectives.keys().copied().collect();
@@ -140,7 +131,7 @@ impl Service {
                 &mut inputs,
                 Timestamp::from_unix_ms(now),
             )
-            .map_err(|e| format!("objective {oid}: {e}"))?;
+            .map_err(|e| StartError::Recovery(format!("objective {oid}: {e}")))?;
             if (st.row.objective.clone(), st.review.clone(), inputs.clone()) == before {
                 continue;
             }
@@ -153,13 +144,12 @@ impl Service {
             for ((_, slot), input) in st.inputs.iter_mut().zip(inputs) {
                 *slot = input;
             }
-            let tx = self.store.begin().map_err(|e| sql_text(&e))?;
-            Self::save_tx(&tx, &st).map_err(|e| sql_text(&e))?;
+            let tx = self.store.begin()?;
+            Self::save_tx(&tx, &st)?;
             for input in &changed {
-                storage::save_delivery(&tx, input.id, &input.delivery, now)
-                    .map_err(|e| sql_text(&e))?;
+                storage::save_delivery(&tx, input.id, &input.delivery, now)?;
             }
-            tx.commit().map_err(|e| sql_text(&e))?;
+            tx.commit()?;
             eprintln!("laded: recovered objective={oid} after restart");
             self.objectives.insert(oid, st);
         }
@@ -167,8 +157,8 @@ impl Service {
         Ok(())
     }
 
-    fn reconcile_journal(&mut self) -> Result<(), String> {
-        let open = storage::open_journal(self.store.conn()).map_err(|e| sql_text(&e))?;
+    fn reconcile_journal(&mut self) -> Result<(), StartError> {
+        let open = storage::open_journal(self.store.conn())?;
         for row in open {
             let now = now_ms();
             let Some(st) = self.objectives.get(&row.objective_id).cloned() else {
@@ -212,9 +202,9 @@ impl Service {
                         .is_ok()
                 });
                 let commit = current.as_ref().map(core_git);
-                let tx = self.store.begin().map_err(|e| sql_text(&e))?;
+                let tx = self.store.begin()?;
                 if completed {
-                    Self::save_tx(&tx, &st).map_err(|e| sql_text(&e))?;
+                    Self::save_tx(&tx, &st)?;
                 }
                 storage::update_journal(
                     &tx,
@@ -223,9 +213,8 @@ impl Service {
                     commit.as_ref(),
                     Some("integration found completed after restart"),
                     now,
-                )
-                .map_err(|e| sql_text(&e))?;
-                tx.commit().map_err(|e| sql_text(&e))?;
+                )?;
+                tx.commit()?;
                 if completed {
                     self.objectives.insert(row.objective_id, st);
                 }
@@ -260,8 +249,7 @@ impl Service {
                     None,
                     Some("target does not hold the intended squash commit"),
                     now,
-                )
-                .map_err(|e| sql_text(&e))?;
+                )?;
                 eprintln!(
                     "laded: reconciled integration objective={} not applied",
                     row.objective_id

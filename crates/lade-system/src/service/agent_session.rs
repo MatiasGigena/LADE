@@ -1,97 +1,43 @@
+//! Agent Session control on top of a running worker: session commands (tree, navigate, fork,
+//! import, export, compact, reload, configure), extension dialogs, model and thinking-level
+//! selection, and the session reports the worker sends back.
+
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use lade_core::domain::execution::{ExecutionGeneration, ExecutionState, ModelRef};
 use lade_core::domain::ids::{ObjectiveId, SessionId, Timestamp};
 use lade_protocol::client::{
-    Empty, ErrorCode, Event, ModelCatalog, ModelInfo, ModelsListQuery, NoticeLevel,
-    ProfileImportCommand, ProfileImportResult, ProviderAuth, ProviderInfo, ProviderStatus,
-    Rejection, ReplyData, ResourceDecideCommand, ResourceEntry, ResourceInventory, ResourceKind,
-    ResourceState, SafeAction, SessionCompactCommand, SessionConfigureCommand, SessionExport,
-    SessionForkCommand, SessionImportCommand, SessionNavigateCommand, SessionState, SessionTree,
-    UiClosed, UiRequest, UiRespondCommand,
+    Empty, ErrorCode, Event, NoticeLevel, Rejection, ReplyData, SafeAction, SessionCompactCommand,
+    SessionConfigureCommand, SessionExport, SessionForkCommand, SessionImportCommand,
+    SessionNavigateCommand, SessionState, SessionTree, UiClosed, UiRequest, UiRespondCommand,
 };
 use lade_protocol::types::{
-    Digest, Id, Model, SessionChangeReason, ThinkingLevel, TreeEntry, UiCloseReason, UiPrompt,
-    WirePath,
+    Id, Model, SessionChangeReason, ThinkingLevel, TreeEntry, UiCloseReason, UiPrompt, WirePath,
 };
 use lade_protocol::worker::{
     LoadStatus, LoadedKind, LoadedResource, ResourceSource, SessionCommand, WorkerBody,
-    WorkerExtension, WorkerResources,
+    WorkerResources,
 };
 use serde_json::Value;
 
-use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
-use crate::supervision::credentials::FIXTURE_PROVIDER;
-use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
 use crate::support::fs::ensure_private_dir;
 
 use super::convert::{
     conflict, counter, domain_rejection, invalid, not_found, preview, rejection, wire_id,
 };
 use super::handlers::{Pending, sql};
-use super::{Flow, JobOutput, ReqCtx, Service};
+use super::resources::snapshot;
+use super::{Flow, JobOutput, ReqCtx, Service, StartError};
 use crate::support::{new_uuid, now_ms};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 pub(crate) const MAX_IMPORT_BYTES: u64 = 16 << 20;
-const MAX_PROVIDERS: usize = 128;
-const MAX_REPLY_MODELS: usize = 512;
-const MAX_CATALOG_MODELS: usize = 4096;
-
-pub(crate) const RESTRICTIONS: &[&str] = &[
-    "Repository .pi/ resources, .agents/skills, project settings and packages are never loaded (project trust is \"never\").",
-    "Your own ~/.pi profile is never read or changed; only an explicit, copy-only import reads it.",
-    "SYSTEM.md / APPEND_SYSTEM.md replacements, themes and pi packages are not loaded; the LADE system note is appended.",
-    "Executable extensions load only by approved content hash; a new or changed extension needs approval and a reload.",
-    "Extensions cannot start, fork or switch sessions; use the LADE session controls.",
-    "Terminal-only extension UI (custom components, editor control) fails explicitly; dialogs are never answered automatically.",
-    "Providers registered by extensions and interactive OAuth logins have no egress policy or credential custody and are restricted.",
-    "Custom providers (models.json) may not run shell commands and reference credentials only as $LADE_PROVIDER_* variables.",
-];
-
-pub(crate) const CATALOG_SANDBOX_FAILED: &str =
-    "LADE can't run agents on this computer because the sandbox check failed.";
-pub(crate) const CATALOG_FAILED: &str =
-    "LADE couldn't load the list of models. Details are in the service diagnostics.";
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CatalogData {
-    pub sdk_version: String,
-    pub providers: Vec<(ProviderFacts, Vec<ModelInfo>)>,
-    pub error: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct CatalogFailure {
-    pub message: &'static str,
-    pub detail: String,
-}
-
-impl CatalogFailure {
-    fn other(detail: String) -> Self {
-        Self {
-            message: CATALOG_FAILED,
-            detail,
-        }
-    }
-
-    fn launch(error: &LaunchError) -> Self {
-        Self {
-            message: match error {
-                LaunchError::SandboxUnavailable(_) => CATALOG_SANDBOX_FAILED,
-                _ => CATALOG_FAILED,
-            },
-            detail: error.detail(),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Op {
@@ -136,133 +82,12 @@ pub(crate) struct LiveSession {
     pub reported: Option<u64>,
 }
 
+/// Per-Objective Agent Session state: the persisted thinking-level preference and the live
+/// pi session (pending command, open dialogs, last reported resources).
 #[derive(Default)]
-pub(crate) struct CompatState {
+pub(crate) struct AgentSessions {
     pub thinking: HashMap<ObjectiveId, ThinkingLevel>,
-    pub approvals: HashMap<(String, String), bool>,
-    pub catalog: Option<Arc<CatalogData>>,
-    pub catalog_running: bool,
-    pub catalog_waiting: Vec<(ReqCtx, ModelsListQuery)>,
     pub live: HashMap<ObjectiveId, LiveSession>,
-}
-
-fn wire_auth(kind: AuthKind) -> ProviderAuth {
-    match kind {
-        AuthKind::None => ProviderAuth::None,
-        AuthKind::ApiKey => ProviderAuth::ApiKey,
-        AuthKind::SubscriptionToken => ProviderAuth::SubscriptionToken,
-        AuthKind::OauthLogin => ProviderAuth::OauthLogin,
-        AuthKind::CloudCredentials => ProviderAuth::CloudCredentials,
-        AuthKind::Custom => ProviderAuth::Custom,
-    }
-}
-
-fn wire_status(status: AccessStatus) -> ProviderStatus {
-    match status {
-        AccessStatus::Available => ProviderStatus::Available,
-        AccessStatus::MissingCredentials => ProviderStatus::MissingCredentials,
-        AccessStatus::Restricted => ProviderStatus::Restricted,
-    }
-}
-
-fn text(value: Option<&Value>, max: usize) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(|s| preview(s, max))
-        .filter(|s| !s.is_empty())
-}
-
-fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
-    let fixture = (
-        ProviderFacts {
-            id: FIXTURE_PROVIDER.into(),
-            name: "LADE fixture provider (offline, scripted; not a real model)".into(),
-            api_key: true,
-            oauth: None,
-            subscription: false,
-            base_url: None,
-        },
-        vec![ModelInfo {
-            provider: FIXTURE_PROVIDER.into(),
-            id: "scripted".into(),
-            name: "LADE fixture: scripted (offline test model)".into(),
-            reasoning: false,
-            thinking_levels: vec![ThinkingLevel::Off],
-        }],
-    );
-    CatalogData {
-        sdk_version: "1.5.0".into(),
-        providers: if test_fixture_provider {
-            vec![fixture]
-        } else {
-            Vec::new()
-        },
-        error: Some(error),
-    }
-}
-
-pub(crate) fn parse_catalog(bytes: &[u8]) -> Result<CatalogData, String> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| "catalogue output is not JSON".to_string())?;
-    let sdk_version = text(value.get("sdk_version"), 64).ok_or("catalogue has no SDK version")?;
-    let mut providers = Vec::new();
-    let mut total = 0usize;
-    for entry in value
-        .get("providers")
-        .and_then(Value::as_array)
-        .ok_or("catalogue has no providers")?
-        .iter()
-        .take(MAX_PROVIDERS)
-    {
-        let Some(id) = text(entry.get("id"), 128) else {
-            continue;
-        };
-        let facts = ProviderFacts {
-            name: text(entry.get("name"), 256).unwrap_or_else(|| id.clone()),
-            api_key: entry.get("api_key").and_then(Value::as_bool) == Some(true),
-            oauth: text(entry.get("oauth"), 200),
-            subscription: entry.get("subscription").and_then(Value::as_bool) == Some(true),
-            base_url: text(entry.get("base_url"), 400),
-            id: id.clone(),
-        };
-        let mut models = Vec::new();
-        for model in entry
-            .get("models")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
-            if total >= MAX_CATALOG_MODELS {
-                break;
-            }
-            let Some(model_id) = text(model.get("id"), 256) else {
-                continue;
-            };
-            let thinking_levels = model
-                .get("thinking")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l.as_str().and_then(ThinkingLevel::parse))
-                .take(8)
-                .collect();
-            models.push(ModelInfo {
-                provider: id.clone(),
-                name: text(model.get("name"), 256).unwrap_or_else(|| model_id.clone()),
-                id: model_id,
-                reasoning: model.get("reasoning").and_then(Value::as_bool) == Some(true),
-                thinking_levels,
-            });
-            total += 1;
-        }
-        providers.push((facts, models));
-    }
-    Ok(CatalogData {
-        sdk_version,
-        providers,
-        error: text(value.get("error"), 512),
-    })
 }
 
 fn wire_reason(reason: SessionChangeReason) -> &'static str {
@@ -278,302 +103,25 @@ fn wire_reason(reason: SessionChangeReason) -> &'static str {
 }
 
 impl Service {
-    pub(crate) fn profile_dir(&self) -> PathBuf {
-        self.paths.state.join("profile")
-    }
-
-    pub(crate) fn load_compat(&mut self) -> Result<(), String> {
-        ensure_private_dir(&self.profile_dir()).map_err(|e| format!("profile: {}", e.kind()))?;
-        let conn = self.store.conn();
-        self.compat
-            .thinking
-            .extend(storage::load_thinking(conn).map_err(|e| e.to_string())?);
-        for row in storage::load_approvals(conn).map_err(|e| e.to_string())? {
-            self.compat
-                .approvals
-                .insert((row.name, row.sha256), row.approved);
-        }
+    pub(crate) fn load_agent_sessions(&mut self) -> Result<(), StartError> {
+        let thinking = storage::load_thinking(self.store.conn())?;
+        self.agent_sessions.thinking.extend(thinking);
         Ok(())
     }
 
     fn live(&mut self, oid: ObjectiveId) -> &mut LiveSession {
-        self.compat.live.entry(oid).or_default()
+        self.agent_sessions.live.entry(oid).or_default()
     }
 
     pub(crate) fn thinking_of(&self, oid: ObjectiveId) -> Option<ThinkingLevel> {
-        self.compat.thinking.get(&oid).copied()
-    }
-
-    pub(crate) fn approved_extensions(&self) -> Vec<(String, String)> {
-        self.compat
-            .approvals
-            .iter()
-            .filter(|(_, approved)| **approved)
-            .map(|(key, _)| key.clone())
-            .collect()
+        self.agent_sessions.thinking.get(&oid).copied()
     }
 
     pub(crate) fn command_pending(&self, oid: ObjectiveId) -> bool {
-        self.compat
+        self.agent_sessions
             .live
             .get(&oid)
             .is_some_and(|l| l.command.is_some())
-    }
-
-    pub(crate) fn models_list(&mut self, ctx: ReqCtx, query: ModelsListQuery) -> Flow {
-        if let Some(data) = self.compat.catalog.clone() {
-            let reply = self.catalog_reply(&data, &query);
-            self.finish(ctx, Ok(reply));
-            return Flow::Done;
-        }
-        self.compat.catalog_waiting.push((ctx, query));
-        if !self.compat.catalog_running {
-            self.compat.catalog_running = true;
-            let launcher = self.launcher.clone();
-            let scratch = self.paths.tmp.join(format!("catalog-{}", new_uuid()));
-            let profile = self.profile_dir();
-            self.spawn(Pending::Catalog, move || {
-                let models = profile.join("models.json");
-                let models = profile::profile_providers(&profile)
-                    .is_ok_and(|p| !p.is_empty())
-                    .then_some(models);
-                let result = ensure_private_dir(&scratch)
-                    .map_err(|e| CatalogFailure::other(format!("catalogue scratch: {}", e.kind())))
-                    .and_then(|()| {
-                        launcher
-                            .catalog(&scratch, models.as_deref())
-                            .map_err(|e| CatalogFailure::launch(&e))
-                    })
-                    .and_then(|bytes| parse_catalog(&bytes).map_err(CatalogFailure::other));
-                let _ = fs::remove_dir_all(&scratch);
-                JobOutput::Catalog(result.map_err(|failure| {
-                    eprintln!("laded: model catalogue unavailable: {}", failure.detail);
-                    failure.message.to_owned()
-                }))
-            });
-        }
-        Flow::Deferred
-    }
-
-    pub(crate) fn catalog_done(&mut self, result: Result<CatalogData, String>) {
-        self.compat.catalog_running = false;
-        let data = match result {
-            Ok(data) => {
-                let data = Arc::new(data);
-                self.compat.catalog = Some(data.clone());
-                data
-            }
-            Err(message) => Arc::new(fallback_catalog(
-                self.test_fixture_provider,
-                preview(&message, 512),
-            )),
-        };
-        for (ctx, query) in std::mem::take(&mut self.compat.catalog_waiting) {
-            let reply = self.catalog_reply(&data, &query);
-            self.finish(ctx, Ok(reply));
-        }
-    }
-
-    fn catalog_reply(&self, data: &CatalogData, query: &ModelsListQuery) -> ReplyData {
-        let offered =
-            |facts: &ProviderFacts| self.test_fixture_provider || facts.id != FIXTURE_PROVIDER;
-        let mut providers: Vec<ProviderInfo> = data
-            .providers
-            .iter()
-            .filter(|(facts, _)| offered(facts))
-            .map(|(facts, models)| {
-                let access = self.launcher.provider_access(facts);
-                ProviderInfo {
-                    provider: facts.id.clone(),
-                    name: preview(&facts.name, 256),
-                    auth: access.auth.iter().map(|a| wire_auth(*a)).take(8).collect(),
-                    status: wire_status(access.status),
-                    models: counter(models.len() as u64),
-                    reason: access.reason.map(|r| preview(&r, 512)),
-                    variables: (!access.variables.is_empty()).then(|| {
-                        access
-                            .variables
-                            .iter()
-                            .take(8)
-                            .map(|v| preview(v, 128))
-                            .collect()
-                    }),
-                }
-            })
-            .collect();
-        providers.sort_by_key(|p| match p.status {
-            ProviderStatus::Available => 0,
-            ProviderStatus::MissingCredentials => 1,
-            ProviderStatus::Restricted => 2,
-        });
-        let matching: Vec<&ModelInfo> = data
-            .providers
-            .iter()
-            .filter(|(facts, _)| {
-                offered(facts) && query.provider.as_deref() == Some(facts.id.as_str())
-            })
-            .flat_map(|(_, models)| models)
-            .collect();
-        ReplyData::ModelsList(ModelCatalog {
-            sdk_version: data.sdk_version.clone(),
-            providers,
-            truncated: matching.len() > MAX_REPLY_MODELS,
-            models: matching
-                .into_iter()
-                .take(MAX_REPLY_MODELS)
-                .cloned()
-                .collect(),
-            error: data.error.clone(),
-        })
-    }
-
-    pub(crate) fn inventory(&self) -> ResourceInventory {
-        let profile = self.profile_dir();
-        let entries = profile::scan(&profile)
-            .into_iter()
-            .map(|entry| {
-                let kind = match entry.kind {
-                    Kind::Context => ResourceKind::Context,
-                    Kind::Skill => ResourceKind::Skill,
-                    Kind::Prompt => ResourceKind::Prompt,
-                    Kind::Extension => ResourceKind::Extension,
-                    Kind::Models => ResourceKind::Models,
-                };
-                let sha256 = entry
-                    .sha256
-                    .as_deref()
-                    .and_then(|s| Digest::parse(s.to_string()).ok());
-                let (state, reason) = match (&entry.problem, entry.kind, &entry.sha256) {
-                    (Some(problem), _, _) => (ResourceState::Refused, Some(problem.clone())),
-                    (None, Kind::Extension, Some(sha)) => {
-                        match self.compat.approvals.get(&(entry.name.clone(), sha.clone())) {
-                            Some(true) => (ResourceState::Active, None),
-                            Some(false) => (
-                                ResourceState::Rejected,
-                                Some("rejected by the developer; it is not loaded".to_string()),
-                            ),
-                            None => (
-                                ResourceState::PendingApproval,
-                                Some(
-                                    "new or changed executable extension: approve this exact content, then reload the session"
-                                        .to_string(),
-                                ),
-                            ),
-                        }
-                    }
-                    _ => (ResourceState::Active, None),
-                };
-                ResourceEntry {
-                    kind,
-                    name: preview(&entry.name, 256),
-                    state,
-                    sha256,
-                    reason: reason.map(|r| preview(&r, 512)),
-                }
-            })
-            .collect();
-        ResourceInventory {
-            profile_dir: WirePath::from_os_str(profile.as_os_str())
-                .unwrap_or_else(|_| super::convert::wire_path(b"profile")),
-            entries,
-            restrictions: RESTRICTIONS.iter().map(|r| preview(r, 512)).collect(),
-        }
-    }
-
-    pub(crate) fn resource_decide(
-        &mut self,
-        ctx: &mut ReqCtx,
-        cmd: &ResourceDecideCommand,
-    ) -> Result<ReplyData, Rejection> {
-        let sha = cmd.sha256.as_str().to_string();
-        let current = profile::scan(&self.profile_dir()).into_iter().any(|e| {
-            e.kind == Kind::Extension && e.name == cmd.name && e.sha256.as_deref() == Some(&sha)
-        });
-        if !current {
-            return Err(rejection(
-                ErrorCode::StaleReference,
-                SafeAction::Refresh,
-                "This extension changed since it was listed. Review it again.",
-            ));
-        }
-        let key = (cmd.name.clone(), sha);
-        let mut approvals = self.compat.approvals.clone();
-        approvals.insert(key.clone(), cmd.approve);
-        let inventory = {
-            let previous = std::mem::replace(&mut self.compat.approvals, approvals);
-            let inventory = self.inventory();
-            self.compat.approvals = previous;
-            inventory
-        };
-        let data = ReplyData::ResourceDecide(inventory.clone());
-        let now = now_ms();
-        self.commit(Some(ctx), Some(&data), |tx| {
-            storage::save_approval(
-                tx,
-                &storage::ApprovalRow {
-                    name: key.0.clone(),
-                    sha256: key.1.clone(),
-                    approved: cmd.approve,
-                },
-                now,
-            )
-        })?;
-        self.compat.approvals.insert(key, cmd.approve);
-        self.emit(Event::ResourcesChanged(inventory));
-        Ok(data)
-    }
-
-    pub(crate) fn profile_import(&mut self, ctx: ReqCtx, cmd: &ProfileImportCommand) -> Flow {
-        let source = PathBuf::from(cmd.source.to_os_string());
-        if !source.is_absolute() {
-            self.finish(
-                ctx,
-                Err(invalid("Choose the folder to import by its full path.")),
-            );
-            return Flow::Done;
-        }
-        let profile = self.profile_dir();
-        if source.starts_with(&profile) || profile.starts_with(&source) {
-            self.finish(
-                ctx,
-                Err(invalid(
-                    "Choose a folder outside the LADE profile to import from.",
-                )),
-            );
-            return Flow::Done;
-        }
-        self.spawn(Pending::ProfileImport { ctx }, move || {
-            JobOutput::Profile(
-                profile::import(&source, &profile)
-                    .map_err(|e| format!("The profile could not be imported ({}).", e.kind())),
-            )
-        });
-        Flow::Deferred
-    }
-
-    pub(crate) fn profile_import_done(
-        &mut self,
-        ctx: ReqCtx,
-        result: Result<profile::ImportReport, String>,
-    ) {
-        let reply = match result {
-            Ok(report) => {
-                self.compat.catalog = None;
-                let inventory = self.inventory();
-                self.emit(Event::ResourcesChanged(inventory.clone()));
-                Ok(ReplyData::ProfileImport(ProfileImportResult {
-                    copied: report.copied.iter().map(|c| preview(c, 256)).collect(),
-                    skipped: report.skipped.iter().map(|s| preview(s, 512)).collect(),
-                    inventory,
-                }))
-            }
-            Err(why) => Err(rejection(
-                ErrorCode::PermissionDenied,
-                SafeAction::None,
-                &why,
-            )),
-        };
-        self.finish(ctx, reply);
     }
 
     fn command_target(&mut self, oid: ObjectiveId, op: Op) -> Result<(), Rejection> {
@@ -858,7 +406,7 @@ impl Service {
             .select_model(model, Timestamp::from_unix_ms(now_ms()))
             .map_err(|e| domain_rejection(&e))?;
         let previous_model = self.objectives.insert(oid, st.clone());
-        let previous = self.compat.thinking.insert(oid, thinking);
+        let previous = self.agent_sessions.thinking.insert(oid, thinking);
         let data = ReplyData::SessionConfigure(reply(self));
         let now = now_ms();
         let committed = self.commit(ctx, Some(&data), |tx| {
@@ -867,8 +415,8 @@ impl Service {
         });
         if let Err(rejection) = committed {
             match previous {
-                Some(level) => self.compat.thinking.insert(oid, level),
-                None => self.compat.thinking.remove(&oid),
+                Some(level) => self.agent_sessions.thinking.insert(oid, level),
+                None => self.agent_sessions.thinking.remove(&oid),
             };
             if let Some(old) = previous_model {
                 self.objectives.insert(oid, old);
@@ -886,7 +434,11 @@ impl Service {
     ) -> SessionState {
         let st = self.objectives.get(&oid);
         let session = st.and_then(|st| st.objective().execution().session().cloned());
-        let pi = self.compat.live.get(&oid).and_then(|l| l.pi.clone());
+        let pi = self
+            .agent_sessions
+            .live
+            .get(&oid)
+            .and_then(|l| l.pi.clone());
         let model = session
             .as_ref()
             .map(|s| Model {
@@ -973,7 +525,7 @@ impl Service {
 
     pub(crate) fn announce_dialogs(&mut self) {
         let mut open = Vec::new();
-        for (oid, live) in &self.compat.live {
+        for (oid, live) in &self.agent_sessions.live {
             for (ui_id, dialog) in &live.ui {
                 if let Ok(id) = Id::parse(ui_id.clone()) {
                     open.push(UiRequest {
@@ -1017,7 +569,7 @@ impl Service {
         }
     }
 
-    pub(crate) fn on_compat_body(
+    pub(crate) fn on_agent_session_body(
         &mut self,
         oid: ObjectiveId,
         generation: ExecutionGeneration,
@@ -1296,7 +848,7 @@ impl Service {
         self.system_item(oid, "Session resources", &text, problem);
     }
 
-    pub(crate) fn compat_worker_gone(&mut self, oid: ObjectiveId) {
+    pub(crate) fn end_agent_session(&mut self, oid: ObjectiveId) {
         let pending = self.live(oid).command.take();
         if let Some(pending) = pending {
             self.finish(
@@ -1313,9 +865,9 @@ impl Service {
         self.live(oid).reported = None;
     }
 
-    pub(crate) fn compat_timeouts(&mut self) {
+    pub(crate) fn expire_session_commands(&mut self) {
         let expired: Vec<ObjectiveId> = self
-            .compat
+            .agent_sessions
             .live
             .iter()
             .filter(|(_, l)| {
@@ -1372,31 +924,9 @@ impl Service {
             thinking,
             now,
         ))?;
-        self.compat.thinking.insert(oid, thinking);
+        self.agent_sessions.thinking.insert(oid, thinking);
         Ok(())
     }
-}
-
-pub(crate) fn snapshot(
-    source: &Path,
-    dest: &Path,
-    approved: &[(String, String)],
-) -> std::io::Result<WorkerResources> {
-    let extensions = profile::materialize(source, dest, |name, sha| {
-        approved.iter().any(|(n, s)| n == name && s == sha)
-    })?;
-    Ok(WorkerResources {
-        profile_dir: dest.to_string_lossy().into_owned(),
-        extensions: extensions
-            .into_iter()
-            .take(64)
-            .map(|Materialized { name, path, sha256 }| WorkerExtension {
-                name,
-                path: path.to_string_lossy().into_owned(),
-                sha256,
-            })
-            .collect(),
-    })
 }
 
 fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
@@ -1434,21 +964,4 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     file.write_all(&bytes).map_err(|_| {
         super::convert::durability("The session could not be copied for import. Try again.")
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalogue_failures_keep_the_sentence_and_the_detail_apart() {
-        let sandbox = CatalogFailure::launch(&LaunchError::SandboxUnavailable(
-            "sandbox_unavailable: the probe sandbox exited with status 1: bwrap: Creating new namespace failed".into(),
-        ));
-        assert_eq!(sandbox.message, CATALOG_SANDBOX_FAILED);
-        assert!(sandbox.detail.contains("Creating new namespace failed"));
-        assert!(!sandbox.message.contains("sandbox_unavailable"));
-        let other = CatalogFailure::other("catalogue output is not JSON".into());
-        assert_eq!(other.message, CATALOG_FAILED);
-    }
 }
