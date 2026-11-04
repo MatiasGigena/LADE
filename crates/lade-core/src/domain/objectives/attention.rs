@@ -55,7 +55,13 @@ impl Badge {
     }
 }
 
+/// Facts the service observes outside the Objective record. Each is independent and read on its
+/// own, so they stay named flags rather than a combined state.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent observations, each mapping to one badge or the review-readiness rule"
+)]
 pub struct AttentionFacts {
     pub delivery_uncertain: bool,
     pub stale_feedback: bool,
