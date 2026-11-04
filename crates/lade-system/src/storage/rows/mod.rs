@@ -10,6 +10,8 @@ mod journal;
 mod objective;
 mod operation;
 mod review;
+#[cfg(test)]
+mod tests;
 mod workspace;
 
 use lade_core::Revision;

@@ -28,7 +28,7 @@ impl JournalState {
         }
     }
 
-    fn parse(code: &str) -> Sql<Self> {
+    pub(super) fn parse(code: &str) -> Sql<Self> {
         Ok(match code {
             "intent" => Self::Intent,
             "done" => Self::Done,

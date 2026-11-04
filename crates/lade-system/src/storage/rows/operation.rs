@@ -25,7 +25,7 @@ impl OperationState {
         }
     }
 
-    fn parse(code: &str) -> Sql<Self> {
+    pub(super) fn parse(code: &str) -> Sql<Self> {
         Ok(match code {
             "pending" => Self::Pending,
             "uncertain" => Self::Uncertain,

@@ -121,7 +121,7 @@ pub fn load_drafts(conn: &Connection) -> Sql<Vec<Draft>> {
     rows.collect()
 }
 
-fn parse_mode(code: &str) -> Sql<InputMode> {
+pub(super) fn parse_mode(code: &str) -> Sql<InputMode> {
     match code {
         "prompt" => Ok(InputMode::Prompt),
         "steer" => Ok(InputMode::Steer),
@@ -146,7 +146,7 @@ fn items_json(items: &[FeedbackItem]) -> Value {
     )
 }
 
-fn parse_items(text: &str) -> Sql<Vec<FeedbackItem>> {
+pub(super) fn parse_items(text: &str) -> Sql<Vec<FeedbackItem>> {
     let value: Value = serde_json::from_str(text).map_err(|_| corrupt("items"))?;
     let Value::Array(items) = value else {
         return Err(corrupt("items"));
@@ -222,7 +222,7 @@ pub fn save_delivery(
     Ok(())
 }
 
-fn parse_delivery(
+pub(super) fn parse_delivery(
     state: &str,
     generation: Option<i64>,
     reason: Option<&str>,
