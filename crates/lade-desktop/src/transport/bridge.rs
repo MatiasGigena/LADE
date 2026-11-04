@@ -1,27 +1,34 @@
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 
 use gtk4::glib;
+use gtk4::glib::thread_guard::ThreadGuard;
 
 use super::connection::UpdateSink;
 use crate::presentation::state::store::{Store, StoreUpdate};
 
 const DRAIN_BATCH: usize = 512;
 
-static NEXT_KEY: AtomicU64 = AtomicU64::new(1);
-
-thread_local! {
-    static TARGETS: RefCell<HashMap<u64, Weak<Store>>> = RefCell::new(HashMap::new());
-}
-
+/// State shared by every sender clone and the idle callbacks that drain it on the GTK main thread.
 struct Shared {
     receiver: Mutex<Receiver<StoreUpdate>>,
     wake_pending: AtomicBool,
-    key: u64,
+    /// The store, which only the thread that called [`connect`] may touch. Always `Some` until drop.
+    store: Option<ThreadGuard<Weak<Store>>>,
+}
+
+impl Drop for Shared {
+    fn drop(&mut self) {
+        // The transport thread may hold the last sender. `Weak` is not thread-safe, so a drop there
+        // leaks the weak handle instead of touching its count off the main thread.
+        if let Some(store) = self.store.take()
+            && !store.is_owner()
+        {
+            std::mem::forget(store);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -76,8 +83,7 @@ fn drain(shared: &Arc<Shared>) {
     if updates.is_empty() {
         return;
     }
-    let store = TARGETS.with(|t| t.borrow().get(&shared.key).and_then(Weak::upgrade));
-    if let Some(store) = store {
+    if let Some(store) = shared.store.as_ref().and_then(|s| s.get_ref().upgrade()) {
         store.apply_all(updates);
     }
     if more && !shared.wake_pending.swap(true, Ordering::AcqRel) {
@@ -86,16 +92,16 @@ fn drain(shared: &Arc<Shared>) {
     }
 }
 
+/// Connects a sender to `store`. Call it on the GTK main thread: the drain callbacks run there
+/// and panic if the store is reached from any other thread.
 pub fn connect(store: &Rc<Store>, capacity: usize) -> UpdateSender {
     let (sender, receiver) = sync_channel(capacity.max(1));
-    let key = NEXT_KEY.fetch_add(1, Ordering::Relaxed);
-    TARGETS.with(|t| t.borrow_mut().insert(key, Rc::downgrade(store)));
     UpdateSender {
         sender,
         shared: Arc::new(Shared {
             receiver: Mutex::new(receiver),
             wake_pending: AtomicBool::new(false),
-            key,
+            store: Some(ThreadGuard::new(Rc::downgrade(store))),
         }),
     }
 }

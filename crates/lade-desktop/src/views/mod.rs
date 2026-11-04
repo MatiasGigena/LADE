@@ -30,7 +30,6 @@ use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
 use crate::presentation::state::attention::{self, AttentionWatcher, Delivery, Notifier};
 use crate::presentation::state::model::{Attention, DraftId, NoticeScope};
 use crate::presentation::state::store::{Change, Store, StoreUpdate, ViewerContent};
-use crate::transport::bridge;
 
 use closing::CloseAfter;
 
@@ -268,10 +267,6 @@ impl App {
 
     pub fn present(&self) {
         self.window.present();
-    }
-
-    pub fn update_sender(&self) -> bridge::UpdateSender {
-        bridge::connect(&self.store, 1024)
     }
 
     fn connect(self: &Rc<Self>) {
