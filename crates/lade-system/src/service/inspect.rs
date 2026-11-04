@@ -9,7 +9,7 @@ use lade_protocol::client::{
     SearchResultKind, SearchResults, SearchScope, Side, TargetRef,
 };
 use lade_protocol::types::{Counter, Digest};
-use lade_protocol::{Framing, encode};
+use lade_protocol::{Framing, encode, json_len};
 
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore, MAX_ARTIFACT_PAGE};
 use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
@@ -17,8 +17,8 @@ use crate::storage::{self, CaptureRow};
 
 use super::capture::CapturePurpose;
 use super::convert::{
-    adapter_git, git_rejection, invalid, json_len, not_found, parse_uuid, preview, repo_path,
-    wire_git, wire_id, wire_path,
+    adapter_git, git_rejection, invalid, not_found, parse_uuid, preview, repo_path, wire_git,
+    wire_id, wire_path,
 };
 use super::execution::wire_activity;
 use super::handlers::sql;

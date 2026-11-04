@@ -22,7 +22,7 @@ pub use client::{ClientBody, ClientEnvelope};
 pub use framing::{Decoder, Deframer, Framing, encode};
 pub use history::RequestHistory;
 pub use io::{FrameReader, FrameWriter, TransportError};
-pub use json::bounded_json;
+pub use json::{bounded_json, json_len};
 pub use schema::Contract;
 pub use worker::{WorkerBody, WorkerEnvelope};
 

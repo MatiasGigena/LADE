@@ -18,7 +18,7 @@ use lade_protocol::client::{
     OperationState, OperationStatus, Outcome, Rejection, Reply, ReplyData, SafeAction,
 };
 use lade_protocol::types::{Counter, Id};
-use lade_protocol::{Framing, MAX_FRAME, encode};
+use lade_protocol::{Framing, MAX_FRAME, encode, json_len};
 
 use crate::adapters::artifacts::ArtifactDigest;
 use crate::storage;
@@ -27,7 +27,7 @@ use super::capture::CapturePurpose;
 use super::convert::{
     conflict, core_reference, domain_rejection, durability, invalid, not_found, parse_uuid,
 };
-use super::convert::{core_mode, json_len, wire_draft, wire_input};
+use super::convert::{core_mode, wire_draft, wire_input};
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
 use super::state::ObjState;

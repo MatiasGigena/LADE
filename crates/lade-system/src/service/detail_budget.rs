@@ -5,11 +5,10 @@ use lade_protocol::client::{
     ReplyData, SessionInfo, Settings, SnapshotData, VerificationState, VerificationSummary,
 };
 use lade_protocol::types::{Counter, Id, Model, ThinkingLevel};
-use lade_protocol::{Framing, MAX_FRAME, MAX_NODES, encode};
+use lade_protocol::{Framing, MAX_FRAME, MAX_NODES, encode, json_len};
 use serde_json::Value;
 
 use super::Service;
-use super::convert::json_len;
 use super::handlers::SNAPSHOT_OBJECTIVES;
 use super::project::{DETAIL_LIST_MAX, MAX_SUMMARY_BADGES};
 use super::state::{ObjState, WsState};

@@ -15,7 +15,6 @@ path = "src/bin/laded.rs"
 lade-core.workspace = true
 lade-protocol.workspace = true
 sha2.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 rustix.workspace = true

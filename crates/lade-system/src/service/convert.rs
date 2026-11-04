@@ -15,42 +15,11 @@ use lade_protocol::client::{
     VerificationState, VerificationSummary,
 };
 use lade_protocol::types::{self as wire_types, Counter, DeliveryMode, Id};
-use serde::Serialize;
 
 use super::state::ObjState;
 use crate::adapters::git::{self, GitError, ObjectFormat};
 use crate::support::wire_ts;
 
-/// Bytes `value` takes as compact JSON, for fitting replies into frame and page budgets.
-///
-/// Wire DTOs derive `Serialize` over strings, numbers and sequences, which cannot fail to
-/// serialize; if one ever did, it reports `usize::MAX` so budget checks leave it out instead of
-/// sending a frame that cannot be encoded.
-#[must_use]
-pub(crate) fn json_len(value: &impl Serialize) -> usize {
-    struct Count(usize);
-    impl std::io::Write for Count {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0 += buf.len();
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut count = Count(0);
-    match serde_json::to_writer(&mut count, value) {
-        Ok(()) => count.0,
-        Err(_) => usize::MAX,
-    }
-}
-
-/// The wire form of a domain identifier.
-///
-/// # Panics
-///
-/// Never in practice: domain UUIDs are lowercase v4 by construction, which is exactly what the
-/// wire `uuid-v4` format accepts.
 #[must_use]
 #[expect(
     clippy::expect_used,

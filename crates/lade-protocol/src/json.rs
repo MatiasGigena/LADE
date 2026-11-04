@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -102,6 +103,30 @@ impl<'de> Visitor<'de> for Seed<'_> {
             values.insert(key, value);
         }
         Ok(Value::Object(values))
+    }
+}
+
+/// Bytes `value` takes as compact JSON, for fitting replies into frame and page budgets.
+///
+/// Wire DTOs derive `Serialize` over strings, numbers and sequences, which cannot fail to
+/// serialize; if one ever did, this reports `usize::MAX` so a budget check leaves the value out
+/// instead of sending a frame that cannot be encoded.
+#[must_use]
+pub fn json_len(value: &impl Serialize) -> usize {
+    struct Count(usize);
+    impl std::io::Write for Count {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0 += buf.len();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut count = Count(0);
+    match serde_json::to_writer(&mut count, value) {
+        Ok(()) => count.0,
+        Err(_) => usize::MAX,
     }
 }
 
