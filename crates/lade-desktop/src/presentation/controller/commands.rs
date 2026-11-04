@@ -1,5 +1,7 @@
 //! Objective lifecycle and review commands, checked against the actions the service offers.
 
+use std::fmt::Write as _;
+
 use super::intents::{Intent, StartPoint};
 use crate::presentation::state::agent_session::{Readiness, ThinkingLevel};
 use crate::presentation::state::model::{
@@ -377,7 +379,7 @@ pub(super) fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLin
             s.model.label(),
         );
         if let Some(thinking) = s.thinking {
-            details.push_str(&format!(" · thinking {}", thinking.label()));
+            let _ = write!(details, " · thinking {}", thinking.label());
         }
         details
     });

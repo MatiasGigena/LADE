@@ -360,7 +360,7 @@ impl Keymap {
                         default.label()
                     ));
                 }
-            } else if !own_default && !(accel.function_key().is_some() && !accel.other_modifier) {
+            } else if !own_default && (accel.function_key().is_none() || accel.other_modifier) {
                 errors.push(format!(
                     "{}: {} is reserved for native typing, editing, selection, clipboard or undo. Keep {} or use a function key F1–F35 with optional Shift, Control or Alt.",
                     binding.description,

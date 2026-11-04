@@ -108,8 +108,8 @@ impl DraftEditor {
             draft.destination_session_id.clone(),
             draft.reference.clone(),
         );
-        editor.body = draft.body.clone();
-        editor.durable_body = draft.body.clone();
+        editor.body.clone_from(&draft.body);
+        editor.durable_body.clone_from(&draft.body);
         editor.durable_revision = draft.revision;
         editor.stale = draft.stale;
         editor.state = draft.state;
@@ -207,7 +207,7 @@ impl DraftEditor {
             return;
         }
         self.durable_revision = draft.revision;
-        self.durable_body = draft.body.clone();
+        self.durable_body.clone_from(&draft.body);
         let lost = self.lost.take();
         let ours = |f: &InFlight| f.body == draft.body && draft.revision > f.expected_revision;
         if draft.body == self.body {

@@ -89,9 +89,10 @@ pub fn random_id() -> Id {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let count = FALLBACK.fetch_add(1, Ordering::Relaxed);
-        bytes[..8].copy_from_slice(&(nanos as u64).to_le_bytes());
+        // Only the low bits vary between calls; keeping them is the intent.
+        bytes[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
         bytes[8..12].copy_from_slice(&std::process::id().to_le_bytes());
-        bytes[12..].copy_from_slice(&(count as u32).to_le_bytes());
+        bytes[12..].copy_from_slice(&count.to_le_bytes()[..4]);
     }
     Id::from_random_bytes(bytes)
 }

@@ -11,8 +11,8 @@ use super::widgets::{
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::state::agent_session::{
-    ForkPosition, ModelChoice, ProviderStatus, Readiness, ResourceKind, ResourceState,
-    ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
+    ForkPosition, ModelChoice, ProviderStatus, ProviderView, Readiness, ResourceKind,
+    ResourceState, ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
 };
 use crate::presentation::state::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
 
@@ -95,7 +95,11 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
         ));
     }
 
-    let names: Vec<String> = catalog.providers.iter().map(|p| p.picker_label()).collect();
+    let names: Vec<String> = catalog
+        .providers
+        .iter()
+        .map(ProviderView::picker_label)
+        .collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let providers = widgets::dropdown_or(&refs, "No model providers are available");
     set_accessible_label(&providers, "Provider for the agent");

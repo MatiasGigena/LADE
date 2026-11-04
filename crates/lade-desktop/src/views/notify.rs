@@ -1,7 +1,6 @@
 use std::cell::OnceCell;
 
 use gtk::gio;
-use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
@@ -32,7 +31,7 @@ impl DesktopNotifier {
                 "org.freedesktop.DBus",
                 "NameHasOwner",
                 Some(&(name,).to_variant()),
-                Some(glib::VariantTy::new("(b)").expect("static type string")),
+                Some(&<(bool,)>::static_variant_type()),
                 gio::DBusCallFlags::NONE,
                 500,
                 None::<&gio::Cancellable>,

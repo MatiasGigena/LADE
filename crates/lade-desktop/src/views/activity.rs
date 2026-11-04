@@ -364,12 +364,17 @@ impl Activity {
             .store
             .state()
             .selected_ui()
-            .map(|u| (u.composer_text.clone(), u.composer_mode))
-            .unwrap_or((String::new(), DeliveryMode::Prompt));
+            .map_or((String::new(), DeliveryMode::Prompt), |u| {
+                (u.composer_text.clone(), u.composer_mode)
+            });
         self.composer_input.set_text(&text);
         self.updating.set(true);
-        if let Some(index) = MODES.iter().position(|m| *m == mode) {
-            self.mode.set_selected(index as u32);
+        if let Some(index) = MODES
+            .iter()
+            .position(|m| *m == mode)
+            .and_then(|i| u32::try_from(i).ok())
+        {
+            self.mode.set_selected(index);
         }
         self.updating.set(false);
     }

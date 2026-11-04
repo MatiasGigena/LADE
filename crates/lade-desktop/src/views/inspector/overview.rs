@@ -57,7 +57,7 @@ impl Inspector {
         match &next {
             Some(next) => next_area.append(&self.action_widget(&detail, next, true)),
             None if !summary.lifecycle.is_archived() && pointer.is_none() => {
-                next_area.append(&label("No step is available right now.", &["meta"]))
+                next_area.append(&label("No step is available right now.", &["meta"]));
             }
             None => {}
         }

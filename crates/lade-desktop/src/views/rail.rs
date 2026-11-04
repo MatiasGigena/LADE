@@ -85,7 +85,7 @@ impl Rail {
         }
     }
 
-    fn row(&self, objective: &ObjectiveSummary) -> gtk::ListBoxRow {
+    fn row(objective: &ObjectiveSummary) -> gtk::ListBoxRow {
         let row = gtk::ListBoxRow::new();
         row.add_css_class("objective-row");
         set_focus_key(
@@ -127,7 +127,7 @@ impl Rail {
         list.set_selection_mode(gtk::SelectionMode::Single);
         set_accessible_label(&list, name);
         for objective in objectives {
-            list.append(&self.row(objective));
+            list.append(&Self::row(objective));
         }
         list
     }

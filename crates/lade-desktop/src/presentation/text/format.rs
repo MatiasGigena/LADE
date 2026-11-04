@@ -99,6 +99,10 @@ pub fn relative_time(now: Timestamp, then: Timestamp) -> String {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "shown to one decimal; durations are far below 2^52 ms"
+)]
 pub fn duration_label(start: Timestamp, end: Option<Timestamp>) -> String {
     let Some(end) = end else {
         return "running".to_owned();
@@ -113,6 +117,10 @@ pub fn duration_label(start: Timestamp, end: Option<Timestamp>) -> String {
     }
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "shown to one decimal; sizes beyond 2^52 bytes need not be exact"
+)]
 pub fn byte_size(bytes: u64) -> String {
     const UNITS: [&str; 3] = ["KiB", "MiB", "GiB"];
     if bytes < 1024 {

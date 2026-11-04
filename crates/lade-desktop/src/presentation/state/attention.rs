@@ -47,22 +47,21 @@ impl AttentionWatcher {
 }
 
 fn request_for(objective: &ObjectiveSummary) -> AttentionRequest {
-    let (title, body) = match objective.attention {
-        Attention::ReadyForReview => (
+    let (title, body) = if objective.attention == Attention::ReadyForReview {
+        (
             "Ready for review".to_owned(),
             format!("“{}” is ready for you to review.", objective.title),
-        ),
-        _ => {
-            let badges = objective.badge_text();
-            (
-                "Needs your attention".to_owned(),
-                if badges.is_empty() {
-                    format!("“{}” needs your attention.", objective.title)
-                } else {
-                    format!("“{}” needs your attention: {badges}.", objective.title)
-                },
-            )
-        }
+        )
+    } else {
+        let badges = objective.badge_text();
+        (
+            "Needs your attention".to_owned(),
+            if badges.is_empty() {
+                format!("“{}” needs your attention.", objective.title)
+            } else {
+                format!("“{}” needs your attention: {badges}.", objective.title)
+            },
+        )
     };
     AttentionRequest {
         objective_id: objective.objective_id.clone(),

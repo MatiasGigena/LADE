@@ -199,7 +199,7 @@ impl Activity {
         self.text_labels.borrow_mut().clear();
         let state = self.controller.store.state();
         let id = state.ui.selected.clone();
-        *self.shown_for.borrow_mut() = id.clone();
+        self.shown_for.borrow_mut().clone_from(&id);
         let log = id
             .and_then(|id| state.activity.get(&id).cloned())
             .unwrap_or_default();

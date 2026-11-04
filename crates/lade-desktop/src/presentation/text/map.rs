@@ -281,8 +281,11 @@ pub fn map_selection(
         }
         i += 1;
     }
-    let lo = (start - base) as usize;
-    let hi = ((end - base) as usize).min(contiguous.len());
+    // Offsets past `usize` cannot index the text; they select nothing.
+    let lo = usize::try_from(start - base).unwrap_or(usize::MAX);
+    let hi = usize::try_from(end - base)
+        .unwrap_or(usize::MAX)
+        .min(contiguous.len());
     let selected_text = contiguous.get(lo..hi).unwrap_or_default().to_owned();
     Ok(MappedSelection {
         side,

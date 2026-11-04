@@ -17,8 +17,8 @@ use crate::presentation::state::model::{
 };
 use crate::presentation::state::store::{Change, MainView, StoreUpdate};
 use crate::presentation::terminal::{
-    MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalStatus,
-    awaits_first_start, encode_key, paste_text,
+    MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalSession,
+    TerminalStatus, awaits_first_start, encode_key, paste_text,
 };
 
 const SCOPE_LINE: &str =
@@ -245,10 +245,7 @@ impl TerminalPane {
         }
     }
 
-    fn with_session<T>(
-        &self,
-        f: impl FnOnce(&crate::presentation::terminal::TerminalSession) -> T,
-    ) -> Option<T> {
+    fn with_session<T>(&self, f: impl FnOnce(&TerminalSession) -> T) -> Option<T> {
         let state = self.controller.store.state();
         let id = state.ui.selected.as_ref()?;
         state.terminal_for(id).map(f)
@@ -269,11 +266,11 @@ impl TerminalPane {
                 &message,
                 gtk::AccessibleAnnouncementPriority::Medium,
             ),
-        };
+        }
     }
 
     pub fn focus(&self) {
-        let open = self.with_session(|s| s.is_open()).unwrap_or(false);
+        let open = self.with_session(TerminalSession::is_open).unwrap_or(false);
         let usable = |b: &gtk::Button| b.is_mapped() && b.is_sensitive();
         if open {
             self.view.grab_focus();
@@ -514,7 +511,7 @@ impl TerminalPane {
         };
         self.title
             .set_text(&format!("Terminal — {}", summary.title));
-        let open = session.as_ref().is_some_and(|s| s.is_open());
+        let open = session.as_ref().is_some_and(TerminalSession::is_open);
         let opening = session
             .as_ref()
             .is_some_and(|s| s.status == TerminalStatus::Opening);

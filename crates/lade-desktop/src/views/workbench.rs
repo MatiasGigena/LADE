@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -450,8 +451,12 @@ impl Workbench {
         self.updating.set(true);
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         self.basis.set_model(Some(&gtk::StringList::new(&refs)));
-        if let Some(index) = bases.iter().position(|b| b == &current) {
-            self.basis.set_selected(index as u32);
+        if let Some(index) = bases
+            .iter()
+            .position(|b| b == &current)
+            .and_then(|i| u32::try_from(i).ok())
+        {
+            self.basis.set_selected(index);
         }
         *self.bases.borrow_mut() = bases;
         self.updating.set(false);
@@ -656,12 +661,12 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     row.set_child(Some(&content));
     let mut spoken = format!("{}, {status}", file.path.display);
     if let Some(old) = &file.old_path {
-        spoken.push_str(&format!(", from {}", old.display));
+        let _ = write!(spoken, ", from {}", old.display);
     }
     if file.binary {
         spoken.push_str(", binary");
     } else {
-        spoken.push_str(&format!(", {} added, {} removed", file.added, file.removed));
+        let _ = write!(spoken, ", {} added, {} removed", file.added, file.removed);
     }
     if file.filtered {
         spoken.push_str(", filtered content compared as raw bytes, unsupported");

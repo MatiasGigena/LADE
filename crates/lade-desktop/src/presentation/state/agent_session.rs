@@ -188,12 +188,16 @@ impl SessionTree {
             children.entry(parent).or_default().push(index);
         }
         let mut ordered = Vec::with_capacity(entries.len());
+        let mut entries: Vec<Option<TreeNode>> = entries.into_iter().map(Some).collect();
         let mut stack: Vec<(usize, usize)> = children
             .get(&None)
             .map(|roots| roots.iter().rev().map(|&i| (i, 0)).collect())
             .unwrap_or_default();
         while let Some((index, depth)) = stack.pop() {
-            let mut node = entries[index].clone();
+            // Each entry has one parent, so it is listed, and taken, once.
+            let Some(mut node) = entries[index].take() else {
+                continue;
+            };
             node.depth = depth;
             if let Some(kids) = children.get(&Some(node.entry_id.clone())) {
                 stack.extend(kids.iter().rev().map(|&i| (i, depth + 1)));

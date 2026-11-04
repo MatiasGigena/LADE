@@ -326,8 +326,12 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     let refs: Vec<&str> = branches.iter().map(String::as_str).collect();
     let target = widgets::dropdown_or(&refs, "No branches found in this repository");
     target.set_hexpand(false);
-    if let Some(index) = branches.iter().position(|b| b == &default_branch) {
-        target.set_selected(index as u32);
+    if let Some(index) = branches
+        .iter()
+        .position(|b| b == &default_branch)
+        .and_then(|i| u32::try_from(i).ok())
+    {
+        target.set_selected(index);
     }
     set_accessible_label(&target, "Integration target branch");
     dialog.body.append(&labelled(

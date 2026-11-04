@@ -311,7 +311,7 @@ impl Screen {
                 self.row = self
                     .row
                     .saturating_sub(arg(0, 1))
-                    .max(self.top.min(self.row))
+                    .max(self.top.min(self.row));
             }
             'B' => self.row = (self.row + arg(0, 1)).min(last_row),
             'C' => self.col = (self.col + arg(0, 1)).min(last_col),

@@ -72,7 +72,7 @@ impl LimitedInput {
                 EndDecision::Restore {
                     snapshot,
                     attempted,
-                } => this.restore(buffer, snapshot, attempted),
+                } => this.restore(buffer, &snapshot, attempted),
             }
         });
         let this = Rc::downgrade(&input);
@@ -135,7 +135,7 @@ impl LimitedInput {
         );
     }
 
-    fn restore(self: &Rc<Self>, buffer: &gtk::TextBuffer, snapshot: Snapshot, attempted: usize) {
+    fn restore(self: &Rc<Self>, buffer: &gtk::TextBuffer, snapshot: &Snapshot, attempted: usize) {
         self.programmatic.set(true);
         buffer.delete(&mut buffer.start_iter(), &mut buffer.end_iter());
         buffer.insert(&mut buffer.start_iter(), &snapshot.text);
@@ -143,19 +143,20 @@ impl LimitedInput {
         self.programmatic.set(false);
         self.show_rejection(attempted);
         let generation = self.guard.borrow().generation();
+        let (cursor, anchor) = (snapshot.cursor, snapshot.anchor);
         let this = Rc::downgrade(self);
         glib::idle_add_local_once(move || {
             let Some(this) = this.upgrade() else { return };
             let buffer = this.view.buffer();
             if this.guard.borrow().generation() == generation
                 && this.view.has_focus()
-                && buffer.cursor_position() == snapshot.cursor
+                && buffer.cursor_position() == cursor
                 && !buffer.has_selection()
-                && snapshot.cursor != snapshot.anchor
+                && cursor != anchor
             {
                 buffer.select_range(
-                    &buffer.iter_at_offset(snapshot.cursor),
-                    &buffer.iter_at_offset(snapshot.anchor),
+                    &buffer.iter_at_offset(cursor),
+                    &buffer.iter_at_offset(anchor),
                 );
             }
         });

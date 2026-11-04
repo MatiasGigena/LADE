@@ -291,8 +291,12 @@ impl Inspector {
         let mode = widgets::dropdown_or(&["Steer", "Follow-up"], "No delivery mode available");
         set_accessible_label(&mode, "Delivery mode");
         set_focus_key(&mode, "submit:mode");
-        if let Some(index) = FEEDBACK_MODES.iter().position(|m| *m == batch.mode) {
-            mode.set_selected(index as u32);
+        if let Some(index) = FEEDBACK_MODES
+            .iter()
+            .position(|m| *m == batch.mode)
+            .and_then(|i| u32::try_from(i).ok())
+        {
+            mode.set_selected(index);
         }
         let controller = self.controller.clone();
         mode.connect_selected_notify(move |d| {
