@@ -1,52 +1,10 @@
-use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::model::{
     Basis, ChangeList, ChangeStatus, ChangedFile, NoticeLevel, NoticeScope, ObjectiveId, RepoPath,
     ServiceNotice,
 };
-use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
-use crate::views::tests::settle;
+use crate::views::tests::{SETTLE, app, descendants, settle};
 use crate::views::*;
-
-/// How long each step lets GTK lay out and draw before it is checked.
-const SETTLE: Duration = Duration::from_millis(300);
-
-fn app(width: i32, height: i32) -> Rc<App> {
-    load_css();
-    let application = gtk::Application::builder()
-        .application_id(format!(
-            "dev.lade.Desktop.LaunchQa{}",
-            glib::uuid_string_random().replace('-', "")
-        ))
-        .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
-        .build();
-    application
-        .register(None::<&gtk::gio::Cancellable>)
-        .unwrap();
-    let mut state = PresentationState::default();
-    for update in test_fixture::fixture_updates() {
-        state.apply(update);
-    }
-    let app = App::new(
-        &application,
-        Store::new(state),
-        Rc::new(RecordingSink::default()),
-    );
-    app.window.set_default_size(width, height);
-    app.present();
-    settle(SETTLE);
-    app
-}
-
-fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
-    let mut found = vec![widget.clone()];
-    let mut child = widget.first_child();
-    while let Some(widget) = child {
-        child = widget.next_sibling();
-        found.extend(descendants(&widget));
-    }
-    found
-}
 
 #[test]
 #[ignore = "requires a graphical display"]
