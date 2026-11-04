@@ -86,8 +86,6 @@ impl Service {
     }
 }
 
-/// Why `review.freeze` is refused for this Objective, if it is. The action list and the
-/// request handler both use it, so the disabled reason is the rejection detail.
 /// What the availability of every action depends on, gathered once per Objective summary.
 struct ActionFacts<'a> {
     service: &'a Service,
@@ -97,12 +95,14 @@ struct ActionFacts<'a> {
     lifecycle: Lifecycle,
     state: &'a ExecutionState,
     live: bool,
-    busy: Option<&'static str>,
+    /// `BUSY` while any operation runs on the Objective.
     busy_reason: Option<&'static str>,
+    /// The running operation is a freeze, which already leaves the worktree read-only.
+    freezing: bool,
     review: &'a Review,
     current: Option<&'a Candidate>,
     running_verification: bool,
-    terminal: bool,
+    closed: bool,
     target_moved: bool,
     worker_blocker: Option<String>,
     storage_blocker: Option<String>,
@@ -124,15 +124,15 @@ impl<'a> ActionFacts<'a> {
             lifecycle: record.lifecycle,
             state,
             live: state.is_live(),
-            busy,
             busy_reason: busy.map(|_| BUSY),
+            freezing: busy == Some("freeze"),
             review,
             current,
             running_verification: review
                 .verifications()
                 .iter()
                 .any(|v| v.outcome == VerificationOutcome::Running),
-            terminal: record.lifecycle.is_terminal(),
+            closed: record.lifecycle.is_terminal(),
             target_moved: match (current, target) {
                 (Some(c), Some(t)) => c.base_target_commit != *t,
                 _ => false,
@@ -282,7 +282,7 @@ impl<'a> ActionFacts<'a> {
             }),
         ));
         let approve = match (self.lifecycle, self.current) {
-            (Lifecycle::Frozen, Some(c)) if self.busy.is_none() => {
+            (Lifecycle::Frozen, Some(c)) if self.busy_reason.is_none() => {
                 if self.target_moved {
                     disabled(
                         ActionName::ReviewApprove,
@@ -353,7 +353,7 @@ impl<'a> ActionFacts<'a> {
         ));
     }
 
-    /// Ending the Objective, cleaning up after it, and the self.terminal.
+    /// Ending the Objective, cleaning up after it, and opening a terminal.
     fn closing_actions(&self, out: &mut Vec<AvailableAction>) {
         let has_changes = self.lifecycle == Lifecycle::Frozen
             || self.st.capture.as_ref().is_some_and(|c| c.counts.files > 0);
@@ -379,7 +379,7 @@ impl<'a> ActionFacts<'a> {
         ));
         out.push(gate(
             ActionName::ObjectiveDiscard,
-            self.busy_reason.or(if self.terminal {
+            self.busy_reason.or(if self.closed {
                 Some(CLOSED)
             } else if self.live {
                 Some(STOP_AGENT_FIRST)
@@ -391,7 +391,7 @@ impl<'a> ActionFacts<'a> {
         ));
         out.push(gate(
             ActionName::ObjectiveCleanup,
-            self.busy_reason.or(if !self.terminal {
+            self.busy_reason.or(if !self.closed {
                 Some("Clean up becomes available once the Objective is integrated, completed or discarded.")
             } else if self.record.cleaned_up {
                 Some("This Objective is already cleaned up.")
@@ -411,7 +411,7 @@ impl<'a> ActionFacts<'a> {
                 disabled(ActionName::TerminalOpen, TERMINAL_SANDBOX_UNAVAILABLE)
             }
             None if matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved)
-                || self.busy == Some("freeze") =>
+                || self.freezing =>
             {
                 AvailableAction {
                     action: ActionName::TerminalOpen,
@@ -424,6 +424,8 @@ impl<'a> ActionFacts<'a> {
     }
 }
 
+/// Why `review.freeze` is refused for this Objective, if it is. The action list and the
+/// request handler both use it, so the disabled reason is the rejection detail.
 pub(crate) fn freeze_blocker(st: &ObjState) -> Option<&'static str> {
     match st.objective().lifecycle() {
         Lifecycle::Active if st.row.worktree.is_none() => {
