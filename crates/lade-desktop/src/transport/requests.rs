@@ -1023,20 +1023,10 @@ fn effects_for(context: &Context, data: ReplyData, records: Records) -> Effects 
 }
 
 fn plain_reason(rejection: &Rejection) -> String {
-    let detail = rejection.detail.trim();
-    let machine = !detail.contains(' ')
-        || rejection.code == wire::ErrorCode::StaleReference
-        || detail.starts_with("stale drafts:");
-    if !machine {
-        return sentence(detail);
+    match rejection.detail.trim() {
+        "" => convert::fallback_reason(rejection.code).to_owned(),
+        detail => sentence(detail),
     }
-    if rejection.code == wire::ErrorCode::NotFound
-        && !detail.is_empty()
-        && detail.chars().all(|c| c.is_ascii_lowercase() || c == '_')
-    {
-        return format!("The {} no longer exists.", detail.replace('_', " "));
-    }
-    convert::fallback_reason(rejection.code).to_owned()
 }
 
 fn reason_and_advice(rejection: &Rejection) -> String {
@@ -1129,10 +1119,15 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             surface,
             ..
         } => {
-            if rejection.code == wire::ErrorCode::StaleReference && !batch.is_empty() {
+            if !rejection.stale_drafts.is_empty() {
                 let stale: Vec<&str> = batch
                     .iter()
-                    .filter(|d| rejection.detail.contains(d.as_str()))
+                    .filter(|d| {
+                        rejection
+                            .stale_drafts
+                            .iter()
+                            .any(|s| s.as_str() == d.as_str())
+                    })
                     .map(DraftId::short)
                     .collect();
                 if !stale.is_empty() {

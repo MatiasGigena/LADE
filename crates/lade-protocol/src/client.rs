@@ -271,12 +271,16 @@ impl From<RequestFrame> for RawRequest {
 }
 
 pub const MAX_DETAIL_CHARS: usize = 512;
+pub const MAX_STALE_DRAFTS: usize = 256;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Rejection {
     pub code: ErrorCode,
     pub action: SafeAction,
+    /// Human-readable reason; never a code or an identifier list.
     pub detail: String,
+    /// For `stale_reference` from a feedback batch: the drafts whose anchors no longer match.
+    pub stale_drafts: Vec<Id>,
 }
 impl Rejection {
     pub fn new(code: ErrorCode, action: SafeAction, detail: &str) -> Self {
@@ -284,7 +288,13 @@ impl Rejection {
             code,
             action,
             detail: truncate_chars(detail, MAX_DETAIL_CHARS).to_owned(),
+            stale_drafts: Vec::new(),
         }
+    }
+    pub fn with_stale_drafts(mut self, mut drafts: Vec<Id>) -> Self {
+        drafts.truncate(MAX_STALE_DRAFTS);
+        self.stale_drafts = drafts;
+        self
     }
 }
 
@@ -298,6 +308,8 @@ enum RawResult {
         code: ErrorCode,
         action: SafeAction,
         detail: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        stale_drafts: Vec<Id>,
     },
 }
 fn raw_result(data: Result<&ReplyData, &Rejection>) -> RawResult {
@@ -309,6 +321,7 @@ fn raw_result(data: Result<&ReplyData, &Rejection>) -> RawResult {
             code: r.code,
             action: r.action,
             detail: r.detail.clone(),
+            stale_drafts: r.stale_drafts.clone(),
         },
     }
 }
@@ -322,10 +335,12 @@ fn typed_result(
             code,
             action,
             detail,
+            stale_drafts,
         } => Err(Rejection {
             code,
             action,
             detail,
+            stale_drafts,
         }),
     })
 }
@@ -405,6 +420,7 @@ impl TryFrom<RawReply> for Reply {
                     code,
                     action,
                     detail,
+                    stale_drafts,
                 },
             ) => ReplyResult::Rejected {
                 name: None,
@@ -412,6 +428,7 @@ impl TryFrom<RawReply> for Reply {
                     code,
                     action,
                     detail,
+                    stale_drafts,
                 },
             },
             (None, RawResult::Ok { .. }) => return Err(WireError::InvalidSchema),

@@ -73,7 +73,7 @@ export type SafeAction = "refresh" | "inspect_previous" | "query_operation" | "r
 
 export type OperationState = "accepted" | "pending" | "completed" | "blocked" | "uncertain" | "unknown";
 
-export type Rejection = { "status": "rejected"; "code": ErrorCode; "action": SafeAction; "detail": ShortText };
+export type Rejection = { "status": "rejected"; "code": ErrorCode; "action": SafeAction; "detail": ShortText; "stale_drafts"?: Id[] };
 
 export type Empty = Record<never, never>;
 

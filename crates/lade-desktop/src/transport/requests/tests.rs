@@ -895,26 +895,18 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
         worded.message,
         "Couldn't edit intent. The Agent Session changed. Refresh and try again."
     );
-    // Bare codes and identifiers are never shown; a lowercase service detail becomes a sentence.
+    // No detail falls back to the code's wording; a lowercase service detail becomes a sentence.
     let bare = refusal(
         "start agent",
         &Rejection::new(
             ErrorCode::ExecutionUnavailable,
             SafeAction::ExplicitContinue,
-            "execution_unavailable",
+            "",
         ),
     );
     assert_eq!(
         bare.message,
         "Couldn't start agent. The agent isn't running."
-    );
-    let gone = refusal(
-        "delete draft",
-        &Rejection::new(ErrorCode::NotFound, SafeAction::Refresh, "draft"),
-    );
-    assert_eq!(
-        gone.message,
-        "Couldn't delete draft. The draft no longer exists."
     );
     let lower = refusal(
         "send terminal input",
@@ -1009,8 +1001,9 @@ fn stale_reference_names_the_stale_drafts() {
     let rejection = Rejection::new(
         ErrorCode::StaleReference,
         SafeAction::Refresh,
-        &format!("stale drafts: {D}"),
-    );
+        "a feedback draft refers to code that changed",
+    )
+    .with_stale_drafts(vec![Id::parse(D).unwrap()]);
     let effects = rejection_effects(&context, &rejection);
     let message = effects
         .updates

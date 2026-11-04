@@ -83,7 +83,13 @@ pub fn domain_rejection(error: DomainError) -> Rejection {
             SafeAction::ExplicitContinue,
         ),
     };
-    Rejection::new(code, action, &error.detail())
+    let rejection = Rejection::new(code, action, &error.detail());
+    match error {
+        DomainError::StaleReference { drafts } => {
+            rejection.with_stale_drafts(drafts.into_iter().map(|d| wire_id(d.uuid())).collect())
+        }
+        _ => rejection,
+    }
 }
 
 pub fn git_rejection(error: GitError) -> Rejection {

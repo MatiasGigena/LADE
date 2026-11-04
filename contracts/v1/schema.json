@@ -265,7 +265,8 @@
         "status": {"const": "rejected"},
         "code": {"$ref": "#/$defs/ErrorCode"},
         "action": {"$ref": "#/$defs/SafeAction"},
-        "detail": {"$ref": "#/$defs/ShortText"}
+        "detail": {"$ref": "#/$defs/ShortText"},
+        "stale_drafts": {"type": "array", "items": {"$ref": "#/$defs/Id"}, "maxItems": 256, "minItems": 1}
       }
     },
     "Empty": {"type": "object", "additionalProperties": false, "required": [], "properties": {}},

@@ -128,7 +128,7 @@ client.update({
     'SafeAction': enum('refresh', 'inspect_previous', 'query_operation', 'retry_read', 'explicit_continue', 'none'),
     'OperationState': enum('accepted', 'pending', 'completed', 'blocked', 'uncertain', 'unknown'),
     'Rejection': obj({'status': const('rejected'), 'code': ref('ErrorCode'), 'action': ref('SafeAction'),
-                      'detail': ref('ShortText')}),
+                      'detail': ref('ShortText')}, {'stale_drafts': array(ID, 256, 1)}),
     'Empty': obj(),
     'Settings': obj({'verification_commands': array(ref('Argv'), 32)}, {'default_model': ref('Model')}),
     'Workspace': obj({'workspace_id': ID, 'path': ref('Path'), 'name': ref('Label'),

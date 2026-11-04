@@ -403,10 +403,15 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     ];
     let rejected = client.call(submit(both)).unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleReference);
-    assert!(rejected.detail.contains(d2.as_str()), "{}", rejected.detail);
-    assert!(
-        !rejected.detail.contains(d1.as_str()),
+    assert_eq!(
+        rejected.stale_drafts,
+        std::slice::from_ref(&d2),
         "{}",
+        rejected.detail
+    );
+    assert!(
+        !rejected.detail.contains(d2.as_str()),
+        "ids travel in stale_drafts: {}",
         rejected.detail
     );
     match client.call(Request::InputsList(InputsListQuery {

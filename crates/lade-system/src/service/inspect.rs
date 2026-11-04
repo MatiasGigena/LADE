@@ -236,9 +236,8 @@ fn chunk_page(
         }
         let valid = match std::str::from_utf8(&page.data) {
             Ok(text) => text,
-            Err(e) if e.error_len().is_none() => {
-                std::str::from_utf8(&page.data[..e.valid_up_to()]).map_err(|_| invalid("utf-8"))?
-            }
+            Err(e) if e.error_len().is_none() => std::str::from_utf8(&page.data[..e.valid_up_to()])
+                .map_err(|_| invalid("the page is not valid UTF-8"))?,
             Err(e) => {
                 return Err(Rejection::new(
                     lade_protocol::client::ErrorCode::UnsupportedContent,
@@ -261,7 +260,8 @@ fn chunk_page(
         Some(valid[..end].to_string())
     };
     Ok(FileContent {
-        artifact_digest: Digest::parse(digest.to_hex()).map_err(|_| invalid("digest"))?,
+        artifact_digest: Digest::parse(digest.to_hex())
+            .map_err(|_| invalid("the content digest is not canonical"))?,
         total_bytes: Counter::new(page.total_bytes),
         offset: Counter::new(page.offset),
         length: Counter::new(length as u64),
@@ -281,7 +281,7 @@ fn retain(artifacts: &ArtifactStore, bytes: &[u8]) -> Result<Digest, Rejection> 
     let digest = artifacts
         .put(bytes)
         .map_err(|_| super::convert::durability("content could not be retained"))?;
-    Digest::parse(digest.to_hex()).map_err(|_| invalid("digest"))
+    Digest::parse(digest.to_hex()).map_err(|_| invalid("the content digest is not canonical"))
 }
 
 fn read_file(
