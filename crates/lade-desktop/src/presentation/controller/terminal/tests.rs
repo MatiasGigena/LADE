@@ -1,21 +1,10 @@
 use super::*;
-use crate::presentation::controller::intents::RecordingSink;
-use crate::presentation::controller::tests::setup;
+use crate::presentation::controller::tests::{main_selected, setup};
 use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::terminal::{TerminalEnd, TerminalMode};
-use crate::presentation::test_fixture;
-use std::rc::Rc;
 
 const TERMINAL: &str = "00000000-0000-4000-8000-000000000042";
-
-fn main_selected() -> (Rc<Controller>, Rc<RecordingSink>, ObjectiveId) {
-    let (controller, sink) = setup();
-    let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
-    controller.select_objective(&id);
-    sink.intents.borrow_mut().clear();
-    (controller, sink, id)
-}
 
 fn opened(controller: &Controller, id: &ObjectiveId) {
     controller.store.apply(StoreUpdate::TerminalOpened {
@@ -29,11 +18,12 @@ fn opened(controller: &Controller, id: &ObjectiveId) {
 
 #[test]
 fn terminal_lifecycle_in_the_controller() {
-    let (controller, sink) = setup();
-    let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
-    controller.select_objective(&id);
-    sink.intents.borrow_mut().clear();
-    assert!(!controller.terminal_input("ls\r"), "no terminal yet");
+    let (controller, sink, id) = main_selected();
+    assert_eq!(
+        controller.terminal_input("ls\r"),
+        Err("No terminal is open".to_owned()),
+        "no terminal yet"
+    );
     controller.open_terminal(80, 24).unwrap();
     controller.open_terminal(80, 24).unwrap();
     assert_eq!(
@@ -52,7 +42,7 @@ fn terminal_lifecycle_in_the_controller() {
         cols: 80,
         rows: 24,
     });
-    assert!(controller.terminal_input(&"x".repeat(5000)));
+    assert_eq!(controller.terminal_input(&"x".repeat(5000)), Ok(()));
     let inputs = sink
         .intents
         .borrow()
@@ -87,8 +77,9 @@ fn terminal_lifecycle_in_the_controller() {
         terminal_id: "00000000-0000-4000-8000-000000000042".into(),
         end: TerminalEnd::ReviewFreeze,
     });
-    assert!(
-        !controller.terminal_input("x"),
+    assert_eq!(
+        controller.terminal_input("x"),
+        Err("No terminal is open".to_owned()),
         "an ended terminal takes no input"
     );
     controller.open_terminal(80, 24).unwrap();
@@ -123,7 +114,10 @@ fn a_terminal_needs_a_selected_objective() {
     );
     controller.resize_terminal(100, 30);
     controller.close_terminal();
-    assert!(!controller.terminal_input("x"));
+    assert_eq!(
+        controller.terminal_input("x"),
+        Err("Select an Objective first".into())
+    );
     assert!(sink.intents.borrow().is_empty());
 }
 
@@ -171,7 +165,7 @@ fn input_is_sent_in_order_to_the_open_terminal() {
     controller.open_terminal(80, 24).unwrap();
     opened(&controller, &id);
     sink.intents.borrow_mut().clear();
-    assert!(controller.terminal_input("ls\r"));
+    assert_eq!(controller.terminal_input("ls\r"), Ok(()));
     assert_eq!(
         sink.intents.borrow().as_slice(),
         [Intent::TerminalInput {

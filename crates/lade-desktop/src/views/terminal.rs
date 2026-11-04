@@ -238,7 +238,7 @@ impl TerminalPane {
         let Some(bytes) = encode_key(term, mods, application_cursor.unwrap_or(false)) else {
             return glib::Propagation::Proceed;
         };
-        if self.controller.terminal_input(&bytes) {
+        if self.controller.terminal_input(&bytes).is_ok() {
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed
@@ -311,18 +311,13 @@ impl TerminalPane {
                 let bracketed = pane
                     .with_session(|s| s.screen.bracketed_paste)
                     .unwrap_or(false);
-                match paste_text(&text, bracketed) {
-                    Ok(data) => {
-                        pane.controller.terminal_input(&data);
-                    }
-                    Err(message) => {
-                        if let Some(objective_id) = pane.selected() {
-                            pane.controller.store.apply(StoreUpdate::TerminalProblem {
-                                objective_id,
-                                message,
-                            });
-                        }
-                    }
+                let pasted = paste_text(&text, bracketed)
+                    .and_then(|data| pane.controller.terminal_input(&data));
+                if let (Err(message), Some(objective_id)) = (pasted, pane.selected()) {
+                    pane.controller.store.apply(StoreUpdate::TerminalProblem {
+                        objective_id,
+                        message,
+                    });
                 }
             });
     }

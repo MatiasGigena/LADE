@@ -33,17 +33,19 @@ impl Controller {
         Ok(())
     }
 
-    fn open_terminal_id(&self) -> Option<(ObjectiveId, String)> {
+    fn open_terminal_id(&self) -> Result<(ObjectiveId, String), String> {
+        let id = self.selected_or_err()?;
         let state = self.store.state();
-        let id = state.ui.selected.clone()?;
-        let session = state.terminal_for(&id).filter(|t| t.is_open())?;
-        Some((id, session.terminal_id.clone()?))
+        state
+            .terminal_for(&id)
+            .filter(|t| t.is_open())
+            .and_then(|t| t.terminal_id.clone())
+            .map(|terminal_id| (id, terminal_id))
+            .ok_or_else(|| "No terminal is open".to_owned())
     }
 
-    pub fn terminal_input(&self, text: &str) -> bool {
-        let Some((objective_id, terminal_id)) = self.open_terminal_id() else {
-            return false;
-        };
+    pub fn terminal_input(&self, text: &str) -> Result<(), String> {
+        let (objective_id, terminal_id) = self.open_terminal_id()?;
         for data in input_chunks(text) {
             self.emit(Intent::TerminalInput {
                 objective_id: objective_id.clone(),
@@ -51,9 +53,11 @@ impl Controller {
                 data,
             });
         }
-        true
+        Ok(())
     }
 
+    /// Follows the pane's size. A layout event, not a user action: without a terminal there is
+    /// nothing to resize and nothing to report.
     pub fn resize_terminal(&self, cols: u16, rows: u16) {
         let send = self.store.update(|s| {
             let Some(id) = s.ui.selected.clone() else {
@@ -92,8 +96,10 @@ impl Controller {
         }
     }
 
+    /// Closes the open terminal, if any. Closing when none is open already has the outcome the
+    /// user asked for, so there is nothing to report.
     pub fn close_terminal(&self) {
-        if let Some((objective_id, terminal_id)) = self.open_terminal_id() {
+        if let Ok((objective_id, terminal_id)) = self.open_terminal_id() {
             self.emit(Intent::CloseTerminal {
                 objective_id,
                 terminal_id,
