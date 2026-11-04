@@ -3,6 +3,7 @@ mod launch_qa;
 
 use super::*;
 use crate::presentation::controller::intents::RecordingSink;
+use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
 

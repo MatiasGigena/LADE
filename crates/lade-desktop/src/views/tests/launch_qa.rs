@@ -1,6 +1,7 @@
 use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::model::{
-    Basis, ChangeList, ChangeStatus, ChangedFile, ObjectiveId, RepoPath,
+    Basis, ChangeList, ChangeStatus, ChangedFile, NoticeLevel, NoticeScope, ObjectiveId, RepoPath,
+    ServiceNotice,
 };
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;

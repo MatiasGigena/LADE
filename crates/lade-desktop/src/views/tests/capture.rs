@@ -1,9 +1,10 @@
 use crate::presentation::controller::intents::RecordingSink;
+use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, Basis, ChangeList, ChangeStatus, ChangedFile,
     DiffHunk, DiffLine, DiffLineKind, FileDiff, ObjectiveId, RepoPath, Timestamp,
 };
-use crate::presentation::state::store::{InspectorTab, PresentationState};
+use crate::presentation::state::store::{InspectorTab, MainView, PresentationState};
 use crate::presentation::test_fixture;
 use crate::views::tests::settle;
 use crate::views::*;
