@@ -127,20 +127,25 @@ fn read_key(variable: &str, provider: &str) -> Result<Vec<u8>, ExitCode> {
         eprintln!("laded: could not read the key from stdin");
         return Err(ExitCode::from(65));
     }
-    if key.ends_with(b"\n") {
-        key.pop();
-        if key.ends_with(b"\r") {
-            key.pop();
+    one_line_key(key).ok_or_else(|| {
+        eprintln!("laded: the key must be one non-empty line of at most 64 KiB");
+        ExitCode::from(65)
+    })
+}
+
+/// The key in `input` without its line ending, if it is one non-empty line of at most
+/// [`MAX_SECRET_BYTES`] with no NUL byte.
+fn one_line_key(mut input: Vec<u8>) -> Option<Vec<u8>> {
+    if input.ends_with(b"\n") {
+        input.pop();
+        if input.ends_with(b"\r") {
+            input.pop();
         }
     }
-    if key.is_empty()
-        || key.len() > MAX_SECRET_BYTES
-        || key.iter().any(|b| matches!(b, 0 | b'\n' | b'\r'))
-    {
-        eprintln!("laded: the key must be one non-empty line of at most 64 KiB");
-        return Err(ExitCode::from(65));
-    }
-    Ok(key)
+    let valid = !input.is_empty()
+        && input.len() <= MAX_SECRET_BYTES
+        && !input.iter().any(|b| matches!(b, 0 | b'\n' | b'\r'));
+    valid.then_some(input)
 }
 
 fn credentials_command(args: &[OsString]) -> ExitCode {
@@ -486,6 +491,48 @@ fn diagnostics_export(parsed: &Args) -> ExitCode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Command {
+    Serve,
+    StoreInfo,
+    StoreRestore,
+    DiagnosticsExport,
+}
+
+/// The subcommand `args` names and its parsed options, or `None` for a usage error. The
+/// `credentials` and `--version` forms are handled before routing.
+fn route(args: &[OsString]) -> Option<(Command, Args)> {
+    let words: Vec<&str> = args
+        .iter()
+        .take(2)
+        .map(|a| a.to_str().unwrap_or(""))
+        .collect();
+    match words.as_slice() {
+        ["serve", ..] => parse_args(
+            &args[1..],
+            &[
+                "--state-dir",
+                "--runtime-dir",
+                "--max-workers",
+                "--max-terminals",
+                "--storage-warn-mib",
+                "--storage-reserve-mib",
+            ],
+            false,
+        )
+        .map(|p| (Command::Serve, p)),
+        ["store", "info"] => {
+            parse_args(&args[2..], &["--state-dir"], false).map(|p| (Command::StoreInfo, p))
+        }
+        ["store", "restore"] => parse_args(&args[2..], &["--state-dir", "--schema"], false)
+            .map(|p| (Command::StoreRestore, p)),
+        ["diagnostics", "export"] => {
+            parse_args(&args[2..], &["--state-dir"], true).map(|p| (Command::DiagnosticsExport, p))
+        }
+        _ => None,
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     if args == ["--version"] {
@@ -499,35 +546,150 @@ fn main() -> ExitCode {
     if args.first().is_some_and(|a| a == "credentials") {
         return credentials_command(&args[1..]);
     }
-    let words: Vec<&str> = args
-        .iter()
-        .take(2)
-        .map(|a| a.to_str().unwrap_or(""))
-        .collect();
-    let parsed = match words.as_slice() {
-        ["serve", ..] => parse_args(
-            &args[1..],
-            &[
-                "--state-dir",
-                "--runtime-dir",
-                "--max-workers",
-                "--max-terminals",
-                "--storage-warn-mib",
-                "--storage-reserve-mib",
-            ],
-            false,
-        )
-        .map(|p| (serve as fn(&Args) -> ExitCode, p)),
-        ["store", "info"] => parse_args(&args[2..], &["--state-dir"], false)
-            .map(|p| (store_info as fn(&Args) -> ExitCode, p)),
-        ["store", "restore"] => parse_args(&args[2..], &["--state-dir", "--schema"], false)
-            .map(|p| (store_restore as fn(&Args) -> ExitCode, p)),
-        ["diagnostics", "export"] => parse_args(&args[2..], &["--state-dir"], true)
-            .map(|p| (diagnostics_export as fn(&Args) -> ExitCode, p)),
-        _ => None,
-    };
-    match parsed {
-        Some((run, args)) => run(&args),
+    match route(&args) {
+        Some((Command::Serve, parsed)) => serve(&parsed),
+        Some((Command::StoreInfo, parsed)) => store_info(&parsed),
+        Some((Command::StoreRestore, parsed)) => store_restore(&parsed),
+        Some((Command::DiagnosticsExport, parsed)) => diagnostics_export(&parsed),
         None => usage(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(words: &[&str]) -> Vec<OsString> {
+        words.iter().map(OsString::from).collect()
+    }
+
+    fn parsed(words: &[&str]) -> Option<(Command, Args)> {
+        route(&args(words))
+    }
+
+    #[test]
+    fn serve_takes_directories_and_positive_limits() {
+        let (command, serve) = parsed(&[
+            "serve",
+            "--state-dir",
+            "/s",
+            "--runtime-dir",
+            "/r",
+            "--max-workers",
+            "3",
+            "--max-terminals",
+            "2",
+            "--storage-warn-mib",
+            "10",
+            "--storage-reserve-mib",
+            "1",
+        ])
+        .expect("valid");
+        assert_eq!(command, Command::Serve);
+        assert_eq!(serve.state, Some(PathBuf::from("/s")));
+        assert_eq!(serve.runtime, Some(PathBuf::from("/r")));
+        assert_eq!(serve.limits.max_workers, 3);
+        assert_eq!(serve.limits.max_terminals, 2);
+        assert_eq!(serve.limits.storage_warn_bytes, 10 << 20);
+        assert_eq!(serve.limits.storage_reserve_bytes, 1 << 20);
+        let (_, defaults) = parsed(&["serve"]).expect("no options");
+        assert_eq!(defaults.limits, ResourceLimits::default());
+    }
+
+    #[test]
+    fn options_are_refused_when_unknown_repeated_valueless_or_out_of_range() {
+        for words in [
+            &["serve", "--schema", "1"][..],
+            &["serve", "--state-dir", "/a", "--state-dir", "/b"],
+            &["serve", "--state-dir"],
+            &["serve", "--max-workers", "0"],
+            &["serve", "--max-workers", "-1"],
+            &["serve", "--max-terminals", "many"],
+            &["serve", "--storage-warn-mib", &u64::MAX.to_string()],
+            &["store", "restore", "--schema", "-1"],
+            &["store", "info", "extra"],
+            &["store"],
+            &["diagnostics", "export"],
+            &["diagnostics", "export", "--state-dir", "/s"],
+            &["bogus"],
+            &[],
+        ] {
+            assert!(parsed(words).is_none(), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn store_and_diagnostics_subcommands_route_with_their_options() {
+        let (command, restore) =
+            parsed(&["store", "restore", "--schema", "2", "--state-dir", "/s"]).expect("restore");
+        assert_eq!(command, Command::StoreRestore);
+        assert_eq!(restore.schema, Some(2));
+        assert_eq!(restore.state, Some(PathBuf::from("/s")));
+        let (command, info) = parsed(&["store", "info"]).expect("info");
+        assert_eq!(command, Command::StoreInfo);
+        assert_eq!(info.schema, None);
+        let (command, export) =
+            parsed(&["diagnostics", "export", "/tmp/out.txt", "--state-dir", "/s"])
+                .expect("export");
+        assert_eq!(command, Command::DiagnosticsExport);
+        assert_eq!(export.out, Some(PathBuf::from("/tmp/out.txt")));
+    }
+
+    #[test]
+    fn non_utf8_options_are_refused_but_paths_may_be_any_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        let raw = OsString::from_vec(b"/state/\xff".to_vec());
+        let routed = route(&[OsString::from("serve"), "--state-dir".into(), raw.clone()]);
+        assert_eq!(
+            routed.expect("valid").1.state,
+            Some(PathBuf::from(raw.clone()))
+        );
+        assert!(route(&[OsString::from("serve"), raw]).is_none());
+    }
+
+    #[test]
+    fn credentials_name_a_built_in_or_custom_provider_variable() {
+        let parse = |words: &[&str]| parse_credentials(&args(words));
+        let (action, provider, variable) = parse(&["set", "anthropic"]).expect("set");
+        assert!(matches!(action, CredentialsAction::Set));
+        assert_eq!(provider, "anthropic");
+        assert_eq!(
+            variable.as_deref(),
+            provider_env_vars("anthropic").and_then(|vars| vars.first().copied())
+        );
+        let (action, _, variable) = parse(&["clear", "anthropic"]).expect("clear");
+        assert!(matches!(action, CredentialsAction::Clear));
+        assert_eq!(
+            variable, None,
+            "clearing a built-in provider clears every variable"
+        );
+        assert!(parse(&["set", "anthropic", "--variable", "NOT_ITS_VARIABLE"]).is_err());
+        assert!(
+            parse(&["set", "my-llm"]).is_err(),
+            "a custom provider names its variable"
+        );
+        let custom =
+            parse(&["set", "my-llm", "--variable", "LADE_PROVIDER_MY_LLM"]).expect("custom");
+        assert_eq!(custom.2.as_deref(), Some("LADE_PROVIDER_MY_LLM"));
+        assert!(parse(&["set", "my-llm", "--variable", "HOME"]).is_err());
+        assert!(parse(&["set", FIXTURE_PROVIDER]).is_err());
+        assert!(parse(&["set", "bad id!"]).is_err());
+        assert!(parse(&["rotate", "anthropic"]).is_err());
+        assert!(parse(&["set"]).is_err());
+    }
+
+    #[test]
+    fn a_key_is_one_non_empty_line_without_nul_bytes() {
+        assert_eq!(one_line_key(b"secret\n".to_vec()), Some(b"secret".to_vec()));
+        assert_eq!(
+            one_line_key(b"secret\r\n".to_vec()),
+            Some(b"secret".to_vec())
+        );
+        assert_eq!(one_line_key(b"secret".to_vec()), Some(b"secret".to_vec()));
+        for bad in [&b""[..], b"\n", b"two\nlines", b"nul\0byte", b"cr\rinside"] {
+            assert_eq!(one_line_key(bad.to_vec()), None, "{bad:?}");
+        }
+        assert!(one_line_key(vec![b'k'; MAX_SECRET_BYTES]).is_some());
+        assert_eq!(one_line_key(vec![b'k'; MAX_SECRET_BYTES + 1]), None);
     }
 }
