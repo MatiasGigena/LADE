@@ -16,6 +16,7 @@ mod terminal;
 #[cfg(test)]
 mod tests;
 
+pub use agent_session::SessionUse;
 pub use feedback::{FeedbackBatch, MAX_FEEDBACK_BATCH, UnsavedDraft};
 
 pub struct Controller {

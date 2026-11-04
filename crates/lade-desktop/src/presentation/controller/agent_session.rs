@@ -6,18 +6,32 @@ use crate::presentation::state::agent_session::{
     AgentSessionUpdate, ForkPosition, ModelChoice, ProviderStatus, Readiness, ThinkingLevel,
     UiAnswerView,
 };
-use crate::presentation::state::model::{ExecutionState, ModelRef, ObjectiveId};
+use crate::presentation::state::model::{
+    ActionAvailability, ExecutionState, ModelRef, ObjectiveId,
+};
 use crate::presentation::state::store::{Change, StoreUpdate};
 
 /// When an Agent Session operation may be sent, by the agent's turn state.
 #[derive(Clone, Copy)]
-enum SessionUse {
+pub enum SessionUse {
     /// The agent is running and idle between turns.
     BetweenTurns,
     /// The agent is running, during a turn or between turns.
     Running,
     /// No turn is in progress, including while the agent is stopped.
     OutsideTurn,
+}
+
+impl SessionUse {
+    /// Whether an operation of this kind may be sent in `state`, or why not.
+    fn allowed_in(self, state: ExecutionState) -> Result<(), &'static str> {
+        match (state, self) {
+            (ExecutionState::Idle, _) | (ExecutionState::Running, Self::Running) => Ok(()),
+            (ExecutionState::Running, _) => Err("Wait until the current turn has finished"),
+            (_, Self::OutsideTurn) => Ok(()),
+            _ => Err("Start or resume the agent first"),
+        }
+    }
 }
 
 impl Controller {
@@ -45,11 +59,13 @@ impl Controller {
             .iter()
             .any(|c| matches!(c, Change::Catalog | Change::Selection | Change::Detail(_)));
         if relevant {
-            self.picker_defaults();
+            self.apply_picker_defaults();
         }
     }
 
-    pub(super) fn picker_defaults(&self) {
+    /// Chooses a default provider, model and thinking level when the current choice is not in
+    /// the catalogue, writes it to the store and requests that provider's models if missing.
+    fn apply_picker_defaults(&self) {
         let (choice, missing) = {
             let state = self.store.state();
             let agent_session = &state.agent_session;
@@ -126,16 +142,24 @@ impl Controller {
         if detail.session.is_none() {
             return Err("Start the agent first".to_owned());
         }
-        let target = detail.summary.objective_id.clone();
-        match (detail.summary.execution.state, when) {
-            (ExecutionState::Idle, _) | (ExecutionState::Running, SessionUse::Running) => {
-                Ok(target)
+        when.allowed_in(detail.summary.execution.state)?;
+        Ok(detail.summary.objective_id.clone())
+    }
+
+    /// How a view should offer an Agent Session operation sent under `when`, by the same rule
+    /// the operation itself checks. Without a session the operation is not offered at all.
+    pub fn session_availability(&self, when: SessionUse) -> ActionAvailability {
+        let state = self.store.state();
+        match state.selected_detail() {
+            Some(detail) if detail.session.is_some() => {
+                match when.allowed_in(detail.summary.execution.state) {
+                    Ok(()) => ActionAvailability::Enabled,
+                    Err(reason) => ActionAvailability::Disabled {
+                        reason: reason.to_owned(),
+                    },
+                }
             }
-            (ExecutionState::Running, _) => {
-                Err("Wait until the current turn has finished".to_owned())
-            }
-            (_, SessionUse::OutsideTurn) => Ok(target),
-            _ => Err("Start or resume the agent first".to_owned()),
+            _ => ActionAvailability::NotOffered,
         }
     }
 
@@ -529,11 +553,32 @@ mod tests {
             "Wait until the current turn has finished"
         );
         assert_eq!(
+            controller.session_availability(SessionUse::OutsideTurn),
+            ActionAvailability::Disabled {
+                reason: "Wait until the current turn has finished".into()
+            }
+        );
+        assert_eq!(
+            controller.session_availability(SessionUse::Running),
+            ActionAvailability::Enabled
+        );
+        assert_eq!(
             controller.compact_session().unwrap_err(),
             "Wait until the current turn has finished"
         );
         assert!(controller.export_session().is_ok());
         execution(ExecutionState::Cancelled);
+        assert_eq!(
+            controller.session_availability(SessionUse::OutsideTurn),
+            ActionAvailability::Enabled,
+            "the view offers what the controller accepts"
+        );
+        assert_eq!(
+            controller.session_availability(SessionUse::BetweenTurns),
+            ActionAvailability::Disabled {
+                reason: "Start or resume the agent first".into()
+            }
+        );
         assert!(controller.configure_session().is_ok());
         assert_eq!(
             controller.compact_session().unwrap_err(),

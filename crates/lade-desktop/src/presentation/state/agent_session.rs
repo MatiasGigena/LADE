@@ -126,6 +126,14 @@ impl ModelView {
     pub fn model_ref(&self) -> ModelRef {
         ModelRef::new(self.provider.clone(), self.id.clone())
     }
+
+    pub fn picker_label(&self) -> String {
+        if self.reasoning {
+            format!("{} (reasoning)", self.name)
+        } else {
+            self.name.clone()
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -368,6 +376,51 @@ impl Readiness {
     }
 }
 
+/// What the model picker offers, decided from the Agent Session state alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelPicker {
+    /// The provider catalogue has not arrived yet.
+    Loading,
+    /// The service offers no provider; `error` says why when the service reported a failure.
+    NoProviders {
+        error: Option<String>,
+    },
+    Choices(PickerChoices),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PickerChoices {
+    /// Why some providers may be missing from an otherwise usable catalogue.
+    pub catalog_error: Option<String>,
+    pub providers: Vec<ProviderView>,
+    pub selected_provider: Option<usize>,
+    /// The chosen provider's models, in dropdown order.
+    pub models: Vec<ModelView>,
+    pub model_row: ModelRow,
+    pub choice: ModelChoice,
+}
+
+impl PickerChoices {
+    pub fn provider(&self) -> Option<&ProviderView> {
+        self.selected_provider.and_then(|i| self.providers.get(i))
+    }
+}
+
+/// What the picker shows below the provider.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelRow {
+    /// A model is ready: offer the models and the thinking levels the chosen one supports.
+    Ready {
+        selected_model: Option<usize>,
+        thinking: Vec<ThinkingLevel>,
+        selected_thinking: Option<usize>,
+    },
+    /// The provider itself can't be used, and the provider row already explains why.
+    Hidden,
+    /// No model can be chosen yet, for this reason.
+    Problem(String),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AgentSessionState {
     pub catalog: Option<Catalog>,
@@ -517,6 +570,46 @@ impl AgentSessionState {
         }
     }
 
+    pub fn model_picker(&self) -> ModelPicker {
+        let Some(catalog) = &self.catalog else {
+            return ModelPicker::Loading;
+        };
+        if catalog.providers.is_empty() {
+            return ModelPicker::NoProviders {
+                error: catalog.error.clone(),
+            };
+        }
+        let choice = self.choice.clone();
+        let models = self.chosen_models().to_vec();
+        let model_row = match self.readiness() {
+            Readiness::Ready { model, thinking } => {
+                let levels = if model.thinking.is_empty() {
+                    ThinkingLevel::ALL.to_vec()
+                } else {
+                    model.thinking
+                };
+                ModelRow::Ready {
+                    selected_model: models.iter().position(|m| m.id == model.id),
+                    selected_thinking: levels.iter().position(|l| *l == thinking),
+                    thinking: levels,
+                }
+            }
+            Readiness::NeedsCredentials { .. } | Readiness::Restricted { .. } => ModelRow::Hidden,
+            other => ModelRow::Problem(other.problem().unwrap_or_default()),
+        };
+        ModelPicker::Choices(PickerChoices {
+            catalog_error: catalog.error.clone(),
+            selected_provider: choice
+                .provider
+                .as_ref()
+                .and_then(|p| catalog.providers.iter().position(|v| &v.id == p)),
+            providers: catalog.providers.clone(),
+            models,
+            model_row,
+            choice,
+        })
+    }
+
     pub fn chosen_model(&self) -> Option<&ModelView> {
         let models = self.chosen_models();
         self.choice
@@ -636,6 +729,119 @@ mod tests {
             provider.credential_help(),
             None,
             "only for missing credentials"
+        );
+    }
+
+    fn provider(id: &str, status: ProviderStatus) -> ProviderView {
+        ProviderView {
+            id: id.into(),
+            name: id.to_uppercase(),
+            auth: Vec::new(),
+            status,
+            reason: None,
+            variables: Vec::new(),
+            models: 1,
+        }
+    }
+
+    fn model(id: &str, reasoning: bool, thinking: Vec<ThinkingLevel>) -> ModelView {
+        ModelView {
+            provider: "a".into(),
+            id: id.into(),
+            name: id.to_uppercase(),
+            reasoning,
+            thinking,
+        }
+    }
+
+    fn with_catalog(providers: Vec<ProviderView>, error: Option<&str>) -> AgentSessionState {
+        AgentSessionState {
+            catalog: Some(Catalog {
+                sdk_version: "1".into(),
+                providers,
+                error: error.map(str::to_owned),
+            }),
+            ..AgentSessionState::default()
+        }
+    }
+
+    #[test]
+    fn the_model_picker_waits_for_the_catalogue_and_explains_an_empty_one() {
+        assert_eq!(
+            AgentSessionState::default().model_picker(),
+            ModelPicker::Loading
+        );
+        assert_eq!(
+            with_catalog(Vec::new(), Some("sandbox_unavailable")).model_picker(),
+            ModelPicker::NoProviders {
+                error: Some("sandbox_unavailable".into())
+            }
+        );
+    }
+
+    #[test]
+    fn the_model_picker_offers_models_and_their_thinking_levels_once_ready() {
+        let mut state = with_catalog(
+            vec![
+                provider("b", ProviderStatus::Available),
+                provider("a", ProviderStatus::Available),
+            ],
+            Some("one provider failed"),
+        );
+        state.choice = ModelChoice {
+            provider: Some("a".into()),
+            model: Some("y".into()),
+            thinking: ThinkingLevel::High,
+        };
+        let ModelPicker::Choices(picker) = state.model_picker() else {
+            panic!("choices");
+        };
+        assert_eq!(picker.catalog_error.as_deref(), Some("one provider failed"));
+        assert_eq!(picker.selected_provider, Some(1));
+        assert_eq!(picker.provider().map(|p| p.id.as_str()), Some("a"));
+        assert_eq!(
+            picker.model_row,
+            ModelRow::Problem("Loading A's models…".into())
+        );
+        state.models.insert(
+            "a".into(),
+            vec![
+                model("x", false, vec![ThinkingLevel::Off]),
+                model("y", true, Vec::new()),
+            ],
+        );
+        let ModelPicker::Choices(picker) = state.model_picker() else {
+            panic!("choices");
+        };
+        assert_eq!(
+            picker.model_row,
+            ModelRow::Ready {
+                selected_model: Some(1),
+                thinking: ThinkingLevel::ALL.to_vec(),
+                selected_thinking: Some(4),
+            },
+            "a model that lists no levels offers them all"
+        );
+        assert_eq!(picker.models[1].picker_label(), "Y (reasoning)");
+        assert_eq!(picker.models[0].picker_label(), "X");
+    }
+
+    #[test]
+    fn the_model_picker_leaves_an_unusable_provider_to_the_provider_row() {
+        let mut state = with_catalog(vec![provider("a", ProviderStatus::Restricted)], None);
+        state.choice.provider = Some("a".into());
+        let ModelPicker::Choices(picker) = state.model_picker() else {
+            panic!("choices");
+        };
+        assert_eq!(picker.model_row, ModelRow::Hidden);
+        state.choice.provider = None;
+        let ModelPicker::Choices(picker) = state.model_picker() else {
+            panic!("choices");
+        };
+        assert_eq!(picker.selected_provider, None);
+        assert_eq!(
+            picker.model_row,
+            ModelRow::Problem("Choose a model provider.".into())
         );
     }
 
