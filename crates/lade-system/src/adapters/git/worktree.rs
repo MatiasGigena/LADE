@@ -255,3 +255,51 @@ fn restore_gitfile(worktree: &Worktree) -> Result<()> {
     }
     fs::write(&gitfile, expected).map_err(io)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::super::fixtures::{head, objective};
+    use super::*;
+    use crate::adapters_support::{TempDir, init_repo};
+
+    #[test]
+    fn worktree_add_open_and_remove() {
+        let tmp = TempDir::new("worktree");
+        let repo = Repository::open(&init_repo(tmp.path(), "sha1")).unwrap();
+        let wt = objective(&repo, tmp.path(), "obj-1");
+        assert!(wt.path().join("README").is_file());
+        assert!(
+            wt.admin_dir()
+                .starts_with(repo.common_dir().join("worktrees"))
+        );
+        assert_eq!(repo.open_worktree(wt.path()).unwrap(), wt);
+        assert!(repo.resolve_ref("refs/heads/lade/obj-1").unwrap().is_some());
+        assert!(matches!(
+            repo.worktree_add(
+                "lade/obj-1",
+                &head(&repo, repo.work_tree()),
+                &tmp.path().join("again")
+            ),
+            Err(GitError::Failed { .. })
+        ));
+
+        fs::write(wt.path().join("scratch.txt"), "dirty").unwrap();
+        fs::write(wt.path().join(".git"), "gitdir: /nonexistent\n").unwrap();
+        assert!(matches!(
+            repo.worktree_remove(&wt, false),
+            Err(GitError::WorktreeDirty)
+        ));
+        repo.worktree_remove(&wt, true).expect("forced remove");
+        assert!(!wt.path().exists());
+        assert!(matches!(
+            repo.open_worktree(wt.path()),
+            Err(GitError::WorktreeNotFound)
+        ));
+
+        let clean = objective(&repo, tmp.path(), "obj-2");
+        repo.worktree_remove(&clean, false).expect("clean remove");
+        assert!(!clean.path().exists());
+    }
+}

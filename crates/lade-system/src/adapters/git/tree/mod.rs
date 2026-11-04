@@ -474,3 +474,6 @@ fn read_until_bounded(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

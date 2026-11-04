@@ -395,3 +395,6 @@ fn worktree_status(worktree: &Worktree) -> Result<(bool, bool)> {
     }
     Ok((dirty, untracked))
 }
+
+#[cfg(test)]
+mod tests;

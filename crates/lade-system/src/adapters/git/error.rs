@@ -149,3 +149,136 @@ impl fmt::Display for GitError {
 }
 
 impl std::error::Error for GitError {}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::*;
+
+    fn every_variant() -> Vec<GitError> {
+        let path = PathBuf::from("/repo");
+        let version = |minor| GitVersion::new(2, minor, 0);
+        vec![
+            GitError::Spawn {
+                op: "status",
+                kind: io::ErrorKind::NotFound,
+            },
+            GitError::Io {
+                op: "read",
+                kind: io::ErrorKind::BrokenPipe,
+            },
+            GitError::Failed {
+                op: "commit-tree",
+                exit_code: Some(128),
+                stderr: Diagnostics::default(),
+            },
+            GitError::OutputLimit {
+                op: "diff",
+                limit: 1,
+            },
+            GitError::Parse {
+                op: "version",
+                what: "version",
+            },
+            GitError::NotRepository,
+            GitError::NotTopLevel,
+            GitError::BareRepository,
+            GitError::UnsupportedObjectFormat,
+            GitError::UnsupportedVersion {
+                found: version(30),
+                required: version(36),
+            },
+            GitError::InvalidRefName,
+            GitError::InvalidPath,
+            GitError::InvalidId,
+            GitError::InvalidArgument { what: "query" },
+            GitError::NotFound { what: "branch" },
+            GitError::NotABlob,
+            GitError::StaleRef {
+                refname: "refs/heads/main".into(),
+                current: None,
+            },
+            GitError::WorktreeNotFound,
+            GitError::WorktreeDirty,
+            GitError::TargetMoved { current: None },
+            GitError::TargetDirty {
+                worktree: path.clone(),
+            },
+            GitError::TargetBusy {
+                worktree: path.clone(),
+                reason: TargetBusyReason::IndexLocked,
+            },
+            GitError::TargetUntracked {
+                worktree: path.clone(),
+                paths: Vec::new(),
+                stderr: Diagnostics::default(),
+            },
+            GitError::TargetWorktreeUnavailable {
+                worktree: path.clone(),
+            },
+            GitError::CheckoutFailed {
+                worktree: path,
+                reverted: true,
+                stderr: Diagnostics::default(),
+            },
+        ]
+    }
+
+    #[test]
+    fn every_error_has_its_own_stable_code() {
+        let errors = every_variant();
+        let codes: HashSet<_> = errors.iter().map(GitError::code).collect();
+        assert_eq!(codes.len(), errors.len(), "codes are distinct");
+        assert!(
+            codes
+                .iter()
+                .all(|c| c.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'))
+        );
+    }
+
+    #[test]
+    fn messages_start_with_the_code_and_name_the_operation_never_the_output() {
+        for error in every_variant() {
+            assert!(error.to_string().starts_with(error.code()), "{error}");
+        }
+        let failed = GitError::Failed {
+            op: "commit-tree",
+            exit_code: Some(128),
+            stderr: Diagnostics::default(),
+        };
+        assert_eq!(failed.to_string(), "git_failed (commit-tree, exit 128)");
+        let signalled = GitError::Failed {
+            op: "gc",
+            exit_code: None,
+            stderr: Diagnostics::default(),
+        };
+        assert_eq!(signalled.to_string(), "git_failed (gc, signal)");
+        let old = GitError::UnsupportedVersion {
+            found: GitVersion::new(2, 30, 1),
+            required: GitVersion::new(2, 36, 0),
+        };
+        assert_eq!(
+            old.to_string(),
+            "unsupported_git_version (found 2.30.1, requires 2.36.0)"
+        );
+        assert_eq!(
+            GitError::NotFound { what: "branch" }.to_string(),
+            "not_found (branch)"
+        );
+        assert_eq!(GitError::WorktreeDirty.to_string(), "worktree_dirty");
+    }
+
+    #[test]
+    fn only_command_failures_carry_diagnostics() {
+        let with_stderr: Vec<_> = every_variant()
+            .into_iter()
+            .filter(|e| e.stderr().is_some())
+            .map(|e| e.code())
+            .collect();
+        assert_eq!(
+            with_stderr,
+            ["git_failed", "target_untracked", "checkout_failed"]
+        );
+    }
+}
