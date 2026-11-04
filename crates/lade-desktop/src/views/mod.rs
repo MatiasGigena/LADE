@@ -1,5 +1,4 @@
 mod activity;
-pub mod bridge;
 mod dialogs;
 mod header;
 mod inspector;
@@ -36,6 +35,7 @@ use crate::presentation::state::model::{
     Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice,
 };
 use crate::presentation::state::store::{Change, MainView, Store, StoreUpdate, ViewerContent};
+use crate::transport::bridge;
 
 const CSS: &str = include_str!("../assets/style.css");
 

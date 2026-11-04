@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use gtk4::glib;
 
+use super::connection::UpdateSink;
 use crate::presentation::state::store::{Store, StoreUpdate};
 
 const DRAIN_BATCH: usize = 512;
@@ -53,6 +54,12 @@ impl UpdateSender {
             let shared = self.shared.clone();
             glib::idle_add_once(move || drain(&shared));
         }
+    }
+}
+
+impl UpdateSink for UpdateSender {
+    fn deliver(&self, update: StoreUpdate) -> bool {
+        self.send(update).is_ok()
     }
 }
 

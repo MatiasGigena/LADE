@@ -1,4 +1,5 @@
 pub mod agent_session;
+pub mod bridge;
 pub mod connection;
 pub mod convert;
 pub mod core;
@@ -10,14 +11,6 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use connection::{Config, Input, UpdateSink};
 
 use crate::presentation::controller::intents::{Intent, IntentSink};
-use crate::presentation::state::store::StoreUpdate;
-use crate::views::bridge::UpdateSender;
-
-impl UpdateSink for UpdateSender {
-    fn deliver(&self, update: StoreUpdate) -> bool {
-        self.send(update).is_ok()
-    }
-}
 
 pub struct Transport {
     tx: Sender<Input>,
