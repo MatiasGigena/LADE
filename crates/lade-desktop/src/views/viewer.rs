@@ -369,12 +369,16 @@ impl Viewer {
                 ViewLineKind::Separator => "sep",
                 _ => continue,
             };
-            let Some(start) = self.buffer.iter_at_line(index as i32) else {
+            // GTK addresses lines with i32; a line past that range has no iterator either.
+            let Ok(index) = i32::try_from(index) else {
+                break;
+            };
+            let Some(start) = self.buffer.iter_at_line(index) else {
                 continue;
             };
             let end = self
                 .buffer
-                .iter_at_line(index as i32 + 1)
+                .iter_at_line(index + 1)
                 .unwrap_or_else(|| self.buffer.end_iter());
             self.buffer.apply_tag_by_name(tag, &start, &end);
         }

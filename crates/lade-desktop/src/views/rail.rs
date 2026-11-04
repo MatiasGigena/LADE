@@ -121,7 +121,7 @@ impl Rail {
         row
     }
 
-    fn list(&self, objectives: &[&ObjectiveSummary], name: &str) -> gtk::ListBox {
+    fn list(objectives: &[&ObjectiveSummary], name: &str) -> gtk::ListBox {
         let list = gtk::ListBox::new();
         list.add_css_class("objective-list");
         list.set_selection_mode(gtk::SelectionMode::Single);
@@ -162,7 +162,7 @@ impl Rail {
             let name = format::attention_label(*attention);
             let heading = widgets::heading(name, "group-heading");
             group.append(&heading);
-            let list = self.list(objectives, name);
+            let list = Self::list(objectives, name);
             group.append(&list);
             self.content.append(&group);
             lists.push((
@@ -174,7 +174,7 @@ impl Rail {
             ));
         }
         if !board.archive.is_empty() {
-            let list = self.list(&board.archive, "Completed and discarded");
+            let list = Self::list(&board.archive, "Completed and discarded");
             let controller = self.controller.clone();
             let archive = widgets::disclosure(
                 &format!("Completed and discarded ({})", board.archive.len()),
