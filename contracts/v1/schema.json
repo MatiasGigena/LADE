@@ -972,13 +972,29 @@
       "required": ["objective_id", "capture_id"],
       "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "capture_id": {"$ref": "#/$defs/Id"}}
     },
+    "NoticeCode": {
+      "enum": [
+        "lease_held",
+        "link_overflow",
+        "recovery",
+        "execution_failed",
+        "limit_reached",
+        "worker_error",
+        "worker_protocol_violation",
+        "session_command_timeout",
+        "candidate_invalidated",
+        "storage_ok",
+        "storage_low",
+        "storage_critical"
+      ]
+    },
     "ServiceNotice": {
       "type": "object",
       "additionalProperties": false,
       "required": ["level", "code", "message"],
       "properties": {
         "level": {"enum": ["info", "warning", "error"]},
-        "code": {"type": "string", "minLength": 1, "maxLength": 64},
+        "code": {"$ref": "#/$defs/NoticeCode"},
         "message": {"$ref": "#/$defs/ShortText"}
       }
     },

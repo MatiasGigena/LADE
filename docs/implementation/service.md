@@ -161,7 +161,7 @@ Per connection: the peer uid from `SO_PEERCRED` must equal the service uid; at m
 10 s timeout. The first frame must be `hello` (answered with `hello`), the second `auth`; the capability is compared in
 constant time. Anything else, or a wrong capability, closes the link without a reply. The authenticated link is
 handed to the service, which grants the single controlling lease (`welcome {service_epoch, lease_id}`) or — when a
-lease is held — sends one `service.notice {level: error, code: "unauthorized"}` event (sequence `0`) and closes the
+lease is held — sends one `service.notice {level: error, code: "lease_held"}` event (sequence `0`) and closes the
 link. The lease frees when its link closes; the next client re-queries `snapshot`.
 
 After admission, frames are decoded with `decode_client_frame`: a schema-invalid request with a readable
@@ -450,7 +450,7 @@ freeze exclusion, read-only review terminal, lease loss, bounded flood rate, `se
 
 A second client never gets authority: the window application is single-instance on the session bus (a second
 launch activates the existing window), and the service refuses any second link while the lease is held (one
-`service.notice {code: unauthorized}`, then the link closes).
+`service.notice {code: lease_held}`, then the link closes).
 
 ## Diagnostics
 

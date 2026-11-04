@@ -35,8 +35,9 @@ use std::time::Duration;
 use lade_core::domain::ids::{CandidateId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{
-    ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeLevel, Outcome, Rejection,
-    Reply, ReplyData, ReplyResult, RequestFrame, RequestName, SafeAction, ServiceNotice, Settings,
+    ClientBody, ClientEnvelope, ErrorCode, Event, EventFrame, NoticeCode, NoticeLevel, Outcome,
+    Rejection, Reply, ReplyData, ReplyResult, RequestFrame, RequestName, SafeAction, ServiceNotice,
+    Settings,
 };
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter, Id};
 use lade_protocol::worker::WorkerResources;
@@ -595,7 +596,7 @@ impl Service {
                         0,
                         Event::ServiceNotice(ServiceNotice {
                             level: NoticeLevel::Error,
-                            code: "unauthorized".into(),
+                            code: NoticeCode::LeaseHeld,
                             message: "another client holds the controlling lease".into(),
                         }),
                     );
@@ -621,7 +622,7 @@ impl Service {
                     self.announce_dialogs();
                     self.announce_storage(false);
                     for note in std::mem::take(&mut self.recovery_notes) {
-                        self.notice(NoticeLevel::Warning, "recovery", &note);
+                        self.notice(NoticeLevel::Warning, NoticeCode::Recovery, &note);
                     }
                 } else {
                     out.close();
@@ -690,7 +691,7 @@ impl Service {
             self.sequence,
             Event::ServiceNotice(ServiceNotice {
                 level: NoticeLevel::Warning,
-                code: "link_overflow".into(),
+                code: NoticeCode::LinkOverflow,
                 message: why.into(),
             }),
         );
@@ -701,10 +702,10 @@ impl Service {
         controller.out.close_with(notice);
     }
 
-    pub(crate) fn notice(&mut self, level: NoticeLevel, code: &str, message: &str) {
+    pub(crate) fn notice(&mut self, level: NoticeLevel, code: NoticeCode, message: &str) {
         self.emit(Event::ServiceNotice(ServiceNotice {
             level,
-            code: convert::preview(code, 64),
+            code,
             message: convert::preview(message, 512),
         }));
     }

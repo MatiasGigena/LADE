@@ -684,7 +684,7 @@ pub fn search_result(r: &wire::SearchResult) -> view::SearchResult {
 pub fn notice(n: &wire::ServiceNotice) -> view::ServiceNotice {
     view::ServiceNotice {
         level: notice_level(n.level),
-        code: n.code.clone(),
+        code: n.code.as_str().to_owned(),
         message: n.message.clone(),
         scope: view::NoticeScope::General,
     }

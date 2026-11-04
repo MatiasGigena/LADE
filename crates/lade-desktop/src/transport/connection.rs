@@ -11,7 +11,9 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lade_protocol::client::{ClientBody, ClientEnvelope, ErrorCode, Event, Rejection, SafeAction};
+use lade_protocol::client::{
+    ClientBody, ClientEnvelope, ErrorCode, Event, NoticeCode, Rejection, SafeAction,
+};
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Capability, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError, WireError};
 
@@ -202,7 +204,9 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
         ClientBody::Welcome { service_epoch, .. } => service_epoch,
         ClientBody::Event(frame) => {
             return Err(match frame.event {
-                Event::ServiceNotice(n) if n.code == "unauthorized" => ConnectError::LeaseHeld,
+                Event::ServiceNotice(n) if n.code == NoticeCode::LeaseHeld => {
+                    ConnectError::LeaseHeld
+                }
                 _ => ConnectError::Protocol("unexpected event before welcome".into()),
             });
         }

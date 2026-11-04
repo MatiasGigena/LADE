@@ -8,8 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::client::{
-    self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeLevel, Reply, ReplyData,
-    Request, ServiceNotice,
+    self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeCode, NoticeLevel, Reply,
+    ReplyData, Request, ServiceNotice,
 };
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
@@ -212,7 +212,7 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
             sequence: Counter::new(0),
             event: Event::ServiceNotice(ServiceNotice {
                 level: NoticeLevel::Error,
-                code: "unauthorized".into(),
+                code: NoticeCode::LeaseHeld,
                 message: "another client holds the controlling lease".into(),
             }),
         }));

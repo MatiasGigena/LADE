@@ -724,6 +724,33 @@ wire_enum!(NoticeLevel {
     Error,
 });
 
+macro_rules! notice_codes {
+    ($($variant:ident = $code:literal,)*) => {
+        /// What a `service.notice` reports; `as_str` is the wire code.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        pub enum NoticeCode { $(#[serde(rename = $code)] $variant),* }
+        impl NoticeCode {
+            pub const fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $code),* }
+            }
+        }
+    };
+}
+notice_codes! {
+    LeaseHeld = "lease_held",
+    LinkOverflow = "link_overflow",
+    Recovery = "recovery",
+    ExecutionFailed = "execution_failed",
+    LimitReached = "limit_reached",
+    WorkerError = "worker_error",
+    WorkerProtocolViolation = "worker_protocol_violation",
+    SessionCommandTimeout = "session_command_timeout",
+    CandidateInvalidated = "candidate_invalidated",
+    StorageOk = "storage_ok",
+    StorageLow = "storage_low",
+    StorageCritical = "storage_critical",
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ActionName {
     #[serde(rename = "objective.update_intent")]
@@ -1289,7 +1316,7 @@ wire_struct!(WorktreeChanged {
 });
 wire_struct!(ServiceNotice {
     level: NoticeLevel,
-    code: String,
+    code: NoticeCode,
     message: String,
 });
 

@@ -129,7 +129,7 @@ fn second_client_is_refused_and_lease_frees_on_disconnect() {
     let refused = Client::connect(&env.socket(), &env.capability())
         .err()
         .expect("second client refused");
-    assert!(refused.contains("unauthorized"), "{refused}");
+    assert!(refused.contains("LeaseHeld"), "{refused}");
     assert!(first.call(Request::Snapshot(Empty {})).is_ok());
     drop(first);
     let mut again = service_support::eventually("lease released", || {

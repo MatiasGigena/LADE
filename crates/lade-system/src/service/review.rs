@@ -11,7 +11,7 @@ use lade_core::domain::review::{
     ApproveCandidate, IntegrationPlan, NewCandidate, NewVerification, RefreshOutcome, RefreshResult,
 };
 use lade_protocol::client::{
-    CandidateCommand, ErrorCode, Event, NoticeLevel, ObjectiveCleanupCommand,
+    CandidateCommand, ErrorCode, Event, NoticeCode, NoticeLevel, ObjectiveCleanupCommand,
     ObjectiveHistoryDeleteCommand, Rejection, ReplyData, ReviewApproveCommand,
     ReviewIntegrateCommand, ReviewVerifyCommand, SafeAction,
 };
@@ -211,7 +211,7 @@ impl Service {
                 if changed {
                     self.notice(
                         NoticeLevel::Warning,
-                        "candidate_invalidated",
+                        NoticeCode::CandidateInvalidated,
                         "the worktree changed while freezing; the candidate lost review authority",
                     );
                 }

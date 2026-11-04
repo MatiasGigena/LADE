@@ -12,9 +12,10 @@ use std::time::{Duration, Instant};
 use lade_core::domain::execution::{ExecutionGeneration, ExecutionState, ModelRef};
 use lade_core::domain::ids::{ObjectiveId, SessionId, Timestamp};
 use lade_protocol::client::{
-    Empty, ErrorCode, Event, NoticeLevel, Rejection, ReplyData, SafeAction, SessionCompactCommand,
-    SessionConfigureCommand, SessionExport, SessionForkCommand, SessionImportCommand,
-    SessionNavigateCommand, SessionState, SessionTree, UiClosed, UiRequest, UiRespondCommand,
+    Empty, ErrorCode, Event, NoticeCode, NoticeLevel, Rejection, ReplyData, SafeAction,
+    SessionCompactCommand, SessionConfigureCommand, SessionExport, SessionForkCommand,
+    SessionImportCommand, SessionNavigateCommand, SessionState, SessionTree, UiClosed, UiRequest,
+    UiRespondCommand,
 };
 use lade_protocol::types::{
     Counter, Id, Model, SessionChangeReason, ThinkingLevel, TreeEntry, UiCloseReason, UiPrompt,
@@ -890,7 +891,7 @@ impl Service {
                 );
                 self.notice(
                     NoticeLevel::Warning,
-                    "session_command_timeout",
+                    NoticeCode::SessionCommandTimeout,
                     "A session operation timed out.",
                 );
                 self.dispatch_queued(oid, None);

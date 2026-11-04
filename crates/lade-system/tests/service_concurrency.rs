@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use lade_protocol::client::{
     ActionName, ApprovalState, Badge, CandidateCommand, ClientBody, ClientEnvelope, Empty,
-    ErrorCode, Event, ExecutionState, Lifecycle, MessageSendCommand, ObjectiveDetail,
+    ErrorCode, Event, ExecutionState, Lifecycle, MessageSendCommand, NoticeCode, ObjectiveDetail,
     ObjectiveSelector, Rejection, ReplyData, Request, RequestFrame, ReviewApproveCommand,
     ReviewIntegrateCommand, TerminalCloseReason, TerminalInputCommand, TerminalOpenCommand,
     TerminalSelector,
@@ -451,7 +451,7 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
     let mut client = env.connect();
     client.wait_event(
         "storage_low",
-        |e| matches!(e, Event::ServiceNotice(n) if n.code == "storage_low"),
+        |e| matches!(e, Event::ServiceNotice(n) if n.code == NoticeCode::StorageLow),
     );
     let ws = open_workspace(&mut client, &env.repo);
     let running = create_objective(&mut client, &ws.workspace_id, "Before pressure").objective_id;
@@ -471,7 +471,7 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
     let mut client = env.connect();
     let notice = client.wait_event(
         "storage_critical",
-        |e| matches!(e, Event::ServiceNotice(n) if n.code == "storage_critical"),
+        |e| matches!(e, Event::ServiceNotice(n) if n.code == NoticeCode::StorageCritical),
     );
     let Event::ServiceNotice(notice) = notice else {
         unreachable!()

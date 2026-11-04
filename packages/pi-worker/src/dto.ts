@@ -197,7 +197,9 @@ export type ActivityDelta = { "objective_id": Id; "item_id": Id; "append_text": 
 
 export type WorktreeChanged = { "objective_id": Id; "capture_id": Id };
 
-export type ServiceNotice = { "level": "info" | "warning" | "error"; "code": string; "message": ShortText };
+export type NoticeCode = "lease_held" | "link_overflow" | "recovery" | "execution_failed" | "limit_reached" | "worker_error" | "worker_protocol_violation" | "session_command_timeout" | "candidate_invalidated" | "storage_ok" | "storage_low" | "storage_critical";
+
+export type ServiceNotice = { "level": "info" | "warning" | "error"; "code": NoticeCode; "message": ShortText };
 
 export type Scope = { "workspace_id": Id; "objective_id": Id; "session_id": Id; "association_revision": Counter };
 

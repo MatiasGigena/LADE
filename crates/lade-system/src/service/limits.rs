@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use lade_core::domain::ids::ObjectiveId;
-use lade_protocol::client::{ErrorCode, NoticeLevel, Rejection, SafeAction};
+use lade_protocol::client::{ErrorCode, NoticeCode, NoticeLevel, Rejection, SafeAction};
 
 use super::Service;
 
@@ -139,7 +139,7 @@ impl Service {
         match self.storage.free_space.level {
             Pressure::Normal if transition => self.notice(
                 NoticeLevel::Info,
-                "storage_ok",
+                NoticeCode::StorageOk,
                 &format!(
                     "The disk that holds LADE's data has {free} MiB free again. New work is \
                      accepted again."
@@ -148,7 +148,7 @@ impl Service {
             Pressure::Normal => {}
             Pressure::Low => self.notice(
                 NoticeLevel::Warning,
-                "storage_low",
+                NoticeCode::StorageLow,
                 &format!(
                     "The disk that holds LADE's data has only {free} MiB free. New agents, \
                      terminals and checks stop below the {} MiB reserve.",
@@ -157,7 +157,7 @@ impl Service {
             ),
             Pressure::Critical => {
                 let detail = self.storage_blocker().unwrap_or_default();
-                self.notice(NoticeLevel::Error, "storage_critical", &detail);
+                self.notice(NoticeLevel::Error, NoticeCode::StorageCritical, &detail);
             }
         }
     }

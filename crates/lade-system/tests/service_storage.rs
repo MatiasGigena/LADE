@@ -2,7 +2,7 @@ mod service_support;
 
 use std::fs;
 
-use lade_protocol::client::{ActionName, Badge, Event, ExecutionState, NoticeLevel};
+use lade_protocol::client::{ActionName, Badge, Event, ExecutionState, NoticeCode, NoticeLevel};
 use service_support::*;
 
 #[test]
@@ -35,7 +35,7 @@ fn exceeding_writable_storage_stops_the_agent_with_limit_reached() {
     assert_eq!(failed.badges.first(), Some(&Badge::LimitReached));
     let notice = client.wait_event(
         "limit notice",
-        |event| matches!(event, Event::ServiceNotice(n) if n.code == "limit_reached"),
+        |event| matches!(event, Event::ServiceNotice(n) if n.code == NoticeCode::LimitReached),
     );
     let Event::ServiceNotice(notice) = notice else {
         unreachable!()

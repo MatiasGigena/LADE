@@ -7,7 +7,7 @@ use lade_core::domain::feedback::{BlockedReason, DeliveryState, DispatchDecision
 use lade_core::domain::ids::{InputId, ObjectiveId, SessionId, Timestamp};
 use lade_protocol::client::{
     ActivityAppended, ActivityDelta, ActivityItem, ErrorCode, Event, ExecutionStartCommand,
-    NoticeLevel, Rejection, ReplyData, SafeAction,
+    NoticeCode, NoticeLevel, Rejection, ReplyData, SafeAction,
 };
 use lade_protocol::types::{ActivityRole, Counter, Id, Model, truncate_utf8};
 use lade_protocol::worker::{MAX_ITEM_TEXT_BYTES, TurnState, WorkerBody};
@@ -342,7 +342,7 @@ impl Service {
                     self.persisted("the launch failure", oid, recorded);
                     self.notice(
                         NoticeLevel::Error,
-                        "execution_failed",
+                        NoticeCode::ExecutionFailed,
                         &format!("execution could not start: {reason}"),
                     );
                     self.system_item(
@@ -407,7 +407,11 @@ impl Service {
             WorkerEvent::Body(body) => self.on_worker_body(oid, generation, body),
             WorkerEvent::ProtocolViolation(code) => {
                 eprintln!("laded: worker protocol violation objective={oid} code={code}");
-                self.notice(NoticeLevel::Error, "worker_protocol_violation", code);
+                self.notice(
+                    NoticeLevel::Error,
+                    NoticeCode::WorkerProtocolViolation,
+                    code,
+                );
                 self.system_item(
                     oid,
                     "Worker link closed",
@@ -531,7 +535,7 @@ impl Service {
                 eprintln!("laded: worker error objective={oid} code={code}");
                 self.notice(
                     NoticeLevel::Warning,
-                    "worker_error",
+                    NoticeCode::WorkerError,
                     &format!("worker reported {code}"),
                 );
                 self.system_item(oid, &format!("Worker error ({code})"), &message, true);
@@ -572,7 +576,7 @@ impl Service {
                 let _ = st
                     .objective_mut()
                     .observe_failure(generation, &reason, ts_now());
-                self.notice(NoticeLevel::Error, "execution_failed", &reason);
+                self.notice(NoticeLevel::Error, NoticeCode::ExecutionFailed, &reason);
             }
             _ => {}
         }
@@ -931,7 +935,7 @@ impl Service {
                 Completed::Done
             });
         }
-        self.notice(NoticeLevel::Error, LIMIT_REACHED, &reason);
+        self.notice(NoticeLevel::Error, NoticeCode::LimitReached, &reason);
         self.system_item(
             oid,
             "Storage limit reached",
