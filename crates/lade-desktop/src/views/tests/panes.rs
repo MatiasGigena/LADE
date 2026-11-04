@@ -3,7 +3,9 @@
 
 use crate::presentation::controller::intents::{Intent, RecordingSink};
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::state::model::{ConnectionState, ObjectiveId};
+use crate::presentation::state::model::{
+    ActivityItem, ActivityItemId, ActivityRole, ConnectionState, ObjectiveId, Timestamp,
+};
 use crate::presentation::state::store::{InspectorTab, MainView, PresentationState};
 use crate::presentation::test_fixture;
 use crate::views::tests::{SETTLE, button_named, descendants, settle, shows};
@@ -287,6 +289,41 @@ fn the_session_sections_show_the_model_and_the_resources_awaiting_approval() {
             "a provider or model choice"
         );
         window.close();
+        app.window.close();
+    });
+}
+
+#[test]
+#[ignore = "requires a graphical display"]
+fn the_activity_log_shows_history_and_streamed_text() {
+    gtk::test_synced(|| {
+        let (app, _) = connected(1440, 900);
+        app.controller.set_view(MainView::Activity);
+        let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
+        app.store.apply(StoreUpdate::ActivityPage {
+            objective_id: id.clone(),
+            items: vec![ActivityItem {
+                item_id: ActivityItemId::new("item-1"),
+                seq: 1,
+                at: Timestamp(1_790_000_000_000),
+                role: ActivityRole::Assistant,
+                title: String::new(),
+                text: "Reading retry.ts".into(),
+                tool_name: None,
+                is_error: false,
+                truncated: false,
+            }],
+            has_more: false,
+        });
+        settle(SETTLE);
+        assert!(shows(&app.activity.root, "Reading retry.ts"));
+        app.store.apply(StoreUpdate::ActivityDelta {
+            objective_id: id,
+            item_id: ActivityItemId::new("item-1"),
+            append_text: " and its tests".into(),
+        });
+        settle(SETTLE);
+        assert!(shows(&app.activity.root, "Reading retry.ts and its tests"));
         app.window.close();
     });
 }
