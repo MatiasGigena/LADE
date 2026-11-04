@@ -240,8 +240,11 @@ fn recordable(rejection: &Rejection) -> bool {
 }
 
 impl Service {
-    /// Builds a service with empty in-memory state and no job threads; `start` then loads the
-    /// durable state and starts the pools.
+    /// Builds a service over `pools` with empty in-memory state; `load_durable` then fills it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separately built resource the service takes ownership of"
+    )]
     fn new(
         config: &ServiceConfig,
         store: Store,
@@ -250,6 +253,7 @@ impl Service {
         launcher: Arc<dyn WorkerLauncher>,
         supervisor_tx: SyncSender<SupervisorEvent>,
         queue_tx: SyncSender<Msg>,
+        pools: jobs::Pools,
     ) -> Self {
         Self {
             store,
@@ -259,7 +263,7 @@ impl Service {
             launcher,
             supervisor_tx,
             queue_tx,
-            pools: jobs::Pools::default(),
+            pools,
             epoch: wire_id(new_uuid()),
             sequence: 0,
             controller: None,

@@ -245,6 +245,7 @@ pub fn start(
         .map_err(|e| StartError::StateDir(format!("artifacts: {}", e.code())))?;
     let (queue_tx, queue_rx) = mpsc::sync_channel::<Msg>(8192);
     let (supervisor_tx, supervisor_rx) = mpsc::sync_channel::<SupervisorEvent>(1024);
+    let pools = jobs::Pools::start().map_err(|e| StartError::Thread("job pool", e))?;
     let mut service = Service::new(
         config,
         store,
@@ -253,12 +254,9 @@ pub fn start(
         launcher,
         supervisor_tx,
         queue_tx.clone(),
+        pools,
     );
-    service.pools = jobs::Pools::start().map_err(|e| StartError::Thread("job pool", e))?;
-    service.load()?;
-    service.load_resources()?;
-    service.load_agent_sessions()?;
-    service.recover()?;
+    service.load_durable()?;
     service.check_free_space();
     eprintln!("laded: limits {}", config.limits);
     let epoch = service.epoch.clone();
@@ -297,6 +295,17 @@ pub fn start(
         epoch,
         _lock: lock,
     })
+}
+
+impl Service {
+    /// Loads the durable state into memory and recovers from an unclean stop. Recovery
+    /// reconciles the loaded Objectives and journal, so it runs last.
+    pub(crate) fn load_durable(&mut self) -> Result<(), StartError> {
+        self.load()?;
+        self.load_resources()?;
+        self.load_agent_sessions()?;
+        self.recover()
+    }
 }
 
 /// Starts the thread that queues a [`Msg::Tick`] every [`TICK`] until the returned sender is

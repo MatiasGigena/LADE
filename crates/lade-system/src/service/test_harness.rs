@@ -19,6 +19,7 @@ use lade_protocol::decode_client_frame;
 use lade_protocol::types::{GitId as WireGitId, Id, Model, WirePath};
 use lade_protocol::worker::WorkerBody;
 
+use super::jobs::Pools;
 use super::link::Controller;
 use super::{Flow, Msg, OpInfo, Paths, ReqCtx, ResourceLimits, Service, ServiceConfig};
 use crate::adapters::artifacts::ArtifactStore;
@@ -145,7 +146,7 @@ impl Harness {
             ensure_private_dir(dir).expect("private dir");
         }
         let launcher = Arc::new(FakeLauncher::default());
-        let (mut service, queue, supervisor) = boot(paths, limits, &launcher, false);
+        let (mut service, queue, supervisor) = boot(paths, limits, &launcher);
         let out = attach(&mut service);
         Self {
             service,
@@ -165,7 +166,7 @@ impl Harness {
     pub fn restart(&mut self) {
         let paths = self.service.paths.clone();
         let limits = self.service.limits.clone();
-        let (mut service, queue, supervisor) = boot(paths, limits, &self.launcher, true);
+        let (mut service, queue, supervisor) = boot(paths, limits, &self.launcher);
         self.out = attach(&mut service);
         self.service = service;
         self.queue = queue;
@@ -395,7 +396,6 @@ fn boot(
     paths: Paths,
     limits: ResourceLimits,
     launcher: &Arc<FakeLauncher>,
-    recover: bool,
 ) -> (Service, Receiver<Msg>, Receiver<SupervisorEvent>) {
     let config = ServiceConfig {
         state_dir: paths.state.clone(),
@@ -418,13 +418,9 @@ fn boot(
         Arc::clone(launcher) as Arc<dyn WorkerLauncher>,
         supervisor_tx,
         queue_tx,
+        Pools::default(),
     );
-    service.load_resources().expect("profile directory");
-    if recover {
-        service.load().expect("load");
-        service.load_agent_sessions().expect("agent sessions");
-        service.recover().expect("recover");
-    }
+    service.load_durable().expect("load durable state");
     service.held = Some(Vec::new());
     (service, queue, supervisor)
 }
