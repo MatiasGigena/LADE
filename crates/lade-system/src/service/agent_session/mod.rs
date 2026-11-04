@@ -97,6 +97,8 @@ fn wire_reason(reason: SessionChangeReason) -> &'static str {
 mod commands;
 mod dialogs;
 mod reports;
+#[cfg(test)]
+mod tests;
 
 impl Service {
     pub(crate) fn load_agent_sessions(&mut self) -> Result<(), StartError> {
