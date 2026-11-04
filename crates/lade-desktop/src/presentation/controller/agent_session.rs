@@ -3,18 +3,15 @@ use std::path::PathBuf;
 use super::Controller;
 use super::intents::Intent;
 use crate::presentation::state::agent_session::{
-    ForkPosition, ModelChoice, Readiness, ThinkingLevel, UiAnswerView,
+    AgentSessionUpdate, ForkPosition, ModelChoice, ProviderStatus, Readiness, ThinkingLevel,
+    UiAnswerView,
 };
 use crate::presentation::state::model::{ExecutionState, ModelRef, ObjectiveId};
 use crate::presentation::state::store::{Change, StoreUpdate};
 
 impl Controller {
-    fn emit_intent(&self, intent: Intent) {
-        self.submit_intent(intent);
-    }
-
     pub fn load_models(&self, provider: Option<String>) {
-        self.emit_intent(Intent::LoadModels { provider });
+        self.emit(Intent::LoadModels { provider });
     }
 
     pub fn choose_model(&self, choice: ModelChoice) {
@@ -23,9 +20,10 @@ impl Controller {
             .as_ref()
             .filter(|p| !self.store.state().agent_session.models.contains_key(*p))
             .cloned();
-        self.store.apply_all(vec![StoreUpdate::AgentSession(
-            crate::presentation::state::agent_session::AgentSessionUpdate::Choice(choice),
-        )]);
+        self.store
+            .apply_all(vec![StoreUpdate::AgentSession(AgentSessionUpdate::Choice(
+                choice,
+            ))]);
         if let Some(provider) = needs_models {
             self.load_models(Some(provider));
         }
@@ -68,10 +66,7 @@ impl Controller {
                     catalog
                         .providers
                         .iter()
-                        .find(|p| {
-                            p.status
-                                == crate::presentation::state::agent_session::ProviderStatus::Available
-                        })
+                        .find(|p| p.status == ProviderStatus::Available)
                         .or_else(|| catalog.providers.first())
                         .map(|p| p.id.clone())
                 });
@@ -92,9 +87,10 @@ impl Controller {
                 .cloned();
             (choice, missing)
         };
-        self.store.apply_all(vec![StoreUpdate::AgentSession(
-            crate::presentation::state::agent_session::AgentSessionUpdate::Choice(choice),
-        )]);
+        self.store
+            .apply_all(vec![StoreUpdate::AgentSession(AgentSessionUpdate::Choice(
+                choice,
+            ))]);
         if let Some(provider) = missing {
             self.load_models(Some(provider));
         }
@@ -129,13 +125,13 @@ impl Controller {
 
     pub fn load_session_tree(&self) -> Result<(), String> {
         let objective_id = self.live_session(true)?;
-        self.emit_intent(Intent::LoadSessionTree { objective_id });
+        self.emit(Intent::LoadSessionTree { objective_id });
         Ok(())
     }
 
     pub fn navigate_session(&self, entry_id: &str) -> Result<(), String> {
         let objective_id = self.live_session(false)?;
-        self.emit_intent(Intent::NavigateSession {
+        self.emit(Intent::NavigateSession {
             objective_id,
             entry_id: entry_id.to_owned(),
         });
@@ -144,7 +140,7 @@ impl Controller {
 
     pub fn fork_session(&self, entry_id: &str, position: ForkPosition) -> Result<(), String> {
         let objective_id = self.live_session(false)?;
-        self.emit_intent(Intent::ForkSession {
+        self.emit(Intent::ForkSession {
             objective_id,
             entry_id: entry_id.to_owned(),
             position,
@@ -154,25 +150,25 @@ impl Controller {
 
     pub fn import_session(&self, path: PathBuf) -> Result<(), String> {
         let objective_id = self.live_session(false)?;
-        self.emit_intent(Intent::ImportSession { objective_id, path });
+        self.emit(Intent::ImportSession { objective_id, path });
         Ok(())
     }
 
     pub fn export_session(&self) -> Result<(), String> {
         let objective_id = self.live_session(true)?;
-        self.emit_intent(Intent::ExportSession { objective_id });
+        self.emit(Intent::ExportSession { objective_id });
         Ok(())
     }
 
     pub fn compact_session(&self) -> Result<(), String> {
         let objective_id = self.live_session(false)?;
-        self.emit_intent(Intent::CompactSession { objective_id });
+        self.emit(Intent::CompactSession { objective_id });
         Ok(())
     }
 
     pub fn reload_session(&self) -> Result<(), String> {
         let objective_id = self.live_session(false)?;
-        self.emit_intent(Intent::ReloadSession { objective_id });
+        self.emit(Intent::ReloadSession { objective_id });
         Ok(())
     }
 
@@ -191,7 +187,7 @@ impl Controller {
             }
             detail.summary.objective_id.clone()
         };
-        self.emit_intent(Intent::ConfigureSession {
+        self.emit(Intent::ConfigureSession {
             objective_id,
             model,
             thinking,
@@ -200,11 +196,11 @@ impl Controller {
     }
 
     pub fn load_resources(&self) {
-        self.emit_intent(Intent::LoadResources);
+        self.emit(Intent::LoadResources);
     }
 
     pub fn decide_resource(&self, name: &str, sha256: &str, approve: bool) {
-        self.emit_intent(Intent::DecideResource {
+        self.emit(Intent::DecideResource {
             name: name.to_owned(),
             sha256: sha256.to_owned(),
             approve,
@@ -212,7 +208,7 @@ impl Controller {
     }
 
     pub fn import_profile(&self, source: PathBuf) {
-        self.emit_intent(Intent::ImportProfile { source });
+        self.emit(Intent::ImportProfile { source });
     }
 
     pub fn answer_dialog(&self, ui_id: &str, answer: UiAnswerView) -> Result<(), String> {
@@ -225,7 +221,7 @@ impl Controller {
             .find(|d| d.ui_id == ui_id)
             .cloned()
             .ok_or_else(|| "The dialog was already closed".to_owned())?;
-        self.emit_intent(Intent::RespondDialog {
+        self.emit(Intent::RespondDialog {
             objective_id: dialog.objective_id,
             ui_id: dialog.ui_id,
             generation: dialog.generation,

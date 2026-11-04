@@ -3,13 +3,13 @@ use std::rc::Rc;
 
 use super::keys::Keymap;
 use super::layout::{LayoutClass, Region};
-use super::state::agent_session::Readiness;
+use super::state::agent_session::{Readiness, ThinkingLevel};
 use super::state::drafts::{DraftEditor, Millis, SaveStatus};
 use super::state::model::{
-    ActionAvailability, ActionName, ApprovalState, Basis, DeliveryMode, DraftId, ExecutionState,
-    Intent as ObjectiveIntent, Load, ModelRef, ObjectiveDetail, ObjectiveId, Reference,
-    ReferenceVersion, RepoPath, SearchResult, SearchResultKind, SearchScope, SessionInfo, Side,
-    VerificationState,
+    ActionAvailability, ActionName, ApprovalState, Basis, CandidateSummary, ChangeStatus,
+    DeliveryMode, DraftId, ExecutionState, Intent as ObjectiveIntent, Load, ModelRef,
+    ObjectiveDetail, ObjectiveId, Reference, ReferenceVersion, RepoPath, SearchResult,
+    SearchResultKind, SearchScope, SessionInfo, Side, VerificationState, VerificationSummary,
 };
 use super::state::store::{
     Change, InspectorTab, MainView, Reveal, Store, ViewerContent, ViewerKey, ViewerMode,
@@ -70,10 +70,6 @@ impl Controller {
 
     fn emit(&self, intent: Intent) {
         self.sink.submit(intent);
-    }
-
-    pub(super) fn submit_intent(&self, intent: Intent) {
-        self.emit(intent);
     }
 
     fn selected(&self) -> Option<ObjectiveId> {
@@ -346,7 +342,7 @@ impl Controller {
                 .get(id)
                 .and_then(Load::loaded)
                 .and_then(|l| l.files.iter().find(|f| &f.path == path))
-                .is_some_and(|f| f.status == super::state::model::ChangeStatus::Deleted);
+                .is_some_and(|f| f.status == ChangeStatus::Deleted);
             (
                 ui.basis,
                 ui.mode,
@@ -771,7 +767,7 @@ impl Controller {
             .ok_or_else(|| "Select an Objective first".to_owned())
     }
 
-    fn current_candidate(&self) -> Result<super::state::model::CandidateSummary, String> {
+    fn current_candidate(&self) -> Result<CandidateSummary, String> {
         self.with_detail(|d| d.current_candidate().cloned())
             .flatten()
             .ok_or_else(|| "There is no current candidate".to_owned())
@@ -805,7 +801,7 @@ impl Controller {
     pub fn start_execution(
         &self,
         model: ModelRef,
-        thinking: Option<super::state::agent_session::ThinkingLevel>,
+        thinking: Option<ThinkingLevel>,
     ) -> Result<(), String> {
         let objective_id = self.selected_or_err()?;
         let is_default = self.store.state().settings.default_model.as_ref() == Some(&model);
@@ -896,7 +892,7 @@ impl Controller {
             let Some(candidate) = d.current_candidate() else {
                 return true;
             };
-            let mut latest: Vec<&super::state::model::VerificationSummary> = Vec::new();
+            let mut latest: Vec<&VerificationSummary> = Vec::new();
             for v in d
                 .verifications
                 .iter()
@@ -1339,16 +1335,16 @@ fn agent_line(d: &ObjectiveDetail, readiness: &Readiness) -> AgentLine {
 mod tests {
     use super::*;
     use crate::presentation::controller::intents::RecordingSink;
-    use crate::presentation::state::store::PresentationState;
+    use crate::presentation::state::model::{AvailableAction, ConnectionState};
+    use crate::presentation::state::store::{PresentationState, StoreUpdate};
     use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
-        let mut state =
-            PresentationState::new(super::super::state::model::ConnectionState::Connected);
+        let mut state = PresentationState::new(ConnectionState::Connected);
         for update in test_fixture::fixture_updates() {
             state.apply(update);
         }
-        state.connection = super::super::state::model::ConnectionState::Connected;
+        state.connection = ConnectionState::Connected;
         let store = Store::new(state);
         let sink = Rc::new(RecordingSink::default());
         (Controller::new(store, sink.clone()), sink)
@@ -1462,7 +1458,6 @@ mod tests {
 
     #[test]
     fn terminal_lifecycle_in_the_controller() {
-        use crate::presentation::state::store::StoreUpdate;
         use crate::presentation::terminal::{TerminalEnd, TerminalMode};
         let (controller, sink) = setup();
         let id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
@@ -1534,9 +1529,11 @@ mod tests {
             cols: 80,
             rows: 24,
         });
-        controller.store.apply(StoreUpdate::Connection(
-            super::super::state::model::ConnectionState::Reconnecting { attempt: 1 },
-        ));
+        controller
+            .store
+            .apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
+                attempt: 1,
+            }));
         assert_eq!(
             controller
                 .store
@@ -1557,9 +1554,7 @@ mod tests {
         sink.intents.borrow_mut().clear();
         controller
             .store
-            .apply(crate::presentation::state::store::StoreUpdate::Connection(
-                super::super::state::model::ConnectionState::LeaseHeld,
-            ));
+            .apply(StoreUpdate::Connection(ConnectionState::LeaseHeld));
         assert!(!controller.exit(StopReason::Logout));
         assert!(
             sink.intents.borrow().is_empty(),
@@ -1644,12 +1639,11 @@ mod tests {
             )
         });
         if let Some((enabled, reason)) = start {
-            d.available_actions
-                .push(super::super::state::model::AvailableAction {
-                    action: ActionName::ExecutionStart,
-                    enabled,
-                    reason: reason.map(str::to_owned),
-                });
+            d.available_actions.push(AvailableAction {
+                action: ActionName::ExecutionStart,
+                enabled,
+                reason: reason.map(str::to_owned),
+            });
         }
         d
     }
@@ -1865,7 +1859,6 @@ mod tests {
     #[test]
     fn draft_removal_waits_for_its_first_save_to_prevent_resurrection() {
         use crate::presentation::state::model::{Draft, DraftState};
-        use crate::presentation::state::store::StoreUpdate;
         let (controller, sink) = setup();
         let objective_id = ObjectiveId::new(test_fixture::MAIN_OBJECTIVE);
         let draft_id = DraftId::new("new-draft");
