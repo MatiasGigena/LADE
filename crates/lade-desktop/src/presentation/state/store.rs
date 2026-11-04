@@ -459,7 +459,7 @@ impl PresentationState {
             .find(|t| &t.objective_id == id)
     }
 
-    fn terminal_by_id(&mut self, terminal_id: &str) -> Option<&mut TerminalSession> {
+    fn terminal_by_id_mut(&mut self, terminal_id: &str) -> Option<&mut TerminalSession> {
         self.terminals
             .iter_mut()
             .find(|t| t.terminal_id.as_deref() == Some(terminal_id))
@@ -1012,7 +1012,7 @@ impl PresentationState {
                 seq,
                 data,
                 dropped,
-            } => match self.terminal_by_id(&terminal_id) {
+            } => match self.terminal_by_id_mut(&terminal_id) {
                 Some(session) => {
                     session.output(seq, &data, dropped);
                     vec![Change::Terminal(session.objective_id.clone())]
@@ -1020,7 +1020,7 @@ impl PresentationState {
                 None => Vec::new(),
             },
             StoreUpdate::TerminalClosed { terminal_id, end } => {
-                match self.terminal_by_id(&terminal_id) {
+                match self.terminal_by_id_mut(&terminal_id) {
                     Some(session) => {
                         session.status = TerminalStatus::Ended(end);
                         vec![Change::Terminal(session.objective_id.clone())]
