@@ -291,3 +291,6 @@ impl Review {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

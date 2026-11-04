@@ -4,6 +4,8 @@
 mod approval;
 mod candidate;
 #[cfg(test)]
+mod fixtures;
+#[cfg(test)]
 mod tests;
 mod verification;
 

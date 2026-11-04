@@ -221,3 +221,218 @@ impl Review {
         Ok(outcome)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::review::fixtures::{approve_cmd, check, frozen, verify};
+    use crate::testing::{candidate_id, digest, ts, verification_id};
+
+    #[test]
+    fn a_newer_passing_run_does_not_hide_an_older_running_check() {
+        let (mut objective, mut review, target) = frozen();
+        review
+            .start_verification(&objective, check(1, &["cargo", "test"]), ts(11))
+            .expect("first check starts");
+        verify(
+            &mut review,
+            &objective,
+            2,
+            &["cargo", "test"],
+            VerificationEnd::Exited { code: 0 },
+        );
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Running);
+        let before = objective.clone();
+        assert_eq!(
+            review.approve(
+                &mut objective,
+                approve_cmd(1, 1, &target, Some("override")),
+                &target,
+                ts(13),
+            ),
+            Err(DomainError::Conflict(
+                "Wait for the running check to finish."
+            ))
+        );
+        assert_eq!(objective, before);
+        assert!(review.approvals().is_empty());
+        review
+            .finish_verification(
+                verification_id(1),
+                VerificationEnd::Exited { code: 1 },
+                None,
+                false,
+                ts(14),
+            )
+            .expect("older check finishes");
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Passed);
+        review
+            .approve(
+                &mut objective,
+                approve_cmd(1, 1, &target, None),
+                &target,
+                ts(15),
+            )
+            .expect("latest completed run permits approval");
+    }
+
+    #[test]
+    fn command_lines_and_labels_are_validated_before_a_check_starts() {
+        let (objective, mut review, _) = frozen();
+        let too_many: Vec<&str> = vec!["x"; MAX_ARGV_ITEMS + 1];
+        let long_arg = "a".repeat(MAX_TEXT_BYTES + 1);
+        for argv in [
+            &[][..],
+            &[""],
+            &["make", "a\0b"],
+            &too_many,
+            &["make", long_arg.as_str()],
+        ] {
+            assert_eq!(
+                review.start_verification(&objective, check(1, argv), ts(11)),
+                Err(DomainError::InvalidRequest("Enter a valid check command.")),
+                "{:?}",
+                argv.len()
+            );
+        }
+        let mut long_label = check(1, &["make"]);
+        long_label.cwd_label = "c".repeat(MAX_TEXT_BYTES + 1);
+        assert!(
+            review
+                .start_verification(&objective, long_label, ts(11))
+                .is_err()
+        );
+        let full: Vec<&str> = vec!["x"; MAX_ARGV_ITEMS];
+        review
+            .start_verification(&objective, check(1, &full), ts(11))
+            .expect("at the item limit");
+        assert_eq!(review.verifications().len(), 1);
+    }
+
+    #[test]
+    fn checks_need_the_current_candidate_and_a_fresh_id() {
+        let (objective, mut review, _) = frozen();
+        let mut other = check(1, &["make"]);
+        other.candidate_id = candidate_id(9);
+        assert_eq!(
+            review.start_verification(&objective, other, ts(11)),
+            Err(DomainError::NotFound("candidate"))
+        );
+        review
+            .start_verification(&objective, check(1, &["make"]), ts(11))
+            .expect("start");
+        assert_eq!(
+            review.start_verification(&objective, check(1, &["make"]), ts(12)),
+            Err(DomainError::Conflict("verification id reused"))
+        );
+        let started = &review.verifications()[0];
+        assert_eq!(
+            (started.outcome, started.started_at, started.ended_at),
+            (VerificationOutcome::Running, ts(11), None)
+        );
+        assert_eq!(started.provenance, Provenance::ServiceObserved);
+    }
+
+    #[test]
+    fn each_way_a_check_ends_maps_to_one_outcome() {
+        let (objective, mut review, _) = frozen();
+        for (n, end, outcome, exit_code) in [
+            (
+                1,
+                VerificationEnd::Exited { code: 0 },
+                VerificationOutcome::Passed,
+                Some(0),
+            ),
+            (
+                2,
+                VerificationEnd::Exited { code: -9 },
+                VerificationOutcome::Failed,
+                Some(-9),
+            ),
+            (
+                3,
+                VerificationEnd::Interrupted,
+                VerificationOutcome::Interrupted,
+                None,
+            ),
+            (4, VerificationEnd::Error, VerificationOutcome::Error, None),
+        ] {
+            review
+                .start_verification(&objective, check(n, &["make"]), ts(11))
+                .expect("start");
+            assert_eq!(
+                review.finish_verification(verification_id(n), end, Some(digest(n)), true, ts(12)),
+                Ok(outcome)
+            );
+            let finished = review.verifications().last().expect("verification");
+            assert_eq!(
+                (finished.exit_code, finished.ended_at, finished.truncated),
+                (exit_code, Some(ts(12)), true)
+            );
+            assert_eq!(finished.output_artifact, Some(digest(n)));
+        }
+        assert_eq!(
+            review.finish_verification(
+                verification_id(9),
+                VerificationEnd::Error,
+                None,
+                false,
+                ts(13)
+            ),
+            Err(DomainError::NotFound("verification"))
+        );
+    }
+
+    #[test]
+    fn evidence_is_the_latest_run_of_each_command_for_that_candidate() {
+        let (objective, mut review, _) = frozen();
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Missing);
+        assert!(!review.verification_failed());
+        verify(
+            &mut review,
+            &objective,
+            1,
+            &["lint"],
+            VerificationEnd::Exited { code: 0 },
+        );
+        verify(
+            &mut review,
+            &objective,
+            2,
+            &["test"],
+            VerificationEnd::Exited { code: 3 },
+        );
+        verify(
+            &mut review,
+            &objective,
+            3,
+            &["lint"],
+            VerificationEnd::Error,
+        );
+        let latest: Vec<VerificationId> = review
+            .latest_verifications(candidate_id(1))
+            .iter()
+            .map(|verification| verification.id)
+            .collect();
+        assert_eq!(latest, [verification_id(3), verification_id(2)]);
+        assert_eq!(review.evidence(candidate_id(1)), Evidence::Failed);
+        assert!(review.verification_failed());
+        assert_eq!(review.evidence(candidate_id(2)), Evidence::Missing);
+        assert!(review.latest_verifications(candidate_id(2)).is_empty());
+    }
+
+    #[test]
+    fn outcome_codes_are_stable() {
+        assert_eq!(
+            [
+                VerificationOutcome::Running,
+                VerificationOutcome::Passed,
+                VerificationOutcome::Failed,
+                VerificationOutcome::Interrupted,
+                VerificationOutcome::Error,
+            ]
+            .map(VerificationOutcome::code),
+            ["running", "passed", "failed", "interrupted", "error"]
+        );
+    }
+}

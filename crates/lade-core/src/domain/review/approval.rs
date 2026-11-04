@@ -276,3 +276,6 @@ impl Review {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
