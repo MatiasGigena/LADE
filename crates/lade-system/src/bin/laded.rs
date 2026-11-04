@@ -6,13 +6,14 @@ use std::sync::Arc;
 
 use rustix::termios::{LocalModes, OptionalActions, Termios, isatty, tcgetattr, tcsetattr};
 
-use lade_system::adapters::sandbox::{OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup};
+use lade_system::adapters::providers::FIXTURE_PROVIDER;
+use lade_system::adapters::sandbox::{
+    FIXTURE_SWITCH, OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup,
+};
 use lade_system::diagnostics;
 use lade_system::service::{self, ResourceLimits, ServiceConfig, StartError};
 use lade_system::storage::{self, backup};
-use lade_system::supervision::credentials::{
-    FIXTURE_PROVIDER, FIXTURE_SWITCH, custom_var, fixture_switch_on, provider_env_vars,
-};
+use lade_system::supervision::credentials::{custom_var, fixture_switch_on, provider_env_vars};
 use lade_system::supervision::secret_service::{
     MAX_SECRET_BYTES, SecretService, valid_provider_id,
 };

@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use adapters_support::{TempDir, git, init_repo, skip_without_sandbox};
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use lade_protocol::worker::{TurnState, WorkerBody};
-use lade_system::adapters::sandbox::SandboxTools;
+use lade_system::adapters::sandbox::{SandboxTools, WORKER_LIMITS};
 use lade_system::supervision::credentials::{CredentialSource, FIXTURE_REFUSED};
 use lade_system::supervision::gateway::{EgressPolicy, EgressRule, default_policies};
 use lade_system::supervision::launcher::{
-    NODE_ARGS, WORKER_LIMITS, default_worker_dir, resolve_node, worker_dir_from,
+    NODE_ARGS, default_worker_dir, resolve_node, worker_dir_from,
 };
 use lade_system::supervision::sweep::read_pidfile;
 use lade_system::supervision::{

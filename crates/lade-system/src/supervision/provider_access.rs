@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use super::credentials::{CredentialSource, FIXTURE_PROVIDER, provider_env_vars};
+use super::credentials::{CredentialSource, provider_env_vars};
 use super::gateway::EgressPolicy;
 use crate::adapters::profile::CustomProvider;
+use crate::adapters::providers::FIXTURE_PROVIDER;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProviderFacts {

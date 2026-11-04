@@ -12,7 +12,7 @@ use lade_protocol::types::{Counter, ThinkingLevel};
 use lade_protocol::worker::Catalog;
 
 use crate::adapters::profile;
-use crate::supervision::credentials::FIXTURE_PROVIDER;
+use crate::adapters::providers::FIXTURE_PROVIDER;
 use crate::supervision::{AccessStatus, AuthKind, LaunchError, ProviderFacts};
 use crate::support::fs::ensure_private_dir;
 

@@ -21,9 +21,10 @@ use lade_protocol::client::{
 use lade_protocol::types::{Capability, Id};
 use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
+use lade_system::adapters::sandbox::FIXTURE_SWITCH;
 use lade_system::service::{self, RunningService, ServiceConfig};
 use lade_system::storage::Store;
-use lade_system::supervision::credentials::{CredentialSource, FIXTURE_SWITCH};
+use lade_system::supervision::credentials::CredentialSource;
 use lade_system::supervision::launcher::PI_FLAGS;
 use lade_system::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,

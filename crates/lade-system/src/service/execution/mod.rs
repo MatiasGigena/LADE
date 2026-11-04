@@ -20,8 +20,9 @@ use lade_protocol::client::{
 use lade_protocol::types::{Id, Model};
 use lade_protocol::worker::WorkerBody;
 
+use crate::adapters::providers::FIXTURE_PROVIDER;
 use crate::storage;
-use crate::supervision::credentials::{FIXTURE_PROVIDER, FIXTURE_REFUSED};
+use crate::supervision::credentials::FIXTURE_REFUSED;
 use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest};
 
 use super::convert::wire_input;

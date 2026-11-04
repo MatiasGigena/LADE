@@ -9,13 +9,10 @@ use std::time::Instant;
 
 use super::secret_service::{Lookup, SecretService};
 use crate::adapters::providers::{BUILT_IN_PROVIDERS, built_in_provider};
+use crate::adapters::sandbox::FIXTURE_SWITCH;
 use crate::support::fs::service_uid;
 
 const MAX_FILE_BYTES: u64 = 64 << 10;
-
-pub use crate::adapters::providers::FIXTURE_PROVIDER;
-
-pub use crate::adapters::sandbox::FIXTURE_SWITCH;
 
 pub const FIXTURE_REFUSED: &str = "lade-fixture is an offline test provider; it is available only \
      when laded runs with LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)";

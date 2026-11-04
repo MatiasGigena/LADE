@@ -9,9 +9,8 @@ use lade_protocol::client::{
 };
 use lade_protocol::types::{Counter, Id};
 
-use crate::supervision::terminal::{
-    MAX_COLS, MAX_ROWS, TERMINAL_LIMITS, Terminal, TerminalExit, TerminalRequest,
-};
+use crate::adapters::sandbox::TERMINAL_LIMITS;
+use crate::supervision::terminal::{MAX_COLS, MAX_ROWS, Terminal, TerminalExit, TerminalRequest};
 
 use super::convert::{conflict, invalid, not_found, parse_uuid, wire_id};
 use super::project::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};

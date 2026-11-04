@@ -75,7 +75,9 @@ crates/
     service/                    # application layer: one module per capability
                                 #   (objectives, feedback, capture, inspect, review,
                                 #   execution, agent_session, models, resources,
-                                #   terminal), dispatch, recovery, convert.rs
+                                #   terminal), dispatch, recovery, convert.rs, and
+                                #   projection/ (summaries, details, offered actions
+                                #   and the reply budget)
     storage/                    # SQLite schema, migrations, rows, backups
     supervision/                # worker launch, egress gateway, credentials, terminals
     adapters/{artifacts,git,profile,providers,sandbox}/
@@ -96,7 +98,7 @@ packaging/                      # matched component bundle and user-service setu
 scripts/                        # build, verification and generator scripts
 ```
 
-`storage` and `supervision` are adapters too, but they sit beside `adapters/` because each is a subsystem with its own state (the database and its migrations; worker processes and their gateways) rather than a single external seam. Lower modules never import `service`: shared primitives live in `support`, and provider facts that profile import and supervision both need live in `adapters/providers.rs`.
+`storage` and `supervision` are adapters too, but they sit beside `adapters/` because each is a subsystem with its own state (the database and its migrations; worker processes and their gateways) rather than a single external seam. Lower modules never import `service`: shared primitives live in `support`, and provider facts that profile import and supervision both need live in `adapters/providers.rs`; `supervision/provider_access.rs` only classifies access and egress from those facts. Constants live in, and are imported from, the module that owns them, never through a re-export.
 
 Split a module into another crate only for a real dependency/test/reuse boundary. `lade-core` has no platform dependencies. `lade-desktop` depends on `lade-protocol`, never on `lade-system` or its SQLite connection. `lade-system` maps protocol data into core transitions. The protocol crate is independent of core and contains no approval authority. Cargo dependency checks enforce crate boundaries; import checks and focused review enforce layers inside a crate.
 

@@ -12,20 +12,17 @@ use std::time::Duration;
 use lade_protocol::worker::WorkerBody;
 
 use super::child::SandboxedChild;
-use super::credentials::{
-    CredentialError, CredentialSource, FIXTURE_PROVIDER, FIXTURE_REFUSED, FIXTURE_SWITCH,
-    ReleasedCredentials,
-};
+use super::credentials::{CredentialError, CredentialSource, FIXTURE_REFUSED, ReleasedCredentials};
 use super::gateway::{EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies};
-use super::providers::{ProviderAccess, ProviderFacts, classify};
+use super::provider_access::{ProviderAccess, ProviderFacts, classify};
 use super::safe_id;
 use super::sweep::sandbox_marker;
 use super::{LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher};
 use crate::adapters::profile::{self, CustomProvider};
-pub use crate::adapters::sandbox::WORKER_LIMITS;
+use crate::adapters::providers::FIXTURE_PROVIDER;
 use crate::adapters::sandbox::{
-    Limits, SandboxCgroups, SandboxSpec, SandboxTools, WorkerLaunch, find_program, run_bounded,
-    sandbox_available, worker_spec,
+    FIXTURE_SWITCH, Limits, SandboxCgroups, SandboxSpec, SandboxTools, WORKER_LIMITS, WorkerLaunch,
+    find_program, run_bounded, sandbox_available, worker_spec,
 };
 use crate::support::fs::ensure_private_dir;
 

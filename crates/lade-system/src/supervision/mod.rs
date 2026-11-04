@@ -3,7 +3,7 @@ pub mod credentials;
 pub mod gateway;
 mod input;
 pub mod launcher;
-pub mod providers;
+pub mod provider_access;
 pub mod secret_service;
 pub mod sweep;
 pub mod terminal;
@@ -21,7 +21,7 @@ pub use launcher::{
     GATEWAY_SOCKET_DIR, LauncherConfig, SandboxLauncher, default_launcher, gateway_socket_path,
     socket_path_fits,
 };
-pub use providers::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
+pub use provider_access::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
 pub use sweep::{SweepReport, sweep_sockets, sweep_stale};
 pub use terminal::{Terminal, TerminalExit, TerminalRequest};
 
@@ -137,7 +137,7 @@ pub trait WorkerLauncher: Send + Sync {
     }
 
     fn provider_access(&self, facts: &ProviderFacts) -> ProviderAccess {
-        providers::classify(
+        provider_access::classify(
             facts,
             &gateway::default_policies(),
             &CredentialSource::empty(),

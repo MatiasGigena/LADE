@@ -6,8 +6,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use adapters_support::{TempDir, skip_without_sandbox};
+use lade_system::adapters::sandbox::TERMINAL_LIMITS;
 use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
-use lade_system::supervision::terminal::{RING_BYTES, TERMINAL_LIMITS, Terminal, TerminalRequest};
+use lade_system::supervision::terminal::{RING_BYTES, Terminal, TerminalRequest};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 

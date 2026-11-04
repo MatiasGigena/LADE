@@ -16,7 +16,6 @@ use super::child::{SandboxedChild, lock};
 use super::input::InputQueue;
 use super::safe_id;
 use super::sweep::sandbox_marker;
-pub use crate::adapters::sandbox::TERMINAL_LIMITS;
 use crate::adapters::sandbox::{
     Limits, SandboxCgroups, SandboxTools, TerminalLaunch, terminal_spec,
 };

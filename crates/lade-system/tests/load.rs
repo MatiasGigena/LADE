@@ -16,7 +16,7 @@ use lade_protocol::client::{
     ServiceStopCommand, Side, StopReason,
 };
 use lade_protocol::types::{Counter, DeliveryMode, Id, ReadLimit, WirePath};
-use lade_system::supervision::credentials::FIXTURE_SWITCH;
+use lade_system::adapters::sandbox::FIXTURE_SWITCH;
 use service_support::*;
 
 fn env_u64(name: &str, default: u64) -> u64 {
