@@ -2,7 +2,7 @@
 //! view value the protocol would refuse from being sent.
 
 use lade_protocol::client as wire;
-use lade_protocol::types::{self, Counter, Id, WirePath};
+use lade_protocol::types::{self, Id, WirePath};
 
 use crate::presentation::state::model as view;
 
@@ -30,10 +30,6 @@ impl Invalid {
 
 pub fn timestamp(t: &types::Timestamp) -> view::Timestamp {
     view::Timestamp(t.unix_ms())
-}
-
-pub fn counter(c: &Counter) -> u64 {
-    c.value()
 }
 
 pub fn id(value: &str, what: &str) -> Result<Id, Invalid> {

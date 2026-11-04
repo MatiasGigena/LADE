@@ -1,8 +1,9 @@
 //! Objectives: summaries, details, candidates, checks, approvals and settings.
 
 use lade_protocol::client as wire;
+use lade_protocol::types::Counter;
 
-use super::{counter, git_id, model, path, timestamp};
+use super::{git_id, model, path, timestamp};
 use crate::presentation::state::model as view;
 use crate::transport::agent_session;
 
@@ -29,7 +30,7 @@ pub(super) fn execution(e: &wire::Execution) -> view::Execution {
             wire::ExecutionState::Cancelled => view::ExecutionState::Cancelled,
             wire::ExecutionState::Failed => view::ExecutionState::Failed,
         },
-        generation: counter(&e.generation),
+        generation: e.generation.value(),
         reason: e.reason.clone(),
     }
 }
@@ -109,7 +110,7 @@ pub fn summary(s: &wire::ObjectiveSummary) -> view::ObjectiveSummary {
         attention: attention(s.attention),
         badges: s.badges.iter().copied().map(badge).collect(),
         updated_at: timestamp(&s.updated_at),
-        revision: counter(&s.revision),
+        revision: s.revision.value(),
     }
 }
 
@@ -123,7 +124,7 @@ pub(super) fn target(t: &wire::TargetRef) -> view::TargetRef {
 pub fn candidate(c: &wire::CandidateSummary) -> view::CandidateSummary {
     view::CandidateSummary {
         candidate_id: view::CandidateId::new(c.candidate_id.as_str()),
-        ordinal: counter(&c.ordinal),
+        ordinal: c.ordinal.value(),
         commit: git_id(&c.commit),
         base_target_commit: git_id(&c.base_target_commit),
         status: match c.status {
@@ -131,9 +132,9 @@ pub fn candidate(c: &wire::CandidateSummary) -> view::CandidateSummary {
             wire::CandidateStatus::Historical => view::CandidateStatus::Historical,
             wire::CandidateStatus::Invalidated => view::CandidateStatus::Invalidated,
         },
-        files: counter(&c.files),
-        added: counter(&c.added),
-        removed: counter(&c.removed),
+        files: c.files.value(),
+        added: c.added.value(),
+        removed: c.removed.value(),
         created_at: timestamp(&c.created_at),
     }
 }
@@ -151,7 +152,7 @@ pub fn verification(v: &wire::VerificationSummary) -> view::VerificationSummary 
             wire::VerificationState::Interrupted => view::VerificationState::Interrupted,
             wire::VerificationState::Error => view::VerificationState::Error,
         },
-        exit_code: v.exit_code.as_ref().map(counter),
+        exit_code: v.exit_code.as_ref().map(Counter::value),
         started_at: timestamp(&v.started_at),
         ended_at: v.ended_at.as_ref().map(timestamp),
         output_tail: v.output_tail.clone(),
@@ -184,14 +185,14 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
             constraints: d.intent.constraints.clone(),
             acceptance: d.intent.acceptance.clone(),
         },
-        intent_revision: counter(&d.intent_revision),
+        intent_revision: d.intent_revision.value(),
         integration_target: target(&d.integration_target),
         start_commit: git_id(&d.start_commit),
         branch: d.branch.clone(),
         session: d.session.as_ref().map(|s| view::SessionInfo {
             session_id: view::SessionId::new(s.session_id.as_str()),
-            association_revision: counter(&s.association_revision),
-            execution_generation: counter(&s.execution_generation),
+            association_revision: s.association_revision.value(),
+            execution_generation: s.execution_generation.value(),
             model: model(&s.model),
             thinking: s.thinking.map(agent_session::thinking),
         }),
@@ -199,11 +200,11 @@ pub fn detail(d: &wire::ObjectiveDetail) -> view::ObjectiveDetail {
         approval: d.approval.as_ref().map(approval),
         verifications: d.verifications.iter().map(verification).collect(),
         change_counts: view::ChangeCounts {
-            files: counter(&d.change_counts.files),
-            added: counter(&d.change_counts.added),
-            removed: counter(&d.change_counts.removed),
+            files: d.change_counts.files.value(),
+            added: d.change_counts.added.value(),
+            removed: d.change_counts.removed.value(),
         },
-        unsent_drafts: counter(&d.unsent_drafts),
+        unsent_drafts: d.unsent_drafts.value(),
         available_actions: d
             .available_actions
             .iter()

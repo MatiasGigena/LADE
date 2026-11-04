@@ -1,7 +1,7 @@
 use lade_protocol::client as wire;
 use lade_protocol::types as wt;
 
-use super::convert::{counter, model};
+use super::convert::model;
 use crate::presentation::state::agent_session::{
     Catalog, ForkPosition, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
     ResourceState, ResourceView, SessionTree, SessionView, ThinkingLevel, TreeNode, UiAnswerView,
@@ -80,7 +80,7 @@ pub fn catalog(c: &wire::ModelCatalog) -> Catalog {
                 },
                 reason: p.reason.clone(),
                 variables: p.variables.clone().unwrap_or_default(),
-                models: counter(&p.models),
+                models: p.models.value(),
             })
             .collect(),
         error: c.error.clone(),
@@ -116,11 +116,11 @@ pub fn session(s: &wire::SessionState) -> (ObjectiveId, SessionView) {
     (
         ObjectiveId::new(s.objective_id.as_str()),
         SessionView {
-            generation: counter(&s.generation),
+            generation: s.generation.value(),
             reason: reason(s.reason).to_owned(),
             model: model(&s.model),
             thinking: thinking(s.thinking),
-            association_revision: s.association_revision.as_ref().map(counter),
+            association_revision: s.association_revision.as_ref().map(wt::Counter::value),
             pi_session_id: s.pi_session_id.clone(),
             leaf_id: s.leaf_id.clone(),
         },
@@ -196,7 +196,7 @@ pub fn dialog(r: &wire::UiRequest) -> UiDialog {
     UiDialog {
         objective_id: ObjectiveId::new(r.objective_id.as_str()),
         ui_id: r.ui_id.as_str().to_owned(),
-        generation: counter(&r.generation),
+        generation: r.generation.value(),
         prompt: match &r.prompt {
             wt::UiPrompt::Confirm { title, message } => UiPromptView::Confirm {
                 title: title.clone(),

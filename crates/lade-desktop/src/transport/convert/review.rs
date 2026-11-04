@@ -5,7 +5,7 @@ use lade_protocol::client as wire;
 use lade_protocol::types::{self, Counter};
 
 use super::objective::target;
-use super::{Invalid, counter, delivery_mode, id, path, side, timestamp, to_path, to_side};
+use super::{Invalid, delivery_mode, id, path, side, timestamp, to_path, to_side};
 use crate::presentation::state::model as view;
 
 pub(super) fn activity_role(r: types::ActivityRole) -> view::ActivityRole {
@@ -21,7 +21,7 @@ pub(super) fn activity_role(r: types::ActivityRole) -> view::ActivityRole {
 pub fn activity_item(i: &wire::ActivityItem) -> view::ActivityItem {
     view::ActivityItem {
         item_id: view::ActivityItemId::new(i.item_id.as_str()),
-        seq: counter(&i.seq),
+        seq: i.seq.value(),
         at: timestamp(&i.at),
         role: activity_role(i.role),
         title: i.title.clone(),
@@ -43,8 +43,8 @@ pub(super) fn changed_file(f: &wire::ChangedFile) -> view::ChangedFile {
             wire::ChangeStatus::Renamed => view::ChangeStatus::Renamed,
             wire::ChangeStatus::TypeChanged => view::ChangeStatus::TypeChanged,
         },
-        added: counter(&f.added),
-        removed: counter(&f.removed),
+        added: f.added.value(),
+        removed: f.removed.value(),
         binary: f.binary,
         filtered: f.filtered == Some(true),
     }
@@ -70,8 +70,8 @@ pub fn change_list(
             .map(|c| view::CandidateId::new(c.as_str())),
         files: l.files.iter().map(changed_file).collect(),
         truncated: l.truncated,
-        total_added: counter(&l.total_added),
-        total_removed: counter(&l.total_removed),
+        total_added: l.total_added.value(),
+        total_removed: l.total_removed.value(),
         notices: l
             .notices
             .iter()
@@ -113,10 +113,10 @@ pub fn file_diff(
             .hunks
             .iter()
             .map(|h| view::DiffHunk {
-                old_start: counter(&h.old_start),
-                old_lines: counter(&h.old_lines),
-                new_start: counter(&h.new_start),
-                new_lines: counter(&h.new_lines),
+                old_start: h.old_start.value(),
+                old_lines: h.old_lines.value(),
+                new_start: h.new_start.value(),
+                new_lines: h.new_lines.value(),
                 lines: h
                     .lines
                     .iter()
@@ -127,11 +127,11 @@ pub fn file_diff(
                             wire::DiffLineKind::Add => view::DiffLineKind::Add,
                             wire::DiffLineKind::Del => view::DiffLineKind::Del,
                         },
-                        old_no: l.old_no.as_ref().map(counter),
-                        new_no: l.new_no.as_ref().map(counter),
+                        old_no: l.old_no.as_ref().map(Counter::value),
+                        new_no: l.new_no.as_ref().map(Counter::value),
                         text: l.text.clone(),
-                        new_byte_start: l.new_byte_start.as_ref().map(counter),
-                        old_byte_start: l.old_byte_start.as_ref().map(counter),
+                        new_byte_start: l.new_byte_start.as_ref().map(Counter::value),
+                        old_byte_start: l.old_byte_start.as_ref().map(Counter::value),
                     })
                     .collect(),
             })
@@ -153,9 +153,9 @@ pub fn file_page(
         path: file.clone(),
         side: requested_side,
         artifact_digest: digest(&c.artifact_digest),
-        total_bytes: counter(&c.total_bytes),
-        offset: counter(&c.offset),
-        length: counter(&c.length),
+        total_bytes: c.total_bytes.value(),
+        offset: c.offset.value(),
+        length: c.length.value(),
         encoding: match c.encoding {
             wire::FileEncoding::Utf8 => view::FileEncoding::Utf8,
             wire::FileEncoding::Binary => view::FileEncoding::Binary,
@@ -184,10 +184,10 @@ pub fn reference(r: &wire::Reference) -> view::Reference {
         path: path(&r.path),
         version: reference_version(&r.version),
         side: side(r.side),
-        byte_start: counter(&r.byte_start),
-        byte_end: counter(&r.byte_end),
+        byte_start: r.byte_start.value(),
+        byte_end: r.byte_end.value(),
         selected_text: r.selected_text.clone(),
-        line_hint: r.line_hint.as_ref().map(counter),
+        line_hint: r.line_hint.as_ref().map(Counter::value),
     }
 }
 
@@ -221,7 +221,7 @@ pub fn draft(d: &wire::Draft) -> view::Draft {
         destination_session_id: view::SessionId::new(d.destination_session_id.as_str()),
         reference: reference(&d.reference),
         body: d.body.clone(),
-        revision: counter(&d.revision),
+        revision: d.revision.value(),
         state: match d.state {
             wire::DraftState::Unsent => view::DraftState::Unsent,
             wire::DraftState::Submitted => view::DraftState::Submitted,
@@ -262,10 +262,10 @@ pub fn search_result(r: &wire::SearchResult) -> view::SearchResult {
             .as_ref()
             .map(|o| view::ObjectiveId::new(o.as_str())),
         path: r.path.as_ref().map(path),
-        line: r.line.as_ref().map(counter),
+        line: r.line.as_ref().map(Counter::value),
         preview: r.preview.clone(),
-        byte_start: r.byte_start.as_ref().map(counter),
-        byte_end: r.byte_end.as_ref().map(counter),
+        byte_start: r.byte_start.as_ref().map(Counter::value),
+        byte_end: r.byte_end.as_ref().map(Counter::value),
     }
 }
 
