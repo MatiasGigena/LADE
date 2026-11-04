@@ -785,8 +785,20 @@ impl Service {
     }
 
     fn on_request(&mut self, conn: u64, frame: RequestFrame) {
-        let digest = frame.canonical_digest();
         let name = frame.request.name();
+        let Ok(digest) = frame.canonical_digest() else {
+            let reply = Reply::rejected(
+                frame.request_id,
+                Some(name),
+                Rejection::new(
+                    ErrorCode::InvalidRequest,
+                    SafeAction::None,
+                    "request payload cannot be represented as JSON",
+                ),
+            );
+            self.send_reply(conn, reply);
+            return;
+        };
         let request_key = frame.request_id.as_str().to_owned();
         if let Some(controller) = self.controller.as_mut() {
             match controller.request_ids.get(&request_key) {

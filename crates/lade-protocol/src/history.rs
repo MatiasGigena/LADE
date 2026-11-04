@@ -18,7 +18,8 @@ impl RequestHistory {
     ///
     /// # Errors
     ///
-    /// - `WireError::InvalidSchema` for a request without an operation id.
+    /// - `WireError::InvalidSchema` for a request without an operation id, or whose payload cannot
+    ///   be represented as JSON.
     /// - `WireError::DuplicateConflict` when the request id or operation id was seen with different
     ///   content.
     /// - `WireError::LimitReached` when the history is full.
@@ -31,7 +32,7 @@ impl RequestHistory {
             return Err(WireError::InvalidSchema);
         };
         let request_id = &request.request_id;
-        let digest = request.canonical_digest();
+        let digest = request.canonical_digest()?;
         if let Some((op, previous)) = self.requests.get(request_id)
             && (op != operation_id || previous != &digest)
         {

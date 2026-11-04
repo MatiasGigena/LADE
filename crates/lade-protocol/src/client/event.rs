@@ -20,8 +20,8 @@ impl<'de> Deserialize<'de> for EventName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawEvent", into = "RawEvent")]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawEvent")]
 pub struct EventFrame {
     pub service_epoch: Id,
     pub sequence: Counter,
@@ -45,14 +45,22 @@ impl TryFrom<RawEvent> for EventFrame {
         })
     }
 }
-impl From<EventFrame> for RawEvent {
-    fn from(frame: EventFrame) -> Self {
-        Self {
-            service_epoch: frame.service_epoch,
-            sequence: frame.sequence,
+impl TryFrom<&EventFrame> for RawEvent {
+    type Error = WireError;
+    fn try_from(frame: &EventFrame) -> Result<Self, WireError> {
+        Ok(Self {
+            service_epoch: frame.service_epoch.clone(),
+            sequence: frame.sequence.clone(),
             name: frame.event.name(),
-            payload: frame.event.payload_value(),
-        }
+            payload: frame.event.payload_value()?,
+        })
+    }
+}
+impl Serialize for EventFrame {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RawEvent::try_from(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
 

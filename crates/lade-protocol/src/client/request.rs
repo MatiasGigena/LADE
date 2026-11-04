@@ -18,14 +18,14 @@ impl<'de> Deserialize<'de> for RequestName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawRequest", into = "RawRequest")]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawRequest")]
 pub struct RequestFrame {
     pub request_id: Id,
     pub operation_id: Option<Id>,
     pub request: Request,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawRequest {
     request_id: Id,
@@ -57,15 +57,18 @@ impl RequestFrame {
     }
     /// SHA-256 of the frame's JSON form without its `request_id`, so a retried operation hashes the
     /// same however its request id was chosen.
-    #[must_use]
-    pub fn canonical_digest(&self) -> [u8; 32] {
+    ///
+    /// # Errors
+    ///
+    /// `WireError::InvalidSchema` when the payload cannot be represented as JSON.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], WireError> {
         let mut content = serde_json::Map::new();
         if let Some(operation_id) = &self.operation_id {
             content.insert("operation_id".into(), operation_id.as_str().into());
         }
         content.insert("name".into(), self.request.name().as_str().into());
-        content.insert("payload".into(), self.request.payload_value());
-        Sha256::digest(Value::Object(content).to_string()).into()
+        content.insert("payload".into(), self.request.payload_value()?);
+        Ok(Sha256::digest(Value::Object(content).to_string()).into())
     }
 }
 impl TryFrom<RawRequest> for RequestFrame {
@@ -78,14 +81,22 @@ impl TryFrom<RawRequest> for RequestFrame {
         )
     }
 }
-impl From<RequestFrame> for RawRequest {
-    fn from(frame: RequestFrame) -> Self {
-        Self {
-            request_id: frame.request_id,
-            operation_id: frame.operation_id,
+impl TryFrom<&RequestFrame> for RawRequest {
+    type Error = WireError;
+    fn try_from(frame: &RequestFrame) -> Result<Self, WireError> {
+        Ok(Self {
+            request_id: frame.request_id.clone(),
+            operation_id: frame.operation_id.clone(),
             name: frame.request.name(),
-            payload: frame.request.payload_value(),
-        }
+            payload: frame.request.payload_value()?,
+        })
+    }
+}
+impl Serialize for RequestFrame {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RawRequest::try_from(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
 
@@ -120,7 +131,10 @@ mod tests {
         )
         .unwrap();
         for frame in [send, read] {
-            assert_eq!(frame.canonical_digest(), digest_of_serialized_frame(&frame));
+            assert_eq!(
+                frame.canonical_digest().unwrap(),
+                digest_of_serialized_frame(&frame)
+            );
         }
     }
 }

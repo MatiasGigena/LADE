@@ -81,8 +81,8 @@ pub use vocabulary::{
     TerminalCloseReason, TerminalMode, VerificationState,
 };
 
-fn to_value(value: &impl Serialize) -> Value {
-    serde_json::to_value(value).expect("wire DTOs serialize to JSON")
+fn to_value(value: &impl Serialize) -> Result<Value, WireError> {
+    serde_json::to_value(value).map_err(|_| WireError::InvalidSchema)
 }
 fn from_value<T: DeserializeOwned>(value: Value) -> Result<T, WireError> {
     serde_json::from_value(value).map_err(|_| WireError::InvalidSchema)
@@ -111,7 +111,12 @@ macro_rules! requests {
             pub const fn name(&self) -> RequestName {
                 match self { $(Request::$variant(_) => RequestName::$variant),* }
             }
-            pub fn payload_value(&self) -> Value {
+            /// The request's payload as JSON.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the payload cannot be represented as JSON.
+            pub fn payload_value(&self) -> Result<Value, WireError> {
                 match self { $(Request::$variant(p) => to_value(p)),* }
             }
             /// Rebuilds the typed request named `name` from its JSON payload.
@@ -131,7 +136,12 @@ macro_rules! requests {
             pub const fn name(&self) -> RequestName {
                 match self { $(ReplyData::$variant(_) => RequestName::$variant),* }
             }
-            pub fn data_value(&self) -> Value {
+            /// The reply data as JSON.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the data cannot be represented as JSON.
+            pub fn data_value(&self) -> Result<Value, WireError> {
                 match self { $(ReplyData::$variant(d) => to_value(d)),* }
             }
             /// Rebuilds the typed reply data for `name` from its JSON value.
@@ -217,7 +227,12 @@ macro_rules! events {
             pub const fn name(&self) -> EventName {
                 match self { $(Event::$variant(_) => EventName::$variant),* }
             }
-            pub fn payload_value(&self) -> Value {
+            /// The event's payload as JSON.
+            ///
+            /// # Errors
+            ///
+            /// `WireError::InvalidSchema` when the payload cannot be represented as JSON.
+            pub fn payload_value(&self) -> Result<Value, WireError> {
                 match self { $(Event::$variant(p) => to_value(p)),* }
             }
             /// Rebuilds the typed event named `name` from its JSON payload.

@@ -5,7 +5,7 @@ use crate::{
     WireError,
     types::{Id, truncate_chars},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 pub const MAX_DETAIL_CHARS: usize = 512;
@@ -52,10 +52,10 @@ enum RawResult {
         stale_drafts: Vec<Id>,
     },
 }
-fn raw_result(data: Result<&ReplyData, &Rejection>) -> RawResult {
-    match data {
+fn raw_result(data: Result<&ReplyData, &Rejection>) -> Result<RawResult, WireError> {
+    Ok(match data {
         Ok(data) => RawResult::Ok {
-            data: data.data_value(),
+            data: data.data_value()?,
         },
         Err(r) => RawResult::Rejected {
             code: r.code,
@@ -63,7 +63,7 @@ fn raw_result(data: Result<&ReplyData, &Rejection>) -> RawResult {
             detail: r.detail.clone(),
             stale_drafts: r.stale_drafts.clone(),
         },
-    }
+    })
 }
 fn typed_result(
     name: RequestName,
@@ -103,8 +103,8 @@ impl ReplyResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawReply", into = "RawReply")]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawReply")]
 pub struct Reply {
     pub request_id: Id,
     pub result: ReplyResult,
@@ -183,22 +183,30 @@ impl TryFrom<RawReply> for Reply {
         })
     }
 }
-impl From<Reply> for RawReply {
-    fn from(reply: Reply) -> Self {
+impl TryFrom<&Reply> for RawReply {
+    type Error = WireError;
+    fn try_from(reply: &Reply) -> Result<Self, WireError> {
         let (name, result) = match &reply.result {
-            ReplyResult::Ok(data) => (Some(data.name()), raw_result(Ok(data))),
-            ReplyResult::Rejected { name, rejection } => (*name, raw_result(Err(rejection))),
+            ReplyResult::Ok(data) => (Some(data.name()), raw_result(Ok(data))?),
+            ReplyResult::Rejected { name, rejection } => (*name, raw_result(Err(rejection))?),
         };
-        Self {
-            request_id: reply.request_id,
+        Ok(Self {
+            request_id: reply.request_id.clone(),
             name,
             result,
-        }
+        })
+    }
+}
+impl Serialize for Reply {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RawReply::try_from(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(try_from = "RawOutcome", into = "RawOutcome")]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(try_from = "RawOutcome")]
 pub enum Outcome {
     Ok(Box<ReplyData>),
     Rejected {
@@ -227,17 +235,25 @@ impl TryFrom<RawOutcome> for Outcome {
         })
     }
 }
-impl From<Outcome> for RawOutcome {
-    fn from(outcome: Outcome) -> Self {
-        match &outcome {
+impl TryFrom<&Outcome> for RawOutcome {
+    type Error = WireError;
+    fn try_from(outcome: &Outcome) -> Result<Self, WireError> {
+        Ok(match outcome {
             Outcome::Ok(data) => Self {
                 name: data.name(),
-                result: raw_result(Ok(data)),
+                result: raw_result(Ok(data))?,
             },
             Outcome::Rejected { name, rejection } => Self {
                 name: *name,
-                result: raw_result(Err(rejection)),
+                result: raw_result(Err(rejection))?,
             },
-        }
+        })
+    }
+}
+impl Serialize for Outcome {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RawOutcome::try_from(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
     }
 }
