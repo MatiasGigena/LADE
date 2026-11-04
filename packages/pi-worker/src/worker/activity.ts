@@ -1,7 +1,7 @@
 import { newId } from "../schema.ts";
 import type { AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { Id } from "../dto.ts";
-import type { ActivityItemBody, ActivityRole, OutboundBody, TurnState } from "./wire.ts";
+import type { ActivityRole, Id, WorkerToService } from "../dto.ts";
+import type { ActivityItemBody, TurnState } from "./wire.ts";
 import { MAX_ERROR_MESSAGE } from "./wire.ts";
 
 export const MAX_ITEM_BYTES = 192 * 1024;
@@ -68,11 +68,11 @@ interface Block { itemId: Id; role: ActivityRole; title: string; sent: number; c
 interface Tool { itemId: Id; name: string; title: string; args: string }
 
 export class ActivityMapper {
-  private readonly send: (body: OutboundBody) => void;
+  private readonly send: (body: WorkerToService) => void;
   private readonly blocks = new Map<number, Block>();
   private readonly tools = new Map<string, Tool>();
   private turn: TurnState = "idle";
-  constructor(send: (body: OutboundBody) => void) { this.send = send; }
+  constructor(send: (body: WorkerToService) => void) { this.send = send; }
 
   handle(event: AgentSessionEvent): void {
     switch (event.type) {

@@ -1,11 +1,16 @@
 import type { Envelope, WorkerBody, WorkerEnvelope } from "./dto.ts";
 import { MAX_FRAME, WireError } from "./json.ts";
 import { BUNDLE, decode, decodeWorkerFrame, validate, validateWorker, VERSION } from "./protocol.ts";
+import { LineDecoder } from "./worker/wire.ts";
 
 export type Framing = "client" | "worker";
 
-export class Decoder<Frame> {
-  private readonly framing: Framing;
+export interface FrameDecoder<Frame> {
+  push(input: Buffer, emit: (frame: Frame) => void): void;
+  finish(): void;
+}
+
+class LengthDecoder<Frame> implements FrameDecoder<Frame> {
   private readonly decodeBody: (bytes: Uint8Array) => Frame;
   private readonly header = Buffer.alloc(4);
   private headerSize = 0;
@@ -13,9 +18,7 @@ export class Decoder<Frame> {
   private size = 0;
   private expected: number | undefined;
   private failed = false;
-  constructor(framing: Framing, decodeBody: (bytes: Uint8Array) => Frame) {
-    this.framing = framing; this.decodeBody = decodeBody;
-  }
+  constructor(decodeBody: (bytes: Uint8Array) => Frame) { this.decodeBody = decodeBody; }
 
   push(input: Buffer, emit: (frame: Frame) => void): void {
     if (this.failed) throw new WireError("closed");
@@ -24,49 +27,28 @@ export class Decoder<Frame> {
       let pos = 0;
 
       while (pos < input.length) {
-        if (this.framing === "client") {
-          if (this.expected === undefined) {
-            const n = Math.min(4 - this.headerSize, input.length - pos);
-            input.copy(this.header, this.headerSize, pos, pos + n);
-            this.headerSize += n; pos += n;
+        if (this.expected === undefined) {
+          const n = Math.min(4 - this.headerSize, input.length - pos);
+          input.copy(this.header, this.headerSize, pos, pos + n);
+          this.headerSize += n; pos += n;
 
-            if (this.headerSize !== 4) continue;
-            const size = this.header.readUInt32BE();
-            this.headerSize = 0;
+          if (this.headerSize !== 4) continue;
+          const size = this.header.readUInt32BE();
+          this.headerSize = 0;
 
-            if (size === 0 || size > MAX_FRAME) throw new WireError("frame_size");
-            this.expected = size;
-            this.body = Buffer.alloc(size);
-          }
+          if (size === 0 || size > MAX_FRAME) throw new WireError("frame_size");
+          this.expected = size;
+          this.body = Buffer.alloc(size);
+        }
 
-          const n = Math.min(this.expected - this.size, input.length - pos);
-          input.copy(this.body, this.size, pos, pos + n);
-          this.size += n; pos += n;
+        const n = Math.min(this.expected - this.size, input.length - pos);
+        input.copy(this.body, this.size, pos, pos + n);
+        this.size += n; pos += n;
 
-          if (this.size === this.expected) {
-            const frame = this.decodeBody(this.body);
-            this.size = 0; this.expected = undefined; this.body = Buffer.alloc(0);
-            emit(frame);
-          }
-        } else {
-          const end = input.indexOf(10, pos);
-          const stop = end < 0 ? input.length : end;
-          const n = stop - pos;
-
-          if (this.size + n > MAX_FRAME) throw new WireError("frame_size");
-
-          if (this.body.length < this.size + n) {
-            const next = Buffer.alloc(Math.min(MAX_FRAME, Math.max(this.size + n, this.body.length * 2, 1024)));
-            this.body.copy(next, 0, 0, this.size); this.body = next;
-          }
-
-          input.copy(this.body, this.size, pos, stop);
-          this.size += n; pos = stop;
-
-          if (end >= 0) {
-            const frame = this.decodeBody(this.body.subarray(0, this.size));
-            this.size = 0; pos++; emit(frame);
-          }
+        if (this.size === this.expected) {
+          const frame = this.decodeBody(this.body);
+          this.size = 0; this.expected = undefined; this.body = Buffer.alloc(0);
+          emit(frame);
         }
       }
     } catch (error) {
@@ -74,6 +56,7 @@ export class Decoder<Frame> {
       throw error;
     }
   }
+
   finish(): void {
     if (this.failed) throw new WireError("closed");
     this.failed = true;
@@ -82,6 +65,10 @@ export class Decoder<Frame> {
 
     if (partial) throw new WireError("truncated_frame");
   }
+}
+
+export function decoder<Frame>(framing: Framing, decodeBody: (bytes: Uint8Array) => Frame): FrameDecoder<Frame> {
+  return framing === "worker" ? new LineDecoder(decodeBody) : new LengthDecoder(decodeBody);
 }
 
 function framed(body: Buffer, framing: Framing): Buffer {
@@ -109,8 +96,4 @@ export function encodeWorker(frame: WorkerEnvelope, framing: Framing): Buffer {
 
 export function encodeWorkerBody(body: WorkerBody): Buffer {
   return encodeWorker({ protocol: VERSION, bundle: BUNDLE, body }, "worker");
-}
-
-export function createWorkerDecoder(): Decoder<WorkerEnvelope> {
-  return new Decoder("worker", decodeWorkerFrame);
 }

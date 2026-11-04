@@ -2,13 +2,13 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionRuntime, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { WorkerErrorCode } from "../dto.ts";
+import type { Model, ThinkingLevel, TreeEntry, WorkerErrorCode, WorkerResources, WorkerToService } from "../dto.ts";
 import { counter } from "../schema.ts";
 import { prefix, safeMessage } from "./activity.ts";
 import { registerTestFixture } from "./fixture.ts";
 import { LadeResourceLoader } from "./resources.ts";
 import type { UiBridge } from "./ui.ts";
-import type { CommandBody, DeliverBody, ModelRef, OutboundBody, ResultBody, StartBody, ThinkingLevel, TreeEntry, WorkerResources } from "./wire.ts";
+import type { CommandBody, DeliverBody, ResultBody, StartBody } from "./wire.ts";
 
 export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
 
@@ -20,7 +20,7 @@ const MAX_LABEL = 200;
 
 type Bindings = Parameters<AgentSession["bindExtensions"]>[0];
 
-type ChangeReason = Extract<OutboundBody, { kind: "session.changed" }>["reason"];
+type ChangeReason = Extract<WorkerToService, { kind: "session.changed" }>["reason"];
 
 export class StartError extends Error {
   readonly code: WorkerErrorCode;
@@ -130,21 +130,21 @@ export class InputGate {
 export class SessionHost {
   readonly gate = new InputGate();
   private readonly start: StartBody;
-  private readonly send: (body: OutboundBody) => void;
+  private readonly send: (body: WorkerToService) => void;
   private readonly ui: UiBridge;
   private readonly observe: (session: AgentSession) => () => void;
   private readonly note: (title: string, text: string, isError: boolean) => void;
   private runtimeHost: AgentSessionRuntime | undefined;
   private loader: LadeResourceLoader | undefined;
   private resources: WorkerResources | undefined;
-  private model: ModelRef;
+  private model: Model;
   private thinking: ThinkingLevel | undefined;
   private reason: ChangeReason = "start";
   private unsubscribe: (() => void) | undefined;
   private busy = false;
   private announced = false;
 
-  constructor(start: StartBody, send: (body: OutboundBody) => void, ui: UiBridge, observe: (session: AgentSession) => () => void, note: (title: string, text: string, isError: boolean) => void) {
+  constructor(start: StartBody, send: (body: WorkerToService) => void, ui: UiBridge, observe: (session: AgentSession) => () => void, note: (title: string, text: string, isError: boolean) => void) {
     this.start = start; this.send = send; this.ui = ui; this.observe = observe; this.note = note;
     this.resources = start.resources; this.model = start.model; this.thinking = start.thinking;
   }
@@ -279,7 +279,7 @@ export class SessionHost {
     if (!this.announced) return;
     const session = this.session;
 
-    const body: Extract<OutboundBody, { kind: "session.changed" }> = {
+    const body: Extract<WorkerToService, { kind: "session.changed" }> = {
       kind: "session.changed",
       generation: counter(this.ui.generation),
       reason,

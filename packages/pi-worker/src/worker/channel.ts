@@ -1,14 +1,14 @@
 import { once } from "node:events";
 import type { EventEmitter } from "node:events";
 import type { Readable } from "node:stream";
-import { encodeOutbound, LineDecoder } from "./wire.ts";
-import type { InboundBody, OutboundBody, WorkerChannel } from "./wire.ts";
+import type { ServiceToWorker, WorkerToService } from "../dto.ts";
+import { encodeOutbound, LineDecoder, parseInbound } from "./wire.ts";
 
 export const DELTA_BUDGET = 4 * 1024 * 1024;
 
 const MAX_COALESCED_DELTA = 64 * 1024;
 
-function weight(body: OutboundBody): number {
+function weight(body: WorkerToService): number {
   switch (body.kind) {
     case "activity.item": return Buffer.byteLength(body.text) + 256;
     case "activity.delta": return Buffer.byteLength(body.append_text) + 128;
@@ -16,18 +16,18 @@ function weight(body: OutboundBody): number {
   }
 }
 
-export class StdioChannel implements WorkerChannel {
+export class StdioChannel {
   private readonly input: Readable;
   private readonly write: (frame: Buffer) => boolean;
   private readonly drains: EventEmitter;
-  private readonly queue: OutboundBody[] = [];
+  private readonly queue: WorkerToService[] = [];
   private queued = 0;
   private flushing: Promise<void> | undefined;
   constructor(input: Readable, write: (frame: Buffer) => boolean, drains: EventEmitter) {
     this.input = input; this.write = write; this.drains = drains;
   }
 
-  send(body: OutboundBody): Promise<void> {
+  send(body: WorkerToService): Promise<void> {
     const last = this.queue.at(-1);
 
     if (body.kind === "activity.delta") {
@@ -61,9 +61,9 @@ export class StdioChannel implements WorkerChannel {
     this.queued = 0;
   }
 
-  async *incoming(): AsyncGenerator<InboundBody> {
-    const decoder = new LineDecoder();
-    const frames: InboundBody[] = [];
+  async *incoming(): AsyncGenerator<ServiceToWorker> {
+    const decoder = new LineDecoder(parseInbound);
+    const frames: ServiceToWorker[] = [];
 
     for await (const chunk of this.input) {
       decoder.push(Buffer.from(chunk), frame => { frames.push(frame); });

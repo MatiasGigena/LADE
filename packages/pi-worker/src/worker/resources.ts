@@ -4,7 +4,8 @@ import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory, LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import { prefix } from "./activity.ts";
-import type { LoadedResource, WorkerResources } from "./wire.ts";
+import type { WorkerResources } from "../dto.ts";
+import type { LoadedResource } from "./wire.ts";
 
 type ExtensionPaths = Parameters<ResourceLoader["extendResources"]>[0];
 

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { boundedJson } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
-import { WORKER_BUNDLE, WORKER_PROTOCOL } from "../src/worker/wire.ts";
+import { BUNDLE, VERSION } from "../src/schema.ts";
 
 export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "worker.ts");
 
@@ -46,7 +46,7 @@ export function text(value: JsonValue | undefined): string {
 }
 
 export function envelope(body: JsonObject): string {
-  return `${JSON.stringify({ protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body })}\n`;
+  return `${JSON.stringify({ protocol: VERSION, bundle: BUNDLE, body })}\n`;
 }
 
 export function startBody(box: Sandbox, resume: boolean): JsonObject {
@@ -88,8 +88,8 @@ export class Worker {
         const frame = record(boundedJson(Buffer.from(this.pending.slice(0, end))));
         this.pending = this.pending.slice(end + 1);
         assert.deepEqual(Object.keys(frame).sort(), ["body", "bundle", "protocol"]);
-        assert.equal(frame.protocol, WORKER_PROTOCOL);
-        assert.equal(frame.bundle, WORKER_BUNDLE);
+        assert.equal(frame.protocol, VERSION);
+        assert.equal(frame.bundle, BUNDLE);
         this.frames.push(record(frame.body));
       }
 

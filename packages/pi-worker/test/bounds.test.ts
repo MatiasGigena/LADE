@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Reassembler } from "../src/chunks.ts";
 import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_TRANSFER, BUNDLE, newId, parseId } from "../src/protocol.ts";
-import { createWorkerDecoder, Decoder, encode, encodeWorkerBody } from "../src/framing.ts";
+import { decoder, encode, encodeWorkerBody } from "../src/framing.ts";
 import type { WorkerBody } from "../src/dto.ts";
 import { RequestHistory } from "../src/history.ts";
 import { boundedJson, WireError, MAX_FRAME, MAX_NODES } from "../src/json.ts";
@@ -37,9 +37,9 @@ test("logical content larger than a frame survives at the reassembly limit", () 
 
   for (let index = 0; index < MAX_TRANSFER / MAX_CHUNK; index++) {
     const data = message({ kind: "chunk.data", transfer_id: id(4), index: String(index), hex: "61".repeat(MAX_CHUNK) });
-    const decoder = new Decoder("worker", decode);
-    decoder.push(encode(data, "worker"), envelope => assert.equal(chunks.accept(envelope.body), undefined));
-    decoder.finish();
+    const lines = decoder("worker", decode);
+    lines.push(encode(data, "worker"), envelope => assert.equal(chunks.accept(envelope.body), undefined));
+    lines.finish();
   }
 
   assert.deepEqual(chunks.accept(message({ kind: "chunk.end", transfer_id: id(4) }).body), bytes);
@@ -72,11 +72,11 @@ test("downstream backpressure stops before later frames", () => {
   for (const framing of ["client", "worker"] as const) {
     const hello = encode(message({ kind: "hello" }), framing);
     const wire = Buffer.concat([hello, hello]);
-    const decoder = new Decoder(framing, decode);
+    const frames = decoder(framing, decode);
     let calls = 0;
-    assert.throws(() => decoder.push(wire, () => { calls++; throw new WireError("limit_reached"); }), { code: "limit_reached" });
+    assert.throws(() => frames.push(wire, () => { calls++; throw new WireError("limit_reached"); }), { code: "limit_reached" });
     assert.equal(calls, 1);
-    assert.throws(() => decoder.push(wire, () => {}), { code: "closed" });
+    assert.throws(() => frames.push(wire, () => {}), { code: "closed" });
   }
 });
 
@@ -97,11 +97,11 @@ test("worker API encodes JSONL lines and decodes them one at a time", () => {
 
   const wire = Buffer.concat(bodies.map(encodeWorkerBody));
   assert.equal(wire.toString().split("\n").length, bodies.length + 1);
-  const decoder = createWorkerDecoder();
+  const lines = decoder("worker", decodeWorkerFrame);
   const received: WorkerBody[] = [];
 
-  for (const byte of wire) decoder.push(Buffer.from([byte]), frame => received.push(frame.body));
-  decoder.finish();
+  for (const byte of wire) lines.push(Buffer.from([byte]), frame => received.push(frame.body));
+  lines.finish();
   assert.deepEqual(JSON.parse(JSON.stringify(received)), bodies);
   assert.ok(received.every(isWorkerToService));
 });

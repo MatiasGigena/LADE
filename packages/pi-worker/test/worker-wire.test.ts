@@ -8,9 +8,10 @@ import { StdioChannel } from "../src/worker/channel.ts";
 import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
 import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
-import type { InboundBody, OutboundBody } from "../src/worker/wire.ts";
+import type { ServiceToWorker, WorkerToService } from "../src/dto.ts";
 import type { JsonObject } from "../src/json.ts";
-import { decodeWorkerFrame, newId, parseId } from "../src/protocol.ts";
+import { newId, parseId } from "../src/schema.ts";
+import { decodeWorkerFrame } from "../src/worker/contract.ts";
 
 const ID = parseId("00000000-0000-4000-8000-000000000001");
 
@@ -31,18 +32,18 @@ test("inbound bodies are closed and exactly typed", () => {
 
 test("LF framing survives byte fragmentation and poisons after an error", () => {
   const wire = Buffer.concat([frame({ kind: "session.abort" }), Buffer.from("\n"), frame({ kind: "worker.shutdown" }), Buffer.from("\n")]);
-  const decoder = new LineDecoder();
-  const seen: InboundBody[] = [];
+  const decoder = new LineDecoder(parseInbound);
+  const seen: ServiceToWorker[] = [];
 
   for (let pos = 0; pos < wire.length; pos++) decoder.push(wire.subarray(pos, pos + 1), body => seen.push(body));
   decoder.finish();
   assert.deepEqual(seen.map(body => body.kind), ["session.abort", "worker.shutdown"]);
 
-  const broken = new LineDecoder();
+  const broken = new LineDecoder(parseInbound);
   assert.throws(() => broken.push(Buffer.from("{oops}\n"), () => {}), { code: "invalid_json" });
   assert.throws(() => broken.push(Buffer.concat([frame({ kind: "session.abort" }), Buffer.from("\n")]), () => {}), { code: "closed" });
 
-  const partial = new LineDecoder();
+  const partial = new LineDecoder(parseInbound);
   partial.push(frame({ kind: "session.abort" }), () => {});
   assert.throws(() => partial.finish(), { code: "truncated_frame" });
 });
@@ -73,7 +74,7 @@ test("streamed text is normalized and bounded before frame encoding", () => {
   };
 
   for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_BYTES)]) {
-    const sent: OutboundBody[] = [];
+    const sent: WorkerToService[] = [];
     const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
     assert.doesNotThrow(() => mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } }));
     const streamed = sent.find(body => body.kind === "activity.delta");
@@ -81,7 +82,7 @@ test("streamed text is normalized and bounded before frame encoding", () => {
     assert.equal(streamed.append_text, boundText(delta).text);
   }
 
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
 
   for (const delta of ["before \uD83D", "\uDE00 after"]) mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } });
@@ -177,7 +178,7 @@ test("frames queued while a drain settles are still written", async () => {
 
 test("character-bounded titles, labels and messages never end in half a surrogate pair", async () => {
   const emoji = "\u{1F600}";
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const mapper = new ActivityMapper(body => { sent.push(body); });
   mapper.handle({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: emoji.repeat(100) } });
   mapper.system(emoji.repeat(150), "text", false);
@@ -196,7 +197,7 @@ test("character-bounded titles, labels and messages never end in half a surrogat
 });
 
 test("select answers map back to the full option and an empty choice is refused", async () => {
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const ui = new UiBridge(body => { sent.push(body); }, () => {});
   const long = `${"o".repeat(600)}`;
   const chosen = ui.context().select("pick", ["short", long]);
@@ -210,7 +211,7 @@ test("select answers map back to the full option and an empty choice is refused"
 });
 
 test("select options that share a clipped prefix remain separately selectable", async () => {
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const ui = new UiBridge(body => { sent.push(body); }, () => {});
   const common = "o".repeat(600);
   const options = [`${common} first`, `${common} second`];

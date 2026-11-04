@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
 import { boundedJson, WireError } from "../src/json.ts";
 import { BUNDLE, decode, decodeWorkerFrame } from "../src/protocol.ts";
-import { Decoder, encode, encodeWorker } from "../src/framing.ts";
+import { decoder, encode, encodeWorker } from "../src/framing.ts";
 import type { Framing } from "../src/framing.ts";
 import { Reassembler } from "../src/chunks.ts";
 import { RequestHistory } from "../src/history.ts";
@@ -85,15 +85,15 @@ function reassemblyContext(fixture: Fixture) {
 }
 
 function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
-  const decoder = new Decoder(framing, codec.decode);
+  const frames = decoder(framing, codec.decode);
   let count = 0;
 
   return outcome(() => {
     for (let pos = 0; pos < bytes.length; pos += stride) {
       try {
-        decoder.push(bytes.subarray(pos, pos + stride), message => {
+        frames.push(bytes.subarray(pos, pos + stride), message => {
           count++;
-          const other = new Decoder(framing, codec.decode);
+          const other = decoder(framing, codec.decode);
           other.push(codec.encode(message, framing), decoded => assert.deepEqual(decoded, message));
           other.finish();
         });
@@ -101,14 +101,14 @@ function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, str
         assert.ok(error instanceof WireError, "invalid bytes must produce a protocol rejection");
         assert.equal(count, 0, "invalid input must not emit a command");
         const valid = framed(codec.valid, framing);
-        assert.equal(outcome(() => decoder.push(valid, () => { count++; })), "closed");
-        assert.equal(outcome(() => decoder.finish()), "closed");
+        assert.equal(outcome(() => frames.push(valid, () => { count++; })), "closed");
+        assert.equal(outcome(() => frames.finish()), "closed");
         assert.equal(count, 0, "a failed connection must not deliver later valid messages");
         throw error;
       }
     }
 
-    decoder.finish();
+    frames.finish();
     assert.equal(count, expectedCount);
   });
 }

@@ -44,14 +44,16 @@ repository's `.pi/` are never read or written. The model catalogue for the servi
 
 ## Protocol mapping
 
-Envelope `{"protocol":1,"bundle":"0.2.0","body":{…}}`. Inbound bodies are parsed with the IMP-001
-bounded JSON parser (`src/json.ts`: 1 MiB frame, 256 KiB strings, duplicate-key rejection) and a
-closed validator in `src/worker/wire.ts` (unknown fields, wrong kinds, non-UUIDv4 ids rejected).
-`wire.ts` also holds the hand-mirrored DTOs and the `WorkerChannel` interface
-(`send(body)` / `incoming()`); replacing it with WP-A's generated worker DTOs/validators is a
-one-file change. The shared `Decoder("worker")` in `src/framing.ts` validates against the IMP-001
-client schema, so `wire.ts` carries an equivalent `LineDecoder` (split on byte LF only, bound the
-line before allocating, poison after the first error) until WP-A generalises it.
+Envelope `{"protocol":1,"bundle":"0.2.0","body":{…}}`. Body types are the generated `src/dto.ts`
+(`ServiceToWorker`, `WorkerToService`, `Model`, …). Inbound frames are parsed with the IMP-001
+bounded JSON parser (`src/json.ts`: 1 MiB frame, 256 KiB strings, duplicate-key rejection), validated
+against the package-local generated schema by `src/worker/contract.ts` (`decodeWorkerFrame`,
+`validateWorker` over `src/worker/worker-schema.json`: unknown fields, wrong kinds and non-UUIDv4 ids are
+rejected) and checked for direction (`isServiceToWorker`). `src/worker/wire.ts` holds the one worker wire
+codec: `parseInbound`, `encodeOutbound` (every outbound frame is re-validated against the same schema)
+and `LineDecoder` (split on byte LF only, bound the line before allocating, poison after the first
+error), plus per-kind aliases of the generated bodies. The test-side reference framing
+(`src/framing.ts`) reuses that `LineDecoder` for worker framing.
 
 | Inbound | Worker action |
 | --- | --- |

@@ -1,9 +1,9 @@
 import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
-import type { Id } from "../dto.ts";
+import type { Id, UiAnswer, UiPrompt, WorkerToService } from "../dto.ts";
 import { counter, newId } from "../schema.ts";
 import { prefix } from "./activity.ts";
-import type { OutboundBody, RespondBody, UiAnswer, UiPrompt } from "./wire.ts";
+import type { RespondBody } from "./wire.ts";
 
 type Notify = (title: string, text: string, isError: boolean) => void;
 
@@ -32,12 +32,12 @@ export class UnsupportedUiError extends Error {
 interface Pending { generation: number; resolve: (answer: UiAnswer | undefined) => void }
 
 export class UiBridge {
-  private readonly send: (body: OutboundBody) => void;
+  private readonly send: (body: WorkerToService) => void;
   private readonly notify: Notify;
   private readonly pending = new Map<Id, Pending>();
   private dialogOpened: (() => void) | undefined;
   private current = 1;
-  constructor(send: (body: OutboundBody) => void, notify: Notify) { this.send = send; this.notify = notify; }
+  constructor(send: (body: WorkerToService) => void, notify: Notify) { this.send = send; this.notify = notify; }
 
   get generation(): number { return this.current; }
 
