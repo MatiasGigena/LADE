@@ -5,17 +5,17 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::super::dialogs;
-use super::super::widgets::{
-    self, MessageKind, action_row, field, inline_message, label, set_accessible_description,
-    set_focus_key, space, vbox,
-};
 use crate::presentation::panel::{self, PanelAction, Tone};
 use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActionSurface, ObjectiveDetail, Timestamp,
 };
 use crate::presentation::state::store::MainView;
 use crate::presentation::text::format;
+use crate::views::dialogs;
+use crate::views::widgets::{
+    self, MessageKind, action_row, field, inline_message, label, set_accessible_description,
+    set_focus_key, space, vbox,
+};
 
 use super::{Inspector, group_separator, section};
 

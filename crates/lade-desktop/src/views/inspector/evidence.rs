@@ -5,15 +5,15 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::super::widgets::{
-    self, MessageKind, action_row, hbox, inline_message, label, set_accessible_description,
-    set_accessible_label, set_focus_key, space, vbox,
-};
 use crate::presentation::state::model::{
     ActionName, ActionSurface, CandidateStatus, CandidateSummary, ObjectiveDetail,
     VerificationState, VerificationSummary,
 };
 use crate::presentation::text::format;
+use crate::views::widgets::{
+    self, MessageKind, action_row, hbox, inline_message, label, set_accessible_description,
+    set_accessible_label, set_focus_key, space, vbox,
+};
 
 use super::{Inspector, section};
 

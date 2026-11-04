@@ -6,16 +6,16 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use super::super::dialogs;
-use super::super::widgets::{
-    self, MessageKind, action_row, field, hbox, inline_message, label, set_accessible_description,
-    set_accessible_label, set_focus_key, space, vbox,
-};
 use crate::presentation::state::drafts::SaveStatus;
 use crate::presentation::state::model::{ActionAvailability, ActionSurface, DeliveryMode, DraftId};
 use crate::presentation::state::store::MainView;
 use crate::presentation::text::bound::TEXT_LIMIT;
 use crate::presentation::text::format;
+use crate::views::dialogs;
+use crate::views::widgets::{
+    self, MessageKind, action_row, field, hbox, inline_message, label, set_accessible_description,
+    set_accessible_label, set_focus_key, space, vbox,
+};
 
 use super::{Inspector, section};
 
