@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
 import { boundedJson, WireError } from "../src/json.ts";
-import { BUNDLE, decode, decodeWorkerFrame } from "../src/protocol.ts";
-import { decoder, encode, encodeWorker } from "../src/framing.ts";
-import type { Framing } from "../src/framing.ts";
-import { Reassembler } from "../src/chunks.ts";
-import { RequestHistory } from "../src/history.ts";
-import type { ReplyResult } from "../src/history.ts";
+import { BUNDLE, decode, decodeWorkerFrame } from "./reference/protocol.ts";
+import { decoder, encode, encodeWorker } from "./reference/framing.ts";
+import type { Framing } from "./reference/framing.ts";
+import { Reassembler } from "./reference/chunks.ts";
+import { RequestHistory } from "./reference/history.ts";
+import type { ReplyResult } from "./reference/history.ts";
 import type { Envelope, WorkerEnvelope } from "../src/dto.ts";
 
 interface Source { value?: unknown; text?: string; hex?: string; depth?: number; array?: number; string?: number; nodes?: boolean; padding?: number; steps?: unknown[] }

@@ -52,8 +52,8 @@ against the package-local generated schema by `src/worker/contract.ts` (`decodeW
 rejected) and checked for direction (`isServiceToWorker`). `src/worker/wire.ts` holds the one worker wire
 codec: `parseInbound`, `encodeOutbound` (every outbound frame is re-validated against the same schema)
 and `LineDecoder` (split on byte LF only, bound the line before allocating, poison after the first
-error), plus per-kind aliases of the generated bodies. The test-side reference framing
-(`src/framing.ts`) reuses that `LineDecoder` for worker framing.
+error), plus per-kind aliases of the generated bodies. The test-only reference framing
+(`test/reference/framing.ts`) reuses that `LineDecoder` for worker framing.
 
 | Inbound | Worker action |
 | --- | --- |

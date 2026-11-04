@@ -1,7 +1,7 @@
-import type { Envelope, WorkerBody, WorkerEnvelope } from "./dto.ts";
-import { MAX_FRAME, WireError } from "./json.ts";
+import type { Envelope, WorkerBody, WorkerEnvelope } from "../../src/dto.ts";
+import { MAX_FRAME, WireError } from "../../src/json.ts";
 import { BUNDLE, decode, decodeWorkerFrame, validate, validateWorker, VERSION } from "./protocol.ts";
-import { LineDecoder } from "./worker/wire.ts";
+import { LineDecoder } from "../../src/worker/wire.ts";
 
 export type Framing = "client" | "worker";
 

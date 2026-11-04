@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Body, Id, Reply } from "./dto.ts";
-import { WireError } from "./json.ts";
-import type { JsonValue } from "./json.ts";
+import type { Body, Id, Reply } from "../../src/dto.ts";
+import { WireError } from "../../src/json.ts";
+import type { JsonValue } from "../../src/json.ts";
 import { record } from "./protocol.ts";
 
 export type ReplyResult = Reply["result"];

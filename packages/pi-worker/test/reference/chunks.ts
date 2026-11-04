@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { Body, Scope } from "./dto.ts";
-import { WireError } from "./json.ts";
+import type { Body, Scope } from "../../src/dto.ts";
+import { WireError } from "../../src/json.ts";
 import { MAX_CHUNK, MAX_TRANSFER, MAX_TRANSFERS } from "./protocol.ts";
 
 interface Transfer { total: number; digest: string; next: bigint; size: number; bytes: Buffer }

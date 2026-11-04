@@ -56,7 +56,7 @@ for path in worker_src.rglob('*.ts'):
             target = (path.parent/x).resolve()
             if path == worker_src/'worker/pi-ai.ts' and target == pi_ai:
                 return True
-            return target in (root/'contracts/v1/schema.json', root/'contracts/v1/worker-schema.json') or worker_src in target.parents
+            return worker_src in target.parents
         return x == 'node:crypto' or (is_worker and (x in worker_packages or x in worker_builtins))
     if not all(reviewed(x) for x in imports):
         errors.append(f'unreviewed worker dependency: {path.relative_to(root)}')

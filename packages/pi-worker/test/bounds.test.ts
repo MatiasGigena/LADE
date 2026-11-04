@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { Reassembler } from "../src/chunks.ts";
-import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_TRANSFER, BUNDLE, newId, parseId } from "../src/protocol.ts";
-import { decoder, encode, encodeWorkerBody } from "../src/framing.ts";
+import { Reassembler } from "./reference/chunks.ts";
+import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_TRANSFER, BUNDLE, newId, parseId } from "./reference/protocol.ts";
+import { decoder, encode, encodeWorkerBody } from "./reference/framing.ts";
 import type { WorkerBody } from "../src/dto.ts";
-import { RequestHistory } from "../src/history.ts";
+import { RequestHistory } from "./reference/history.ts";
 import { boundedJson, WireError, MAX_FRAME, MAX_NODES } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 
