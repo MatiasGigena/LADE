@@ -70,3 +70,85 @@ wire_struct!(ServiceNotice {
     code: NoticeCode,
     message: String,
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::ClientBody;
+    use crate::client::fixtures::{counter, id, objective_detail, round_trip};
+    use serde_json::json;
+
+    fn frame(event: Event) -> EventFrame {
+        EventFrame {
+            service_epoch: id(9),
+            sequence: counter(3),
+            event,
+        }
+    }
+
+    #[test]
+    fn event_names_parse_and_serialize_as_their_wire_names() {
+        for name in EventName::ALL {
+            assert_eq!(EventName::parse(name.as_str()), Some(*name));
+            assert_eq!(
+                serde_json::to_value(name).expect("serialize"),
+                json!(name.as_str())
+            );
+        }
+        assert_eq!(EventName::parse("objective.deleted"), None);
+        assert!(serde_json::from_value::<EventName>(json!("Objective.Changed")).is_err());
+    }
+
+    #[test]
+    fn frames_carry_the_name_of_their_typed_payload() {
+        let changed = frame(Event::ObjectiveChanged(objective_detail().summary()));
+        let json = round_trip(&ClientBody::Event(changed.clone()), "Event");
+        assert_eq!(json["name"], json!("objective.changed"));
+        assert_eq!(json["sequence"], json!("3"));
+        assert_eq!(changed.event.name(), EventName::ObjectiveChanged);
+        let delta = frame(Event::ActivityDelta(ActivityDelta {
+            objective_id: id(1),
+            item_id: id(2),
+            append_text: "more".into(),
+        }));
+        let json = round_trip(&ClientBody::Event(delta), "Event");
+        assert_eq!(json["payload"]["append_text"], json!("more"));
+        round_trip(
+            &ClientBody::Event(frame(Event::WorktreeChanged(WorktreeChanged {
+                objective_id: id(1),
+                capture_id: id(4),
+            }))),
+            "Event",
+        );
+    }
+
+    #[test]
+    fn a_payload_of_another_event_or_an_unknown_name_is_refused() {
+        let worktree = json!({"objective_id": id(1).as_str(), "capture_id": id(4).as_str()});
+        let mismatched = json!({
+            "service_epoch": id(9).as_str(), "sequence": "1",
+            "name": "draft.changed", "payload": worktree
+        });
+        assert!(serde_json::from_value::<EventFrame>(mismatched).is_err());
+        assert_eq!(
+            Event::from_parts(EventName::DraftChanged, worktree.clone()).map(|e| e.name()),
+            Err(WireError::InvalidSchema)
+        );
+        assert_eq!(
+            Event::from_parts(EventName::WorktreeChanged, worktree).map(|e| e.name()),
+            Ok(EventName::WorktreeChanged)
+        );
+        let unknown = json!({
+            "service_epoch": id(9).as_str(), "sequence": "1",
+            "name": "shell.output", "payload": {}
+        });
+        assert!(serde_json::from_value::<EventFrame>(unknown).is_err());
+        let extra = json!({
+            "service_epoch": id(9).as_str(), "sequence": "1",
+            "name": "activity.appended",
+            "payload": {"objective_id": id(1).as_str(), "items": []},
+            "replayed": true
+        });
+        assert!(serde_json::from_value::<EventFrame>(extra).is_err());
+    }
+}

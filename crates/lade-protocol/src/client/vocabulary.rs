@@ -148,6 +148,8 @@ macro_rules! notice_codes {
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
         pub enum NoticeCode { $(#[serde(rename = $code)] $variant),* }
         impl NoticeCode {
+            #[cfg(test)]
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),*];
             pub const fn as_str(self) -> &'static str {
                 match self { $(Self::$variant => $code),* }
             }
@@ -228,5 +230,113 @@ impl From<ActionName> for RequestName {
             ActionName::ObjectiveDeleteHistory => Self::ObjectiveDeleteHistory,
             ActionName::TerminalOpen => Self::TerminalOpen,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{
+        ContentNoticeKind, Provenance, ProviderAuth, ProviderStatus, ResourceKind, ResourceState,
+    };
+    use crate::schema::{Contract, client_enum, conforms};
+    use serde_json::Value;
+
+    macro_rules! assert_closed {
+        ($($name:ident => $pointer:literal),* $(,)?) => {$(
+            assert_eq!(
+                serde_json::to_value($name::ALL).expect("serialize"),
+                client_enum($pointer),
+                "{} differs from {}",
+                stringify!($name),
+                $pointer
+            );
+        )*};
+    }
+
+    #[test]
+    fn every_closed_vocabulary_matches_the_contract_exactly() {
+        assert_closed!(
+            ErrorCode => "/$defs/ErrorCode",
+            SafeAction => "/$defs/SafeAction",
+            OperationState => "/$defs/OperationState",
+            Side => "/$defs/Side",
+            Lifecycle => "/$defs/Lifecycle",
+            ExecutionState => "/$defs/ExecutionState",
+            Attention => "/$defs/Attention",
+            Badge => "/$defs/Badge",
+            CandidateStatus => "/$defs/CandidateSummary/properties/status",
+            VerificationState => "/$defs/VerificationSummary/properties/state",
+            ApprovalState => "/$defs/ApprovalSummary/properties/state",
+            ChangeStatus => "/$defs/ChangedFile/properties/status",
+            DraftState => "/$defs/Draft/properties/state",
+            DeliveryState => "/$defs/InputSummary/properties/delivery",
+            DiffLineKind => "/$defs/DiffLine/properties/kind",
+            SearchScope => "/$defs/SearchQuery/properties/scope",
+            SearchResultKind => "/$defs/SearchResult/properties/kind",
+            FileEncoding => "/$defs/FileContent/properties/encoding",
+            TerminalMode => "/$defs/TerminalMode",
+            TerminalCloseReason => "/$defs/TerminalClosed/properties/reason",
+            StopReason => "/$defs/ServiceStopCommand/properties/reason",
+            NoticeLevel => "/$defs/ServiceNotice/properties/level",
+            NoticeCode => "/$defs/NoticeCode",
+            ContentNoticeKind => "/$defs/ContentNotice/properties/kind",
+            ProviderAuth => "/$defs/ProviderAuth",
+            ProviderStatus => "/$defs/ProviderStatus",
+            ResourceKind => "/$defs/ResourceKind",
+            ResourceState => "/$defs/ResourceState",
+        );
+    }
+
+    #[test]
+    fn the_only_provenance_is_the_contract_constant() {
+        let [only] = Provenance::ALL else {
+            panic!("one provenance")
+        };
+        let wire = serde_json::to_value(only).expect("serialize");
+        assert!(conforms(
+            &wire,
+            Contract::Client,
+            "/$defs/VerificationSummary/properties/provenance"
+        ));
+        assert_eq!(wire, Value::from("service_observed"));
+    }
+
+    #[test]
+    fn notice_codes_spell_their_serialized_names() {
+        for code in NoticeCode::ALL {
+            assert_eq!(
+                serde_json::to_value(code).expect("serialize"),
+                Value::from(code.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn each_action_names_the_request_that_performs_it() {
+        let Value::Array(actions) = client_enum("/$defs/ActionName") else {
+            panic!("ActionName is a closed list")
+        };
+        for wire in actions {
+            let action: ActionName = serde_json::from_value(wire.clone()).expect("known action");
+            assert_eq!(serde_json::to_value(action).expect("serialize"), wire);
+            let request = RequestName::from(action);
+            assert_eq!(Some(request.as_str()), wire.as_str());
+        }
+        assert!(serde_json::from_value::<ActionName>(Value::from("snapshot")).is_err());
+    }
+
+    #[test]
+    fn unknown_or_differently_cased_names_are_refused() {
+        for text in ["Unauthorized", "unknown", "", "stale-service"] {
+            assert!(
+                serde_json::from_value::<ErrorCode>(Value::from(text)).is_err(),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            serde_json::from_value::<Lifecycle>(Value::from("completed_no_changes")).ok(),
+            Some(Lifecycle::CompletedNoChanges)
+        );
     }
 }

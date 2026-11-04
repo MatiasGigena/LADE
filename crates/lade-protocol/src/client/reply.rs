@@ -257,3 +257,119 @@ impl Serialize for Outcome {
             .serialize(serializer)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::fixtures::{id, round_trip};
+    use crate::client::{ClientBody, Empty, OperationState, OperationStatus};
+    use serde_json::json;
+
+    fn rejection() -> Rejection {
+        Rejection::new(
+            ErrorCode::Conflict,
+            SafeAction::Refresh,
+            "The draft changed.",
+        )
+    }
+
+    fn reply_json(reply: &Reply) -> Value {
+        round_trip(&ClientBody::Reply(reply.clone()), "Reply")
+    }
+
+    #[test]
+    fn rejection_details_and_stale_drafts_are_bounded() {
+        let long = Rejection::new(ErrorCode::NotFound, SafeAction::None, &"é".repeat(600));
+        assert_eq!(long.detail.chars().count(), MAX_DETAIL_CHARS);
+        assert_eq!(
+            Rejection::new(ErrorCode::NotFound, SafeAction::None, "short").detail,
+            "short"
+        );
+        let drafts: Vec<Id> = (0..=255).chain(0..10).map(id).collect();
+        let stale = rejection().with_stale_drafts(drafts.clone());
+        assert_eq!(stale.stale_drafts, drafts[..MAX_STALE_DRAFTS]);
+    }
+
+    #[test]
+    fn an_ok_reply_names_its_request_and_types_its_data() {
+        let reply = Reply::ok(id(1), ReplyData::DraftDelete(Empty {}));
+        assert_eq!(reply.result.name(), Some(RequestName::DraftDelete));
+        let json = reply_json(&reply);
+        assert_eq!(json["name"], json!("draft.delete"));
+        assert_eq!(json["result"], json!({"status": "ok", "data": {}}));
+        let mut wrong = json.clone();
+        wrong["result"]["data"] = json!({"unexpected": true});
+        assert!(serde_json::from_value::<ClientBody>(wrong).is_err());
+    }
+
+    #[test]
+    fn a_rejection_may_omit_the_name_but_data_may_not() {
+        let reply = Reply::rejected(id(1), None, rejection());
+        let json = reply_json(&reply);
+        assert!(json.get("name").is_none());
+        assert!(json["result"].get("stale_drafts").is_none());
+        assert_eq!(reply.result.name(), None);
+        let unnamed_ok = json!({
+            "request_id": id(1).as_str(),
+            "result": {"status": "ok", "data": {}}
+        });
+        assert!(serde_json::from_value::<Reply>(unnamed_ok).is_err());
+        let stale = Reply::rejected(
+            id(1),
+            Some(RequestName::FeedbackSubmit),
+            rejection().with_stale_drafts(vec![id(2)]),
+        );
+        assert_eq!(
+            reply_json(&stale)["result"]["stale_drafts"],
+            json!([id(2).as_str()])
+        );
+    }
+
+    #[test]
+    fn only_mutating_requests_record_an_outcome() {
+        let read = Reply::ok(
+            id(1),
+            ReplyData::OperationGet(OperationStatus {
+                state: OperationState::Unknown,
+                outcome: None,
+            }),
+        );
+        assert_eq!(read.outcome(), None);
+        assert_eq!(
+            Reply::rejected(id(1), Some(RequestName::Snapshot), rejection()).outcome(),
+            None
+        );
+        assert_eq!(Reply::rejected(id(1), None, rejection()).outcome(), None);
+        let deleted = Reply::ok(id(1), ReplyData::DraftDelete(Empty {}));
+        assert_eq!(
+            deleted.outcome(),
+            Some(Outcome::Ok(Box::new(ReplyData::DraftDelete(Empty {}))))
+        );
+        let refused = Reply::rejected(id(1), Some(RequestName::DraftDelete), rejection());
+        let outcome = refused.outcome().expect("mutating");
+        assert_eq!(
+            outcome,
+            Outcome::Rejected {
+                name: RequestName::DraftDelete,
+                rejection: rejection()
+            }
+        );
+        round_trip(&outcome, "Outcome");
+    }
+
+    #[test]
+    fn an_outcome_of_a_read_is_refused() {
+        let read = json!({"name": "snapshot", "result": {
+            "status": "rejected", "code": "conflict", "action": "refresh", "detail": "x"
+        }});
+        assert!(serde_json::from_value::<Outcome>(read).is_err());
+        let ok = round_trip(
+            &Outcome::Ok(Box::new(ReplyData::DraftDelete(Empty {}))),
+            "Outcome",
+        );
+        assert_eq!(
+            ok,
+            json!({"name": "draft.delete", "result": {"status": "ok", "data": {}}})
+        );
+    }
+}

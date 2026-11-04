@@ -183,6 +183,31 @@ pub(crate) fn format(s: &str, kind: &str) -> bool {
     }
 }
 
+/// Whether `value` matches the definition at `pointer` (such as `/$defs/Reply`) of `contract`.
+#[cfg(test)]
+pub(crate) fn conforms(value: &Value, contract: Contract, pointer: &str) -> bool {
+    let root = match contract {
+        Contract::Client => CLIENT.as_ref(),
+        Contract::Worker => WORKER.as_ref(),
+    };
+    root.and_then(|root| {
+        root.pointer(pointer)
+            .map(|schema| matches(value, schema, root))
+    })
+    .unwrap_or(false)
+}
+
+/// The closed value list of the `enum` at `pointer` in the client contract.
+#[cfg(test)]
+pub(crate) fn client_enum(pointer: &str) -> Value {
+    CLIENT
+        .as_ref()
+        .and_then(|root| root.pointer(pointer))
+        .and_then(|schema| schema.get("enum"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

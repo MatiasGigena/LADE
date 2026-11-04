@@ -11,6 +11,10 @@ macro_rules! wire_enum {
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         pub enum $name { $($variant),* }
+        #[cfg(test)]
+        impl $name {
+            pub(crate) const ALL: &'static [Self] = &[$(Self::$variant),*];
+        }
     };
 }
 
@@ -27,6 +31,8 @@ mod commands;
 mod envelope;
 mod event;
 mod feedback;
+#[cfg(test)]
+mod fixtures;
 mod inspection;
 mod objective;
 mod reply;

@@ -143,3 +143,166 @@ pub enum ForkPosition {
     Before,
     At,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::{Contract, client_enum, conforms};
+    use serde_json::{Value, json};
+
+    fn wire<T: Serialize>(values: &[T]) -> Value {
+        serde_json::to_value(values).expect("serialize")
+    }
+
+    #[test]
+    fn session_vocabularies_match_the_contract_exactly() {
+        use ActivityRole as R;
+        use SessionChangeReason as C;
+        use TreeEntryKind as K;
+        assert_eq!(
+            wire(&ThinkingLevel::ALL),
+            client_enum("/$defs/ThinkingLevel")
+        );
+        assert_eq!(
+            wire(&[
+                DeliveryMode::Prompt,
+                DeliveryMode::Steer,
+                DeliveryMode::FollowUp
+            ]),
+            client_enum("/$defs/DeliveryMode")
+        );
+        assert_eq!(
+            wire(&[R::User, R::Assistant, R::Thinking, R::Tool, R::System]),
+            client_enum("/$defs/ActivityRole")
+        );
+        let kinds = [
+            K::User,
+            K::Assistant,
+            K::ToolResult,
+            K::CustomMessage,
+            K::Compaction,
+            K::BranchSummary,
+            K::ModelChange,
+            K::ThinkingChange,
+            K::Label,
+            K::SessionInfo,
+            K::Custom,
+            K::Other,
+        ];
+        assert_eq!(
+            wire(&kinds),
+            client_enum("/$defs/TreeEntry/properties/kind")
+        );
+        let closes = [
+            UiCloseReason::Timeout,
+            UiCloseReason::Aborted,
+            UiCloseReason::Replaced,
+            UiCloseReason::Answered,
+        ];
+        assert_eq!(wire(&closes), client_enum("/$defs/UiCloseReason"));
+        let changes = [
+            C::Start,
+            C::Navigate,
+            C::Fork,
+            C::Import,
+            C::Reload,
+            C::Compact,
+            C::Configure,
+        ];
+        assert_eq!(wire(&changes), client_enum("/$defs/SessionChangeReason"));
+        assert_eq!(
+            wire(&[ForkPosition::Before, ForkPosition::At]),
+            client_enum("/$defs/SessionForkCommand/properties/position")
+        );
+    }
+
+    #[test]
+    fn thinking_levels_parse_exactly_their_wire_names() {
+        for level in ThinkingLevel::ALL {
+            assert_eq!(ThinkingLevel::parse(level.as_str()), Some(level));
+            assert_eq!(
+                serde_json::to_value(level).expect("serialize"),
+                Value::from(level.as_str())
+            );
+        }
+        for text in ["", "High", "x-high", "maximum"] {
+            assert_eq!(ThinkingLevel::parse(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn prompts_answers_and_tree_entries_take_the_contract_shapes() {
+        let prompts = [
+            UiPrompt::Confirm {
+                title: "Proceed?".into(),
+                message: "It writes files.".into(),
+            },
+            UiPrompt::Select {
+                title: "Pick".into(),
+                options: vec!["a".into(), "b".into()],
+            },
+            UiPrompt::Input {
+                title: "Name".into(),
+                placeholder: String::new(),
+            },
+            UiPrompt::Editor {
+                title: "Edit".into(),
+                prefill: "text".into(),
+            },
+        ];
+        for prompt in &prompts {
+            let json = serde_json::to_value(prompt).expect("serialize");
+            assert!(
+                conforms(&json, Contract::Client, "/$defs/UiPrompt"),
+                "{json}"
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&prompts[1]).expect("serialize"),
+            json!({"kind": "select", "title": "Pick", "options": ["a", "b"]})
+        );
+        for answer in [
+            UiAnswer::Confirm { confirmed: true },
+            UiAnswer::Value { value: "x".into() },
+            UiAnswer::Cancel,
+        ] {
+            let json = serde_json::to_value(&answer).expect("serialize");
+            assert!(
+                conforms(&json, Contract::Client, "/$defs/UiAnswer"),
+                "{json}"
+            );
+        }
+        let root = TreeEntry {
+            entry_id: "e1".into(),
+            kind: TreeEntryKind::User,
+            label: "hello".into(),
+            parent_id: None,
+            bookmark: None,
+        };
+        let json = serde_json::to_value(&root).expect("serialize");
+        assert_eq!(
+            json,
+            json!({"entry_id": "e1", "kind": "user", "label": "hello"})
+        );
+        assert!(conforms(&json, Contract::Client, "/$defs/TreeEntry"));
+    }
+
+    #[test]
+    fn closed_shapes_refuse_unknown_fields_and_kinds() {
+        assert!(
+            serde_json::from_value::<Model>(json!({"provider": "p", "id": "m", "extra": 1}))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<UiAnswer>(json!({"kind": "skip"})).is_err());
+        // serde ignores extra fields on a tagged unit variant; the contract refuses them first.
+        assert!(!conforms(
+            &json!({"kind": "cancel", "value": "x"}),
+            Contract::Client,
+            "/$defs/UiAnswer"
+        ));
+        assert_eq!(
+            serde_json::from_value::<DeliveryMode>(json!("follow_up")).ok(),
+            Some(DeliveryMode::FollowUp)
+        );
+    }
+}
