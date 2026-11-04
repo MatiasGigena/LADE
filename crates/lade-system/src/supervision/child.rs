@@ -119,10 +119,12 @@ impl SandboxedChild {
         if matches!(child.try_wait(), Ok(Some(_))) {
             return;
         }
+        // The outer process first: killed after the namespace init, bwrap could see the init die
+        // and exit with status 137 before the signal reached it.
+        let _ = child.kill();
         if let Some(init) = *lock(&self.init) {
             kill_record(&init);
         }
-        let _ = child.kill();
     }
 
     /// Kills the sandbox and releases its cgroup leaf and pidfile (see the type's teardown
