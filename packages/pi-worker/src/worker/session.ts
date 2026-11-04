@@ -328,10 +328,10 @@ export class SessionHost {
 
   private async execute(body: CommandBody, result: ResultBody): Promise<void> {
     const command = body.command;
-    const session = this.session;
     const runtime = this.runtimeHost;
 
     if (!runtime) throw new CommandError("session runtime is not open");
+    const session = runtime.session;
 
     switch (command.op) {
       case "tree": {
