@@ -671,6 +671,23 @@ mod tests {
     }
 
     #[test]
+    fn stopped_execution_resumes_with_the_next_generation_and_session() {
+        let mut objective = defined_objective();
+        let first = objective
+            .start_execution(session_id(1), model(), ts(2))
+            .expect("start");
+        objective.request_stop(ts(3)).expect("stop");
+        objective.observe_stopped(first, ts(4)).expect("stopped");
+        let next = objective.resume_execution(ts(5)).expect("resume");
+        assert_eq!(next.value(), first.value() + 1);
+        assert_eq!(objective.execution().state(), &ExecutionState::Starting);
+        assert_eq!(
+            objective.execution().session().map(|s| s.session_id),
+            Some(session_id(1))
+        );
+    }
+
+    #[test]
     fn freezing_or_closing_requires_quiescent_execution() {
         let (mut objective, _) = active_objective();
         for path in [

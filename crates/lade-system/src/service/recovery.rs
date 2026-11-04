@@ -3,8 +3,8 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use lade_core::application::recover_after_restart;
 use lade_core::domain::ids::{ObjectiveId, Timestamp};
+use lade_core::domain::recovery::recover_after_restart;
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{ErrorCode, Outcome, Rejection, RequestName, SafeAction, Settings};
 
