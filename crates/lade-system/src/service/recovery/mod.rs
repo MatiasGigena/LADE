@@ -8,8 +8,8 @@ use lade_core::domain::recovery::recover_after_restart;
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{ErrorCode, Outcome, Rejection, SafeAction, Settings};
 
-use crate::adapters::git::CommitSpec;
-use crate::storage::{self, JournalState, OperationKey, OperationState};
+use crate::adapters::git::{self, CommitSpec};
+use crate::storage::{self, JournalRow, JournalState, OperationKey, OperationState};
 
 use super::convert::{adapter_git, core_git};
 use super::state::{ObjState, WsState};
@@ -158,124 +158,145 @@ impl Service {
     }
 
     fn reconcile_journal(&mut self) -> Result<(), StartError> {
-        let open = storage::open_journal(self.store.conn())?;
-        for row in open {
-            let now = now_ms();
-            let Some(st) = self.objectives.get(&row.objective_id).cloned() else {
-                continue;
-            };
-            let Some(ws) = self.workspaces.get(&st.objective().record().workspace_id) else {
-                continue;
-            };
-            let probed = ws
-                .repo
-                .resolve_ref(&format!("refs/heads/{}", row.target_branch))
-                .and_then(|current| {
-                    let expected = ws.repo.commit_tree(&CommitSpec {
-                        tree: adapter_git(&row.candidate_tree),
-                        parents: vec![adapter_git(&row.expected_target)],
-                        message: row.message.clone(),
-                        timestamp: Some(row.commit_time),
-                    })?;
-                    Ok((current, expected))
-                });
-            let (current, expected_commit) = match probed {
-                Ok(found) => found,
-                Err(e) => {
-                    eprintln!(
-                        "laded: integration journal left pending objective={} code={}",
-                        row.objective_id,
-                        e.code()
-                    );
-                    self.recovery_notes.push(format!(
-                        "LADE could not check whether the interrupted integration into {} completed ({}); it will check again on the next start.",
-                        row.target_branch,
-                        e.code()
-                    ));
-                    continue;
-                }
-            };
-            let integrated = current.as_ref() == Some(&expected_commit);
-            if integrated {
-                let mut st = st;
-                let candidate = st.review.candidate(row.candidate_id).cloned();
-                let completed = candidate.is_some_and(|candidate| {
-                    let plan = IntegrationPlan {
-                        approval_id: row.approval_id,
-                        candidate_id: row.candidate_id,
-                        candidate_commit: candidate.commit,
-                        candidate_tree: row.candidate_tree.clone(),
-                        expected_target: row.expected_target.clone(),
-                    };
-                    match st.review.complete_integration(
-                        &mut st.row.objective,
-                        &plan,
-                        Timestamp::from_unix_ms(now),
-                    ) {
-                        Ok(()) => true,
-                        Err(e) => {
-                            eprintln!(
-                                "laded: completed integration not applied to objective={}: {e}",
-                                row.objective_id
-                            );
-                            false
-                        }
-                    }
-                });
-                let commit = current.as_ref().map(core_git);
-                let tx = self.store.begin()?;
-                if completed {
-                    Self::save_tx(&tx, &st)?;
-                }
-                storage::update_journal(
-                    &tx,
-                    row.id,
-                    JournalState::ReconciledDone,
-                    commit.as_ref(),
-                    Some("integration found completed after restart"),
-                    now,
-                )?;
-                tx.commit()?;
-                if completed {
-                    self.objectives.insert(row.objective_id, st);
-                }
+        for row in storage::open_journal(self.store.conn())? {
+            self.reconcile_integration(&row)?;
+        }
+        Ok(())
+    }
+
+    /// Resolves one integration left in the `intent` state: if the target now holds exactly
+    /// the squash commit the journal describes, the integration completed and is applied to the
+    /// Objective; otherwise it never happened and is recorded as aborted.
+    fn reconcile_integration(&mut self, row: &JournalRow) -> Result<(), StartError> {
+        let Some(st) = self.objectives.get(&row.objective_id).cloned() else {
+            return Ok(());
+        };
+        let Some(ws) = self.workspaces.get(&st.objective().record().workspace_id) else {
+            return Ok(());
+        };
+        let probed = ws
+            .repo
+            .resolve_ref(&format!("refs/heads/{}", row.target_branch))
+            .and_then(|current| {
+                let expected = ws.repo.commit_tree(&CommitSpec {
+                    tree: adapter_git(&row.candidate_tree),
+                    parents: vec![adapter_git(&row.expected_target)],
+                    message: row.message.clone(),
+                    timestamp: Some(row.commit_time),
+                })?;
+                Ok((current, expected))
+            });
+        let (current, expected_commit) = match probed {
+            Ok(found) => found,
+            Err(e) => {
                 eprintln!(
-                    "laded: reconciled integration objective={} done",
-                    row.objective_id
+                    "laded: integration journal left pending objective={} code={}",
+                    row.objective_id,
+                    e.code()
                 );
-                if let Some(commit) = &current {
-                    let finished = ws.repo.finish_integration_checkout(
-                        &row.target_branch,
-                        &adapter_git(&row.expected_target),
-                        commit,
-                    );
-                    if let Err(e) = finished {
-                        eprintln!(
-                            "laded: integrated target checkout not updated objective={} code={}",
-                            row.objective_id,
-                            e.code()
-                        );
-                        self.recovery_notes.push(format!(
-                            "The integration into {} completed before the restart, but its checked-out files could not be updated ({}); run `git status` there before continuing.",
-                            row.target_branch,
-                            e.code()
-                        ));
-                    }
-                }
-            } else {
+                self.recovery_notes.push(format!(
+                    "LADE could not check whether the interrupted integration into {} completed ({}); it will check again on the next start.",
+                    row.target_branch,
+                    e.code()
+                ));
+                return Ok(());
+            }
+        };
+        match current {
+            Some(commit) if commit == expected_commit => {
+                self.integration_found_done(row, st, &commit)
+            }
+            _ => {
                 storage::update_journal(
                     self.store.conn(),
                     row.id,
                     JournalState::ReconciledAborted,
                     None,
                     Some("target does not hold the intended squash commit"),
-                    now,
+                    now_ms(),
                 )?;
                 eprintln!(
                     "laded: reconciled integration objective={} not applied",
                     row.objective_id
                 );
+                Ok(())
             }
+        }
+    }
+
+    /// Applies an integration the target shows completed, records it in the journal, and
+    /// brings the target's checked-out files up to the squash commit.
+    fn integration_found_done(
+        &mut self,
+        row: &JournalRow,
+        mut st: ObjState,
+        commit: &git::GitId,
+    ) -> Result<(), StartError> {
+        let now = now_ms();
+        let candidate = st.review.candidate(row.candidate_id).cloned();
+        let completed = candidate.is_some_and(|candidate| {
+            let plan = IntegrationPlan {
+                approval_id: row.approval_id,
+                candidate_id: row.candidate_id,
+                candidate_commit: candidate.commit,
+                candidate_tree: row.candidate_tree.clone(),
+                expected_target: row.expected_target.clone(),
+            };
+            match st.review.complete_integration(
+                &mut st.row.objective,
+                &plan,
+                Timestamp::from_unix_ms(now),
+            ) {
+                Ok(()) => true,
+                Err(e) => {
+                    eprintln!(
+                        "laded: completed integration not applied to objective={}: {e}",
+                        row.objective_id
+                    );
+                    false
+                }
+            }
+        });
+        let tx = self.store.begin()?;
+        if completed {
+            Self::save_tx(&tx, &st)?;
+        }
+        storage::update_journal(
+            &tx,
+            row.id,
+            JournalState::ReconciledDone,
+            Some(&core_git(commit)),
+            Some("integration found completed after restart"),
+            now,
+        )?;
+        tx.commit()?;
+        let workspace = st.objective().record().workspace_id;
+        if completed {
+            self.objectives.insert(row.objective_id, st);
+        }
+        eprintln!(
+            "laded: reconciled integration objective={} done",
+            row.objective_id
+        );
+        let Some(ws) = self.workspaces.get(&workspace) else {
+            return Ok(());
+        };
+        let finished = ws.repo.finish_integration_checkout(
+            &row.target_branch,
+            &adapter_git(&row.expected_target),
+            commit,
+        );
+        if let Err(e) = finished {
+            eprintln!(
+                "laded: integrated target checkout not updated objective={} code={}",
+                row.objective_id,
+                e.code()
+            );
+            self.recovery_notes.push(format!(
+                "The integration into {} completed before the restart, but its checked-out files could not be updated ({}); run `git status` there before continuing.",
+                row.target_branch,
+                e.code()
+            ));
         }
         Ok(())
     }
