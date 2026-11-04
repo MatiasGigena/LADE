@@ -164,3 +164,75 @@ impl Drop for SandboxedChild {
         self.terminate();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+
+    use super::*;
+    use crate::adapters_support::TempDir;
+
+    /// A shell standing in for bwrap: its background child plays the namespace init.
+    fn sandbox(script: &str) -> SandboxCommand {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command.into()
+    }
+
+    #[test]
+    fn a_sandbox_is_recorded_with_its_init_until_it_is_torn_down() {
+        let tmp = TempDir::new("child-teardown");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, stdio) =
+            SandboxedChild::spawn(sandbox("sleep 30 & wait"), pidfile.clone(), None)
+                .expect("spawn");
+        assert!(stdio.stdin.is_some() && stdio.stdout.is_some());
+        assert!(stdio.stderr.is_none(), "only piped streams are handed over");
+        assert_eq!(child.pidfile(), pidfile);
+        let init = child.namespace_init().expect("the init was discovered");
+        let recorded = std::fs::read_to_string(&pidfile).expect("pidfile");
+        assert!(recorded.contains(&init.to_string()), "{recorded}");
+        assert!(child.poll_exit().is_none());
+        assert!(child.wait_exit(Duration::from_millis(50)).is_none());
+
+        let status = child.terminate().expect("reaped");
+        assert_eq!(status.signal(), Some(9));
+        assert!(
+            !pidfile.exists(),
+            "the pidfile goes once the child is reaped"
+        );
+        assert_eq!(child.terminate(), Some(status), "teardown is idempotent");
+        assert_eq!(child.poll_exit(), Some(status));
+    }
+
+    #[test]
+    fn an_exited_sandbox_reports_its_status_to_waiters() {
+        let tmp = TempDir::new("child-exit");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, _stdio) =
+            SandboxedChild::spawn(sandbox("sleep 0.2 & wait; exit 3"), pidfile.clone(), None)
+                .expect("spawn");
+        let status = child.wait_exit(Duration::from_secs(10)).expect("exited");
+        assert_eq!(status.code(), Some(3));
+        child.kill();
+        assert_eq!(child.terminate().and_then(|s| s.code()), Some(3));
+        assert!(!pidfile.exists());
+    }
+
+    #[test]
+    fn dropping_the_last_handle_tears_the_sandbox_down() {
+        let tmp = TempDir::new("child-drop");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, _stdio) =
+            SandboxedChild::spawn(sandbox("sleep 30 & wait"), pidfile.clone(), None)
+                .expect("spawn");
+        assert!(pidfile.exists());
+        drop(child);
+        assert!(!pidfile.exists());
+    }
+}

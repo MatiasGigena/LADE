@@ -43,3 +43,53 @@ pub fn ensure_private_dir(dir: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+    use crate::adapters_support::TempDir;
+
+    fn refusal(dir: &Path) -> String {
+        let error = ensure_private_dir(dir).expect_err("refused");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        error.to_string()
+    }
+
+    #[test]
+    fn private_directories_are_created_with_owner_only_permissions() {
+        let tmp = TempDir::new("private-dir");
+        let dir = tmp.path().join("a/b/c");
+        ensure_private_dir(&dir).expect("create");
+        let meta = fs::metadata(&dir).expect("metadata");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+        assert_eq!(meta.uid(), service_uid());
+        ensure_private_dir(&dir).expect("an existing private directory is accepted");
+        assert_eq!(service_uid(), rustix::process::geteuid().as_raw());
+    }
+
+    #[test]
+    fn existing_directories_are_verified_never_repaired() {
+        let tmp = TempDir::new("private-dir-refused");
+        let open = tmp.path().join("open");
+        fs::create_dir(&open).expect("dir");
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o750)).expect("chmod");
+        assert!(refusal(&open).contains("group or other permissions"));
+        assert_eq!(
+            fs::metadata(&open).expect("metadata").permissions().mode() & 0o777,
+            0o750,
+            "the mode is left as it was"
+        );
+
+        let target = tmp.path().join("target");
+        ensure_private_dir(&target).expect("target");
+        let link = tmp.path().join("link");
+        symlink(&target, &link).expect("symlink");
+        assert!(refusal(&link).contains("not a directory"));
+
+        let file = tmp.path().join("file");
+        fs::write(&file, "x").expect("file");
+        assert!(ensure_private_dir(&file).is_err());
+    }
+}

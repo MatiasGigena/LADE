@@ -74,3 +74,66 @@ pub const OBJECTIVE_CGROUP_LIMITS: CgroupLimits = CgroupLimits {
     pids_max: Some(512),
     cpu_max: None,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(limits: &Limits) -> Vec<String> {
+        limits
+            .prlimit_args()
+            .into_iter()
+            .map(|a| a.into_string().expect("utf-8"))
+            .collect()
+    }
+
+    #[test]
+    fn prlimit_arguments_name_each_limit_and_cpu_only_when_set() {
+        assert_eq!(
+            args(&Limits::WORKER),
+            [
+                format!("--as={}", 4 * GIB),
+                "--nofile=1024".into(),
+                format!("--fsize={}", 512 * MIB),
+            ]
+        );
+        assert_eq!(
+            args(&Limits::VERIFICATION).last().map(String::as_str),
+            Some("--cpu=600")
+        );
+        assert!(
+            !args(&Limits::WORKER)
+                .iter()
+                .any(|a| a.starts_with("--nproc")),
+            "the process limit is enforced by the cgroup and the sandbox, not prlimit"
+        );
+    }
+
+    #[test]
+    fn the_named_limit_sets_differ_only_where_documented() {
+        assert_eq!(Limits::default(), Limits::WORKER);
+        assert_eq!(
+            Limits {
+                cpu_seconds: None,
+                ..Limits::VERIFICATION
+            },
+            Limits::WORKER
+        );
+        assert_eq!(
+            WORKER_LIMITS.address_space_bytes,
+            2 * Limits::WORKER.address_space_bytes
+        );
+        assert_eq!(
+            Limits {
+                address_space_bytes: Limits::WORKER.address_space_bytes,
+                ..WORKER_LIMITS
+            },
+            Limits::WORKER
+        );
+        assert_eq!(TERMINAL_LIMITS, Limits::WORKER);
+        assert_eq!(
+            OBJECTIVE_CGROUP_LIMITS.pids_max,
+            Some(Limits::WORKER.processes)
+        );
+    }
+}

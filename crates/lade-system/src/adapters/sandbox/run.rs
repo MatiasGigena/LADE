@@ -142,3 +142,89 @@ fn kill_group(pgid: u32) {
             .status();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sh(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        command
+    }
+
+    #[test]
+    fn the_tail_keeps_the_last_bytes_and_counts_them_all() {
+        let mut tail = Tail {
+            bytes: VecDeque::new(),
+            total: 0,
+            cap: 4,
+        };
+        tail.push(b"ab");
+        tail.push(b"cdef");
+        assert_eq!(tail.bytes.iter().copied().collect::<Vec<_>>(), b"cdef");
+        tail.push(b"0123456789");
+        assert_eq!(tail.bytes.iter().copied().collect::<Vec<_>>(), b"6789");
+        assert_eq!(tail.total, 16);
+    }
+
+    #[test]
+    fn output_is_merged_and_the_exit_status_reported() {
+        let outcome = run_bounded(
+            sh("printf out; printf err >&2; exit 7"),
+            Duration::from_secs(10),
+            1024,
+        )
+        .expect("run");
+        assert_eq!(outcome.exit_code, Some(7));
+        assert_eq!(outcome.signal, None);
+        assert!(!outcome.timed_out && !outcome.truncated);
+        assert_eq!(outcome.total_bytes, 6);
+        let text = String::from_utf8(outcome.output_tail).expect("utf-8");
+        assert!(text.contains("out") && text.contains("err"), "{text}");
+    }
+
+    #[test]
+    fn long_output_keeps_only_its_tail() {
+        let outcome = run_bounded(
+            sh("i=0; while [ $i -lt 2000 ]; do printf 0123456789; i=$((i+1)); done; printf END"),
+            Duration::from_secs(30),
+            100,
+        )
+        .expect("run");
+        assert_eq!(outcome.exit_code, Some(0));
+        assert!(outcome.truncated);
+        assert_eq!(outcome.total_bytes, 20_003);
+        assert_eq!(outcome.output_tail.len(), 100);
+        assert!(outcome.output_tail.ends_with(b"789END"));
+    }
+
+    #[test]
+    fn a_run_past_its_timeout_is_killed_with_its_process_group() {
+        let start = Instant::now();
+        let outcome = run_bounded(
+            sh("sleep 30 & sleep 30; wait"),
+            Duration::from_millis(200),
+            1024,
+        )
+        .expect("run");
+        assert!(outcome.timed_out);
+        assert_eq!(outcome.signal, Some(9));
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the background sleep was killed too"
+        );
+    }
+
+    #[test]
+    fn a_failed_placement_kills_the_child_and_reports_the_error() {
+        let start = Instant::now();
+        let error = run_bounded_with(sh("sleep 30"), Duration::from_secs(30), 16, |pgid| {
+            assert!(pgid > 0);
+            Err(io::Error::other("no cgroup"))
+        })
+        .expect_err("placement fails");
+        assert_eq!(error.to_string(), "no cgroup");
+        assert!(start.elapsed() < Duration::from_secs(10));
+    }
+}
