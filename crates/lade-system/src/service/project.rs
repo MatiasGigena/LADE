@@ -400,27 +400,11 @@ impl Service {
                 .then_some("There is no agent work to give feedback on yet."))
             .or((st.unsent_drafts() == 0).then_some("There are no saved drafts to submit.")),
         ));
+        let stopping =
+            (*state == ExecutionState::Stopping).then_some("Wait until the agent has stopped.");
         out.push(gate(
             ActionName::ReviewFreeze,
-            busy_reason.or(match lifecycle {
-                Lifecycle::Active if st.row.worktree.is_none() => {
-                    Some("There is no agent work to freeze yet.")
-                }
-                Lifecycle::Active if *state == ExecutionState::Stopping => {
-                    Some("Wait until the agent has stopped.")
-                }
-                Lifecycle::Active if st.capture.as_ref().is_some_and(|c| c.counts.files == 0) => {
-                    Some(NO_CHANGES_TO_FREEZE)
-                }
-                Lifecycle::Active => None,
-                Lifecycle::Defined => {
-                    Some("Start the agent first; there is nothing to freeze yet.")
-                }
-                Lifecycle::Frozen | Lifecycle::Approved => {
-                    Some("The work is already frozen for review.")
-                }
-                _ => Some(CLOSED),
-            }),
+            busy_reason.or(freeze_blocker(st)).or(stopping),
         ));
         let latest_returnable = review
             .latest_candidate()
@@ -630,6 +614,23 @@ impl Service {
         self.emit(Event::ObjectiveChanged(detail.summary()));
         self.emit(Event::ObjectiveDetail(Box::new(detail)));
         self.enforce_terminal_scope(oid);
+    }
+}
+
+/// Why `review.freeze` is refused for this Objective, if it is. The action list and the
+/// request handler both use it, so the disabled reason is the rejection detail.
+pub(crate) fn freeze_blocker(st: &ObjState) -> Option<&'static str> {
+    match st.objective().lifecycle() {
+        Lifecycle::Active if st.row.worktree.is_none() => {
+            Some("There is no agent work to freeze yet.")
+        }
+        Lifecycle::Active if st.capture.as_ref().is_some_and(|c| c.counts.files == 0) => {
+            Some(NO_CHANGES_TO_FREEZE)
+        }
+        Lifecycle::Active => None,
+        Lifecycle::Defined => Some("Start the agent first; there is nothing to freeze yet."),
+        Lifecycle::Frozen | Lifecycle::Approved => Some("The work is already frozen for review."),
+        _ => Some(CLOSED),
     }
 }
 

@@ -27,7 +27,7 @@ use super::convert::{
 use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::handlers::sql;
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
-use super::project::delete_history_blocker;
+use super::project::{delete_history_blocker, freeze_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms};
 
@@ -52,18 +52,9 @@ impl Service {
         let prepared = (|| {
             let oid = self.objective_id(id)?;
             self.check_idle(oid)?;
-            let st = self.obj(oid)?;
-            if st.objective().lifecycle() != Lifecycle::Active {
+            if let Some(reason) = freeze_blocker(self.obj(oid)?) {
                 return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
-                    "freeze requires an active objective",
-                )));
-            }
-            if st.row.worktree.is_none() {
-                return Err(invalid("no agent work to freeze yet"));
-            }
-            if st.capture.as_ref().is_some_and(|c| c.counts.files == 0) {
-                return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
-                    super::project::NO_CHANGES_TO_FREEZE,
+                    reason,
                 )));
             }
             Ok(oid)
