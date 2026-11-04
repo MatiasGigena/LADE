@@ -1,10 +1,10 @@
-use super::*;
 use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::model::{
     Basis, ChangeList, ChangeStatus, ChangedFile, ObjectiveId, RepoPath,
 };
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
+use crate::views::*;
 
 fn settle() {
     let context = glib::MainContext::default();

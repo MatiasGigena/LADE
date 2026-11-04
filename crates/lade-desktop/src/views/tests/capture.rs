@@ -1,4 +1,3 @@
-use super::*;
 use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, Basis, ChangeList, ChangeStatus, ChangedFile,
@@ -6,6 +5,7 @@ use crate::presentation::state::model::{
 };
 use crate::presentation::state::store::{InspectorTab, PresentationState};
 use crate::presentation::test_fixture;
+use crate::views::*;
 
 fn settle() {
     let context = glib::MainContext::default();
