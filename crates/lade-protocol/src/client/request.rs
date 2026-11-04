@@ -1,6 +1,6 @@
 //! Request frames: a named request with its payload, request id and operation id.
 
-use super::{Request, RequestName, to_value};
+use super::{Request, RequestName};
 use crate::{WireError, types::Id};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -49,13 +49,17 @@ impl RequestFrame {
             request,
         })
     }
+    /// SHA-256 of the frame's JSON form without its `request_id`, so a retried operation hashes the
+    /// same however its request id was chosen.
+    #[must_use]
     pub fn canonical_digest(&self) -> [u8; 32] {
-        let mut content = to_value(self);
-        content
-            .as_object_mut()
-            .expect("request serializes as an object")
-            .remove("request_id");
-        Sha256::digest(serde_json::to_vec(&content).expect("JSON value serializes")).into()
+        let mut content = serde_json::Map::new();
+        if let Some(operation_id) = &self.operation_id {
+            content.insert("operation_id".into(), operation_id.as_str().into());
+        }
+        content.insert("name".into(), self.request.name().as_str().into());
+        content.insert("payload".into(), self.request.payload_value());
+        Sha256::digest(Value::Object(content).to_string()).into()
     }
 }
 impl TryFrom<RawRequest> for RequestFrame {
@@ -75,6 +79,42 @@ impl From<RequestFrame> for RawRequest {
             operation_id: frame.operation_id,
             name: frame.request.name(),
             payload: frame.request.payload_value(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::{Empty, MessageSendCommand};
+    use crate::types::DeliveryMode;
+
+    fn digest_of_serialized_frame(frame: &RequestFrame) -> [u8; 32] {
+        let mut json = serde_json::to_value(frame).unwrap();
+        json.as_object_mut().unwrap().remove("request_id");
+        Sha256::digest(serde_json::to_vec(&json).unwrap()).into()
+    }
+
+    #[test]
+    fn canonical_digest_is_the_serialized_frame_without_its_request_id() {
+        let send = RequestFrame::new(
+            Id::from_random_bytes([1; 16]),
+            Some(Id::from_random_bytes([2; 16])),
+            Request::MessageSend(MessageSendCommand {
+                objective_id: Id::from_random_bytes([3; 16]),
+                text: "go".into(),
+                mode: DeliveryMode::Steer,
+            }),
+        )
+        .unwrap();
+        let read = RequestFrame::new(
+            Id::from_random_bytes([4; 16]),
+            None,
+            Request::Snapshot(Empty {}),
+        )
+        .unwrap();
+        for frame in [send, read] {
+            assert_eq!(frame.canonical_digest(), digest_of_serialized_frame(&frame));
         }
     }
 }
