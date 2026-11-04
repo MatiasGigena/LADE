@@ -167,21 +167,35 @@ impl Service {
             let Some(ws) = self.workspaces.get(&st.objective().record().workspace_id) else {
                 continue;
             };
-            let current = ws
+            let probed = ws
                 .repo
                 .resolve_ref(&format!("refs/heads/{}", row.target_branch))
-                .ok()
-                .flatten();
-            let expected_commit = ws
-                .repo
-                .commit_tree(&CommitSpec {
-                    tree: adapter_git(&row.candidate_tree),
-                    parents: vec![adapter_git(&row.expected_target)],
-                    message: row.message.clone(),
-                    timestamp: Some(row.commit_time),
-                })
-                .ok();
-            let integrated = current.is_some() && current == expected_commit;
+                .and_then(|current| {
+                    let expected = ws.repo.commit_tree(&CommitSpec {
+                        tree: adapter_git(&row.candidate_tree),
+                        parents: vec![adapter_git(&row.expected_target)],
+                        message: row.message.clone(),
+                        timestamp: Some(row.commit_time),
+                    })?;
+                    Ok((current, expected))
+                });
+            let (current, expected_commit) = match probed {
+                Ok(found) => found,
+                Err(e) => {
+                    eprintln!(
+                        "laded: integration journal left pending objective={} code={}",
+                        row.objective_id,
+                        e.code()
+                    );
+                    self.recovery_notes.push(format!(
+                        "LADE could not check whether the interrupted integration into {} completed ({}); it will check again on the next start.",
+                        row.target_branch,
+                        e.code()
+                    ));
+                    continue;
+                }
+            };
+            let integrated = current.as_ref() == Some(&expected_commit);
             if integrated {
                 let mut st = st;
                 let candidate = st.review.candidate(row.candidate_id).cloned();
@@ -193,13 +207,20 @@ impl Service {
                         candidate_tree: row.candidate_tree.clone(),
                         expected_target: row.expected_target.clone(),
                     };
-                    st.review
-                        .complete_integration(
-                            &mut st.row.objective,
-                            &plan,
-                            Timestamp::from_unix_ms(now),
-                        )
-                        .is_ok()
+                    match st.review.complete_integration(
+                        &mut st.row.objective,
+                        &plan,
+                        Timestamp::from_unix_ms(now),
+                    ) {
+                        Ok(()) => true,
+                        Err(e) => {
+                            eprintln!(
+                                "laded: completed integration not applied to objective={}: {e}",
+                                row.objective_id
+                            );
+                            false
+                        }
+                    }
                 });
                 let commit = current.as_ref().map(core_git);
                 let tx = self.store.begin()?;

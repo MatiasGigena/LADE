@@ -845,11 +845,8 @@ impl Service {
         let tx = self
             .store
             .begin()
-            .map_err(|_| durability("store unavailable"))?;
-        writes(&tx).map_err(|e| {
-            eprintln!("laded: store write failed: {}", sql_code(&e));
-            durability("state could not be recorded")
-        })?;
+            .map_err(store_failed("begin", "store unavailable"))?;
+        writes(&tx).map_err(store_failed("write", "state could not be recorded"))?;
         let mut journaled = false;
         if let (Some(ctx), Some(data)) = (ctx.as_deref(), outcome)
             && let Some(op) = &ctx.op
@@ -861,15 +858,39 @@ impl Service {
                 Some(&Outcome::Ok(Box::new(data.clone()))),
                 now,
             )
-            .map_err(|_| durability("operation outcome could not be recorded"))?;
+            .map_err(store_failed(
+                "journal",
+                "operation outcome could not be recorded",
+            ))?;
             journaled = true;
         }
         tx.commit()
-            .map_err(|_| durability("state could not be recorded"))?;
+            .map_err(store_failed("commit", "state could not be recorded"))?;
         if journaled && let Some(ctx) = ctx {
             ctx.recorded = true;
         }
         Ok(())
+    }
+
+    /// Applies the policy for state changes that have no request to reject (worker events,
+    /// job completions): a failed write is logged once with what was lost and its cause, and
+    /// the caller sees `false` and decides whether to go on without it.
+    pub(crate) fn persisted(
+        &self,
+        what: &str,
+        oid: ObjectiveId,
+        result: Result<(), Rejection>,
+    ) -> bool {
+        match result {
+            Ok(()) => true,
+            Err(rejection) => {
+                eprintln!(
+                    "laded: could not record {what} objective={oid}: {}",
+                    rejection.detail
+                );
+                false
+            }
+        }
     }
 
     pub(crate) fn spawn(
@@ -944,6 +965,18 @@ impl Service {
                 Some(tools)
             })
             .clone()
+    }
+}
+
+/// Logs a store failure in `Service::commit` with its stage and cause, then rejects with
+/// `detail`.
+fn store_failed(
+    stage: &'static str,
+    detail: &'static str,
+) -> impl Fn(rusqlite::Error) -> Rejection {
+    move |e| {
+        eprintln!("laded: store {stage} failed: {}", sql_code(&e));
+        durability(detail)
     }
 }
 

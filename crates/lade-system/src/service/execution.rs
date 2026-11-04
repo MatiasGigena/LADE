@@ -312,8 +312,9 @@ impl Service {
         let state = st.objective().execution().state().clone();
         match out.result {
             Ok(control) => {
-                if out.provisioned_branch.is_some() && self.commit_obj(None, None, st).is_err() {
-                    eprintln!("laded: could not record provisioned worktree objective={oid}");
+                if out.provisioned_branch.is_some() {
+                    let recorded = self.commit_obj(None, None, st);
+                    self.persisted("the provisioned worktree", oid, recorded);
                 }
                 if current && state.is_live() {
                     self.rt(oid).control = Some(control);
@@ -335,9 +336,8 @@ impl Service {
                         &reason.to_string(),
                         ts_now(),
                     );
-                    if self.commit_obj(None, None, st).is_err() {
-                        eprintln!("laded: could not record launch failure objective={oid}");
-                    }
+                    let recorded = self.commit_obj(None, None, st);
+                    self.persisted("the launch failure", oid, recorded);
                     self.notice(
                         NoticeLevel::Error,
                         "execution_failed",
@@ -351,7 +351,8 @@ impl Service {
                     );
                     self.continue_freeze(oid);
                 } else if out.provisioned_branch.is_some() {
-                    let _ = self.commit_obj(None, None, st);
+                    let recorded = self.commit_obj(None, None, st);
+                    self.persisted("the provisioned worktree", oid, recorded);
                 }
             }
         }
@@ -381,8 +382,10 @@ impl Service {
                 .observe_stopped(generation, ts_now())
                 .is_ok()
         {
-            let _ = self.commit_obj(None, None, st);
-            self.continue_freeze(oid);
+            let recorded = self.commit_obj(None, None, st);
+            if self.persisted("the stopped execution", oid, recorded) {
+                self.continue_freeze(oid);
+            }
         }
     }
 
@@ -443,7 +446,7 @@ impl Service {
                     }
                     Ok(())
                 });
-                if committed.is_ok() {
+                if self.persisted("the ready worker", oid, committed) {
                     self.objectives.insert(oid, st);
                     self.emit_objective(oid);
                     self.dispatch_queued(oid, None);
@@ -508,9 +511,12 @@ impl Service {
                 if st
                     .objective_mut()
                     .observe_turn(generation, running, ts_now())
-                    .is_ok()
-                    && self.commit_obj(None, None, st).is_ok()
+                    .is_err()
                 {
+                    return;
+                }
+                let recorded = self.commit_obj(None, None, st);
+                if self.persisted("the turn state", oid, recorded) {
                     self.emit_objective(oid);
                     if !running {
                         self.request_capture(oid);
@@ -581,8 +587,7 @@ impl Service {
             }
             Ok(())
         });
-        if committed.is_err() {
-            eprintln!("laded: could not record worker exit objective={oid}");
+        if !self.persisted("the worker exit", oid, committed) {
             return;
         }
         self.objectives.insert(oid, st);
@@ -675,8 +680,7 @@ impl Service {
         let recorded = self.commit(None, None, |tx| {
             storage::save_delivery(tx, id, &input.delivery, now)
         });
-        if recorded.is_err() {
-            eprintln!("laded: could not record dispatch input={id}");
+        if !self.persisted(&format!("the dispatch of input {id}"), oid, recorded) {
             return false;
         }
         if let DispatchDecision::Dispatch { .. } = decision {
@@ -693,9 +697,10 @@ impl Service {
                 .map(|control| control.send(body));
             if !matches!(sent, Some(Ok(()))) {
                 input.mark_worker_lost();
-                let _ = self.commit(None, None, |tx| {
+                let recorded = self.commit(None, None, |tx| {
                     storage::save_delivery(tx, id, &input.delivery, now)
                 });
+                self.persisted(&format!("the lost delivery of input {id}"), oid, recorded);
             }
         }
         if let Some(slot) = st.input_mut(id) {
@@ -917,8 +922,8 @@ impl Service {
         {
             return;
         }
-        if self.commit_obj(None, None, st).is_err() {
-            eprintln!("laded: could not record the storage limit objective={oid}");
+        let recorded = self.commit_obj(None, None, st);
+        if !self.persisted("the storage limit", oid, recorded) {
             return;
         }
         eprintln!("laded: writable storage limit reached objective={oid} bytes={bytes}");
