@@ -663,6 +663,7 @@ pub enum OperationState {
 }
 
 impl OperationState {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -1088,6 +1089,7 @@ pub enum JournalState {
 }
 
 impl JournalState {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Intent => "intent",

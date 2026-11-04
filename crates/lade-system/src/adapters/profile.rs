@@ -141,6 +141,7 @@ fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|e| e == "md")
 }
 
+#[must_use]
 pub fn scan(profile: &Path) -> Vec<Entry> {
     let mut entries = Vec::new();
     let plain = |kind, name: String, path: &Path| {

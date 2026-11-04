@@ -141,6 +141,7 @@ fn replace_home(line: &str, home: &str) -> String {
     out
 }
 
+#[must_use]
 pub fn redact(line: &str, home: Option<&str>) -> String {
     let clean: String = line
         .chars()
@@ -169,6 +170,7 @@ pub fn redact(line: &str, home: Option<&str>) -> String {
     out
 }
 
+#[must_use]
 pub fn home() -> Option<String> {
     std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
 }
@@ -181,6 +183,7 @@ pub struct RotatingLog {
 }
 
 impl RotatingLog {
+    #[must_use]
     pub fn new(dir: PathBuf, file_bytes: u64, files: usize) -> Self {
         Self {
             dir,
@@ -261,6 +264,7 @@ fn source_of(line: &str) -> &str {
     }
 }
 
+#[must_use]
 pub fn record(line: &str) -> String {
     serde_json::json!({
         "ts": wire_ts(now_ms()).as_str(),

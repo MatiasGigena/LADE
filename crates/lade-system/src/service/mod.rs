@@ -77,6 +77,7 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
+    #[must_use]
     pub fn from_environment(state: Option<PathBuf>, runtime: Option<PathBuf>) -> Option<Self> {
         let env_dir = |name: &str| {
             std::env::var_os(name)
@@ -354,14 +355,17 @@ pub struct RunningService {
 }
 
 impl RunningService {
+    #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.socket
     }
 
+    #[must_use]
     pub fn capability_path(&self) -> &Path {
         &self.capability
     }
 
+    #[must_use]
     pub fn service_epoch(&self) -> &str {
         self.epoch.as_str()
     }

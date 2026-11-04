@@ -13,10 +13,12 @@ pub struct Worktree {
 }
 
 impl Worktree {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn admin_dir(&self) -> &Path {
         &self.admin_dir
     }

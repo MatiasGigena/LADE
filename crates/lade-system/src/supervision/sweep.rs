@@ -18,11 +18,13 @@ pub struct PidRecord {
 }
 
 impl PidRecord {
+    #[must_use]
     pub fn of(pid: u32) -> Option<Self> {
         let (state, start_time) = proc_stat(pid)?;
         (state != 'Z' && state != 'X').then_some(Self { pid, start_time })
     }
 
+    #[must_use]
     pub fn is_alive(&self) -> bool {
         Self::of(self.pid).is_some_and(|now| now == *self)
     }
@@ -161,6 +163,7 @@ pub(crate) fn kill_record(record: &PidRecord) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+#[must_use]
 pub fn sandbox_marker(run_dir: &Path) -> String {
     let canonical = fs::canonicalize(run_dir).unwrap_or_else(|_| run_dir.to_path_buf());
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());

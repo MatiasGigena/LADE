@@ -85,6 +85,7 @@ pub enum GitError {
 }
 
 impl GitError {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Spawn { .. } => "git_spawn_failed",
@@ -115,6 +116,7 @@ impl GitError {
         }
     }
 
+    #[must_use]
     pub fn stderr(&self) -> Option<&Diagnostics> {
         match self {
             Self::Failed { stderr, .. }

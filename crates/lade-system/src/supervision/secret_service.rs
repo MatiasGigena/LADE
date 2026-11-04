@@ -82,6 +82,7 @@ enum RunError {
 }
 
 impl SecretService {
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             state: State::Disabled,
@@ -89,6 +90,7 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn new(program: PathBuf, env: Vec<(OsString, OsString)>) -> Self {
         Self {
             state: State::Ready { program, env },
@@ -96,11 +98,13 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
+    #[must_use]
     pub fn from_env() -> Self {
         Self::detect(find_program("secret-tool"), |name| std::env::var_os(name))
     }
@@ -138,10 +142,12 @@ impl SecretService {
         Self::new(program, env)
     }
 
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         !matches!(self.state, State::Disabled)
     }
 
+    #[must_use]
     pub fn unavailable_reason(&self) -> Option<&str> {
         match &self.state {
             State::Unavailable(reason) => Some(reason),
@@ -149,10 +155,12 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
+    #[must_use]
     pub fn lookup(&self, provider: &str, variable: &str, deadline: Instant) -> Lookup {
         let args = [
             "lookup", "service", SERVICE, "provider", provider, "variable", variable,
@@ -184,6 +192,7 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn locked(&self, provider: &str, deadline: Instant) -> Option<String> {
         let args = ["search", "service", SERVICE, "provider", provider];
         let ran = self.run(&args, None, false, deadline).ok()?;
@@ -345,6 +354,7 @@ fn reason_of(stderr: &[u8]) -> Option<String> {
     )
 }
 
+#[must_use]
 pub fn valid_provider_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id

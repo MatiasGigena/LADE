@@ -6,6 +6,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 
 /// The effective user id, which owns every file and directory the service creates.
+#[must_use]
 pub fn service_uid() -> u32 {
     rustix::process::geteuid().as_raw()
 }

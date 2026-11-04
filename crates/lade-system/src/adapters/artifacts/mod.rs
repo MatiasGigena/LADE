@@ -16,6 +16,7 @@ const CHUNK: usize = 64 << 10;
 pub struct ArtifactDigest([u8; 32]);
 
 impl ArtifactDigest {
+    #[must_use]
     pub fn of(bytes: &[u8]) -> Self {
         Self::from_hasher(Sha256::new_with_prefix(bytes))
     }
@@ -43,10 +44,12 @@ impl ArtifactDigest {
         Ok(Self(digest))
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
+    #[must_use]
     pub fn to_hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
@@ -80,6 +83,7 @@ pub enum ArtifactError {
 }
 
 impl ArtifactError {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Io { .. } => "artifact_io",
@@ -166,11 +170,13 @@ impl ArtifactStore {
         })
     }
 
+    #[must_use]
     pub fn path_of(&self, digest: &ArtifactDigest) -> PathBuf {
         let hex = digest.to_hex();
         self.objects.join(&hex[..2]).join(&hex[2..])
     }
 
+    #[must_use]
     pub fn contains(&self, digest: &ArtifactDigest) -> bool {
         fs::symlink_metadata(self.path_of(digest)).is_ok_and(|m| m.is_file())
     }

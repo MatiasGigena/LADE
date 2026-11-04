@@ -115,6 +115,7 @@ const ARCH: Option<Arch> = Some(Arch {
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const ARCH: Option<Arch> = None;
 
+#[must_use]
 pub fn denied() -> Vec<&'static str> {
     ARCH.as_ref()
         .map(|arch| arch.denied.iter().map(|(name, _)| *name).collect())
@@ -205,6 +206,7 @@ impl Asm {
     }
 }
 
+#[must_use]
 pub fn program() -> Option<Vec<u8>> {
     let arch = ARCH.as_ref()?;
     if cfg!(target_endian = "big") {

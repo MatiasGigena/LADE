@@ -246,6 +246,7 @@ impl Listener {
     }
 }
 
+#[must_use]
 pub fn serve<T: From<Inbound> + Send + 'static>(
     listener: UnixListener,
     socket: PathBuf,

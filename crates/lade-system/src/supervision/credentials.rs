@@ -20,10 +20,12 @@ pub use crate::adapters::sandbox::FIXTURE_SWITCH;
 pub const FIXTURE_REFUSED: &str = "lade-fixture is an offline test provider; it is available only \
      when laded runs with LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)";
 
+#[must_use]
 pub fn fixture_switch_on() -> bool {
     std::env::var_os(FIXTURE_SWITCH).is_some_and(|v| v == "1")
 }
 
+#[must_use]
 pub fn provider_env_vars(provider: &str) -> Option<&'static [&'static str]> {
     built_in_provider(provider).map(|p| p.env_vars)
 }
@@ -35,6 +37,7 @@ fn known_var(name: &str) -> bool {
         || custom_var(name)
 }
 
+#[must_use]
 pub fn custom_var(name: &str) -> bool {
     name.strip_prefix(crate::adapters::profile::CUSTOM_VAR_PREFIX)
         .is_some_and(|rest| {
@@ -54,6 +57,7 @@ impl Secret {
         Self(value)
     }
 
+    #[must_use]
     pub fn expose(&self) -> &OsStr {
         &self.0
     }
@@ -71,6 +75,7 @@ pub struct ReleasedCredentials {
 }
 
 impl ReleasedCredentials {
+    #[must_use]
     pub fn names(&self) -> Vec<&str> {
         self.vars.iter().map(|(k, _)| k.as_str()).collect()
     }
@@ -187,20 +192,24 @@ impl CredentialSource {
         }
     }
 
+    #[must_use]
     pub fn with_secret_service(mut self, secret_service: SecretService) -> Self {
         self.secret_service = secret_service;
         self
     }
 
+    #[must_use]
     pub fn from_process() -> Self {
         Self::new(std::env::vars_os(), default_file())
             .with_secret_service(SecretService::from_env())
     }
 
+    #[must_use]
     pub fn empty() -> Self {
         Self::new(Vec::new(), None)
     }
 
+    #[must_use]
     pub fn file(&self) -> Option<&Path> {
         self.file.as_deref()
     }
@@ -266,6 +275,7 @@ impl CredentialSource {
         self.resolve_custom(provider, vars).map(drop)
     }
 
+    #[must_use]
     pub fn is_available(&self, provider: &str) -> bool {
         provider_env_vars(provider).is_some_and(|vars| {
             vars.is_empty() || self.plain_sources_have(vars, false).unwrap_or(false)
@@ -277,6 +287,7 @@ impl CredentialSource {
         vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true).unwrap_or(false)
     }
 
+    #[must_use]
     pub fn secret_service(&self) -> &SecretService {
         &self.secret_service
     }

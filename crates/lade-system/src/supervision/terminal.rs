@@ -260,6 +260,7 @@ impl Terminal {
         tcsetwinsize(&self.controller, winsize(cols, rows)?).map_err(io::Error::from)
     }
 
+    #[must_use]
     pub fn drain(&self, max: usize) -> Drained {
         let mut ring = lock(&self.shared.ring);
         let n = ring.bytes.len().min(max);
@@ -272,11 +273,13 @@ impl Terminal {
         drained
     }
 
+    #[must_use]
     pub fn pending(&self) -> bool {
         let ring = lock(&self.shared.ring);
         !ring.bytes.is_empty() || ring.dropped > 0
     }
 
+    #[must_use]
     pub fn exit(&self) -> Option<TerminalExit> {
         let status = self.shared.child.poll_exit()?;
         Some(TerminalExit {
@@ -285,6 +288,7 @@ impl Terminal {
         })
     }
 
+    #[must_use]
     pub fn finished(&self) -> Option<TerminalExit> {
         let eof = lock(&self.shared.ring).eof;
         let exit = self.exit()?;
@@ -301,10 +305,12 @@ impl Terminal {
         self.shared.space.notify_all();
     }
 
+    #[must_use]
     pub fn pidfile(&self) -> &Path {
         self.shared.child.pidfile()
     }
 
+    #[must_use]
     pub fn namespace_init(&self) -> Option<u32> {
         self.shared.child.namespace_init()
     }

@@ -56,6 +56,7 @@ pub enum SandboxError {
 }
 
 impl SandboxError {
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             Self::ToolMissing { .. } => "sandbox_tool_missing",
@@ -264,6 +265,7 @@ impl SandboxSpec {
         Ok(())
     }
 
+    #[must_use]
     pub fn limits(&self) -> Limits {
         self.limits
     }
@@ -410,6 +412,7 @@ impl SandboxCommand {
         &mut self.command
     }
 
+    #[must_use]
     pub fn get_command(&self) -> &Command {
         &self.command
     }

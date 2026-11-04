@@ -42,6 +42,7 @@ pub enum ObjectFormat {
 }
 
 impl ObjectFormat {
+    #[must_use]
     pub fn hex_len(self) -> usize {
         match self {
             Self::Sha1 => 40,
@@ -49,6 +50,7 @@ impl ObjectFormat {
         }
     }
 
+    #[must_use]
     pub fn name(self) -> &'static str {
         match self {
             Self::Sha1 => "sha1",
@@ -56,6 +58,7 @@ impl ObjectFormat {
         }
     }
 
+    #[must_use]
     pub fn empty_tree(self) -> GitId {
         let hex = match self {
             Self::Sha1 => "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
@@ -92,10 +95,12 @@ impl GitId {
         }
     }
 
+    #[must_use]
     pub fn format(&self) -> ObjectFormat {
         self.format
     }
 
+    #[must_use]
     pub fn hex(&self) -> &str {
         &self.hex
     }
@@ -135,18 +140,22 @@ impl RepoPath {
         }
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
+    #[must_use]
     pub fn as_os_str(&self) -> &OsStr {
         OsStr::from_bytes(&self.0)
     }
 
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         String::from_utf8_lossy(&self.0).into_owned()
     }
@@ -170,6 +179,7 @@ pub struct GitVersion {
 }
 
 impl GitVersion {
+    #[must_use]
     pub const fn new(major: u32, minor: u32, patch: u32) -> Self {
         Self {
             major,
@@ -215,6 +225,7 @@ pub struct Branch {
 }
 
 impl Branch {
+    #[must_use]
     pub fn is_utf8(&self) -> bool {
         std::str::from_utf8(&self.raw).is_ok()
     }
@@ -313,22 +324,27 @@ impl Repository {
         })
     }
 
+    #[must_use]
     pub fn work_tree(&self) -> &Path {
         &self.work_tree
     }
 
+    #[must_use]
     pub fn git_dir(&self) -> &Path {
         &self.git_dir
     }
 
+    #[must_use]
     pub fn common_dir(&self) -> &Path {
         &self.common_dir
     }
 
+    #[must_use]
     pub fn object_format(&self) -> ObjectFormat {
         self.format
     }
 
+    #[must_use]
     pub fn git_version(&self) -> GitVersion {
         self.version
     }
@@ -623,6 +639,7 @@ impl Repository {
         })
     }
 
+    #[must_use]
     pub fn with_excludes_file(mut self, path: Option<PathBuf>) -> Self {
         self.excludes_file = path;
         self
@@ -709,6 +726,7 @@ pub fn user_excludes_file() -> Option<PathBuf> {
     (path.is_absolute() && path.is_file()).then_some(path)
 }
 
+#[must_use]
 pub fn escape_branch_name(raw: &[u8]) -> String {
     let mut out = String::new();
     for chunk in raw.utf8_chunks() {
@@ -720,6 +738,7 @@ pub fn escape_branch_name(raw: &[u8]) -> String {
     out
 }
 
+#[must_use]
 pub fn unescape_branch_name(name: &str) -> Option<Vec<u8>> {
     let bytes = name.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

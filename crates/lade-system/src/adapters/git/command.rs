@@ -52,10 +52,12 @@ pub struct Diagnostics {
 }
 
 impl Diagnostics {
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
+    #[must_use]
     pub fn truncated(&self) -> bool {
         self.truncated
     }

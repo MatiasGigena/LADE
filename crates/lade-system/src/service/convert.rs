@@ -20,6 +20,7 @@ use super::state::ObjState;
 use crate::adapters::git::{self, GitError, ObjectFormat};
 use crate::support::wire_ts;
 
+#[must_use]
 pub fn wire_id(uuid: Uuid) -> Id {
     Id::parse(uuid.to_string()).expect("domain uuids are canonical v4")
 }
@@ -32,10 +33,12 @@ pub fn counter_u32(value: &Counter) -> Result<u32, Rejection> {
     u32::try_from(value.value()).map_err(|_| invalid("counter out of range"))
 }
 
+#[must_use]
 pub fn invalid(detail: &str) -> Rejection {
     Rejection::new(ErrorCode::InvalidRequest, SafeAction::None, detail)
 }
 
+#[must_use]
 pub fn not_found(what: &str) -> Rejection {
     Rejection::new(
         ErrorCode::NotFound,
@@ -44,10 +47,12 @@ pub fn not_found(what: &str) -> Rejection {
     )
 }
 
+#[must_use]
 pub fn conflict(detail: &str) -> Rejection {
     Rejection::new(ErrorCode::Conflict, SafeAction::Refresh, detail)
 }
 
+#[must_use]
 pub fn durability(detail: &str) -> Rejection {
     Rejection::new(
         ErrorCode::DurabilityFailure,
@@ -56,6 +61,7 @@ pub fn durability(detail: &str) -> Rejection {
     )
 }
 
+#[must_use]
 pub fn domain_rejection(error: DomainError) -> Rejection {
     let (code, action) = match error {
         DomainError::Unauthorized => (ErrorCode::Unauthorized, SafeAction::None),
@@ -163,6 +169,7 @@ pub fn git_rejection(error: GitError) -> Rejection {
     }
 }
 
+#[must_use]
 pub fn core_algorithm(format: ObjectFormat) -> GitAlgorithm {
     match format {
         ObjectFormat::Sha1 => GitAlgorithm::Sha1,
@@ -170,6 +177,7 @@ pub fn core_algorithm(format: ObjectFormat) -> GitAlgorithm {
     }
 }
 
+#[must_use]
 pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
     match algorithm {
         GitAlgorithm::Sha1 => ObjectFormat::Sha1,
@@ -177,14 +185,17 @@ pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
     }
 }
 
+#[must_use]
 pub fn core_git(id: &git::GitId) -> core_ids::GitId {
     core_ids::GitId::new(core_algorithm(id.format()), id.hex()).expect("adapter ids are full ids")
 }
 
+#[must_use]
 pub fn adapter_git(id: &core_ids::GitId) -> git::GitId {
     git::GitId::parse(adapter_format(id.algorithm()), id.hex()).expect("domain ids are full ids")
 }
 
+#[must_use]
 pub fn wire_git(id: &core_ids::GitId) -> wire_types::GitId {
     let algorithm = match id.algorithm() {
         GitAlgorithm::Sha1 => wire_types::GitAlgorithm::Sha1,
@@ -201,6 +212,7 @@ pub fn from_wire_git(id: &wire_types::GitId) -> Result<core_ids::GitId, Rejectio
     core_ids::GitId::new(algorithm, id.hex()).map_err(domain_rejection)
 }
 
+#[must_use]
 pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
     match lifecycle {
         Lifecycle::Defined => wire::Lifecycle::Defined,
@@ -213,6 +225,7 @@ pub fn wire_lifecycle(lifecycle: Lifecycle) -> wire::Lifecycle {
     }
 }
 
+#[must_use]
 pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Option<String>) {
     match state {
         ExecutionState::None => (wire::ExecutionState::None, None),
@@ -231,6 +244,7 @@ pub fn wire_execution_state(state: &ExecutionState) -> (wire::ExecutionState, Op
     }
 }
 
+#[must_use]
 pub fn wire_reference(reference: &Reference) -> wire::Reference {
     let version = match reference.version() {
         InspectedVersion::Working { capture_id } => wire::ReferenceVersion::Working {
@@ -294,12 +308,14 @@ pub fn repo_path(path: &wire_types::WirePath) -> Result<git::RepoPath, Rejection
     git::RepoPath::new(path.as_bytes().to_vec()).map_err(|_| invalid("invalid repository path"))
 }
 
+#[must_use]
 pub fn wire_path(bytes: &[u8]) -> wire_types::WirePath {
     let bounded = &bytes[..bytes.len().min(wire_types::MAX_PATH_BYTES)];
     wire_types::WirePath::from_bytes(bounded.to_vec())
         .unwrap_or_else(|_| wire_types::WirePath::from_bytes(b"?".to_vec()).expect("valid path"))
 }
 
+#[must_use]
 pub fn preview(text: &str, max: usize) -> String {
     wire_types::truncate_chars(text, max).to_string()
 }
@@ -322,6 +338,7 @@ fn blocked_reason(reason: lade_core::domain::feedback::BlockedReason) -> &'stati
     }
 }
 
+#[must_use]
 pub fn wire_mode(mode: lade_core::domain::feedback::InputMode) -> DeliveryMode {
     use lade_core::domain::feedback::InputMode;
     match mode {
@@ -331,6 +348,7 @@ pub fn wire_mode(mode: lade_core::domain::feedback::InputMode) -> DeliveryMode {
     }
 }
 
+#[must_use]
 pub fn core_mode(mode: DeliveryMode) -> lade_core::domain::feedback::InputMode {
     use lade_core::domain::feedback::InputMode;
     match mode {
@@ -340,6 +358,7 @@ pub fn core_mode(mode: DeliveryMode) -> lade_core::domain::feedback::InputMode {
     }
 }
 
+#[must_use]
 pub fn wire_input(input: &AcceptedInput) -> InputSummary {
     let (delivery, blocked_reason) = match input.delivery {
         DeliveryState::Queued => (WireDelivery::Queued, None),
@@ -363,6 +382,7 @@ pub fn wire_input(input: &AcceptedInput) -> InputSummary {
     }
 }
 
+#[must_use]
 pub fn wire_draft(st: &ObjState, draft: &Draft) -> wire::Draft {
     let record = draft.record();
     let (state, input_id) = match record.state {
@@ -384,6 +404,7 @@ pub fn wire_draft(st: &ObjState, draft: &Draft) -> wire::Draft {
     }
 }
 
+#[must_use]
 pub fn wire_candidate(candidate: &Candidate) -> CandidateSummary {
     CandidateSummary {
         candidate_id: wire_id(candidate.id.uuid()),
@@ -432,6 +453,7 @@ pub fn wire_verification(st: &ObjState, verification: &Verification) -> Verifica
     })
 }
 
+#[must_use]
 pub fn wire_approval(approval: &Approval) -> ApprovalSummary {
     ApprovalSummary {
         approval_id: wire_id(approval.id.uuid()),

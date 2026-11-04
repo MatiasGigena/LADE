@@ -28,6 +28,7 @@ pub struct EgressRule {
 }
 
 impl EgressRule {
+    #[must_use]
     pub fn https(host: &str) -> Self {
         Self {
             host: normalize_host(host),
@@ -43,16 +44,19 @@ pub struct EgressPolicy {
 }
 
 impl EgressPolicy {
+    #[must_use]
     pub fn none() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn https_hosts(hosts: &[&str]) -> Self {
         Self {
             rules: hosts.iter().map(|h| EgressRule::https(h)).collect(),
         }
     }
 
+    #[must_use]
     pub fn with_extra(mut self, rules: impl IntoIterator<Item = EgressRule>) -> Self {
         for mut rule in rules {
             rule.host = normalize_host(&rule.host);
@@ -63,10 +67,12 @@ impl EgressPolicy {
         self
     }
 
+    #[must_use]
     pub fn rules(&self) -> &[EgressRule] {
         &self.rules
     }
 
+    #[must_use]
     pub fn allows(&self, host: &str, port: u16) -> Option<&EgressRule> {
         let host = normalize_host(host);
         self.rules.iter().find(|r| r.host == host && r.port == port)
@@ -74,6 +80,7 @@ impl EgressPolicy {
 }
 
 /// The reviewed endpoint policy of every built-in provider: HTTPS to its documented API hosts.
+#[must_use]
 pub fn default_policies() -> BTreeMap<String, EgressPolicy> {
     BUILT_IN_PROVIDERS
         .iter()
@@ -113,6 +120,7 @@ impl fmt::Debug for UpstreamProxy {
 }
 
 impl UpstreamProxy {
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let var = |upper: &str, lower: &str| {
             std::env::var(upper)
@@ -126,6 +134,7 @@ impl UpstreamProxy {
         )
     }
 
+    #[must_use]
     pub fn from_vars(https_proxy: Option<&str>, no_proxy: Option<&str>) -> Option<Self> {
         let url = https_proxy?.trim();
         let rest = match url.split_once("://") {
@@ -154,6 +163,7 @@ impl UpstreamProxy {
         })
     }
 
+    #[must_use]
     pub fn bypass(&self, host: &str) -> bool {
         let host = normalize_host(host);
         self.no_proxy.iter().any(|entry| {
@@ -432,10 +442,12 @@ impl Gateway {
         })
     }
 
+    #[must_use]
     pub fn socket_path(&self) -> &Path {
         &self.socket
     }
 
+    #[must_use]
     pub fn active_connections(&self) -> usize {
         self.shared.active.load(Ordering::SeqCst)
     }

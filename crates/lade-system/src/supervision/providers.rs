@@ -98,6 +98,7 @@ fn without_plain_key(credentials: &CredentialSource, missing: String) -> (Access
     }
 }
 
+#[must_use]
 pub fn classify(
     facts: &ProviderFacts,
     policies: &BTreeMap<String, EgressPolicy>,

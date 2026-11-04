@@ -346,14 +346,17 @@ impl SandboxCgroups {
         })
     }
 
+    #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    #[must_use]
     pub fn limits(&self) -> CgroupLimits {
         self.limits
     }
 
+    #[must_use]
     pub fn delegation(&self) -> &str {
         &self.delegation
     }
@@ -404,6 +407,7 @@ impl SandboxCgroups {
         fs::write(group.join("cgroup.subtree_control"), ENABLE)
     }
 
+    #[must_use]
     pub fn sweep(&self) -> usize {
         let mut removed = 0;
         for group in subdirs(&self.root) {
@@ -521,6 +525,7 @@ pub struct CgroupLeaf {
 }
 
 impl CgroupLeaf {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -529,6 +534,7 @@ impl CgroupLeaf {
         fs::write(self.path.join("cgroup.procs"), pid.to_string())
     }
 
+    #[must_use]
     pub fn contains(&self, pid: u32) -> bool {
         let Ok(text) = fs::read_to_string(format!("/proc/{pid}/cgroup")) else {
             return false;
@@ -537,6 +543,7 @@ impl CgroupLeaf {
             .is_some_and(|path| Path::new(MOUNT).join(path.trim_start_matches('/')) == self.path)
     }
 
+    #[must_use]
     pub fn oom_kills(&self) -> u64 {
         fs::read_to_string(self.path.join("memory.events"))
             .ok()

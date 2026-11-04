@@ -112,12 +112,14 @@ pub const BUILT_IN_PROVIDERS: &[BuiltInProvider] = &[
     },
 ];
 
+#[must_use]
 pub fn built_in_provider(id: &str) -> Option<&'static BuiltInProvider> {
     BUILT_IN_PROVIDERS.iter().find(|p| p.id == id)
 }
 
 /// True for loopback, private, link-local, documentation and other addresses that are not
 /// reachable public Internet hosts, including IPv4-mapped and NAT64 forms of them.
+#[must_use]
 pub fn is_non_public(addr: IpAddr) -> bool {
     match addr {
         IpAddr::V4(v4) => is_non_public_v4(v4),

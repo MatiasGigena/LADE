@@ -62,6 +62,7 @@ pub fn gateway_socket_path(dir: &Path, objective_id: &str, generation: u64) -> P
     dir.join(format!("{short}-{generation}.sock"))
 }
 
+#[must_use]
 pub fn socket_path_fits(path: &Path) -> bool {
     path.as_os_str().len() <= MAX_SOCKET_PATH
 }

@@ -115,6 +115,7 @@ pub trait WorkerLauncher: Send + Sync {
 }
 
 impl LaunchError {
+    #[must_use]
     pub fn detail(&self) -> String {
         match self {
             Self::SandboxUnavailable(why) => format!("worker sandbox unavailable: {why}"),
