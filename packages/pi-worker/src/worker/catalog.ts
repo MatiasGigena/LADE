@@ -5,21 +5,15 @@ import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { registerTestFixture } from "./fixture.ts";
 import { installNoNetwork } from "./gateway.ts";
 
-export interface CatalogModel { id: string; name: string; reasoning: boolean; thinking: string[] }
+interface CatalogModel { id: string; name: string; reasoning: boolean; thinking: string[] }
 
-export interface CatalogProvider { id: string; name: string; api_key: boolean; oauth: string | null; subscription: boolean; base_url: string | null; models: CatalogModel[] }
+interface CatalogProvider { id: string; name: string; api_key: boolean; oauth: string | null; subscription: boolean; base_url: string | null; models: CatalogModel[] }
 
-export interface Catalog { sdk_version: string; providers: CatalogProvider[]; error: string | null }
-
-process.env.PI_OFFLINE = "1";
-
-process.env.PI_SKIP_VERSION_CHECK = "1";
-
-process.env.PI_TELEMETRY = "0";
+interface Catalog { sdk_version: string; providers: CatalogProvider[]; error: string | null }
 
 installNoNetwork();
 
-export async function catalog(modelsPath: string | null, scratch: string): Promise<Catalog> {
+async function catalog(modelsPath: string | null, scratch: string): Promise<Catalog> {
   const runtime = await ModelRuntime.create({
     authPath: `${scratch}/auth.json`,
     modelsPath,
