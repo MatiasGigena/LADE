@@ -9,7 +9,7 @@ use lade_protocol::client::{
     ModelCatalog, ModelInfo, ModelsListQuery, ProviderAuth, ProviderInfo, ProviderStatus, ReplyData,
 };
 use lade_protocol::types::{Counter, ThinkingLevel};
-use serde_json::Value;
+use lade_protocol::worker::Catalog;
 
 use crate::adapters::profile;
 use crate::supervision::credentials::FIXTURE_PROVIDER;
@@ -89,11 +89,8 @@ fn wire_status(status: AccessStatus) -> ProviderStatus {
     }
 }
 
-fn text(value: Option<&Value>, max: usize) -> Option<String> {
-    value
-        .and_then(Value::as_str)
-        .map(|s| preview(s, max))
-        .filter(|s| !s.is_empty())
+fn text(value: &str, max: usize) -> Option<String> {
+    Some(preview(value, max)).filter(|s| !s.is_empty())
 }
 
 fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
@@ -126,66 +123,51 @@ fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
 }
 
 pub(crate) fn parse_catalog(bytes: &[u8]) -> Result<CatalogData, String> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| "catalogue output is not JSON".to_string())?;
-    let sdk_version = text(value.get("sdk_version"), 64).ok_or("catalogue has no SDK version")?;
+    let catalog: Catalog = serde_json::from_slice(bytes)
+        .map_err(|e| format!("catalogue output is not a catalogue: {e}"))?;
+    let sdk_version = text(&catalog.sdk_version, 64).ok_or("catalogue has no SDK version")?;
     let mut providers = Vec::new();
     let mut total = 0usize;
-    for entry in value
-        .get("providers")
-        .and_then(Value::as_array)
-        .ok_or("catalogue has no providers")?
-        .iter()
-        .take(MAX_PROVIDERS)
-    {
-        let Some(id) = text(entry.get("id"), 128) else {
+    for entry in catalog.providers.into_iter().take(MAX_PROVIDERS) {
+        let Some(id) = text(&entry.id, 128) else {
             continue;
         };
-        let facts = ProviderFacts {
-            name: text(entry.get("name"), 256).unwrap_or_else(|| id.clone()),
-            api_key: entry.get("api_key").and_then(Value::as_bool) == Some(true),
-            oauth: text(entry.get("oauth"), 200),
-            subscription: entry.get("subscription").and_then(Value::as_bool) == Some(true),
-            base_url: text(entry.get("base_url"), 400),
-            id: id.clone(),
-        };
         let mut models = Vec::new();
-        for model in entry
-            .get("models")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-        {
+        for model in entry.models {
             if total >= MAX_CATALOG_MODELS {
                 break;
             }
-            let Some(model_id) = text(model.get("id"), 256) else {
+            let Some(model_id) = text(&model.id, 256) else {
                 continue;
             };
-            let thinking_levels = model
-                .get("thinking")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|l| l.as_str().and_then(ThinkingLevel::parse))
-                .take(8)
-                .collect();
             models.push(ModelInfo {
                 provider: id.clone(),
-                name: text(model.get("name"), 256).unwrap_or_else(|| model_id.clone()),
+                name: text(&model.name, 256).unwrap_or_else(|| model_id.clone()),
                 id: model_id,
-                reasoning: model.get("reasoning").and_then(Value::as_bool) == Some(true),
-                thinking_levels,
+                reasoning: model.reasoning,
+                thinking_levels: model
+                    .thinking
+                    .iter()
+                    .filter_map(|l| ThinkingLevel::parse(l))
+                    .take(8)
+                    .collect(),
             });
             total += 1;
         }
+        let facts = ProviderFacts {
+            name: text(&entry.name, 256).unwrap_or_else(|| id.clone()),
+            api_key: entry.api_key,
+            oauth: entry.oauth.as_deref().and_then(|o| text(o, 200)),
+            subscription: entry.subscription,
+            base_url: entry.base_url.as_deref().and_then(|u| text(u, 400)),
+            id,
+        };
         providers.push((facts, models));
     }
     Ok(CatalogData {
         sdk_version,
         providers,
-        error: text(value.get("error"), 512),
+        error: catalog.error.as_deref().and_then(|e| text(e, 512)),
     })
 }
 
@@ -314,5 +296,35 @@ mod tests {
         assert!(!sandbox.message.contains("sandbox_unavailable"));
         let other = CatalogFailure::other("catalogue output is not JSON".into());
         assert_eq!(other.message, CATALOG_FAILED);
+    }
+
+    #[test]
+    fn catalogue_parses_the_worker_shape_and_skips_incomplete_entries() {
+        let bytes = br#"{"sdk_version":"1.5.0","error":null,"providers":[
+            {"id":"anthropic","name":"Anthropic","api_key":true,"oauth":null,"subscription":false,
+             "base_url":null,"models":[
+                {"id":"opus","name":"","reasoning":true,"thinking":["off","high","sideways"]},
+                {"id":"","name":"nameless","reasoning":false,"thinking":[]}]},
+            {"id":"","name":"no id","models":[]}]}"#;
+        let data = parse_catalog(bytes).unwrap();
+        assert_eq!(data.sdk_version, "1.5.0");
+        assert_eq!(data.error, None);
+        let [(facts, models)] = data.providers.as_slice() else {
+            panic!("{:?}", data.providers);
+        };
+        assert_eq!(
+            (facts.id.as_str(), facts.api_key, facts.oauth.as_deref()),
+            ("anthropic", true, None)
+        );
+        let [model] = models.as_slice() else {
+            panic!("{models:?}");
+        };
+        assert_eq!((model.id.as_str(), model.name.as_str()), ("opus", "opus"));
+        assert_eq!(
+            model.thinking_levels,
+            [ThinkingLevel::Off, ThinkingLevel::High]
+        );
+        assert!(parse_catalog(br#"{"providers":[]}"#).is_err());
+        assert!(parse_catalog(b"not json").is_err());
     }
 }

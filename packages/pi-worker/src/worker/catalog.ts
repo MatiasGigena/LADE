@@ -5,6 +5,7 @@ import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
 import { registerTestFixture } from "./fixture.ts";
 import { installNoNetwork } from "./gateway.ts";
 
+// The output file shape; the service reads it as `lade_protocol::worker::Catalog`.
 interface CatalogModel { id: string; name: string; reasoning: boolean; thinking: string[] }
 
 interface CatalogProvider { id: string; name: string; api_key: boolean; oauth: string | null; subscription: boolean; base_url: string | null; models: CatalogModel[] }
