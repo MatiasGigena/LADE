@@ -27,8 +27,33 @@ const A: &str = "5b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const T: &str = "7b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 const CAPTURE: &str = "6b1c2d3e-4f50-4a61-8b72-839405a6b7c8";
 
-fn oid() -> ObjectiveId {
+pub(crate) fn oid() -> ObjectiveId {
     ObjectiveId::new(O)
+}
+
+pub(crate) fn epoch() -> Id {
+    Id::parse("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee").unwrap()
+}
+
+pub(crate) fn snapshot_data(sequence: u64) -> ReplyData {
+    ReplyData::Snapshot(wire::SnapshotData {
+        service_epoch: epoch(),
+        sequence: Counter::new(sequence),
+        workspaces: Vec::new(),
+        objectives: Vec::new(),
+        settings: wire::Settings {
+            verification_commands: Vec::new(),
+            default_model: None,
+        },
+    })
+}
+
+pub(crate) fn event(sequence: u64) -> wire::EventFrame {
+    wire::EventFrame {
+        service_epoch: epoch(),
+        sequence: Counter::new(sequence),
+        event: wire::Event::ObjectiveChanged(wire_detail(O).summary()),
+    }
 }
 
 fn reference() -> Reference {

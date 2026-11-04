@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use lade_protocol::client::{
     self as wire, Empty, ErrorCode, EventFrame, OperationStatus, Rejection, SafeAction,
-    SnapshotData,
 };
 use lade_protocol::types::{Counter, Id};
 
@@ -10,19 +9,11 @@ use super::*;
 use crate::presentation::state::model::{
     ArtifactDigest, CaptureId, DeliveryMode, DraftId, Reference, ReferenceVersion, RepoPath, Side,
 };
-use crate::transport::requests::tests::{O, wire_detail};
+use crate::transport::requests::tests::{O, epoch, event, oid, snapshot_data};
 
 fn ids() -> impl FnMut() -> Id + Send + 'static {
     static NEXT: AtomicU8 = AtomicU8::new(1);
     move || Id::from_random_bytes([NEXT.fetch_add(1, Ordering::Relaxed); 16])
-}
-
-fn epoch() -> Id {
-    Id::parse("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee").unwrap()
-}
-
-fn oid() -> ObjectiveId {
-    ObjectiveId::new(O)
 }
 
 fn connected() -> (Core, Step) {
@@ -40,27 +31,6 @@ fn names(step: &Step) -> Vec<&'static str> {
 
 fn ok(frame: &RequestFrame, data: ReplyData) -> Reply {
     Reply::ok(frame.request_id.clone(), data)
-}
-
-fn snapshot_data(sequence: u64) -> ReplyData {
-    ReplyData::Snapshot(SnapshotData {
-        service_epoch: epoch(),
-        sequence: Counter::new(sequence),
-        workspaces: Vec::new(),
-        objectives: Vec::new(),
-        settings: wire::Settings {
-            verification_commands: Vec::new(),
-            default_model: None,
-        },
-    })
-}
-
-fn event(sequence: u64) -> EventFrame {
-    EventFrame {
-        service_epoch: epoch(),
-        sequence: Counter::new(sequence),
-        event: Event::ObjectiveChanged(wire_detail(O).summary()),
-    }
 }
 
 fn send_message() -> Intent {

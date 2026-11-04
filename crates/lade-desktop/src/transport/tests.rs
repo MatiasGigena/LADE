@@ -9,12 +9,16 @@ use std::time::{Duration, Instant};
 
 use lade_protocol::client::{
     self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeLevel, Reply, ReplyData,
-    Request, ServiceNotice, SnapshotData,
+    Request, ServiceNotice,
 };
-use lade_protocol::types::{Counter, Id};
+use lade_protocol::types::Counter;
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 
 use super::connection::{self, Config, ConnectError, Input, random_id, spawn_driver};
+use super::requests::{
+    self,
+    tests::{epoch, snapshot_data},
+};
 use crate::presentation::controller::intents::{Intent, StartPoint};
 use crate::presentation::state::model::{
     Basis, ConnectionState, DeliveryMode, ExecutionState, Intent as ObjectiveIntent, ModelRef,
@@ -135,31 +139,8 @@ fn accept(listener: &UnixListener) -> FakeLink {
     link
 }
 
-fn epoch() -> Id {
-    Id::parse("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee").unwrap()
-}
-
-fn snapshot(sequence: u64) -> ReplyData {
-    ReplyData::Snapshot(SnapshotData {
-        service_epoch: epoch(),
-        sequence: Counter::new(sequence),
-        workspaces: Vec::new(),
-        objectives: Vec::new(),
-        settings: wire::Settings {
-            verification_commands: Vec::new(),
-            default_model: None,
-        },
-    })
-}
-
 fn event(sequence: u64) -> ClientBody {
-    ClientBody::Event(EventFrame {
-        service_epoch: epoch(),
-        sequence: Counter::new(sequence),
-        event: Event::ObjectiveChanged(
-            super::requests::tests::wire_detail(super::requests::tests::O).summary(),
-        ),
-    })
+    ClientBody::Event(requests::tests::event(sequence))
 }
 
 #[test]
@@ -176,12 +157,18 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
         let first = link.request();
         assert_eq!(first.request.name(), wire::RequestName::Snapshot);
         assert!(first.operation_id.is_none());
-        link.send(ClientBody::Reply(Reply::ok(first.request_id, snapshot(5))));
+        link.send(ClientBody::Reply(Reply::ok(
+            first.request_id,
+            snapshot_data(5),
+        )));
         link.send(event(6));
         link.send(event(8));
         let resync = link.request();
         assert_eq!(resync.request.name(), wire::RequestName::Snapshot);
-        link.send(ClientBody::Reply(Reply::ok(resync.request_id, snapshot(8))));
+        link.send(ClientBody::Reply(Reply::ok(
+            resync.request_id,
+            snapshot_data(8),
+        )));
         let command = link.request();
         assert_eq!(command.request.name(), wire::RequestName::ReviewFreeze);
         let operation_id = command.operation_id.clone().expect("operation id");
@@ -197,7 +184,10 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
             let frame = link.request();
             match frame.request {
                 Request::Snapshot(_) => {
-                    link.send(ClientBody::Reply(Reply::ok(frame.request_id, snapshot(9))));
+                    link.send(ClientBody::Reply(Reply::ok(
+                        frame.request_id,
+                        snapshot_data(9),
+                    )));
                 }
                 Request::OperationGet(query) => {
                     assert_eq!(query.operation_id, operation_id);
