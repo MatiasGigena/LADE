@@ -11,6 +11,16 @@ use sha2::{Digest, Sha256};
 
 use crate::adapters::sandbox::{CgroupLeaf, find_program};
 
+/// How often namespace-init discovery re-reads `/proc` for the sandbox's first child. Linux
+/// gives no notification when a process forks, so discovery polls until `INIT_DISCOVERY`.
+const INIT_POLL: Duration = Duration::from_millis(5);
+/// How long the startup sweep keeps killing processes that carry the sandbox marker, and how
+/// long it waits for killed pidfile records to disappear.
+const SWEEP_WAIT: Duration = Duration::from_secs(3);
+/// How often the sweep re-scans `/proc` while it waits: killed processes are not this
+/// service's children, so there is no exit status to wait on.
+const SWEEP_POLL: Duration = Duration::from_millis(20);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PidRecord {
     pub pid: u32,
@@ -127,7 +137,7 @@ fn discover_init(pid: u32, ended: &impl Fn() -> bool) -> io::Result<Option<PidRe
                 "sandbox namespace init not found",
             ));
         }
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(INIT_POLL);
     }
 }
 
@@ -208,7 +218,7 @@ fn marked(marker: &str) -> Vec<u32> {
 
 pub fn kill_marked(marker: &str) -> Vec<u32> {
     let mut killed = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + SWEEP_WAIT;
     loop {
         let found = marked(marker);
         if found.is_empty() || Instant::now() >= deadline {
@@ -223,7 +233,7 @@ pub fn kill_marked(marker: &str) -> Vec<u32> {
                 killed.push(pid);
             }
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(SWEEP_POLL);
     }
 }
 
@@ -274,9 +284,9 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
             }
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + SWEEP_WAIT;
     while killed.iter().any(PidRecord::is_alive) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(SWEEP_POLL);
     }
     for path in pidfiles {
         if fs::remove_file(path).is_ok() {

@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{SandboxCommand, find_program};
+use crate::support::process::wait_until;
 
-const POLL: Duration = Duration::from_millis(10);
 const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,17 +106,14 @@ pub fn run_bounded_with(
     });
     let deadline = start + timeout;
     let mut timed_out = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if Instant::now() >= deadline {
+    let status = match wait_until(&mut child, deadline)? {
+        Some(status) => status,
+        None => {
             timed_out = true;
             kill_group(pgid);
             let _ = child.kill();
-            break child.wait()?;
+            child.wait()?
         }
-        thread::sleep(POLL);
     };
     let elapsed = start.elapsed();
     if done_rx.recv_timeout(DRAIN_GRACE).is_err() {

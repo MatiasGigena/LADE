@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::limits::CgroupLimits;
+use crate::support::process::wait_until;
 
 const MOUNT: &str = "/sys/fs/cgroup";
 const CONTROLLERS: [&str; 3] = ["memory", "pids", "cpu"];
@@ -17,6 +18,11 @@ const SANDBOXES: &str = "sandboxes";
 const PROBE: &str = "delegation-probe";
 const KILL_WAIT: Duration = Duration::from_secs(2);
 const QUERY_WAIT: Duration = Duration::from_secs(5);
+/// How often the delegation probe re-reads `pids.events`. The kernel's only change signal for
+/// it is an inotify watch, which is not worth a dependency for a one-off startup probe.
+const PROBE_POLL: Duration = Duration::from_millis(5);
+/// How often a killed leaf is re-checked for remaining processes before it is removed.
+const KILL_POLL: Duration = Duration::from_millis(10);
 const MOVE_PASSES: usize = 8;
 const CGROUP2_SUPER_MAGIC: i128 = 0x6367_7270;
 const SYSTEMCTL: [&str; 2] = ["/usr/bin/systemctl", "/bin/systemctl"];
@@ -277,18 +283,12 @@ fn ask_user_manager(unit: &str) -> Result<String, String> {
 }
 
 fn wait_bounded(child: &mut Child) -> Option<ExitStatus> {
-    let deadline = Instant::now() + QUERY_WAIT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(5)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
+    if let Ok(Some(status)) = wait_until(child, Instant::now() + QUERY_WAIT) {
+        return Some(status);
     }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
 }
 
 fn own_cgroup(membership: &str) -> Option<&str> {
@@ -495,7 +495,7 @@ fn prove_in(probe: &Path) -> Result<(), String> {
         && matches!(shell.try_wait(), Ok(None))
         && Instant::now() < deadline
     {
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(PROBE_POLL);
     }
     let refused = fork_refusals(probe);
     let _ = shell.kill();
@@ -538,7 +538,7 @@ fn kill_and_remove(leaf: &Path) {
     let _ = fs::write(leaf.join("cgroup.kill"), "1");
     let deadline = Instant::now() + KILL_WAIT;
     while populated(leaf) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(KILL_POLL);
     }
     let _ = fs::remove_dir(leaf);
 }

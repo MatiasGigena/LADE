@@ -25,10 +25,18 @@ pub use rows::{
 };
 
 pub const LOCK_FILE: &str = "lade.lock";
+/// How many times `lock_state` tries the state lock, [`LOCK_RETRY`] apart. `flock` has no
+/// timed form, so a bounded wait for a predecessor's exit retries the non-blocking lock.
+const LOCK_ATTEMPTS: u32 = 40;
+const LOCK_RETRY: Duration = Duration::from_millis(50);
 
 /// Takes the exclusive lock that marks the state directory as owned by one service. Retries
-/// for about two seconds so a restarting service can outlast its predecessor's exit; a lock
-/// still held after that fails with `ErrorKind::WouldBlock`.
+/// for about two seconds so a restarting service can outlast its predecessor's exit.
+///
+/// # Errors
+///
+/// Returns the error from creating or opening the lock file, or `ErrorKind::WouldBlock` when
+/// another process still holds the lock after the last attempt.
 pub fn lock_state(state: &Path) -> io::Result<File> {
     let file = OpenOptions::new()
         .create(true)
@@ -36,11 +44,11 @@ pub fn lock_state(state: &Path) -> io::Result<File> {
         .write(true)
         .mode(0o600)
         .open(state.join(LOCK_FILE))?;
-    for _ in 0..40 {
+    for _ in 0..LOCK_ATTEMPTS {
         if rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
             return Ok(file);
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(LOCK_RETRY);
     }
     Err(io::ErrorKind::WouldBlock.into())
 }

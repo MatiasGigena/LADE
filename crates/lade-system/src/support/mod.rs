@@ -2,6 +2,7 @@
 //! private-directory handling. Nothing here knows about requests, storage rows or the wire.
 
 pub mod fs;
+pub mod process;
 
 use std::fmt::Write as _;
 use std::fs::File;

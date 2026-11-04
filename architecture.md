@@ -80,7 +80,7 @@ crates/
     supervision/                # worker launch, egress gateway, credentials, terminals
     adapters/{artifacts,git,profile,providers,sandbox}/
     transport/                  # client socket admission and framing
-    support/                    # clock, randomness, hex, verified private directories
+    support/                    # clock, randomness, hex, private directories, child waits
     diagnostics.rs, fault.rs    # service log capture; test fault injection
     bin/laded.rs                # composition root and CLI
   lade-desktop/src/

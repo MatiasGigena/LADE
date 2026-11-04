@@ -12,6 +12,7 @@ use rustix::process::{Pid, Signal, kill_process_group};
 
 use super::credentials::Secret;
 use crate::adapters::sandbox::find_program;
+use crate::support::process::wait_until;
 
 pub const SERVICE: &str = "lade";
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -19,7 +20,6 @@ pub const STORE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_SECRET_BYTES: usize = 64 << 10;
 const MAX_STDERR_BYTES: usize = 4 << 10;
 const MAX_REASON_CHARS: usize = 200;
-const POLL: Duration = Duration::from_millis(10);
 const PASSED_ENV: &[&str] = &[
     "HOME",
     "XDG_RUNTIME_DIR",
@@ -293,7 +293,7 @@ impl SecretService {
             .stderr
             .take()
             .map(|pipe| thread::spawn(move || read_capped(pipe, MAX_STDERR_BYTES)));
-        let status = wait_until(&mut child, deadline);
+        let status = wait_or_kill(&mut child, deadline);
         if let Some(writer) = writer {
             let _ = writer.join();
         }
@@ -320,13 +320,11 @@ fn run_error(error: RunError, bound: Duration) -> String {
     }
 }
 
-fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
-            _ => break,
-        }
+/// Waits for `child` until `deadline`; a child still running then (or one whose status cannot
+/// be read) is killed with its process group.
+fn wait_or_kill(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
+    if let Ok(Some(status)) = wait_until(child, deadline) {
+        return Some(status);
     }
     if let Some(group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
         let _ = kill_process_group(group, Signal::KILL);
