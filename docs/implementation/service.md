@@ -43,6 +43,12 @@ handlers) — workers and terminals die with their sandbox (`--die-with-parent`)
 | `$RUNTIME/control.cap`, `control.sock` | admission capability and control socket (0600, directory 0700) |
 | `$RUNTIME/g/<12 hex>-<gen>.sock` | per-launch gateway sockets (0600, directory 0700; swept on start) |
 
+The state and runtime directories, the directories the service creates under them (`worktrees/`, `sessions/` and each
+session directory, `verify/`, `run/`, `tmp/`, `artifacts/`, `profile/`, `backups/`, `logs/`, `g/`) are created
+through one check (`support::fs::ensure_private_dir`): created 0700 if missing, then refused unless it is a real
+directory (not a symbolic link) owned by the service's effective user with no group or other permission bits. An
+existing directory that fails the check is reported, never repaired.
+
 Unix socket paths hold at most 107 bytes. Gateway sockets therefore live under the runtime directory with short
 names, so any state directory length works; at startup `laded` refuses (exit 78, before creating anything) a runtime
 directory whose `control.sock` or widest gateway socket path (generation up to 9,999,999) would not fit, naming the
