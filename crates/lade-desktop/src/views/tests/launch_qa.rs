@@ -172,10 +172,11 @@ fn launch_qa_opening_workspace_resolves_its_previous_error() {
         let app = app(1440, 900);
         app.store.apply(StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: "workspace_open/invalid_request".into(),
+            code: "invalid_request".into(),
             message:
                 "Couldn't open workspace. Path is not the top level of a non-bare Git repository."
                     .into(),
+            scope: NoticeScope::WorkspaceOpen,
         }));
         assert!(app.notice.is_visible(), "failed open is visible");
         let settings = app.store.state().settings.clone();
@@ -191,6 +192,7 @@ fn launch_qa_opening_workspace_resolves_its_previous_error() {
             level: NoticeLevel::Warning,
             code: "storage_pressure".into(),
             message: "Storage is running low.".into(),
+            scope: NoticeScope::General,
         }));
         let workspace = app.store.state().active_workspace().unwrap().clone();
         app.store.apply(StoreUpdate::WorkspaceOpened(workspace));

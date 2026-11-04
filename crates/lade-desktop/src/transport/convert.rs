@@ -686,6 +686,7 @@ pub fn notice(n: &wire::ServiceNotice) -> view::ServiceNotice {
         level: notice_level(n.level),
         code: n.code.clone(),
         message: n.message.clone(),
+        scope: view::NoticeScope::General,
     }
 }
 

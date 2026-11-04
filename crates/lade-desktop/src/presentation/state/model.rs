@@ -747,11 +747,21 @@ pub enum NoticeLevel {
     Error,
 }
 
+/// What a notice is about, so a later outcome can resolve the notices it answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NoticeScope {
+    #[default]
+    General,
+    /// A failed attempt to open a workspace folder.
+    WorkspaceOpen,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceNotice {
     pub level: NoticeLevel,
     pub code: String,
     pub message: String,
+    pub scope: NoticeScope,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]

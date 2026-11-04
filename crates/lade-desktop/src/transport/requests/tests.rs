@@ -833,7 +833,7 @@ fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface()
 fn refusals_are_plain_sentences_with_the_code_kept_apart() {
     // A precondition: no code, no "Refresh" advice (refreshing would not help).
     let terminal = refusal(
-        "Open terminal",
+        "open terminal",
         &Rejection::new(
             ErrorCode::InvalidLifecycle,
             SafeAction::Refresh,
@@ -850,7 +850,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
     );
     // Stale state: refreshing helps, and says so once.
     let stale = refusal(
-        "Approve",
+        "approve",
         &Rejection::new(ErrorCode::StaleTarget, SafeAction::Refresh, ""),
     );
     assert_eq!(
@@ -859,7 +859,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
     );
     assert_eq!(stale.details, "stale_target");
     let worded = refusal(
-        "Edit intent",
+        "edit intent",
         &Rejection::new(
             ErrorCode::StaleAssociation,
             SafeAction::Refresh,
@@ -872,7 +872,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
     );
     // Bare codes and identifiers are never shown; a lowercase service detail becomes a sentence.
     let bare = refusal(
-        "Start agent",
+        "start agent",
         &Rejection::new(
             ErrorCode::ExecutionUnavailable,
             SafeAction::ExplicitContinue,
@@ -884,7 +884,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
         "Couldn't start agent. The agent isn't running."
     );
     let gone = refusal(
-        "Delete draft",
+        "delete draft",
         &Rejection::new(ErrorCode::NotFound, SafeAction::Refresh, "draft"),
     );
     assert_eq!(
@@ -892,7 +892,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
         "Couldn't delete draft. The draft no longer exists."
     );
     let lower = refusal(
-        "Terminal input",
+        "send terminal input",
         &Rejection::new(
             ErrorCode::NotFound,
             SafeAction::Refresh,
@@ -904,7 +904,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
         "Couldn't send terminal input. Terminal not found."
     );
     assert_eq!(
-        rejection_message("Checking the outcome of “Approve”", &stale_rejection()),
+        rejection_message("check the outcome of “Approve”", &stale_rejection()),
         "Couldn't check the outcome of “Approve”. The Integration Target moved. Refresh and try again."
     );
     // Every code reads without its spelling.
@@ -915,7 +915,7 @@ fn refusals_are_plain_sentences_with_the_code_kept_apart() {
         ErrorCode::Conflict,
         ErrorCode::VersionMismatch,
     ] {
-        let message = rejection_message("Approve", &Rejection::new(code, SafeAction::None, ""));
+        let message = rejection_message("approve", &Rejection::new(code, SafeAction::None, ""));
         assert!(!message.contains(convert::error_code(code)), "{message}");
         assert!(!message.contains('_'), "{message}");
     }
@@ -936,6 +936,39 @@ fn commands_without_an_objective_still_use_the_notice() {
     assert!(matches!(
         effects.updates.as_slice(),
         [StoreUpdate::Notice(n)] if n.message == "Couldn't save default model. Unknown model."
+    ));
+}
+
+#[test]
+fn a_failed_workspace_open_is_scoped_and_explains_the_folder() {
+    let effects = rejection_effects(
+        &context_of(&Intent::OpenWorkspace {
+            path: PathBuf::from("/tmp/repo/.git"),
+        }),
+        &Rejection::new(
+            ErrorCode::InvalidRequest,
+            SafeAction::None,
+            "not a repository",
+        ),
+    );
+    let [StoreUpdate::Notice(notice)] = effects.updates.as_slice() else {
+        panic!("one notice: {:?}", effects.updates);
+    };
+    assert_eq!(notice.scope, NoticeScope::WorkspaceOpen);
+    assert_eq!(notice.code, "invalid_request");
+    assert!(
+        notice
+            .message
+            .starts_with("Couldn't open workspace. Not a repository.")
+    );
+    assert!(notice.message.ends_with("It needs at least one commit."));
+    let other = rejection_effects(
+        &context_of(&Intent::LoadResources),
+        &Rejection::new(ErrorCode::InvalidRequest, SafeAction::None, "bad"),
+    );
+    assert!(matches!(
+        other.updates.as_slice(),
+        [StoreUpdate::Notice(n)] if n.scope == NoticeScope::General
     ));
 }
 

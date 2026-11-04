@@ -7,8 +7,9 @@ use super::drafts::DraftEditor;
 use super::model::{
     ActionSurface, ActivityItem, ActivityItemId, Attention, Basis, ChangeList, ConnectionState,
     DeliveryMode, Draft, DraftId, DraftState, FileContent, FileDiff, FilePage, InputSummary, Load,
-    NoticeLevel, ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal, RepoPath,
-    SearchResults, ServiceNotice, Settings, Side, VerificationSummary, Workspace, WorkspaceId,
+    NoticeLevel, NoticeScope, ObjectiveDetail, ObjectiveId, ObjectiveSummary, Reference, Refusal,
+    RepoPath, SearchResults, ServiceNotice, Settings, Side, VerificationSummary, Workspace,
+    WorkspaceId,
 };
 use crate::presentation::keys::Keymap;
 use crate::presentation::layout::{LayoutClass, Region};
@@ -1032,6 +1033,7 @@ impl PresentationState {
             level: NoticeLevel::Warning,
             code: code.to_owned(),
             message: refusal.message,
+            scope: NoticeScope::General,
         });
         vec![Change::Notices]
     }
@@ -1497,6 +1499,7 @@ mod tests {
                 level: crate::presentation::state::model::NoticeLevel::Warning,
                 code: "c".into(),
                 message: format!("notice {n}"),
+                scope: NoticeScope::General,
             }));
         }
         assert_eq!(state.notices.len(), MAX_NOTICES);
@@ -1610,6 +1613,7 @@ mod tests {
             level: crate::presentation::state::model::NoticeLevel::Info,
             code: "query_operation".into(),
             message: "Checking outcome of “Integrate”…".into(),
+            scope: NoticeScope::General,
         };
         state.apply(StoreUpdate::CommandStatus {
             objective_id: o.clone(),

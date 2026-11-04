@@ -12,7 +12,8 @@ use super::requests::{self, Context, Effects};
 use crate::presentation::controller::intents::Intent;
 use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
-    ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, ObjectiveId, ServiceNotice,
+    ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, NoticeScope, ObjectiveId,
+    ServiceNotice,
 };
 use crate::presentation::state::store::StoreUpdate;
 
@@ -58,6 +59,7 @@ fn notice(level: NoticeLevel, code: &str, message: String) -> ServiceNotice {
         level,
         code: code.to_owned(),
         message,
+        scope: NoticeScope::General,
     }
 }
 
@@ -714,7 +716,7 @@ impl Core {
                 OperationState::Unknown,
                 None,
                 Some(requests::rejection_message(
-                    &format!("Checking the outcome of “{label}”"),
+                    &format!("check the outcome of “{label}”"),
                     &rejection,
                 )),
             ),

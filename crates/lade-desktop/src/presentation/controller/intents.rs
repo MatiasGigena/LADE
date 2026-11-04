@@ -283,7 +283,7 @@ impl Intent {
             Self::ImportProfile { .. } => "Import pi profile",
             Self::RespondDialog { .. } => "Answer extension dialog",
             Self::OpenTerminal { .. } => "Open terminal",
-            Self::TerminalInput { .. } => "Terminal input",
+            Self::TerminalInput { .. } => "Send terminal input",
             Self::ResizeTerminal { .. } => "Resize terminal",
             Self::CloseTerminal { .. } => "Close terminal",
             Self::StopService { .. } => "Exit and stop the service",

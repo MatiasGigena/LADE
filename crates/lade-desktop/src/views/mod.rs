@@ -27,7 +27,7 @@ use crate::presentation::layout::{self, LayoutClass, Region, WideSizes};
 use crate::presentation::state::attention::{self, AttentionWatcher, Delivery, Notifier};
 use crate::presentation::state::drafts::CLOSE_WAIT_MS;
 use crate::presentation::state::model::{
-    Attention, ConnectionState, DraftId, NoticeLevel, ServiceNotice,
+    Attention, ConnectionState, DraftId, NoticeLevel, NoticeScope, ServiceNotice,
 };
 use crate::presentation::state::store::{Change, MainView, Store, StoreUpdate, ViewerContent};
 use crate::transport::bridge;
@@ -385,6 +385,7 @@ impl App {
                 level: NoticeLevel::Warning,
                 code: "keybindings_ignored".to_owned(),
                 message,
+                scope: NoticeScope::General,
             }));
         }
     }
@@ -849,7 +850,7 @@ impl App {
             if state
                 .notices
                 .last()
-                .is_some_and(|n| n.code.starts_with("workspace_open/"))
+                .is_some_and(|n| n.scope == NoticeScope::WorkspaceOpen)
             {
                 self.notices_seen.set(state.notices_received);
                 drop(state);
@@ -984,7 +985,7 @@ impl App {
         let text = widgets::label(&notice.message, &[]);
         text.set_hexpand(true);
         self.notice.append(&text);
-        if notice.code.starts_with("workspace_open/") {
+        if notice.scope == NoticeScope::WorkspaceOpen {
             let retry = widgets::wrapping_button("Choose repository…", &[]);
             let weak = Rc::downgrade(self);
             retry.connect_clicked(move |_| {

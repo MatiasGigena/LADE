@@ -6,8 +6,8 @@ use super::convert::{self, Invalid, id, to_basis, to_path};
 use crate::presentation::controller::intents::{Intent, StartPoint, StopReason};
 use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
-    self as view, ActionSurface, Basis, DraftId, NoticeLevel, ObjectiveId, Refusal, RepoPath,
-    SearchScope, ServiceNotice, Side,
+    self as view, ActionSurface, Basis, DraftId, NoticeLevel, NoticeScope, ObjectiveId, Refusal,
+    RepoPath, SearchScope, ServiceNotice, Side,
 };
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
@@ -20,6 +20,7 @@ pub const READ_WINDOW: u32 = 262_144;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Context {
     Snapshot,
+    OpenWorkspace,
     Objective(ObjectiveId),
     Activity(ObjectiveId),
     Changes(ObjectiveId, Basis),
@@ -61,6 +62,7 @@ impl Context {
     pub fn objective_id(&self) -> Option<&ObjectiveId> {
         match self {
             Self::Snapshot
+            | Self::OpenWorkspace
             | Self::Search { .. }
             | Self::Models(_)
             | Self::Resources
@@ -80,6 +82,7 @@ impl Context {
     pub fn label(&self) -> &'static str {
         match self {
             Self::Snapshot => "Load service state",
+            Self::OpenWorkspace => "Open workspace",
             Self::Objective(_) => "Load Objective",
             Self::Activity(_) => "Load activity",
             Self::Changes(..) => "Load Change Set",
@@ -94,6 +97,14 @@ impl Context {
             Self::Command { label, .. } | Self::Terminal(_, label) => label,
             Self::Stop => "Exit and stop the service",
         }
+    }
+
+    /// The label as a verb phrase, for "Couldn't …" sentences.
+    pub fn action(&self) -> String {
+        let mut chars = self.label().chars();
+        chars.next().map_or_else(String::new, |first| {
+            first.to_lowercase().chain(chars).collect()
+        })
     }
 }
 
@@ -194,7 +205,7 @@ fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
                     |_| Invalid("the folder path cannot be sent (empty or over 4096 bytes)".into()),
                 )?,
             }),
-            Context::command(intent.label(), None),
+            Context::OpenWorkspace,
         ),
         I::LoadObjective { objective_id } => (
             Request::ObjectiveGet(selector(objective_id)?),
@@ -761,6 +772,7 @@ fn agent_session_effects(context: &Context, data: &ReplyData, effects: &mut Effe
                         format!("; skipped: {}", result.skipped.join("; "))
                     }
                 ),
+                scope: NoticeScope::General,
             }));
             effects
                 .follow_ups
@@ -984,22 +996,6 @@ pub fn reply_effects(context: &Context, data: ReplyData) -> Effects {
     effects
 }
 
-fn could_not(label: &str) -> String {
-    let action = match label {
-        "Terminal input" => "send terminal input".to_owned(),
-        _ => match label.strip_prefix("Checking ") {
-            Some(rest) => format!("check {rest}"),
-            None => {
-                let mut chars = label.chars();
-                chars.next().map_or_else(String::new, |first| {
-                    first.to_lowercase().chain(chars).collect()
-                })
-            }
-        },
-    };
-    format!("Couldn't {action}.")
-}
-
 fn plain_reason(rejection: &Rejection) -> String {
     let detail = rejection.detail.trim();
     let machine = !detail.contains(' ')
@@ -1037,41 +1033,28 @@ fn technical_details(rejection: &Rejection) -> String {
     }
 }
 
-pub fn refusal(label: &str, rejection: &Rejection) -> Refusal {
+pub fn refusal(action: &str, rejection: &Rejection) -> Refusal {
     Refusal {
-        message: format!("{} {}", could_not(label), reason_and_advice(rejection)),
+        message: format!("Couldn't {action}. {}", reason_and_advice(rejection)),
         details: technical_details(rejection),
     }
 }
 
-pub fn rejection_message(label: &str, rejection: &Rejection) -> String {
-    refusal(label, rejection).message
+pub fn rejection_message(action: &str, rejection: &Rejection) -> String {
+    refusal(action, rejection).message
 }
 
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
-    // Scope folder-open failures so a later successful open can resolve only that notice.
-    let code = if matches!(
-        context,
-        Context::Command {
-            label: "Open workspace",
-            ..
-        }
-    ) {
-        format!("workspace_open/{}", convert::error_code(rejection.code))
-    } else {
-        convert::error_code(rejection.code).to_owned()
-    };
-    let mut refused = refusal(context.label(), rejection);
-    if code.starts_with("workspace_open/") && rejection.code == wire::ErrorCode::InvalidRequest {
-        refused.message.push_str(" Choose the repository folder containing .git, not .git itself. It needs at least one commit.");
-    }
+    let code = convert::error_code(rejection.code);
+    let mut refused = refusal(&context.action(), rejection);
     let updates = &mut effects.updates;
-    let notice = |refused: Refusal| {
+    let notice = |scope, refused: Refusal| {
         StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: code.clone(),
+            code: code.to_owned(),
             message: refused.message,
+            scope,
         })
     };
     match context {
@@ -1091,6 +1074,13 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                 message: refused.message,
             });
         }
+        Context::OpenWorkspace => {
+            if rejection.code == wire::ErrorCode::InvalidRequest {
+                refused.message.push_str(" Choose the repository folder containing .git, not .git itself. It needs at least one commit.");
+            }
+            // Scoped so a later successful open resolves only this notice.
+            updates.push(notice(NoticeScope::WorkspaceOpen, refused));
+        }
         Context::Search { .. } => updates.push(StoreUpdate::SearchFailed {
             message: refused.message,
         }),
@@ -1105,7 +1095,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
         | Context::Inputs(_)
         | Context::Models(_)
         | Context::Tree(_)
-        | Context::Resources => updates.push(notice(refused)),
+        | Context::Resources => updates.push(notice(NoticeScope::General, refused)),
         Context::Command {
             objective_id,
             draft_id,
@@ -1151,7 +1141,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                         refusal: refused,
                     });
                 }
-                (None, None) => updates.push(notice(refused)),
+                (None, None) => updates.push(notice(NoticeScope::General, refused)),
             }
             if let Some(o) = objective_id {
                 effects.follow_ups.push(refresh_objective(o));
