@@ -131,6 +131,7 @@ wire_struct!(ObjectiveDetail {
     history_deleted: Option<bool>,
 });
 impl ObjectiveDetail {
+    #[must_use]
     pub fn summary(&self) -> ObjectiveSummary {
         ObjectiveSummary {
             objective_id: self.objective_id.clone(),

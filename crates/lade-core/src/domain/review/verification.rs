@@ -18,6 +18,7 @@ pub enum VerificationOutcome {
 }
 
 impl VerificationOutcome {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -73,6 +74,7 @@ pub enum Evidence {
 }
 
 impl Review {
+    #[must_use]
     pub fn latest_verifications(&self, candidate_id: CandidateId) -> Vec<&Verification> {
         let mut latest: Vec<&Verification> = Vec::new();
         for verification in self
@@ -91,6 +93,7 @@ impl Review {
         latest
     }
 
+    #[must_use]
     pub fn evidence(&self, candidate_id: CandidateId) -> Evidence {
         if self.verifications.iter().any(|verification| {
             verification.candidate_id == candidate_id
@@ -111,6 +114,7 @@ impl Review {
         }
     }
 
+    #[must_use]
     pub fn verification_failed(&self) -> bool {
         self.current_candidate()
             .is_some_and(|candidate| self.evidence(candidate.id) == Evidence::Failed)

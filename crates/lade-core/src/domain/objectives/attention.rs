@@ -13,6 +13,7 @@ pub enum Attention {
 }
 
 impl Attention {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::NeedsAttention => "needs_attention",
@@ -38,6 +39,7 @@ pub enum Badge {
 }
 
 impl Badge {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Interrupted => "interrupted",
@@ -69,6 +71,7 @@ pub struct AttentionView {
     pub badges: Vec<Badge>,
 }
 
+#[must_use]
 pub fn derive_attention(objective: &Objective, facts: &AttentionFacts) -> AttentionView {
     let record = objective.record();
     if record.lifecycle.is_terminal() {

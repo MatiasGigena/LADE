@@ -10,10 +10,12 @@ pub struct ExecutionGeneration(u64);
 impl ExecutionGeneration {
     pub const NONE: Self = Self(0);
 
+    #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
+    #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }
@@ -40,6 +42,7 @@ pub enum ExecutionState {
 }
 
 impl ExecutionState {
+    #[must_use]
     pub const fn is_live(&self) -> bool {
         matches!(
             self,
@@ -47,10 +50,12 @@ impl ExecutionState {
         )
     }
 
+    #[must_use]
     pub const fn accepts_dispatch(&self) -> bool {
         matches!(self, Self::Running | Self::Idle)
     }
 
+    #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::None => "none",

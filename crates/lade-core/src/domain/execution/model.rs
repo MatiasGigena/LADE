@@ -28,10 +28,12 @@ impl ModelRef {
         })
     }
 
+    #[must_use]
     pub fn provider(&self) -> &str {
         &self.provider
     }
 
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }

@@ -37,9 +37,11 @@ impl GitId {
         };
         Self::new(algorithm, hex)
     }
+    #[must_use]
     pub fn algorithm(&self) -> GitAlgorithm {
         self.algorithm
     }
+    #[must_use]
     pub fn hex(&self) -> &str {
         &self.hex
     }

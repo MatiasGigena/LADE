@@ -22,6 +22,7 @@ impl Title {
         Ok(Self(trimmed.to_string()))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -43,13 +44,13 @@ impl BranchName {
             && name != "HEAD"
             && !name.starts_with('-')
             && !name.ends_with('.')
-            && !name.ends_with(".lock")
             && !name.contains("..")
             && !name.contains("@{")
             && !name.chars().any(forbidden_char)
-            && name
-                .split('/')
-                .all(|part| !part.is_empty() && !part.starts_with('.') && !part.ends_with(".lock"));
+            // Git refuses a `.lock` suffix on any component, comparing it case-sensitively.
+            && name.split('/').all(|part| {
+                !part.is_empty() && !part.starts_with('.') && !part.as_bytes().ends_with(b".lock")
+            });
         if !valid {
             return Err(DomainError::InvalidRequest(
                 "That isn't a valid branch name.",
@@ -58,10 +59,12 @@ impl BranchName {
         Ok(Self(name.to_string()))
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    #[must_use]
     pub fn for_objective(id: ObjectiveId) -> Self {
         Self(format!("lade/{}", id.uuid().short()))
     }
@@ -94,14 +97,17 @@ impl Intent {
         })
     }
 
+    #[must_use]
     pub fn outcome(&self) -> &str {
         &self.outcome
     }
 
+    #[must_use]
     pub fn constraints(&self) -> &str {
         &self.constraints
     }
 
+    #[must_use]
     pub fn acceptance(&self) -> &str {
         &self.acceptance
     }

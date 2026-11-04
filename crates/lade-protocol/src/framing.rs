@@ -16,6 +16,7 @@ pub struct Deframer {
     failed: bool,
 }
 impl Deframer {
+    #[must_use]
     pub fn new(framing: Framing) -> Self {
         Self {
             framing,
@@ -49,27 +50,26 @@ impl Deframer {
         while !input.is_empty() {
             match self.framing {
                 Framing::Client => {
-                    let size = match self.expected {
-                        Some(size) => size,
-                        None => {
-                            let n = (self.header.len() - self.header_len).min(input.len());
-                            self.header[self.header_len..self.header_len + n]
-                                .copy_from_slice(&input[..n]);
-                            self.header_len += n;
-                            *input = &input[n..];
-                            if self.header_len != self.header.len() {
-                                continue;
-                            }
-                            self.header_len = 0;
-                            let size = usize::try_from(u32::from_be_bytes(self.header))
-                                .map_err(|_| WireError::FrameSize)?;
-                            if size == 0 || size > MAX_FRAME {
-                                return Err(WireError::FrameSize);
-                            }
-                            self.body.reserve_exact(size);
-                            self.expected = Some(size);
-                            size
+                    let size = if let Some(size) = self.expected {
+                        size
+                    } else {
+                        let n = (self.header.len() - self.header_len).min(input.len());
+                        self.header[self.header_len..self.header_len + n]
+                            .copy_from_slice(&input[..n]);
+                        self.header_len += n;
+                        *input = &input[n..];
+                        if self.header_len != self.header.len() {
+                            continue;
                         }
+                        self.header_len = 0;
+                        let size = usize::try_from(u32::from_be_bytes(self.header))
+                            .map_err(|_| WireError::FrameSize)?;
+                        if size == 0 || size > MAX_FRAME {
+                            return Err(WireError::FrameSize);
+                        }
+                        self.body.reserve_exact(size);
+                        self.expected = Some(size);
+                        size
                     };
                     let n = (size - self.body.len()).min(input.len());
                     self.body.extend_from_slice(&input[..n]);
@@ -126,6 +126,7 @@ pub struct Decoder<M> {
     message: PhantomData<fn() -> M>,
 }
 impl<M: Message> Decoder<M> {
+    #[must_use]
     pub fn new(framing: Framing) -> Self {
         Self {
             deframer: Deframer::new(framing),

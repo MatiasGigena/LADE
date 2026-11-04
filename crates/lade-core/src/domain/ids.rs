@@ -37,6 +37,7 @@ impl Uuid {
         Ok(Self(value))
     }
 
+    #[must_use]
     pub const fn from_random_bytes(bytes: [u8; 16]) -> Self {
         let mut value = u128::from_be_bytes(bytes);
         value = (value & !(0xf << VERSION_SHIFT)) | (0x4 << VERSION_SHIFT);
@@ -44,6 +45,7 @@ impl Uuid {
         Self(value)
     }
 
+    #[must_use]
     pub fn short(self) -> String {
         let mut text = self.to_string();
         text.truncate(8);
@@ -113,6 +115,7 @@ pub enum GitAlgorithm {
 }
 
 impl GitAlgorithm {
+    #[must_use]
     pub const fn hex_len(self) -> usize {
         match self {
             Self::Sha1 => 40,
@@ -120,6 +123,7 @@ impl GitAlgorithm {
         }
     }
 
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Sha1 => "sha1",
@@ -147,10 +151,12 @@ impl GitId {
         })
     }
 
+    #[must_use]
     pub const fn algorithm(&self) -> GitAlgorithm {
         self.algorithm
     }
 
+    #[must_use]
     pub fn hex(&self) -> &str {
         &self.hex
     }
@@ -173,10 +179,12 @@ pub(crate) fn is_lower_hex(text: &str, len: usize) -> bool {
 pub struct Timestamp(i64);
 
 impl Timestamp {
+    #[must_use]
     pub const fn from_unix_ms(millis: i64) -> Self {
         Self(millis)
     }
 
+    #[must_use]
     pub const fn unix_ms(self) -> i64 {
         self.0
     }
@@ -188,10 +196,12 @@ pub struct Revision(u64);
 impl Revision {
     pub const INITIAL: Self = Self(1);
 
+    #[must_use]
     pub const fn new(value: u64) -> Self {
         Self(value)
     }
 
+    #[must_use]
     pub const fn value(self) -> u64 {
         self.0
     }

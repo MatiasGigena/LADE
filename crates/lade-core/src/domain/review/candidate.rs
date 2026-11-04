@@ -22,6 +22,7 @@ pub enum CandidateStatus {
 }
 
 impl CandidateStatus {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Current => "current",

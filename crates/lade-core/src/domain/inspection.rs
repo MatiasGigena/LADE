@@ -18,6 +18,7 @@ impl ArtifactDigest {
         Ok(Self(hex.to_string()))
     }
 
+    #[must_use]
     pub fn hex(&self) -> &str {
         &self.0
     }
@@ -50,10 +51,12 @@ impl RepoPath {
         Ok(Self(bytes))
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         String::from_utf8_lossy(&self.0).into_owned()
     }
@@ -66,6 +69,7 @@ pub enum InspectedVersion {
 }
 
 impl InspectedVersion {
+    #[must_use]
     pub fn label(self) -> String {
         match self {
             Self::Working { capture_id } => {
@@ -85,6 +89,7 @@ pub enum Side {
 }
 
 impl Side {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Old => "old",
@@ -109,14 +114,17 @@ impl ByteRange {
         Ok(Self { start, end })
     }
 
+    #[must_use]
     pub const fn start(self) -> u64 {
         self.start
     }
 
+    #[must_use]
     pub const fn end(self) -> u64 {
         self.end
     }
 
+    #[must_use]
     pub const fn byte_len(self) -> u64 {
         self.end - self.start
     }
@@ -171,34 +179,42 @@ impl Reference {
         })
     }
 
+    #[must_use]
     pub fn artifact_digest(&self) -> &ArtifactDigest {
         &self.artifact_digest
     }
 
+    #[must_use]
     pub fn path(&self) -> &RepoPath {
         &self.path
     }
 
+    #[must_use]
     pub const fn version(&self) -> InspectedVersion {
         self.version
     }
 
+    #[must_use]
     pub const fn side(&self) -> Side {
         self.side
     }
 
+    #[must_use]
     pub const fn byte_range(&self) -> ByteRange {
         self.byte_range
     }
 
+    #[must_use]
     pub fn selected_text(&self) -> &str {
         &self.selected_text
     }
 
+    #[must_use]
     pub const fn line_hint(&self) -> u32 {
         self.line_hint
     }
 
+    #[must_use]
     pub fn staleness(&self, current: CurrentContent<'_>) -> Staleness {
         match current {
             CurrentContent::Missing => Staleness::Missing,
@@ -233,6 +249,7 @@ pub enum Staleness {
 }
 
 impl Staleness {
+    #[must_use]
     pub const fn is_stale(self) -> bool {
         !matches!(self, Self::Fresh)
     }

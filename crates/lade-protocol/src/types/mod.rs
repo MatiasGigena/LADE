@@ -154,6 +154,7 @@ impl Digest {
     }
 }
 
+#[must_use]
 pub fn truncate_utf8(text: &str, max_bytes: usize) -> (&str, bool) {
     if text.len() <= max_bytes {
         return (text, false);
@@ -165,6 +166,7 @@ pub fn truncate_utf8(text: &str, max_bytes: usize) -> (&str, bool) {
     (&text[..end], true)
 }
 
+#[must_use]
 pub fn truncate_chars(text: &str, max_chars: usize) -> &str {
     text.char_indices()
         .nth(max_chars)

@@ -14,6 +14,7 @@ pub enum BlockedReason {
 }
 
 impl BlockedReason {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::ExecutionUnavailable => "execution_unavailable",
@@ -34,6 +35,7 @@ pub enum DeliveryState {
 }
 
 impl DeliveryState {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Queued => "queued",

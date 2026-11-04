@@ -17,6 +17,7 @@ pub enum InvalidationReason {
 }
 
 impl InvalidationReason {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::ReturnedForRevision => "returned_for_revision",
@@ -63,12 +64,14 @@ pub struct IntegrationPlan {
 }
 
 impl Review {
+    #[must_use]
     pub fn valid_approval(&self) -> Option<&Approval> {
         self.approvals
             .iter()
             .find(|approval| approval.state == ApprovalState::Valid)
     }
 
+    #[must_use]
     pub fn target_stale(&self, current_target: &GitId) -> bool {
         self.current_candidate()
             .is_some_and(|candidate| candidate.base_target_commit != *current_target)

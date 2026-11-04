@@ -26,6 +26,7 @@ pub enum DomainError {
 }
 
 impl DomainError {
+    #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
@@ -52,6 +53,7 @@ impl DomainError {
 
     /// Human-readable reason, empty when the code says it all. Structured data such as the
     /// stale draft ids stays on the variant.
+    #[must_use]
     pub fn detail(&self) -> String {
         match self {
             Self::StaleReference { drafts } => match drafts.len() {

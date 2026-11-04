@@ -107,22 +107,27 @@ impl Draft {
         Ok(Self { record })
     }
 
+    #[must_use]
     pub const fn record(&self) -> &DraftRecord {
         &self.record
     }
 
+    #[must_use]
     pub fn into_record(self) -> DraftRecord {
         self.record
     }
 
+    #[must_use]
     pub const fn id(&self) -> DraftId {
         self.record.id
     }
 
+    #[must_use]
     pub const fn revision(&self) -> Revision {
         self.record.revision
     }
 
+    #[must_use]
     pub const fn is_unsent(&self) -> bool {
         matches!(self.record.state, DraftState::Unsent)
     }
@@ -181,6 +186,7 @@ impl Draft {
         self.check_editable(expected_revision)
     }
 
+    #[must_use]
     pub fn is_stale(&self, current: CurrentContent<'_>) -> bool {
         self.record.reference.staleness(current).is_stale()
     }

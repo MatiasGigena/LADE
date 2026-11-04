@@ -19,6 +19,7 @@ pub enum InputMode {
 }
 
 impl InputMode {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Prompt => "prompt",
@@ -68,6 +69,7 @@ pub struct BatchEntry<'a> {
 }
 
 /// Why input (a message or feedback) is refused for an Objective in `lifecycle` (not active).
+#[must_use]
 pub const fn input_refusal(lifecycle: Lifecycle) -> &'static str {
     match lifecycle {
         Lifecycle::Defined | Lifecycle::Active => "Start the agent before sending input.",
@@ -217,6 +219,7 @@ pub fn accept_feedback(
     })
 }
 
+#[must_use]
 pub fn render_feedback(items: &[FeedbackItem], note: Option<&str>) -> String {
     let mut blocks: Vec<String> = Vec::with_capacity(items.len() + 1);
     if let Some(note) = note.filter(|text| !text.trim().is_empty()) {

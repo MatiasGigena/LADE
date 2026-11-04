@@ -31,6 +31,7 @@ pub struct Review {
 }
 
 impl Review {
+    #[must_use]
     pub const fn new(objective_id: ObjectiveId) -> Self {
         Self {
             objective_id,
@@ -82,32 +83,39 @@ impl Review {
         })
     }
 
+    #[must_use]
     pub const fn objective_id(&self) -> ObjectiveId {
         self.objective_id
     }
 
+    #[must_use]
     pub fn candidates(&self) -> &[Candidate] {
         &self.candidates
     }
 
+    #[must_use]
     pub fn verifications(&self) -> &[Verification] {
         &self.verifications
     }
 
+    #[must_use]
     pub fn approvals(&self) -> &[Approval] {
         &self.approvals
     }
 
+    #[must_use]
     pub fn candidate(&self, id: CandidateId) -> Option<&Candidate> {
         self.candidates.iter().find(|candidate| candidate.id == id)
     }
 
+    #[must_use]
     pub fn current_candidate(&self) -> Option<&Candidate> {
         self.candidates
             .iter()
             .find(|candidate| candidate.status == CandidateStatus::Current)
     }
 
+    #[must_use]
     pub fn latest_candidate(&self) -> Option<&Candidate> {
         self.candidates.last()
     }

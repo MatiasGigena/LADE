@@ -20,6 +20,7 @@ pub struct Reassembler {
     failed: bool,
 }
 impl Reassembler {
+    #[must_use]
     pub fn new(owner: Scope, generation: Counter) -> Self {
         Self {
             owner,

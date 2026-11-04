@@ -36,20 +36,25 @@ impl WirePath {
         use std::os::unix::ffi::OsStrExt;
         Self::from_bytes(path.as_bytes())
     }
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
+    #[must_use]
     pub fn into_bytes(self) -> Vec<u8> {
         self.bytes
     }
     #[cfg(unix)]
+    #[must_use]
     pub fn to_os_string(&self) -> OsString {
         use std::os::unix::ffi::OsStringExt;
         OsString::from_vec(self.bytes.clone())
     }
+    #[must_use]
     pub fn display(&self) -> &str {
         &self.display
     }
+    #[must_use]
     pub fn b64(&self) -> String {
         base64::encode(&self.bytes)
     }

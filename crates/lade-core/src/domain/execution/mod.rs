@@ -28,6 +28,7 @@ impl Default for Execution {
 }
 
 impl Execution {
+    #[must_use]
     pub const fn new() -> Self {
         Self {
             state: ExecutionState::None,
@@ -59,14 +60,17 @@ impl Execution {
         })
     }
 
+    #[must_use]
     pub const fn state(&self) -> &ExecutionState {
         &self.state
     }
 
+    #[must_use]
     pub const fn generation(&self) -> ExecutionGeneration {
         self.generation
     }
 
+    #[must_use]
     pub const fn session(&self) -> Option<&SessionAssociation> {
         self.session.as_ref()
     }

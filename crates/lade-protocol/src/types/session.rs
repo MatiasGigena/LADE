@@ -51,6 +51,7 @@ impl ThinkingLevel {
         Self::Max,
     ];
 
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Off => "off",
@@ -63,6 +64,7 @@ impl ThinkingLevel {
         }
     }
 
+    #[must_use]
     pub fn parse(text: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|level| level.as_str() == text)
     }

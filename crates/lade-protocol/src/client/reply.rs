@@ -21,6 +21,7 @@ pub struct Rejection {
     pub stale_drafts: Vec<Id>,
 }
 impl Rejection {
+    #[must_use]
     pub fn new(code: ErrorCode, action: SafeAction, detail: &str) -> Self {
         Self {
             code,
@@ -29,6 +30,7 @@ impl Rejection {
             stale_drafts: Vec::new(),
         }
     }
+    #[must_use]
     pub fn with_stale_drafts(mut self, mut drafts: Vec<Id>) -> Self {
         drafts.truncate(MAX_STALE_DRAFTS);
         self.stale_drafts = drafts;
@@ -92,6 +94,7 @@ pub enum ReplyResult {
     },
 }
 impl ReplyResult {
+    #[must_use]
     pub fn name(&self) -> Option<RequestName> {
         match self {
             Self::Ok(data) => Some(data.name()),
@@ -115,18 +118,21 @@ struct RawReply {
     result: RawResult,
 }
 impl Reply {
+    #[must_use]
     pub fn ok(request_id: Id, data: ReplyData) -> Self {
         Self {
             request_id,
             result: ReplyResult::Ok(Box::new(data)),
         }
     }
+    #[must_use]
     pub fn rejected(request_id: Id, name: Option<RequestName>, rejection: Rejection) -> Self {
         Self {
             request_id,
             result: ReplyResult::Rejected { name, rejection },
         }
     }
+    #[must_use]
     pub fn outcome(&self) -> Option<Outcome> {
         match &self.result {
             ReplyResult::Ok(data) if data.name().is_mutating() => Some(Outcome::Ok(data.clone())),

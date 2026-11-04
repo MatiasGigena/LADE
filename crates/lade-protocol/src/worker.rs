@@ -12,6 +12,7 @@ pub struct WorkerEnvelope {
     pub body: WorkerBody,
 }
 impl WorkerEnvelope {
+    #[must_use]
     pub fn new(body: WorkerBody) -> Self {
         Self {
             protocol: crate::VERSION,
@@ -228,6 +229,7 @@ pub struct LoadedResource {
     pub message: Option<String>,
 }
 impl WorkerBody {
+    #[must_use]
     pub fn is_from_worker(&self) -> bool {
         !matches!(
             self,

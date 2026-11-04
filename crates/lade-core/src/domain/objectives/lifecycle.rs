@@ -22,6 +22,7 @@ impl Lifecycle {
         Self::Discarded,
     ];
 
+    #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -29,6 +30,7 @@ impl Lifecycle {
         )
     }
 
+    #[must_use]
     pub const fn permits(self, to: Self) -> bool {
         use Lifecycle::{
             Active, Approved, CompletedNoChanges, Defined, Discarded, Frozen, Integrated,
@@ -37,15 +39,14 @@ impl Lifecycle {
             (self, to),
             (Defined, Active)
                 | (Active, Frozen)
-                | (Frozen, Active)
-                | (Frozen, Approved)
-                | (Approved, Frozen)
-                | (Approved, Integrated)
+                | (Frozen, Active | Approved)
+                | (Approved, Frozen | Integrated)
                 | (Defined | Active | Frozen, CompletedNoChanges)
                 | (Defined | Active | Frozen | Approved, Discarded)
         )
     }
 
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Defined => "defined",

@@ -12,6 +12,7 @@ pub struct ClientEnvelope {
     pub body: ClientBody,
 }
 impl ClientEnvelope {
+    #[must_use]
     pub fn new(body: ClientBody) -> Self {
         Self {
             protocol: crate::VERSION,
@@ -63,6 +64,7 @@ pub enum ClientBody {
     ChunkCancel { transfer_id: Id },
 }
 impl ClientBody {
+    #[must_use]
     pub fn direction(&self) -> Direction {
         match self {
             Self::Hello

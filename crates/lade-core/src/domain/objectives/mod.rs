@@ -54,6 +54,7 @@ pub struct Objective {
 }
 
 impl Objective {
+    #[must_use]
     pub fn define(new: NewObjective, now: Timestamp) -> Self {
         Self {
             record: ObjectiveRecord {
@@ -94,26 +95,32 @@ impl Objective {
         Ok(Self { record })
     }
 
+    #[must_use]
     pub const fn record(&self) -> &ObjectiveRecord {
         &self.record
     }
 
+    #[must_use]
     pub fn into_record(self) -> ObjectiveRecord {
         self.record
     }
 
+    #[must_use]
     pub const fn id(&self) -> ObjectiveId {
         self.record.id
     }
 
+    #[must_use]
     pub const fn lifecycle(&self) -> Lifecycle {
         self.record.lifecycle
     }
 
+    #[must_use]
     pub const fn execution(&self) -> &Execution {
         &self.record.execution
     }
 
+    #[must_use]
     pub const fn revision(&self) -> Revision {
         self.record.revision
     }
