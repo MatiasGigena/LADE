@@ -274,18 +274,11 @@ mod tests {
         AgentSessionUpdate, Catalog, ModelView, ProviderStatus, ProviderView, UiDialog,
         UiPromptView,
     };
-    use crate::presentation::state::model::{ConnectionState, Load};
-    use crate::presentation::state::store::{PresentationState, Store};
+    use crate::presentation::state::model::Load;
     use crate::presentation::test_fixture;
 
     fn setup() -> (Rc<Controller>, Rc<RecordingSink>) {
-        let mut state = PresentationState::new(ConnectionState::Connected);
-        for update in test_fixture::fixture_updates() {
-            state.apply(update);
-        }
-        let store = Store::new(state);
-        let sink = Rc::new(RecordingSink::default());
-        let controller = Controller::new(store, sink.clone());
+        let (controller, sink) = super::super::tests::setup();
         controller.select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
         sink.intents.borrow_mut().clear();
         (controller, sink)
