@@ -53,6 +53,19 @@ pub(crate) struct LiveActivity {
     deltas: Vec<(ObjectiveId, String, String)>,
 }
 
+/// One activity item as a worker (or the service itself) reported it, before it is bounded
+/// and stored.
+#[derive(Clone, Copy)]
+struct ActivityUpdate<'a> {
+    item_id: &'a str,
+    role: ActivityRole,
+    title: &'a str,
+    text: &'a str,
+    is_error: bool,
+    truncated: bool,
+    tool_name: Option<&'a str>,
+}
+
 struct LiveItem {
     objective: ObjectiveId,
     row: ActivityRow,
@@ -495,13 +508,15 @@ impl Service {
                 tool_name,
             } => self.activity_item(
                 oid,
-                item_id.as_str(),
-                role,
-                &title,
-                &text,
-                is_error,
-                truncated,
-                tool_name.as_deref(),
+                &ActivityUpdate {
+                    item_id: item_id.as_str(),
+                    role,
+                    title: &title,
+                    text: &text,
+                    is_error,
+                    truncated,
+                    tool_name: tool_name.as_deref(),
+                },
             ),
             WorkerBody::ActivityDelta {
                 item_id,
@@ -722,18 +737,16 @@ impl Service {
         *seq
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn activity_item(
-        &mut self,
-        oid: ObjectiveId,
-        item_id: &str,
-        role: ActivityRole,
-        title: &str,
-        text: &str,
-        is_error: bool,
-        truncated: bool,
-        tool_name: Option<&str>,
-    ) {
+    fn activity_item(&mut self, oid: ObjectiveId, update: &ActivityUpdate<'_>) {
+        let ActivityUpdate {
+            item_id,
+            role,
+            title,
+            text,
+            is_error,
+            truncated,
+            tool_name,
+        } = *update;
         let existing = match self.live.items.get(item_id) {
             Some(live) => Some((live.objective, live.row.seq, live.row.at)),
             None => storage::load_activity_item(self.store.conn(), item_id)
@@ -815,13 +828,15 @@ impl Service {
         let id = new_uuid().to_string();
         self.activity_item(
             oid,
-            &id,
-            ActivityRole::System,
-            title,
-            text,
-            is_error,
-            false,
-            None,
+            &ActivityUpdate {
+                item_id: &id,
+                role: ActivityRole::System,
+                title,
+                text,
+                is_error,
+                truncated: false,
+                tool_name: None,
+            },
         );
     }
 

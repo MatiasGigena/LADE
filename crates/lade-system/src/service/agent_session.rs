@@ -53,6 +53,16 @@ pub(crate) enum Op {
     Configure,
 }
 
+/// A worker's answer to a session command, as it arrived in `command.result`.
+struct CommandResult {
+    command_id: Id,
+    ok: bool,
+    message: String,
+    entries: Option<Vec<TreeEntry>>,
+    leaf_id: Option<String>,
+    truncated: Option<bool>,
+}
+
 pub(crate) struct PendingCommand {
     pub id: String,
     pub ctx: ReqCtx,
@@ -608,12 +618,14 @@ impl Service {
                 truncated,
             } => self.command_result(
                 oid,
-                command_id.as_str(),
-                ok,
-                &message,
-                entries,
-                leaf_id,
-                truncated,
+                CommandResult {
+                    command_id,
+                    ok,
+                    message,
+                    entries,
+                    leaf_id,
+                    truncated,
+                },
             ),
             WorkerBody::ResourcesLoaded {
                 generation: pi_generation,
@@ -731,17 +743,16 @@ impl Service {
         self.emit(Event::SessionChanged(state));
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn command_result(
-        &mut self,
-        oid: ObjectiveId,
-        command_id: &str,
-        ok: bool,
-        message: &str,
-        entries: Option<Vec<TreeEntry>>,
-        leaf_id: Option<String>,
-        truncated: Option<bool>,
-    ) {
+    fn command_result(&mut self, oid: ObjectiveId, reply: CommandResult) {
+        let CommandResult {
+            command_id,
+            ok,
+            message,
+            entries,
+            leaf_id,
+            truncated,
+        } = reply;
+        let command_id = command_id.as_str();
         let live = self.live(oid);
         if live.command.as_ref().is_none_or(|c| c.id != command_id) {
             return;
