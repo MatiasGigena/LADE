@@ -1,12 +1,10 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -15,6 +13,8 @@ use rustix::pty::{OpenptFlags, grantpt, ioctl_tiocgptpeer, openpt, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
 use super::child::{SandboxedChild, lock};
+use super::input::InputQueue;
+use super::safe_id;
 use super::sweep::sandbox_marker;
 pub use crate::adapters::sandbox::TERMINAL_LIMITS;
 use crate::adapters::sandbox::{
@@ -103,10 +103,6 @@ fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn safe_id(id: &str) -> bool {
-    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
 fn invalid(what: &'static str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, what)
 }
@@ -126,9 +122,7 @@ fn winsize(cols: u16, rows: u16) -> io::Result<Winsize> {
 pub struct Terminal {
     shared: Arc<Shared>,
     controller: File,
-    input: Option<SyncSender<Vec<u8>>>,
-    queued: Arc<AtomicUsize>,
-    link_failed: Arc<AtomicBool>,
+    input: Option<InputQueue>,
     killed: bool,
 }
 
@@ -198,8 +192,6 @@ impl Terminal {
             shared: Arc::clone(&shared),
             controller: controller.try_clone()?,
             input: None,
-            queued: Arc::new(AtomicUsize::new(0)),
-            link_failed: Arc::new(AtomicBool::new(false)),
             killed: false,
         };
         let reader = controller.try_clone()?;
@@ -211,27 +203,21 @@ impl Terminal {
             terminal.kill();
             return Err(e);
         }
-        let (tx, rx) = sync_channel::<Vec<u8>>(INPUT_QUEUE_FRAMES);
-        let queued = Arc::clone(&terminal.queued);
-        let failed = Arc::clone(&terminal.link_failed);
-        let mut writer = controller;
-        let spawned = thread::Builder::new()
-            .name("lade-terminal-write".into())
-            .spawn(move || {
-                for chunk in rx {
-                    let written = writer.write_all(&chunk).and_then(|()| writer.flush());
-                    queued.fetch_sub(chunk.len(), Ordering::SeqCst);
-                    if written.is_err() {
-                        failed.store(true, Ordering::SeqCst);
-                        break;
-                    }
-                }
-            });
-        if let Err(e) = spawned {
-            terminal.kill();
-            return Err(e);
-        }
-        terminal.input = Some(tx);
+        let input = InputQueue::start(
+            "lade-terminal-write",
+            controller,
+            INPUT_QUEUE_FRAMES,
+            INPUT_QUEUE_BYTES,
+            "terminal_input_full",
+        );
+        let input = match input {
+            Ok(input) => input,
+            Err(e) => {
+                terminal.kill();
+                return Err(e);
+            }
+        };
+        terminal.input = Some(input);
         Ok(terminal)
     }
 
@@ -243,29 +229,13 @@ impl Terminal {
     /// queue is full.
     pub fn write(&self, data: &[u8]) -> io::Result<()> {
         let gone = || io::Error::new(ErrorKind::BrokenPipe, "terminal_closed");
-        let Some(tx) = self.input.as_ref() else {
+        let Some(input) = self.input.as_ref() else {
             return Err(gone());
         };
-        if self.killed || self.link_failed.load(Ordering::SeqCst) || self.exit().is_some() {
+        if self.killed || input.failed() || self.exit().is_some() {
             return Err(gone());
         }
-        let len = data.len();
-        let full = || io::Error::new(ErrorKind::WouldBlock, "terminal_input_full");
-        if self.queued.fetch_add(len, Ordering::SeqCst) + len > INPUT_QUEUE_BYTES {
-            self.queued.fetch_sub(len, Ordering::SeqCst);
-            return Err(full());
-        }
-        match tx.try_send(data.to_vec()) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(full())
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(gone())
-            }
-        }
+        input.push(data.to_vec(), gone)
     }
 
     /// Sets the terminal's size.

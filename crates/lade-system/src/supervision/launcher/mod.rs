@@ -1,31 +1,26 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::fmt;
-use std::io::{self, ErrorKind, Read, Write};
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::io::{self, ErrorKind};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ChildStderr, ChildStdin, ChildStdout, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lade_protocol::worker::WorkerBody;
-use lade_protocol::{FrameReader, Framing, Message, TransportError, WorkerEnvelope, encode};
 
-use super::child::{ChildStdio, SandboxedChild, lock};
+use super::child::SandboxedChild;
 use super::credentials::{
     CredentialError, CredentialSource, FIXTURE_PROVIDER, FIXTURE_REFUSED, FIXTURE_SWITCH,
     ReleasedCredentials,
 };
 use super::gateway::{EgressPolicy, EgressRule, Gateway, UpstreamProxy, default_policies};
 use super::providers::{ProviderAccess, ProviderFacts, classify};
+use super::safe_id;
 use super::sweep::sandbox_marker;
-use super::{
-    LaunchBinding, LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent,
-    WorkerLauncher,
-};
+use super::{LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher};
 use crate::adapters::profile::{self, CustomProvider};
 pub use crate::adapters::sandbox::WORKER_LIMITS;
 use crate::adapters::sandbox::{
@@ -33,6 +28,11 @@ use crate::adapters::sandbox::{
     sandbox_available, worker_spec,
 };
 use crate::support::fs::ensure_private_dir;
+
+mod worker;
+
+pub use worker::SandboxWorker;
+use worker::Shared;
 
 pub const NODE_ARGS: &[&str] = &["--disable-wasm-trap-handler"];
 /// The pi switches every worker spawn (session worker and model catalogue) runs with.
@@ -246,10 +246,6 @@ impl SandboxLauncher {
 
 fn invalid(what: &'static str) -> LaunchError {
     LaunchError::Io(io::Error::new(ErrorKind::InvalidInput, what))
-}
-
-fn safe_id(id: &str) -> bool {
-    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 impl SandboxLauncher {
@@ -512,323 +508,4 @@ pub fn read_bounded(path: &Path) -> Result<Vec<u8>, LaunchError> {
         return Err(invalid("model catalogue output"));
     }
     std::fs::read(path).map_err(LaunchError::Io)
-}
-
-struct Shared {
-    child: SandboxedChild,
-    gateway: Mutex<Option<Gateway>>,
-}
-
-impl Shared {
-    /// Tears the sandbox down (see [`SandboxedChild::terminate`]) and stops its gateway.
-    fn finish(&self) -> Option<ExitStatus> {
-        let status = self.child.terminate();
-        if let Some(mut gateway) = lock(&self.gateway).take() {
-            gateway.stop();
-        }
-        status
-    }
-}
-
-struct Pipes {
-    stdin: ChildStdin,
-    stdout: ChildStdout,
-    stderr: ChildStderr,
-    rx: Receiver<Vec<u8>>,
-}
-
-fn spawn_threads(
-    shared: Arc<Shared>,
-    binding: LaunchBinding,
-    label: String,
-    events: SyncSender<SupervisorEvent>,
-    pipes: Pipes,
-    queued: Arc<AtomicUsize>,
-    link_failed: Arc<AtomicBool>,
-) -> io::Result<()> {
-    let Pipes {
-        mut stdin,
-        stdout,
-        stderr,
-        rx,
-    } = pipes;
-    thread::Builder::new()
-        .name("lade-worker-write".into())
-        .spawn(move || {
-            for frame in rx {
-                let written = stdin.write_all(&frame).and_then(|()| stdin.flush());
-                queued.fetch_sub(frame.len(), Ordering::SeqCst);
-                if written.is_err() {
-                    link_failed.store(true, Ordering::SeqCst);
-                    break;
-                }
-            }
-        })?;
-    thread::Builder::new()
-        .name("lade-worker-stderr".into())
-        .spawn(move || forward_stderr(stderr, &label, &mut io::stderr()))?;
-    thread::Builder::new()
-        .name("lade-worker-monitor".into())
-        .spawn(move || monitor(&shared, &binding, stdout, &events))?;
-    Ok(())
-}
-
-enum Ending {
-    Eof,
-    Violation(&'static str),
-    ReceiverGone,
-}
-
-fn monitor(
-    shared: &Shared,
-    binding: &LaunchBinding,
-    stdout: ChildStdout,
-    events: &SyncSender<SupervisorEvent>,
-) {
-    let mut reader = FrameReader::new(stdout, Framing::Worker);
-    let event = |event| SupervisorEvent {
-        binding: binding.clone(),
-        event,
-    };
-    let ending = loop {
-        match reader.read_frame() {
-            Ok(Some(frame)) => match WorkerEnvelope::decode(&frame) {
-                Ok(envelope) if envelope.body.is_from_worker() => {
-                    if events
-                        .send(event(WorkerEvent::Body(envelope.body)))
-                        .is_err()
-                    {
-                        break Ending::ReceiverGone;
-                    }
-                }
-                Ok(_) => break Ending::Violation("service_body_from_worker"),
-                Err(e) => break Ending::Violation(e.as_str()),
-            },
-            Ok(None) | Err(TransportError::Io(_)) => break Ending::Eof,
-            Err(TransportError::Wire(e)) => break Ending::Violation(e.as_str()),
-        }
-    };
-    drop(reader);
-    match ending {
-        Ending::Violation(code) => {
-            shared.child.kill();
-            let _ = events.send(event(WorkerEvent::ProtocolViolation(code)));
-        }
-        Ending::ReceiverGone => shared.child.kill(),
-        Ending::Eof => drop(shared.child.wait_exit(SHUTDOWN_GRACE)),
-    }
-    let status = shared.finish();
-    let _ = events.send(event(WorkerEvent::Exited {
-        code: status.and_then(|s| s.code()),
-        signal: status.and_then(|s| s.signal()),
-    }));
-}
-
-pub(crate) fn forward_stderr(mut from: impl Read, label: &str, out: &mut impl Write) {
-    let mut line: Vec<u8> = Vec::with_capacity(STDERR_LINE_BYTES);
-    let mut cut = false;
-    let mut window = Instant::now();
-    let mut emitted = 0u32;
-    let mut dropped = 0u64;
-    let mut emit = |line: &[u8], cut: bool| {
-        if window.elapsed() >= Duration::from_secs(1) {
-            if dropped > 0 {
-                let _ = writeln!(
-                    out,
-                    "lade-worker[{label}]: ({dropped} stderr lines dropped)"
-                );
-            }
-            window = Instant::now();
-            emitted = 0;
-            dropped = 0;
-        }
-        if emitted >= STDERR_LINES_PER_SECOND {
-            dropped += 1;
-            return;
-        }
-        emitted += 1;
-        let text: String = String::from_utf8_lossy(line)
-            .chars()
-            .map(|c| if c.is_control() && c != '\t' { '?' } else { c })
-            .collect();
-        let _ = writeln!(
-            out,
-            "lade-worker[{label}]: {text}{}",
-            if cut { " …" } else { "" }
-        );
-    };
-    let mut buffer = [0u8; 4096];
-    loop {
-        let n = match from.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => break,
-        };
-        for &byte in &buffer[..n] {
-            if byte == b'\n' {
-                emit(&line, cut);
-                line.clear();
-                cut = false;
-            } else if line.len() < STDERR_LINE_BYTES {
-                line.push(byte);
-            } else {
-                cut = true;
-            }
-        }
-    }
-    if !line.is_empty() {
-        emit(&line, cut);
-    }
-}
-
-pub struct SandboxWorker {
-    shared: Arc<Shared>,
-    tx: Option<SyncSender<Vec<u8>>>,
-    queued: Arc<AtomicUsize>,
-    link_failed: Arc<AtomicBool>,
-    terminated: bool,
-}
-
-impl SandboxWorker {
-    /// Starts the writer, stderr and monitor threads of a spawned worker sandbox. On failure the
-    /// worker is dropped, which terminates the sandbox.
-    fn start(
-        shared: Arc<Shared>,
-        stdio: ChildStdio,
-        binding: LaunchBinding,
-        events: SyncSender<SupervisorEvent>,
-    ) -> Result<Self, LaunchError> {
-        let (tx, rx) = sync_channel::<Vec<u8>>(WRITE_QUEUE_FRAMES);
-        let worker = Self {
-            shared: Arc::clone(&shared),
-            tx: Some(tx),
-            queued: Arc::new(AtomicUsize::new(0)),
-            link_failed: Arc::new(AtomicBool::new(false)),
-            terminated: false,
-        };
-        let ChildStdio {
-            stdin: Some(stdin),
-            stdout: Some(stdout),
-            stderr: Some(stderr),
-        } = stdio
-        else {
-            return Err(invalid("missing worker pipes"));
-        };
-        let label = format!("{}/{}", binding.objective_id, binding.execution_generation);
-        spawn_threads(
-            shared,
-            binding,
-            label,
-            events,
-            Pipes {
-                stdin,
-                stdout,
-                stderr,
-                rx,
-            },
-            Arc::clone(&worker.queued),
-            Arc::clone(&worker.link_failed),
-        )
-        .map_err(LaunchError::Io)?;
-        Ok(worker)
-    }
-}
-
-impl fmt::Debug for SandboxWorker {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SandboxWorker")
-            .field("terminated", &self.terminated)
-            .finish_non_exhaustive()
-    }
-}
-
-impl WorkerControl for SandboxWorker {
-    fn send(&mut self, body: WorkerBody) -> io::Result<()> {
-        if body.is_from_worker() {
-            return Err(io::Error::new(
-                ErrorKind::InvalidInput,
-                "not a service-to-worker body",
-            ));
-        }
-        let gone = || io::Error::new(ErrorKind::BrokenPipe, "worker_link_closed");
-        let Some(tx) = self.tx.as_ref() else {
-            return Err(gone());
-        };
-        if self.terminated
-            || self.link_failed.load(Ordering::SeqCst)
-            || self.shared.child.poll_exit().is_some()
-        {
-            return Err(gone());
-        }
-        let frame = encode(&WorkerEnvelope::new(body), Framing::Worker)
-            .map_err(|e| io::Error::new(ErrorKind::InvalidData, e.as_str()))?;
-        let len = frame.len();
-        let full = || io::Error::new(ErrorKind::WouldBlock, "worker_queue_full");
-        if self.queued.fetch_add(len, Ordering::SeqCst) + len > WRITE_QUEUE_BYTES {
-            self.queued.fetch_sub(len, Ordering::SeqCst);
-            return Err(full());
-        }
-        match tx.try_send(frame) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(full())
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(gone())
-            }
-        }
-    }
-
-    fn terminate(&mut self) {
-        if self.terminated {
-            return;
-        }
-        if self.shared.child.poll_exit().is_none() {
-            let _ = self.send(WorkerBody::Shutdown);
-        }
-        self.terminated = true;
-        self.tx = None;
-        self.shared.child.wait_exit(SHUTDOWN_GRACE);
-        self.shared.finish();
-    }
-}
-
-impl Drop for SandboxWorker {
-    fn drop(&mut self) {
-        self.terminate();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stderr_is_bounded_and_sanitized() {
-        let mut input = Vec::new();
-        input.extend_from_slice(b"hello\x1b[31m\n");
-        input.extend(std::iter::repeat_n(b'a', 2000));
-        input.push(b'\n');
-        for i in 0..300 {
-            input.extend_from_slice(format!("line {i}\n").as_bytes());
-        }
-        let mut out = Vec::new();
-        forward_stderr(&input[..], "o/1", &mut out);
-        let out = String::from_utf8(out).unwrap();
-        let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines[0], "lade-worker[o/1]: hello?[31m");
-        assert!(lines[1].ends_with(" …"));
-        assert!(lines[1].len() < STDERR_LINE_BYTES + 40);
-        assert_eq!(lines.len(), STDERR_LINES_PER_SECOND as usize);
-    }
-
-    #[test]
-    fn ids_are_file_safe() {
-        assert!(safe_id("0b8a4c1e-7a1f-4f7e-9d7a-0d6c8f2a9b11"));
-        assert!(!safe_id("../x"));
-        assert!(!safe_id(""));
-    }
 }

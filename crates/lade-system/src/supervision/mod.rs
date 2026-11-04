@@ -1,6 +1,7 @@
 mod child;
 pub mod credentials;
 pub mod gateway;
+mod input;
 pub mod launcher;
 pub mod providers;
 pub mod secret_service;
@@ -23,6 +24,11 @@ pub use launcher::{
 pub use providers::{AccessStatus, AuthKind, ProviderAccess, ProviderFacts};
 pub use sweep::{SweepReport, sweep_sockets, sweep_stale};
 pub use terminal::{Terminal, TerminalExit, TerminalRequest};
+
+/// Whether `id` is safe in a file or socket name: 1 to 64 ASCII letters, digits or dashes.
+pub(crate) fn safe_id(id: &str) -> bool {
+    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LaunchBinding {
@@ -147,6 +153,21 @@ impl LaunchError {
             Self::SandboxUnavailable(why) => format!("worker sandbox unavailable: {why}"),
             Self::ProviderUnavailable(why) => why.clone(),
             Self::Io(e) => format!("worker launch failed: {}", e.kind()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_file_safe() {
+        assert!(safe_id("0b8a4c1e-7a1f-4f7e-9d7a-0d6c8f2a9b11"));
+        assert!(safe_id(&"A".repeat(64)));
+        assert!(!safe_id(&"a".repeat(65)));
+        for bad in ["", "../x", "a/b", "a b", "a_b", "é"] {
+            assert!(!safe_id(bad), "{bad:?}");
         }
     }
 }
