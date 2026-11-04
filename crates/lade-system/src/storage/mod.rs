@@ -12,8 +12,17 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
-pub use preferences::*;
-pub use rows::*;
+pub use preferences::{ApprovalRow, load_approvals, load_thinking, save_approval, save_thinking};
+pub use rows::{
+    ActivityRow, CaptureRow, JournalRow, JournalState, ObjectiveRow, OperationKey, OperationRow,
+    OperationState, PendingOperation, WorkspaceRow, activity_page, capture_retention_refs,
+    delete_draft, insert_capture, insert_input, insert_journal, insert_workspace, latest_captures,
+    load_activity_item, load_capture, load_drafts, load_inputs, load_objectives, load_operation,
+    load_review, load_settings, load_verification_tails, load_workspaces, max_activity_seq,
+    open_journal, pending_operations, pi_session_file, record_operation, record_pi_session,
+    save_delivery, save_draft, save_objective, save_review, save_session, save_settings,
+    set_verification_tail, update_journal, upsert_activity, workspace_by_path,
+};
 
 pub const LOCK_FILE: &str = "lade.lock";
 

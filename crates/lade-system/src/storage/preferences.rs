@@ -5,11 +5,7 @@ use lade_core::domain::ids::{ObjectiveId, Uuid};
 use lade_protocol::types::ThinkingLevel;
 use rusqlite::{Connection, params};
 
-type Sql<T> = rusqlite::Result<T>;
-
-fn corrupt(what: &'static str) -> rusqlite::Error {
-    rusqlite::Error::InvalidColumnType(0, what.to_string(), rusqlite::types::Type::Text)
-}
+use super::rows::{Sql, corrupt};
 
 pub(super) const SCHEMA_V2: &str = r"
 CREATE TABLE session_preferences (
