@@ -112,7 +112,7 @@ Appended record of what the native client implements; it does not change the app
 | Type | meta | 13px, 400, metadata ink (600 for group headings) | Secondary text, reasons, identities |
 | Type | mono | 13px monospace | Code, paths, ids, commands |
 
-Shared components (`crates/lade-desktop/src/views/widgets.rs` and its `input` and `dialog` submodules), used instead of one-off layouts:
+Shared components (`crates/lade-desktop/src/views/widgets/mod.rs` and its `input` and `dialog` submodules), used instead of one-off layouts:
 
 | Component | What it is | Used for |
 | --- | --- | --- |

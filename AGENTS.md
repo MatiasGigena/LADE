@@ -19,4 +19,4 @@ This repository uses a single-context domain-doc layout. See `docs/agents/domain
 - Use only erasable TypeScript syntax (Node strip-only mode) in `packages/pi-worker/src` and `packages/pi-worker/test` (`erasableSyntaxOnly` in its `tsconfig.json`): no parameter properties, `enum`, `namespace`/`module`, `import =`, `export =`, or other constructs needing JavaScript emit. Use explicit fields with constructor assignments.
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
-- Never hardcode key checks in the desktop client. Add defaults to `DEFAULT_APP_KEYBINDINGS` (`crates/lade-desktop/src/presentation/keys.rs`) so they stay configurable.
+- Never hardcode key checks in the desktop client. Add defaults to `DEFAULT_APP_KEYBINDINGS` (`crates/lade-desktop/src/presentation/keys/mod.rs`) so they stay configurable.
