@@ -80,7 +80,10 @@ Tests that need the sandbox (bubblewrap, prlimit and working user namespaces; th
 node) print a `skipping:` note and pass when it is missing. With `LADE_REQUIRE_SANDBOX=1` they fail instead, and the
 tests that choose between the bubblewrap launcher and the unsandboxed test launcher refuse the fallback; CI sets it for
 `scripts/verify`, so a CI run never passes with the sandbox tests silently skipped. Some sandbox tests assume a
-non-root user (root is exempt from `RLIMIT_NPROC`).
+non-root user (root is exempt from `RLIMIT_NPROC`). The desktop's live-service test runs the `laded` built in the same
+target directory; `cargo test -p lade-desktop` does not rebuild it, so the test is skipped with a note when that
+binary is missing, reports another release, or is older than the `lade-system` or `lade-protocol` sources. With
+`LADE_REQUIRE_LADED=1`, which CI also sets for `scripts/verify`, it fails instead.
 
 IMP-013 adds `service_concurrency.rs` and `service_crash.rs` (part of `scripts/verify`; the crash tests run the real
 `laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and need bubblewrap) and the long

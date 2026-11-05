@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use lade_protocol::client::{
     self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeCode, NoticeLevel, Reply,
@@ -351,10 +351,74 @@ fn runtime_dir_follows_the_service_defaults() {
     assert_eq!(dir(None, None, &[("XDG_RUNTIME_DIR", "relative")]), None);
 }
 
+/// The newest modification time of any file under `dir`.
+fn newest_change(dir: &Path) -> Option<SystemTime> {
+    fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            if meta.is_dir() {
+                newest_change(&entry.path())
+            } else {
+                meta.modified().ok()
+            }
+        })
+        .max()
+}
+
+/// Why the `laded` next to this test binary cannot be used, if it cannot: missing, from another
+/// release, or older than the service sources. Cargo does not rebuild lade-system for
+/// `cargo test -p lade-desktop`, so the binary may predate the code under test.
+fn laded_problem(laded: &Path) -> Option<String> {
+    let built = match fs::metadata(laded).and_then(|m| m.modified()) {
+        Ok(built) => built,
+        Err(_) => return Some(format!("{} is missing", laded.display())),
+    };
+    let version = Command::new(laded)
+        .arg("--version")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    let expected = format!(
+        "laded {} protocol {}",
+        lade_protocol::BUNDLE,
+        lade_protocol::VERSION
+    );
+    if version != expected {
+        return Some(format!(
+            "{} reports {version:?}, not {expected:?}",
+            laded.display()
+        ));
+    }
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let sources = ["lade-system/src", "lade-protocol/src"]
+        .iter()
+        .filter_map(|dir| newest_change(&crates.join(dir)))
+        .max();
+    sources
+        .filter(|changed| *changed > built)
+        .map(|_| format!("{} is older than the service sources", laded.display()))
+}
+
+/// The current `laded` built next to this test binary. Without one the test is skipped, and
+/// with `LADE_REQUIRE_LADED=1` (set in CI) it fails instead, so it cannot pass unrun.
 fn laded() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe.parent()?.parent()?.join("laded");
-    candidate.is_file().then_some(candidate)
+    let exe = std::env::current_exe().expect("test binary path");
+    let laded = exe
+        .parent()
+        .and_then(Path::parent)
+        .expect("test binary under target/<profile>/deps")
+        .join("laded");
+    let Some(problem) = laded_problem(&laded) else {
+        return Some(laded);
+    };
+    assert!(
+        std::env::var_os("LADE_REQUIRE_LADED").is_none_or(|v| v != "1"),
+        "LADE_REQUIRE_LADED=1, but {problem}"
+    );
+    eprintln!("skipped: {problem}; build it first (cargo build -p lade-system)");
+    None
 }
 
 struct Service(Child);
@@ -384,7 +448,6 @@ fn git(repo: &Path, args: &[&str]) {
 #[test]
 fn real_service_workspace_objective_execution_and_change_set() {
     let Some(laded) = laded() else {
-        eprintln!("skipped: build laded first (cargo build -p lade-system)");
         return;
     };
     let dir = TempDir::new("live");
