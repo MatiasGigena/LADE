@@ -4,8 +4,8 @@ use lade_protocol::types as wt;
 use super::convert::model;
 use crate::presentation::state::agent_session::{
     Catalog, ForkPosition, Inventory, ModelInfo, ProviderInfo, ProviderStatus, ResourceEntry,
-    ResourceKind, ResourceState, SessionState, SessionTree, ThinkingLevel, TreeNode, UiAnswer,
-    UiDialog, UiPrompt,
+    ResourceKind, ResourceState, SessionChangeReason, SessionState, SessionTree, ThinkingLevel,
+    TreeEntryKind, TreeNode, UiAnswer, UiDialog, UiPrompt,
 };
 use crate::presentation::state::model::ObjectiveId;
 
@@ -100,15 +100,15 @@ pub fn models(c: &wire::ModelCatalog) -> Vec<ModelInfo> {
         .collect()
 }
 
-fn reason(reason: wt::SessionChangeReason) -> &'static str {
+fn reason(reason: wt::SessionChangeReason) -> SessionChangeReason {
     match reason {
-        wt::SessionChangeReason::Start => "started",
-        wt::SessionChangeReason::Navigate => "moved in the tree",
-        wt::SessionChangeReason::Fork => "forked",
-        wt::SessionChangeReason::Import => "imported",
-        wt::SessionChangeReason::Reload => "reloaded",
-        wt::SessionChangeReason::Compact => "compacted",
-        wt::SessionChangeReason::Configure => "reconfigured",
+        wt::SessionChangeReason::Start => SessionChangeReason::Start,
+        wt::SessionChangeReason::Navigate => SessionChangeReason::Navigate,
+        wt::SessionChangeReason::Fork => SessionChangeReason::Fork,
+        wt::SessionChangeReason::Import => SessionChangeReason::Import,
+        wt::SessionChangeReason::Reload => SessionChangeReason::Reload,
+        wt::SessionChangeReason::Compact => SessionChangeReason::Compact,
+        wt::SessionChangeReason::Configure => SessionChangeReason::Configure,
     }
 }
 
@@ -117,7 +117,7 @@ pub fn session(s: &wire::SessionState) -> (ObjectiveId, SessionState) {
         ObjectiveId::new(s.objective_id.as_str()),
         SessionState {
             generation: s.generation.value(),
-            reason: reason(s.reason).to_owned(),
+            reason: reason(s.reason),
             model: model(&s.model),
             thinking: thinking(s.thinking),
             association_revision: s.association_revision.as_ref().map(wt::Counter::value),
@@ -127,20 +127,20 @@ pub fn session(s: &wire::SessionState) -> (ObjectiveId, SessionState) {
     )
 }
 
-fn kind_label(kind: wt::TreeEntryKind) -> &'static str {
+fn tree_kind(kind: wt::TreeEntryKind) -> TreeEntryKind {
     match kind {
-        wt::TreeEntryKind::User => "You",
-        wt::TreeEntryKind::Assistant => "Agent",
-        wt::TreeEntryKind::ToolResult => "Tool result",
-        wt::TreeEntryKind::CustomMessage => "Extension message",
-        wt::TreeEntryKind::Compaction => "Compaction",
-        wt::TreeEntryKind::BranchSummary => "Branch summary",
-        wt::TreeEntryKind::ModelChange => "Model change",
-        wt::TreeEntryKind::ThinkingChange => "Thinking change",
-        wt::TreeEntryKind::Label => "Bookmark",
-        wt::TreeEntryKind::SessionInfo => "Session name",
-        wt::TreeEntryKind::Custom => "Extension data",
-        wt::TreeEntryKind::Other => "Entry",
+        wt::TreeEntryKind::User => TreeEntryKind::User,
+        wt::TreeEntryKind::Assistant => TreeEntryKind::Assistant,
+        wt::TreeEntryKind::ToolResult => TreeEntryKind::ToolResult,
+        wt::TreeEntryKind::CustomMessage => TreeEntryKind::CustomMessage,
+        wt::TreeEntryKind::Compaction => TreeEntryKind::Compaction,
+        wt::TreeEntryKind::BranchSummary => TreeEntryKind::BranchSummary,
+        wt::TreeEntryKind::ModelChange => TreeEntryKind::ModelChange,
+        wt::TreeEntryKind::ThinkingChange => TreeEntryKind::ThinkingChange,
+        wt::TreeEntryKind::Label => TreeEntryKind::Label,
+        wt::TreeEntryKind::SessionInfo => TreeEntryKind::SessionInfo,
+        wt::TreeEntryKind::Custom => TreeEntryKind::Custom,
+        wt::TreeEntryKind::Other => TreeEntryKind::Other,
     }
 }
 
@@ -151,8 +151,7 @@ pub fn tree(t: &wire::SessionTree) -> SessionTree {
             .map(|e| TreeNode {
                 entry_id: e.entry_id.clone(),
                 parent_id: e.parent_id.clone(),
-                kind: kind_label(e.kind).to_owned(),
-                user: e.kind == wt::TreeEntryKind::User,
+                kind: tree_kind(e.kind),
                 label: e.label.clone(),
                 bookmark: e.bookmark.clone(),
                 depth: 0,
@@ -265,17 +264,17 @@ mod tests {
             truncated: true,
             leaf_id: Some("reply".into()),
         });
-        let shape: Vec<(&str, usize, &str, bool)> = tree
+        let shape: Vec<(&str, usize, &str)> = tree
             .entries
             .iter()
-            .map(|n| (n.entry_id.as_str(), n.depth, n.kind.as_str(), n.user))
+            .map(|n| (n.entry_id.as_str(), n.depth, n.kind.label()))
             .collect();
         assert_eq!(
             shape,
             [
-                ("ask", 0, "You", true),
-                ("reply", 1, "Agent", false),
-                ("mark", 0, "Bookmark", false),
+                ("ask", 0, "You"),
+                ("reply", 1, "Agent"),
+                ("mark", 0, "Bookmark"),
             ]
         );
         assert!(tree.truncated);

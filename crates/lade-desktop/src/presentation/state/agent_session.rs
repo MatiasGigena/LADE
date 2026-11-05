@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use super::model::{ModelRef, ObjectiveId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -156,10 +158,36 @@ pub struct ModelChoice {
     pub thinking: ThinkingLevel,
 }
 
+/// Why the service reported a new Agent Session state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionChangeReason {
+    Start,
+    Navigate,
+    Fork,
+    Import,
+    Reload,
+    Compact,
+    Configure,
+}
+
+impl SessionChangeReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Start => "started",
+            Self::Navigate => "moved in the tree",
+            Self::Fork => "forked",
+            Self::Import => "imported",
+            Self::Reload => "reloaded",
+            Self::Compact => "compacted",
+            Self::Configure => "reconfigured",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionState {
     pub generation: u64,
-    pub reason: String,
+    pub reason: SessionChangeReason,
     pub model: ModelRef,
     pub thinking: ThinkingLevel,
     pub association_revision: Option<u64>,
@@ -167,12 +195,46 @@ pub struct SessionState {
     pub leaf_id: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TreeEntryKind {
+    User,
+    Assistant,
+    ToolResult,
+    CustomMessage,
+    Compaction,
+    BranchSummary,
+    ModelChange,
+    ThinkingChange,
+    Label,
+    SessionInfo,
+    Custom,
+    Other,
+}
+
+impl TreeEntryKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::User => "You",
+            Self::Assistant => "Agent",
+            Self::ToolResult => "Tool result",
+            Self::CustomMessage => "Extension message",
+            Self::Compaction => "Compaction",
+            Self::BranchSummary => "Branch summary",
+            Self::ModelChange => "Model change",
+            Self::ThinkingChange => "Thinking change",
+            Self::Label => "Bookmark",
+            Self::SessionInfo => "Session name",
+            Self::Custom => "Extension data",
+            Self::Other => "Entry",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreeNode {
     pub entry_id: String,
     pub parent_id: Option<String>,
-    pub kind: String,
-    pub user: bool,
+    pub kind: TreeEntryKind,
     pub label: String,
     pub bookmark: Option<String>,
     pub depth: usize,
@@ -187,10 +249,8 @@ pub struct SessionTree {
 
 impl SessionTree {
     pub fn ordered(entries: Vec<TreeNode>, leaf_id: Option<String>, truncated: bool) -> Self {
-        let known: std::collections::HashSet<String> =
-            entries.iter().map(|e| e.entry_id.clone()).collect();
-        let mut children: std::collections::HashMap<Option<String>, Vec<usize>> =
-            std::collections::HashMap::new();
+        let known: HashSet<String> = entries.iter().map(|e| e.entry_id.clone()).collect();
+        let mut children: HashMap<Option<String>, Vec<usize>> = HashMap::new();
         for (index, entry) in entries.iter().enumerate() {
             let parent = entry.parent_id.clone().filter(|p| known.contains(p));
             children.entry(parent).or_default().push(index);
@@ -281,8 +341,6 @@ pub struct Inventory {
     pub entries: Vec<ResourceEntry>,
     pub restrictions: Vec<String>,
 }
-
-impl Inventory {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UiPrompt {
@@ -540,9 +598,9 @@ impl AgentSessionState {
         let Some(id) = &self.choice.provider else {
             return Readiness::NoProviderChosen;
         };
-        let view = catalog.provider(id);
-        let provider = view.map_or_else(|| id.clone(), ProviderInfo::picker_label);
-        match view.map(|v| v.status) {
+        let info = catalog.provider(id);
+        let provider = info.map_or_else(|| id.clone(), ProviderInfo::picker_label);
+        match info.map(|listed| listed.status) {
             Some(ProviderStatus::MissingCredentials) => {
                 return Readiness::NeedsCredentials { provider };
             }
@@ -588,10 +646,12 @@ impl AgentSessionState {
         };
         ModelPicker::Choices(PickerChoices {
             catalog_error: catalog.error.clone(),
-            selected_provider: choice
-                .provider
-                .as_ref()
-                .and_then(|p| catalog.providers.iter().position(|v| &v.id == p)),
+            selected_provider: choice.provider.as_ref().and_then(|p| {
+                catalog
+                    .providers
+                    .iter()
+                    .position(|provider| &provider.id == p)
+            }),
             providers: catalog.providers.clone(),
             models,
             model_row,
@@ -619,7 +679,7 @@ mod tests {
         let objective = ObjectiveId::new("o");
         let session = |generation| SessionState {
             generation,
-            reason: "reload".into(),
+            reason: SessionChangeReason::Reload,
             model: ModelRef::new("lade-fixture", "scripted"),
             thinking: ThinkingLevel::Off,
             association_revision: Some(1),
@@ -668,8 +728,7 @@ mod tests {
         TreeNode {
             entry_id: id.into(),
             parent_id: parent.map(str::to_string),
-            kind: "You".into(),
-            user: true,
+            kind: TreeEntryKind::User,
             label: id.into(),
             bookmark: None,
             depth: 9,

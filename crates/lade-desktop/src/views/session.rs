@@ -13,7 +13,7 @@ use crate::presentation::controller::{Controller, SessionUse};
 use crate::presentation::state::agent_session::{
     ForkPosition, ModelChoice, ModelInfo, ModelPicker, ModelRow, PickerChoices, ProviderInfo,
     ProviderStatus, Readiness, ResourceKind, ResourceState, SessionState, SessionTree,
-    ThinkingLevel, UiAnswer, UiDialog, UiPrompt,
+    ThinkingLevel, TreeEntryKind, UiAnswer, UiDialog, UiPrompt,
 };
 use crate::presentation::state::model::{ActionAvailability, ObjectiveDetail};
 
@@ -275,7 +275,7 @@ fn session_status(s: &gtk::Box, session: Option<&SessionState>, export: Option<&
                     "Model {} · thinking {} · this generation: {}",
                     reported.model.label(),
                     reported.thinking.label(),
-                    reported.reason
+                    reported.reason.label()
                 ),
                 &[],
             ));
@@ -388,7 +388,7 @@ fn session_tree(
             "{}{}{}: {}{}",
             "  ".repeat(node.depth.min(12)),
             if current { "● " } else { "" },
-            node.kind,
+            node.kind.label(),
             node.label,
             node.bookmark
                 .as_ref()
@@ -405,7 +405,7 @@ fn session_tree(
         let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
         go.connect_clicked(move |_| r(c.navigate_session(&id)));
         row.append(&go);
-        if node.user {
+        if node.kind == TreeEntryKind::User {
             let fork = widgets::button("Fork", &[]);
             fork.set_sensitive(enabled);
             fork.set_tooltip_text(Some("New session with the history before this message"));

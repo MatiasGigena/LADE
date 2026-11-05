@@ -604,7 +604,8 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
 fn agent_session_fixture() -> Vec<StoreUpdate> {
     use super::state::agent_session::{
         AgentSessionUpdate, Catalog, Inventory, ModelInfo, ProviderInfo, ProviderStatus,
-        ResourceEntry, ResourceKind, ResourceState, SessionState, ThinkingLevel,
+        ResourceEntry, ResourceKind, ResourceState, SessionChangeReason, SessionState,
+        ThinkingLevel,
     };
     let provider =
         |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderInfo {
@@ -658,7 +659,7 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
             objective_id: id(MAIN_OBJECTIVE),
             session: SessionState {
                 generation: 2,
-                reason: "reloaded".into(),
+                reason: SessionChangeReason::Reload,
                 model: model(),
                 thinking: ThinkingLevel::Off,
                 association_revision: Some(2),
