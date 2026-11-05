@@ -545,7 +545,7 @@ pub fn wire_candidate(candidate: &Candidate) -> CandidateSummary {
 pub fn wire_verification(st: &ObjState, verification: &Verification) -> VerificationSummary {
     super::projection::budget::budget_verification(VerificationSummary {
         verification_id: wire_id(verification.id.uuid()),
-        objective_id: wire_id(st.objective().id().uuid()),
+        objective_id: wire_id(st.row.objective.id().uuid()),
         candidate_id: wire_id(verification.candidate_id.uuid()),
         command: verification
             .argv

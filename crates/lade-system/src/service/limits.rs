@@ -86,7 +86,7 @@ impl Service {
     fn live_workers(&self, except: ObjectiveId) -> usize {
         self.objectives
             .iter()
-            .filter(|(oid, st)| **oid != except && st.objective().execution().state().is_live())
+            .filter(|(oid, st)| **oid != except && st.row.objective.execution().state().is_live())
             .count()
     }
 

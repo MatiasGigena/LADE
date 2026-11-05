@@ -46,7 +46,7 @@ impl Service {
 
     pub(crate) fn ws_of(&self, st: &ObjState) -> Result<&WsState, Rejection> {
         self.workspaces
-            .get(&st.objective().record().workspace_id)
+            .get(&st.row.objective.record().workspace_id)
             .ok_or_else(|| not_found("workspace"))
     }
 
@@ -88,7 +88,7 @@ impl Service {
             Self::save_tx(tx, &st)?;
             extra(tx)
         })?;
-        self.objectives.insert(st.objective().id(), st);
+        self.objectives.insert(st.row.objective.id(), st);
         Ok(())
     }
 
@@ -266,8 +266,8 @@ impl Service {
         let mut states: Vec<&ObjState> = self.objectives.values().chain(objective).collect();
         states.sort_by_key(|st| {
             (
-                std::cmp::Reverse(st.objective().record().updated_at),
-                st.objective().id(),
+                std::cmp::Reverse(st.row.objective.record().updated_at),
+                st.row.objective.id(),
             )
         });
         let objectives = states

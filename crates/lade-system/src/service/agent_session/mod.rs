@@ -128,7 +128,7 @@ impl Service {
         reason: SessionChangeReason,
     ) -> SessionState {
         let st = self.objectives.get(&oid);
-        let session = st.and_then(|st| st.objective().execution().session().cloned());
+        let session = st.and_then(|st| st.row.objective.execution().session().cloned());
         let pi = self
             .agent_sessions
             .live
@@ -171,7 +171,7 @@ impl Service {
         let session = self
             .objectives
             .get(&oid)
-            .and_then(|st| st.objective().execution().session().map(|s| s.session_id));
+            .and_then(|st| st.row.objective.execution().session().map(|s| s.session_id));
         let file = session
             .and_then(|s| {
                 storage::pi_session_file(self.store.conn(), s)

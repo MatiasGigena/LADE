@@ -51,7 +51,8 @@ impl Service {
         self.ws_of(&st)?;
         let session = SessionId::new(new_uuid());
         let generation = st
-            .objective_mut()
+            .row
+            .objective
             .start_execution(session, model, ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
@@ -62,7 +63,7 @@ impl Service {
             self.record_start_thinking(oid, thinking)?;
         }
         let data = ReplyData::ExecutionStart(Box::new(self.fresh_detail(&st)));
-        let association = st.objective().execution().session().cloned();
+        let association = st.row.objective.execution().session().cloned();
         let now = now_ms();
         self.commit_obj_with(Some(ctx), Some(&data), st, |tx| {
             if let Some(association) = &association {
@@ -102,7 +103,8 @@ impl Service {
     ) -> Result<ReplyData, Rejection> {
         let oid = self.objective_id(id)?;
         let mut st = self.obj(oid)?.clone();
-        st.objective_mut()
+        st.row
+            .objective
             .request_stop(ts_now())
             .map_err(domain_rejection)?;
         let data = ReplyData::ExecutionCancel(Box::new(self.fresh_detail(&st)));
@@ -122,16 +124,17 @@ impl Service {
         let mut st = self.obj(oid)?.clone();
         self.ws_of(&st)?;
         let generation = st
-            .objective_mut()
+            .row
+            .objective
             .resume_execution(ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
             return Err(limit_reached(&why));
         }
-        if let Some(session) = st.objective().execution().session() {
+        if let Some(session) = st.row.objective.execution().session() {
             self.preflight(session.model.provider())?;
         }
-        let association = st.objective().execution().session().cloned();
+        let association = st.row.objective.execution().session().cloned();
         let mut requeued = Vec::new();
         for (_, input) in &mut st.inputs {
             let same = association.as_ref().is_some_and(|a| {
@@ -174,7 +177,7 @@ impl Service {
         let Ok(ws) = self.ws_of(st) else {
             return;
         };
-        let record = st.objective().record();
+        let record = st.row.objective.record();
         let generation = record.execution.generation().value();
         let Some(session) = record.execution.session() else {
             return;
@@ -246,8 +249,8 @@ impl Service {
             st.row.git_branch = Some(branch.clone());
             st.row.worktree = Some(self.paths.worktrees.join(oid.to_string()));
         }
-        let current = st.objective().execution().generation().value() == generation;
-        let state = st.objective().execution().state().clone();
+        let current = st.row.objective.execution().generation().value() == generation;
+        let state = st.row.objective.execution().state().clone();
         match out.result {
             Ok(control) => {
                 if out.provisioned_branch.is_some() {
@@ -269,7 +272,7 @@ impl Service {
             Err(reason) => {
                 eprintln!("laded: launch failed objective={oid} reason={reason}");
                 if current && state.is_live() {
-                    let _ = st.objective_mut().observe_failure(
+                    let _ = st.row.objective.observe_failure(
                         ExecutionGeneration::new(generation),
                         &reason.to_string(),
                         ts_now(),
@@ -313,10 +316,11 @@ impl Service {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        let generation = st.objective().execution().generation();
-        if st.objective().execution().state() == &ExecutionState::Stopping
+        let generation = st.row.objective.execution().generation();
+        if st.row.objective.execution().state() == &ExecutionState::Stopping
             && st
-                .objective_mut()
+                .row
+                .objective
                 .observe_stopped(generation, ts_now())
                 .is_ok()
         {

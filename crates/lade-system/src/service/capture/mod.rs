@@ -37,7 +37,8 @@ impl Service {
             worktree,
             scratch: self.paths.tmp.clone(),
             target_branch: st
-                .objective()
+                .row
+                .objective
                 .record()
                 .integration_target
                 .as_str()

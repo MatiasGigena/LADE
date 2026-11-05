@@ -14,7 +14,7 @@ use crate::service::test_harness::Harness;
 use crate::storage::JournalState;
 
 fn lifecycle(harness: &Harness, oid: ObjectiveId) -> Lifecycle {
-    harness.service.objectives[&oid].objective().lifecycle()
+    harness.service.objectives[&oid].row.objective.lifecycle()
 }
 
 fn approval_id(reply: Result<ReplyData, Rejection>) -> Id {

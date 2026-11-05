@@ -321,7 +321,8 @@ fn a_fork_rebinds_the_objective_to_a_new_agent_session() {
     let (_, oid, _) = ready(&mut harness, "Fork");
     let session = |harness: &Harness| {
         harness.service.objectives[&oid]
-            .objective()
+            .row
+            .objective
             .execution()
             .session()
             .expect("session")
@@ -378,7 +379,8 @@ fn configuring_a_stopped_agent_persists_the_selection_and_refuses_a_bad_model() 
     assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
     assert_eq!(
         harness.service.objectives[&oid]
-            .objective()
+            .row
+            .objective
             .execution()
             .session()
             .expect("session")

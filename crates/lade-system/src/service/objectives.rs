@@ -169,7 +169,8 @@ impl Service {
         )
         .map_err(domain_rejection)?;
         let mut st = self.obj(oid)?.clone();
-        st.objective_mut()
+        st.row
+            .objective
             .update_intent(
                 Revision::new(cmd.expected_intent_revision.value()),
                 intent,
@@ -380,7 +381,8 @@ mod tests {
         assert_eq!(stale.expect_err("stale revision").code, ErrorCode::Conflict);
         assert_eq!(
             harness.service.objectives[&oid]
-                .objective()
+                .row
+                .objective
                 .record()
                 .intent
                 .outcome(),

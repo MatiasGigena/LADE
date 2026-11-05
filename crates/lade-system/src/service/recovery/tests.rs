@@ -15,7 +15,7 @@ use crate::service::test_harness::Harness;
 use crate::service::{Flow, ReqCtx};
 
 fn lifecycle(harness: &Harness, oid: ObjectiveId) -> Lifecycle {
-    harness.service.objectives[&oid].objective().lifecycle()
+    harness.service.objectives[&oid].row.objective.lifecycle()
 }
 
 fn journal_states(harness: &Harness) -> Vec<String> {
@@ -105,7 +105,7 @@ fn an_agent_running_at_restart_is_interrupted_and_its_queued_input_waits_for_a_r
         .expect("queued");
     harness.restart();
     let st = &harness.service.objectives[&oid];
-    let state = st.objective().execution().state();
+    let state = st.row.objective.execution().state();
     assert!(!state.is_live(), "{state:?}");
     assert!(matches!(
         state,

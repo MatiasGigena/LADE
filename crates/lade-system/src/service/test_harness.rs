@@ -378,7 +378,8 @@ impl Harness {
     /// Delivers `event` as if the current worker of `oid` sent it.
     pub fn worker_event(&mut self, oid: ObjectiveId, event: WorkerEvent) {
         let generation = self.service.objectives[&oid]
-            .objective()
+            .row
+            .objective
             .execution()
             .generation()
             .value();

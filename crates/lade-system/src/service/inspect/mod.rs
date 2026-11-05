@@ -50,7 +50,7 @@ enum Basis2 {
 impl Service {
     fn resolve(&mut self, oid: ObjectiveId, basis: &Basis) -> Result<Basis2, Rejection> {
         let st = self.obj(oid)?.clone();
-        let record = st.objective().record();
+        let record = st.row.objective.record();
         let branch = record.integration_target.as_str().to_string();
         let candidate = |id: &lade_protocol::types::Id| -> Result<_, Rejection> {
             let id = CandidateId::new(parse_uuid(id)?);
@@ -242,7 +242,8 @@ impl Service {
             label: capture_label(row),
             target: TargetRef {
                 branch: st
-                    .objective()
+                    .row
+                    .objective
                     .record()
                     .integration_target
                     .as_str()
@@ -306,17 +307,17 @@ impl Service {
             let mut results: Vec<SearchResult> = self
                 .objectives
                 .values()
-                .filter(|st| st.objective().record().workspace_id == workspace)
+                .filter(|st| st.row.objective.record().workspace_id == workspace)
                 .filter(|st| {
-                    let r = st.objective().record();
+                    let r = st.row.objective.record();
                     r.title.as_str().to_lowercase().contains(&needle)
                         || r.intent.outcome().to_lowercase().contains(&needle)
                 })
                 .take(limit + 1)
                 .map(|st| SearchResult {
                     kind: SearchResultKind::Objective,
-                    preview: preview(st.objective().record().title.as_str(), 1024),
-                    objective_id: Some(wire_id(st.objective().id().uuid())),
+                    preview: preview(st.row.objective.record().title.as_str(), 1024),
+                    objective_id: Some(wire_id(st.row.objective.id().uuid())),
                     path: None,
                     line: None,
                     byte_start: None,

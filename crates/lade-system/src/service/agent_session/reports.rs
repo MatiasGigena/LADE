@@ -118,14 +118,15 @@ impl Service {
         ) {
             let session = SessionId::new(new_uuid());
             if st
-                .objective_mut()
+                .row
+                .objective
                 .rebind_live_session(generation, session, Timestamp::from_unix_ms(now))
                 .is_err()
             {
                 eprintln!("laded: session replacement refused objective={oid}");
                 return;
             }
-            let association = st.objective().execution().session().cloned();
+            let association = st.row.objective.execution().session().cloned();
             let committed = self.commit(None, None, |tx| {
                 Self::save_tx(tx, &st)?;
                 if let Some(association) = &association {
@@ -151,7 +152,7 @@ impl Service {
                 false,
             );
             self.emit_objective(oid);
-        } else if let Some(session) = st.objective().execution().session().map(|s| s.session_id) {
+        } else if let Some(session) = st.row.objective.execution().session().map(|s| s.session_id) {
             let recorded = self.commit(None, None, |tx| {
                 storage::record_pi_session(tx, session, &pi.pi_session_id, session_file)
             });

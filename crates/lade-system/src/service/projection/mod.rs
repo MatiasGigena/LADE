@@ -49,7 +49,7 @@ impl Service {
     }
 
     pub(crate) fn cached_target(&self, st: &ObjState) -> Option<GitId> {
-        let record = st.objective().record();
+        let record = st.row.objective.record();
         self.integrations
             .targets
             .get(&(
@@ -60,7 +60,7 @@ impl Service {
     }
 
     pub(crate) fn fresh_target(&mut self, st: &ObjState) -> Option<GitId> {
-        let record = st.objective().record();
+        let record = st.row.objective.record();
         let branch = record.integration_target.as_str().to_string();
         self.resolve_target(record.workspace_id, &branch)
     }
@@ -83,7 +83,7 @@ impl Service {
     }
 
     pub(crate) fn summary_with(st: &ObjState, target: Option<&GitId>) -> ObjectiveSummary {
-        let objective = st.objective();
+        let objective = &st.row.objective;
         let record = objective.record();
         let view = derive_attention(objective, &Self::facts(st, target));
         let mut badges: Vec<Badge> = view.badges.into_iter().filter_map(wire_badge).collect();
@@ -140,7 +140,7 @@ impl Service {
 
     pub(crate) fn detail_with(&self, st: &ObjState, target: Option<&GitId>) -> ObjectiveDetail {
         let summary = Self::summary_with(st, target);
-        let record = st.objective().record();
+        let record = st.row.objective.record();
         let review = &st.review;
         let session = record.execution.session().map(|s| SessionInfo {
             session_id: wire_id(s.session_id.uuid()),
@@ -150,7 +150,7 @@ impl Service {
                 provider: preview(s.model.provider(), 128),
                 id: preview(s.model.id(), 256),
             },
-            thinking: self.thinking_of(st.objective().id()),
+            thinking: self.thinking_of(st.row.objective.id()),
         });
         let skip = |len: usize| len.saturating_sub(DETAIL_LIST_MAX);
         let candidates = review

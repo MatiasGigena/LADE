@@ -28,7 +28,8 @@ fn start(harness: &mut Harness, id: &Id, provider: &str) -> Result<ReplyData, Re
 
 fn state(harness: &Harness, oid: ObjectiveId) -> ExecutionState {
     harness.service.objectives[&oid]
-        .objective()
+        .row
+        .objective
         .execution()
         .state()
         .clone()
@@ -77,13 +78,13 @@ fn starting_provisions_the_worktree_and_launches_a_worker_for_the_new_session() 
     );
     assert_eq!(
         st.row.git_branch.as_deref(),
-        Some(st.objective().record().branch.as_str())
+        Some(st.row.objective.record().branch.as_str())
     );
     assert_eq!(request.worktree, worktree);
     assert_eq!(request.provider, "anthropic");
     assert_eq!(
         request.binding.execution_generation,
-        st.objective().execution().generation().value()
+        st.row.objective.execution().generation().value()
     );
     let WorkerBody::Start {
         resume,
@@ -107,7 +108,8 @@ fn starting_provisions_the_worktree_and_launches_a_worker_for_the_new_session() 
     ready(&mut harness, oid);
     assert_eq!(state(&harness, oid), ExecutionState::Idle);
     let session = harness.service.objectives[&oid]
-        .objective()
+        .row
+        .objective
         .execution()
         .session()
         .expect("session")
@@ -226,7 +228,8 @@ fn events_of_an_older_generation_are_ignored() {
     let mut harness = Harness::new("execution-stale");
     let (_, oid) = running(&mut harness, "Stale");
     let generation = harness.service.objectives[&oid]
-        .objective()
+        .row
+        .objective
         .execution()
         .generation()
         .value();
@@ -390,7 +393,8 @@ fn exceeding_writable_storage_stops_the_current_generation_only() {
     let (_, oid) = running(&mut harness, "Storage");
     let (_, log) = harness.last_worker();
     let generation = harness.service.objectives[&oid]
-        .objective()
+        .row
+        .objective
         .execution()
         .generation()
         .value();

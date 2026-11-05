@@ -27,20 +27,20 @@ impl Service {
             self.check_idle(oid)?;
             let st = self.obj(oid)?;
             if !matches!(
-                st.objective().lifecycle(),
+                st.row.objective.lifecycle(),
                 Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen
             ) {
                 return Err(domain_rejection(DomainError::InvalidLifecycle(
                     "objective is approved or closed",
                 )));
             }
-            if st.objective().execution().state().is_live() {
+            if st.row.objective.execution().state().is_live() {
                 return Err(domain_rejection(DomainError::InvalidLifecycle(
                     "stop execution first",
                 )));
             }
             let ws = self.ws_of(st)?;
-            let record = st.objective().record();
+            let record = st.row.objective.record();
             Ok((
                 oid,
                 ws.repo.clone(),
@@ -116,14 +116,15 @@ impl Service {
             let oid = self.objective_id(&cmd.objective_id)?;
             self.check_idle(oid)?;
             let st = self.obj(oid)?;
-            if st.objective().execution().state().is_live() {
+            if st.row.objective.execution().state().is_live() {
                 return Err(domain_rejection(DomainError::InvalidLifecycle(
                     "stop execution first",
                 )));
             }
             let mut probe = st.clone();
             probe
-                .objective_mut()
+                .row
+                .objective
                 .cleanup(st.unsent_drafts(), cmd.confirm_data_loss, ts_now())
                 .map_err(domain_rejection)?;
             let ws = self.ws_of(st)?;
@@ -242,7 +243,8 @@ impl Service {
             result?;
             let mut st = self.obj(oid)?.clone();
             let unsent = st.unsent_drafts();
-            st.objective_mut()
+            st.row
+                .objective
                 .cleanup(unsent, confirm, ts_now())
                 .map_err(domain_rejection)?;
             st.row.worktree = None;

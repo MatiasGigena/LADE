@@ -172,7 +172,7 @@ impl Service {
         let Some(st) = self.objectives.get(&row.objective_id).cloned() else {
             return Ok(());
         };
-        let Some(ws) = self.workspaces.get(&st.objective().record().workspace_id) else {
+        let Some(ws) = self.workspaces.get(&st.row.objective.record().workspace_id) else {
             return Ok(());
         };
         let probed = ws
@@ -271,7 +271,7 @@ impl Service {
             now,
         )?;
         tx.commit()?;
-        let workspace = st.objective().record().workspace_id;
+        let workspace = st.row.objective.record().workspace_id;
         if completed {
             self.objectives.insert(row.objective_id, st);
         }

@@ -40,7 +40,7 @@ impl Service {
             ));
         }
         let st = self.obj(oid)?;
-        let state = st.objective().execution().state();
+        let state = st.row.objective.execution().state();
         let ready = match op {
             Op::Tree | Op::Export => {
                 matches!(state, ExecutionState::Idle | ExecutionState::Running)
@@ -254,12 +254,13 @@ impl Service {
                 ModelRef::new(&cmd.model.provider, &cmd.model.id).map_err(domain_rejection)?;
             let st = self.obj(oid)?;
             let session = st
-                .objective()
+                .row
+                .objective
                 .execution()
                 .session()
                 .cloned()
                 .ok_or_else(|| domain_rejection(lade_core::DomainError::ExecutionUnavailable))?;
-            let live = st.objective().execution().state().is_live();
+            let live = st.row.objective.execution().state().is_live();
             if live && session.model.provider() != model.provider() {
                 return Err(invalid(
                     "Changing the provider needs a restart: stop the agent, change the model, then resume it.",
@@ -305,7 +306,8 @@ impl Service {
         reply: impl FnOnce(&Self) -> SessionState,
     ) -> Result<ReplyData, Rejection> {
         let mut st = self.obj(oid)?.clone();
-        st.objective_mut()
+        st.row
+            .objective
             .select_model(model, ts_now())
             .map_err(domain_rejection)?;
         // `reply` reads the selected model and thinking level back from the service, and its

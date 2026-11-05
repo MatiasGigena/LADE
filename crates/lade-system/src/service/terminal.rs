@@ -95,7 +95,7 @@ impl Service {
                 why,
             ));
         }
-        Ok(match st.objective().lifecycle() {
+        Ok(match st.row.objective.lifecycle() {
             Lifecycle::Frozen | Lifecycle::Approved => false,
             _ => self.runtime.get(&oid).and_then(|r| r.busy) != Some(Busy::Freeze),
         })

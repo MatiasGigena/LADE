@@ -26,7 +26,7 @@ impl Service {
         let Some(st) = self.objectives.get(&oid) else {
             return;
         };
-        let generation = st.objective().execution().generation();
+        let generation = st.row.objective.execution().generation();
         if generation.value() != event.binding.execution_generation {
             return;
         }
@@ -132,13 +132,14 @@ impl Service {
             return;
         };
         if st
-            .objective_mut()
+            .row
+            .objective
             .observe_worker_ready(generation, ts_now())
             .is_err()
         {
             return;
         }
-        let session = st.objective().execution().session().map(|s| s.session_id);
+        let session = st.row.objective.execution().session().map(|s| s.session_id);
         let committed = self.commit_obj_with(None, None, st, |tx| {
             if let Some(session) = session {
                 storage::record_pi_session(tx, session, pi_session_id, session_file)?;
@@ -180,7 +181,8 @@ impl Service {
             return;
         };
         if st
-            .objective_mut()
+            .row
+            .objective
             .observe_turn(generation, running, ts_now())
             .is_err()
         {
@@ -202,12 +204,12 @@ impl Service {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        let generation = st.objective().execution().generation();
-        let state = st.objective().execution().state().clone();
+        let generation = st.row.objective.execution().generation();
+        let state = st.row.objective.execution().state().clone();
         let mut lost = Vec::new();
         match state {
             ExecutionState::Stopping => {
-                let _ = st.objective_mut().observe_stopped(generation, ts_now());
+                let _ = st.row.objective.observe_stopped(generation, ts_now());
             }
             state if state.is_live() => {
                 let reason = match (code, signal) {
@@ -216,7 +218,8 @@ impl Service {
                     _ => "worker exited unexpectedly".to_string(),
                 };
                 let _ = st
-                    .objective_mut()
+                    .row
+                    .objective
                     .observe_failure(generation, &reason, ts_now());
                 self.notice(NoticeLevel::Error, NoticeCode::ExecutionFailed, &reason);
             }
@@ -261,7 +264,7 @@ impl Service {
                 return;
             };
             let id = input.id;
-            let state = st.objective().execution().state();
+            let state = st.row.objective.execution().state();
             if !state.accepts_dispatch() && *state == ExecutionState::Starting {
                 return;
             }

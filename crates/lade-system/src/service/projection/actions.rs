@@ -43,7 +43,7 @@ fn input_blocker(
 }
 
 pub(crate) fn terminal_blocker(st: &ObjState) -> Option<&'static str> {
-    let record = st.objective().record();
+    let record = st.row.objective.record();
     if record.cleaned_up {
         Some("This Objective was cleaned up, so it has no worktree for a terminal.")
     } else if record.lifecycle.is_terminal() {
@@ -108,8 +108,8 @@ struct ActionFacts<'a> {
 
 impl<'a> ActionFacts<'a> {
     fn new(service: &'a Service, st: &'a ObjState, target: Option<&'a GitId>) -> Self {
-        let oid = st.objective().id();
-        let record = st.objective().record();
+        let oid = st.row.objective.id();
+        let record = st.row.objective.record();
         let state = record.execution.state();
         let busy = service.runtime.get(&oid).and_then(|r| r.busy);
         let review = &st.review;
@@ -428,7 +428,7 @@ impl<'a> ActionFacts<'a> {
 /// Why `review.freeze` is refused for this Objective, if it is. The action list and the
 /// request handler both use it, so the disabled reason is the rejection detail.
 pub(crate) fn freeze_blocker(st: &ObjState) -> Option<&'static str> {
-    match st.objective().lifecycle() {
+    match st.row.objective.lifecycle() {
         Lifecycle::Active if st.row.worktree.is_none() => {
             Some("There is no agent work to freeze yet.")
         }
@@ -443,7 +443,7 @@ pub(crate) fn freeze_blocker(st: &ObjState) -> Option<&'static str> {
 }
 
 pub(crate) fn delete_history_blocker(st: &ObjState) -> Option<&'static str> {
-    let record = st.objective().record();
+    let record = st.row.objective.record();
     if !record.cleaned_up {
         Some("Clean up the Objective before deleting its Git history.")
     } else if st.row.history_deleted {

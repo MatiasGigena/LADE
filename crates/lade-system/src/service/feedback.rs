@@ -272,7 +272,7 @@ impl Service {
         let created = existing.is_none();
         let draft = save_draft(
             existing,
-            st.objective(),
+            &st.row.objective,
             SaveDraft {
                 draft_id,
                 objective_id: oid,
@@ -360,7 +360,7 @@ impl Service {
             pair
         } else {
             let current =
-                st.objective().execution().session().ok_or_else(|| {
+                st.row.objective.execution().session().ok_or_else(|| {
                     domain_rejection(lade_core::DomainError::ExecutionUnavailable)
                 })?;
             (current.session_id, current.association_revision)
@@ -382,7 +382,7 @@ impl Service {
         submitted: &[lade_core::domain::feedback::Draft],
         checked: bool,
     ) {
-        let oid = st.objective().id();
+        let oid = st.row.objective.id();
         let seq = self.input_seq + 1;
         let summary = wire_input(&input);
         let data = input_reply(ctx.name, summary.clone());
@@ -422,7 +422,7 @@ impl Service {
             let oid = self.objective_id(&cmd.objective_id)?;
             let st = self.obj(oid)?;
             let acceptance = Self::acceptance(st, &ctx, cmd.mode, None)?;
-            let input = accept_message(st.objective(), acceptance, cmd.text.clone(), ts_now())
+            let input = accept_message(&st.row.objective, acceptance, cmd.text.clone(), ts_now())
                 .map_err(domain_rejection)?;
             Ok((st.clone(), input))
         })();
@@ -438,13 +438,14 @@ impl Service {
             let oid = self.objective_id(&cmd.objective_id)?;
             let st = self.obj(oid)?;
             let session = SessionId::new(parse_uuid(&cmd.destination_session_id)?);
-            st.objective()
+            st.row
+                .objective
                 .execution()
                 .check_association(session, Revision::new(cmd.association_revision.value()))
                 .map_err(domain_rejection)?;
-            if st.objective().lifecycle() != lade_core::domain::objectives::Lifecycle::Active {
+            if st.row.objective.lifecycle() != lade_core::domain::objectives::Lifecycle::Active {
                 return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
-                    lade_core::domain::feedback::input_refusal(st.objective().lifecycle()),
+                    lade_core::domain::feedback::input_refusal(st.row.objective.lifecycle()),
                 )));
             }
             let mut drafts = Vec::new();
@@ -529,7 +530,7 @@ impl Service {
                 })
                 .collect();
             let input = accept_feedback(
-                st.objective(),
+                &st.row.objective,
                 acceptance,
                 &mut batch,
                 cmd.note.clone(),

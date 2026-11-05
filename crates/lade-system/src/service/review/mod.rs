@@ -63,7 +63,8 @@ impl Service {
         self.rt(oid).busy = Some(Busy::Freeze);
         self.exclude_terminal_writers(oid);
         let live = self.objectives[&oid]
-            .objective()
+            .row
+            .objective
             .execution()
             .state()
             .is_live();
@@ -72,8 +73,8 @@ impl Service {
             return Flow::Deferred;
         }
         let mut st = self.objectives[&oid].clone();
-        if st.objective().execution().state() != &ExecutionState::Stopping
-            && let Err(e) = st.objective_mut().request_stop(ts_now())
+        if st.row.objective.execution().state() != &ExecutionState::Stopping
+            && let Err(e) = st.row.objective.request_stop(ts_now())
         {
             self.rt(oid).busy = None;
             self.finish(ctx, Err(domain_rejection(e)));
@@ -95,7 +96,7 @@ impl Service {
         let live = self
             .objectives
             .get(&oid)
-            .is_some_and(|st| st.objective().execution().state().is_live());
+            .is_some_and(|st| st.row.objective.execution().state().is_live());
         if live {
             return;
         }
@@ -108,7 +109,7 @@ impl Service {
         let input = (|| {
             let st = self.obj(oid)?;
             let ws = self.ws_of(st)?;
-            let record = st.objective().record();
+            let record = st.row.objective.record();
             let candidate_id = CandidateId::new(new_uuid());
             let ordinal = st.review.latest_candidate().map_or(1, |c| c.ordinal + 1);
             Ok((
@@ -163,7 +164,7 @@ impl Service {
         let outcome = (|| {
             let out = result?;
             let mut st = self.obj(oid)?.clone();
-            if st.objective().execution().state().is_live() {
+            if st.row.objective.execution().state().is_live() {
                 return Err(conflict(
                     "a writer restarted during freeze; nothing was frozen",
                 ));
@@ -389,7 +390,7 @@ impl Service {
             let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
             let st = self.obj(oid)?.clone();
             if !matches!(
-                st.objective().lifecycle(),
+                st.row.objective.lifecycle(),
                 Lifecycle::Frozen | Lifecycle::Approved
             ) {
                 return Err(domain_rejection(DomainError::InvalidLifecycle(
@@ -418,7 +419,8 @@ impl Service {
                     repo: ws.repo.clone(),
                     artifacts: self.artifacts.clone(),
                     target_branch: st
-                        .objective()
+                        .row
+                        .objective
                         .record()
                         .integration_target
                         .as_str()

@@ -28,7 +28,7 @@ pub(crate) struct Integrations {
 impl Service {
     fn integration_key(&self, oid: ObjectiveId) -> Option<(WorkspaceId, String)> {
         self.objectives.get(&oid).map(|st| {
-            let record = st.objective().record();
+            let record = st.row.objective.record();
             (
                 record.workspace_id,
                 record.integration_target.as_str().to_string(),
@@ -102,7 +102,7 @@ impl Service {
             .ok_or_else(|| not_found("integration target branch"))?;
         match st
             .review
-            .check_integration(st.objective(), approval_id, &current)
+            .check_integration(&st.row.objective, approval_id, &current)
         {
             Ok(plan) => Ok((oid, st, plan)),
             Err(DomainError::StaleTarget) => {
@@ -276,7 +276,7 @@ impl Service {
             .objectives
             .iter()
             .filter(|(other, st)| {
-                let record = st.objective().record();
+                let record = st.row.objective.record();
                 **other != oid
                     && key.as_ref().is_some_and(|(workspace, target)| {
                         record.workspace_id == *workspace
@@ -303,7 +303,7 @@ impl Service {
 /// The journal entry for integrating `plan`, with the exact squash message and time so restart
 /// reconciliation can rebuild the commit.
 fn integration_journal(oid: ObjectiveId, st: &ObjState, plan: &IntegrationPlan) -> JournalRow {
-    let record = st.objective().record();
+    let record = st.row.objective.record();
     JournalRow {
         id: new_uuid(),
         objective_id: oid,

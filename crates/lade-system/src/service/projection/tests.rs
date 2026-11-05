@@ -82,7 +82,7 @@ fn the_target_is_resolved_fresh_and_then_served_from_the_cache() {
     let st = harness.service.objectives[&oid].clone();
     let fresh = harness.service.fresh_target(&st).expect("main resolves");
     assert_eq!(harness.service.cached_target(&st), Some(fresh.clone()));
-    let workspace = st.objective().record().workspace_id;
+    let workspace = st.row.objective.record().workspace_id;
     assert_eq!(harness.service.resolve_target(workspace, "missing"), None);
     assert_eq!(
         harness.service.resolve_target(workspace, "main"),

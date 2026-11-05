@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use lade_core::domain::feedback::{AcceptedInput, Draft};
 use lade_core::domain::ids::{DraftId, InputId, VerificationId, WorkspaceId};
-use lade_core::domain::objectives::Objective;
 use lade_core::domain::review::Review;
 
 use crate::adapters::git::Repository;
@@ -34,14 +33,6 @@ pub struct ObjState {
 }
 
 impl ObjState {
-    pub fn objective(&self) -> &Objective {
-        &self.row.objective
-    }
-
-    pub fn objective_mut(&mut self) -> &mut Objective {
-        &mut self.row.objective
-    }
-
     pub fn input_mut(&mut self, id: InputId) -> Option<&mut AcceptedInput> {
         self.inputs.iter_mut().map(|(_, i)| i).find(|i| i.id == id)
     }
@@ -165,7 +156,6 @@ mod tests {
             .rendered_text = "edited".into();
         assert_eq!(st.inputs[1].1.rendered_text, "edited");
         assert!(st.input_mut(InputId::new(id(3))).is_none());
-        assert_eq!(st.objective().id(), oid);
-        assert!(st.objective_mut().execution().session().is_none());
+        assert_eq!(st.row.objective.id(), oid);
     }
 }

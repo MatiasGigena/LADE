@@ -42,10 +42,10 @@ impl Service {
         let targets: Vec<(ObjectiveId, u64, [PathBuf; 2])> = self
             .objectives
             .iter()
-            .filter(|(_, st)| st.objective().execution().state().is_live())
+            .filter(|(_, st)| st.row.objective.execution().state().is_live())
             .filter_map(|(oid, st)| {
                 let worktree = st.row.worktree.clone()?;
-                let generation = st.objective().execution().generation().value();
+                let generation = st.row.objective.execution().generation().value();
                 Some((
                     *oid,
                     generation,
@@ -87,7 +87,7 @@ impl Service {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        let execution = st.objective().execution();
+        let execution = st.row.objective.execution();
         if execution.generation().value() != generation || !execution.state().is_live() {
             return;
         }
@@ -97,7 +97,8 @@ impl Service {
             human_bytes(self.storage.writable_limit)
         );
         if st
-            .objective_mut()
+            .row
+            .objective
             .observe_failure(ExecutionGeneration::new(generation), &reason, ts_now())
             .is_err()
         {
