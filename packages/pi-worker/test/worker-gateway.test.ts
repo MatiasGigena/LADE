@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { getGlobalDispatcher } from "undici";
-import { installGateway, installNoNetwork, tunnel } from "../src/worker/gateway.ts";
+import { installGateway, installNoNetwork, MAX_CONNECT_RESPONSE, tunnel } from "../src/worker/gateway.ts";
 
 const root = mkdtempSync(join(tmpdir(), "lade-gateway-"));
 
@@ -30,77 +30,86 @@ function portOf(server: Server): number {
   return address.port;
 }
 
+const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+const ESTABLISHED = "HTTP/1.1 200 Connection Established\r\n";
+
+const PAD = `${ESTABLISHED}X-Pad: `;
+
+const PAYLOAD_BYTES = 20 * 1024;
+
+const REFUSED = "refused.lade.test:80";
+
+const OFFLINE = "http://provider.lade.test/";
+
+function track(socket: Socket): void {
+  open.add(socket);
+  socket.once("close", () => open.delete(socket));
+}
+
+/** A CONNECT response header of exactly `size` bytes. */
+function paddedHeader(size: number): string {
+  return `${PAD}${"x".repeat(size - Buffer.byteLength(PAD) - 4)}\r\n\r\n`;
+}
+
+/** Scripted gateway replies, chosen by the first label of the CONNECT authority; other targets are forwarded to the origin. */
+const SCRIPTED = new Map<string, (client: Socket) => void>([
+  ["refused.", client => { client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); }],
+  ["silent.", client => { client.end(); }],
+  ["oversized.", client => { client.end(`${PAD}${"x".repeat(MAX_CONNECT_RESPONSE + 1024)}\r\n\r\n`); }],
+  ["limit.", client => { client.end(paddedHeader(MAX_CONNECT_RESPONSE)); }],
+  ["over-limit.", client => { client.end(paddedHeader(MAX_CONNECT_RESPONSE + 1)); }],
+  ["payload.", client => { client.end(`${ESTABLISHED}\r\n${"x".repeat(PAYLOAD_BYTES)}`); }],
+]);
+
+/** Echoes one short, masked client text frame back unmasked. */
+function echoFrame(socket: Socket, frame: Buffer): void {
+  const length = (frame[1] ?? 0) & 0x7f;
+  const mask = frame.subarray(2, 6);
+  const payload = Buffer.from(frame.subarray(6, 6 + length).map((byte, index) => byte ^ (mask[index % 4] ?? 0)));
+  socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
+}
+
 const origin = createServer((request, response) => {
   response.end(`origin saw ${request.url}`);
 });
 
 origin.on("upgrade", (request, socket: Socket) => {
-  open.add(socket);
-  socket.once("close", () => open.delete(socket));
-  const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"] ?? ""}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64");
+  track(socket);
+  const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"] ?? ""}${WEBSOCKET_GUID}`).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-  socket.once("data", (frame: Buffer) => {
-    const length = (frame[1] ?? 0) & 0x7f;
-    const mask = frame.subarray(2, 6);
-    const payload = Buffer.from(frame.subarray(6, 6 + length).map((byte, index) => byte ^ (mask[index % 4] ?? 0)));
-    socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
-  });
+  socket.once("data", (frame: Buffer) => echoFrame(socket, frame));
 });
 
+function answer(client: Socket, authority: string): void {
+  authorities.push(authority);
+  const scripted = SCRIPTED.get(authority.slice(0, authority.indexOf(".") + 1));
+
+  if (scripted) {
+    scripted(client);
+
+    return;
+  }
+
+  const upstream = connect({ host: "127.0.0.1", port: portOf(origin) }, () => {
+    client.write(`${ESTABLISHED}\r\n`);
+    client.pipe(upstream); upstream.pipe(client);
+  });
+
+  track(upstream);
+}
+
 const gateway = createNetServer(client => {
-  open.add(client);
-  client.once("close", () => open.delete(client));
+  track(client);
   let head = "";
 
-  function onData(chunk: Buffer): void {
+  const onData = (chunk: Buffer): void => {
     head += chunk.toString("latin1");
-    const end = head.indexOf("\r\n\r\n");
 
-    if (end < 0) return;
+    if (!head.includes("\r\n\r\n")) return;
     client.removeListener("data", onData);
-    const authority = /^CONNECT (\S+) HTTP\/1\.1\r\n/.exec(head)?.[1] ?? "";
-    authorities.push(authority);
-
-    if (authority.startsWith("refused.")) {
-      client.end("HTTP/1.1 403 Forbidden\r\n\r\n");
-
-      return;
-    }
-
-    if (authority.startsWith("silent.")) {
-      client.end();
-
-      return;
-    }
-
-    if (authority.startsWith("oversized.")) {
-      client.end(`HTTP/1.1 200 Connection Established\r\nX-Pad: ${"x".repeat(17 * 1024)}\r\n\r\n`);
-
-      return;
-    }
-
-    if (authority.startsWith("limit.") || authority.startsWith("over-limit.")) {
-      const prefix = "HTTP/1.1 200 Connection Established\r\nX-Pad: ";
-      const size = 16 * 1024 + (authority.startsWith("over-limit.") ? 1 : 0);
-      client.end(`${prefix}${"x".repeat(size - Buffer.byteLength(prefix) - 4)}\r\n\r\n`);
-
-      return;
-    }
-
-    if (authority.startsWith("payload.")) {
-      client.end(`HTTP/1.1 200 Connection Established\r\n\r\n${"x".repeat(20 * 1024)}`);
-
-      return;
-    }
-
-    const upstream = connect({ host: "127.0.0.1", port: portOf(origin) }, () => {
-      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      client.pipe(upstream); upstream.pipe(client);
-    });
-
-    open.add(upstream);
-    upstream.once("close", () => open.delete(upstream));
-  }
+    answer(client, /^CONNECT (\S+) HTTP\/1\.1\r\n/.exec(head)?.[1] ?? "");
+  };
 
   client.on("data", onData);
 });
@@ -152,7 +161,7 @@ test("node:http clients use the global agent, which tunnels through the gateway"
   const port = portOf(origin);
   assert.equal(await httpGet(`http://sdk.lade.test:${port}/v1/chat`), "origin saw /v1/chat");
   assert.equal(authorities.at(-1), `sdk.lade.test:${port}`);
-  await assert.rejects(httpGet("http://refused.lade.test:80/"), { code: "gateway_refused" });
+  await assert.rejects(httpGet(`http://${REFUSED}/`), { code: "gateway_refused" });
   http.globalAgent.destroy();
 });
 
@@ -171,8 +180,8 @@ test("WebSocket connections are tunnelled through the gateway", async () => {
   const port = portOf(origin);
   assert.equal(await echo(`ws://realtime.lade.test:${port}/v1/responses`), "ping");
   assert.equal(authorities.at(-1), `realtime.lade.test:${port}`);
-  await assert.rejects(echo("ws://refused.lade.test:80/"), /websocket failed/);
-  assert.equal(authorities.at(-1), "refused.lade.test:80");
+  await assert.rejects(echo(`ws://${REFUSED}/`), /websocket failed/);
+  assert.equal(authorities.at(-1), REFUSED);
 });
 
 test("a refused tunnel fails the request", async () => {
@@ -201,14 +210,14 @@ test("CONNECT preserves tunneled payload arriving with the response header", asy
 
   for await (const chunk of socket) chunks.push(chunk);
   const payload = Buffer.concat(chunks);
-  assert.equal(payload.length, 20 * 1024);
-  assert.equal(payload.equals(Buffer.alloc(20 * 1024, "x")), true);
+  assert.equal(payload.length, PAYLOAD_BYTES);
+  assert.equal(payload.equals(Buffer.alloc(PAYLOAD_BYTES, "x")), true);
 });
 
 test("without a gateway socket every connection fails with a clear reason", async () => {
   installNoNetwork();
-  await assert.rejects(httpGet("http://provider.lade.test/"), { code: "network_unavailable" });
-  await assert.rejects(fetch("http://provider.lade.test/"), (error: Error) => {
+  await assert.rejects(httpGet(OFFLINE), { code: "network_unavailable" });
+  await assert.rejects(fetch(OFFLINE), (error: Error) => {
     assert.match(String(error.cause), /network disabled: no LADE gateway socket/);
 
     return true;
