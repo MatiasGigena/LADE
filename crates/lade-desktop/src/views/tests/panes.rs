@@ -8,7 +8,7 @@ use crate::presentation::state::model::{
 };
 use crate::presentation::state::store::{InspectorTab, MainView, PresentationState};
 use crate::presentation::test_fixture;
-use crate::views::tests::{SETTLE, button_named, descendants, settle, shows};
+use crate::views::tests::{button_named, descendants, laid_out, settle_until, shows};
 use crate::views::*;
 
 /// A presented, connected window over the fixture, with the main Objective selected, and the
@@ -36,7 +36,9 @@ fn connected(width: i32, height: i32) -> (Rc<App>, Rc<RecordingSink>) {
     app.present();
     app.controller
         .select_objective(&ObjectiveId::new(test_fixture::MAIN_OBJECTIVE));
-    settle(SETTLE);
+    settle_until("the panes are shown", || {
+        laid_out(&app.workbench.root) && laid_out(&app.inspector.root)
+    });
     (app, sink)
 }
 
@@ -58,7 +60,9 @@ fn the_rail_lists_objectives_and_selecting_one_shows_it_in_the_workbench() {
         sink.intents.borrow_mut().clear();
         app.controller
             .select_objective(&ObjectiveId::new(test_fixture::SECOND_OBJECTIVE));
-        settle(SETTLE);
+        settle_until("the workbench shows the second Objective", || {
+            shows(&app.workbench.root, "Explain interrupted work")
+        });
         assert!(shows(&app.workbench.root, "Explain interrupted work"));
         assert!(
             sink.intents
@@ -80,7 +84,9 @@ fn the_header_names_the_connection_and_switches_the_main_view() {
             .apply(StoreUpdate::Connection(ConnectionState::Reconnecting {
                 attempt: 2,
             }));
-        settle(SETTLE);
+        settle_until("the header shows the reconnect", || {
+            shows(&app.header.root, "Reconnecting")
+        });
         assert!(shows(&app.header.root, "Reconnecting"));
         assert_eq!(
             header::connection_text(&ConnectionState::Disconnected {
@@ -92,7 +98,9 @@ fn the_header_names_the_connection_and_switches_the_main_view() {
             )
         );
         app.controller.set_view(MainView::Activity);
-        settle(SETTLE);
+        settle_until("the activity view replaces the workbench", || {
+            app.activity.root.is_mapped() && !app.workbench.root.is_mapped()
+        });
         assert!(app.activity.root.is_mapped());
         assert!(!app.workbench.root.is_mapped());
         app.window.close();
@@ -106,11 +114,15 @@ fn the_inspector_tabs_show_the_objective_its_checks_and_its_drafts() {
         let (app, _) = connected(1440, 900);
         assert!(shows(&app.inspector.root, "Harden network calls"));
         app.controller.set_inspector_tab(InspectorTab::Evidence);
-        settle(SETTLE);
+        settle_until("the evidence tab shows its checks", || {
+            app.inspector.root.current_page() == Some(1) && shows(&app.inspector.root, "npm test")
+        });
         assert_eq!(app.inspector.root.current_page(), Some(1));
         assert!(shows(&app.inspector.root, "npm test"));
         app.controller.set_inspector_tab(InspectorTab::Feedback);
-        settle(SETTLE);
+        settle_until("the feedback tab is shown", || {
+            app.inspector.root.current_page() == Some(2) && !shows(&app.inspector.root, "npm test")
+        });
         assert_eq!(app.inspector.root.current_page(), Some(2));
         assert!(!shows(&app.inspector.root, "npm test"));
         app.window.close();
@@ -123,7 +135,12 @@ fn activity_states_what_the_agent_is_doing() {
     gtk::test_synced(|| {
         let (app, sink) = connected(1440, 900);
         app.controller.set_view(MainView::Activity);
-        settle(SETTLE);
+        settle_until("the activity view explains the agent", || {
+            shows(
+                &app.activity.root,
+                "The agent is idle and waiting for your message.",
+            )
+        });
         assert!(shows(
             &app.activity.root,
             "The agent is idle and waiting for your message."
@@ -145,11 +162,18 @@ fn the_terminal_pane_offers_to_open_a_terminal_for_the_objective() {
     gtk::test_synced(|| {
         let (app, sink) = connected(1440, 900);
         app.controller.set_view(MainView::Terminal);
-        settle(SETTLE);
+        settle_until("the terminal pane offers to open", || {
+            button_named(&app.terminal.root, "Open terminal").is_some()
+        });
         let open = button_named(&app.terminal.root, "Open terminal").expect("open action");
         sink.intents.borrow_mut().clear();
         open.emit_clicked();
-        settle(SETTLE);
+        settle_until("the open request is sent", || {
+            sink.intents
+                .borrow()
+                .iter()
+                .any(|i| matches!(i, Intent::OpenTerminal { .. }))
+        });
         assert!(
             sink.intents
                 .borrow()
@@ -167,14 +191,14 @@ fn a_compact_window_shows_the_region_switches() {
         let (app, _) = connected(1440, 900);
         assert!(!app.region_bar.is_visible());
         app.apply_width(800);
-        settle(SETTLE);
+        settle_until("the region switches appear", || app.region_bar.is_visible());
         assert!(app.region_bar.is_visible());
         assert_eq!(
             app.store.state().ui.layout,
             crate::presentation::layout::LayoutClass::Compact
         );
         app.apply_width(1440);
-        settle(SETTLE);
+        settle_until("the region switches hide", || !app.region_bar.is_visible());
         assert!(!app.region_bar.is_visible());
         app.window.close();
     });
@@ -201,7 +225,14 @@ fn every_rebindable_action_has_a_shortcut_that_follows_the_keymap() {
             .collect();
         let keymap = Keymap::propose(&entries).expect("F9 is free");
         app.controller.set_keymap(keymap);
-        settle(SETTLE);
+        settle_until("the shortcut follows the keymap", || {
+            app.shortcuts
+                .borrow()
+                .iter()
+                .find(|(a, _)| *a == AppAction::ShowActivity)
+                .and_then(|(_, s)| s.trigger())
+                .is_some_and(|t| t.to_str() == "F9")
+        });
         let trigger = app
             .shortcuts
             .borrow()
@@ -248,16 +279,20 @@ fn a_confirmation_closes_on_success_and_keeps_a_refusal_in_view() {
                 }
             },
         );
-        settle(SETTLE);
+        settle_until("the confirmation opens", || {
+            toplevel("Discard Objective").is_some_and(|w| laid_out(&w))
+        });
         let window = toplevel("Discard Objective").expect("confirmation");
         let discard = button_named(&window, "Discard").expect("confirm action");
         assert!(discard.has_css_class("destructive"));
         discard.emit_clicked();
-        settle(SETTLE);
+        settle_until("the refusal is shown", || {
+            shows(&window, "The service refused")
+        });
         assert!(window.is_visible(), "a refusal keeps the dialog open");
         assert!(shows(&window, "The service refused"));
         discard.emit_clicked();
-        settle(SETTLE);
+        settle_until("the confirmation closes", || !window.is_visible());
         assert!(!window.is_visible());
         assert_eq!(attempts.get(), 2);
         app.window.close();
@@ -275,7 +310,13 @@ fn the_session_sections_show_the_model_and_the_resources_awaiting_approval() {
         content.append(&session::resources_section(&app.controller));
         window.set_child(Some(&content));
         window.present();
-        settle(SETTLE);
+        settle_until("the session sections are shown", || {
+            shows(&content, "ask.js")
+                && descendants(content.upcast_ref())
+                    .into_iter()
+                    .filter_map(|w| w.downcast::<gtk::DropDown>().ok())
+                    .any(|d| d.is_mapped())
+        });
         assert!(
             shows(&content, "ask.js"),
             "{:?}",
@@ -315,14 +356,18 @@ fn the_activity_log_shows_history_and_streamed_text() {
             }],
             has_more: false,
         });
-        settle(SETTLE);
+        settle_until("the history is shown", || {
+            shows(&app.activity.root, "Reading retry.ts")
+        });
         assert!(shows(&app.activity.root, "Reading retry.ts"));
         app.store.apply(StoreUpdate::ActivityDelta {
             objective_id: id,
             item_id: ActivityItemId::new("item-1"),
             append_text: " and its tests".into(),
         });
-        settle(SETTLE);
+        settle_until("the streamed text is shown", || {
+            shows(&app.activity.root, "Reading retry.ts and its tests")
+        });
         assert!(shows(&app.activity.root, "Reading retry.ts and its tests"));
         app.window.close();
     });

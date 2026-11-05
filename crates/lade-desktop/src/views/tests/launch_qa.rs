@@ -1,9 +1,10 @@
+use crate::presentation::layout::LayoutClass;
 use crate::presentation::state::model::{
     Basis, ChangeList, ChangeStatus, ChangedFile, NoticeLevel, NoticeScope, ObjectiveId, RepoPath,
     ServiceNotice,
 };
 use crate::presentation::test_fixture;
-use crate::views::tests::{SETTLE, app, descendants, settle};
+use crate::views::tests::{app, descendants, laid_out, settle_until};
 use crate::views::*;
 
 #[test]
@@ -12,12 +13,16 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
     gtk::test_synced(|| {
         let app = app(800, 550);
         dialogs::new_objective(&app.window, &app.controller);
-        settle(SETTLE);
-        let dialog = gtk::Window::list_toplevels()
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Window>().ok())
-            .find(|w| w.title().as_deref() == Some("New Objective"))
-            .expect("Objective form");
+        let form = || {
+            gtk::Window::list_toplevels()
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Window>().ok())
+                .find(|w| w.title().as_deref() == Some("New Objective"))
+        };
+        settle_until("the Objective form opens", || {
+            form().is_some_and(|w| laid_out(&w))
+        });
+        let dialog = form().expect("Objective form");
         let size = (dialog.width(), dialog.height());
         let create = descendants(dialog.upcast_ref())
             .into_iter()
@@ -25,12 +30,16 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
             .find(|b| b.label().as_deref() == Some("Create Objective"))
             .expect("Create Objective action");
         create.emit_clicked();
-        settle(SETTLE);
-        let error = descendants(dialog.upcast_ref())
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .find(|l| l.label().as_str() == "Give the Objective a title of 1–200 characters")
-            .expect("validation message");
+        let validation = || {
+            descendants(dialog.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .find(|l| l.label().as_str() == "Give the Objective a title of 1–200 characters")
+        };
+        settle_until("the validation message is shown", || {
+            validation().is_some_and(|l| laid_out(&l))
+        });
+        let error = validation().expect("validation message");
         let error_bounds = error.compute_bounds(&dialog).unwrap();
         let height = dialog.height();
         dialog.close();
@@ -52,12 +61,18 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
 fn launch_qa_narrow_navigation_fits_requested_width() {
     gtk::test_synced(|| {
         let app = app(375, 812);
+        let menu = || {
+            descendants(app.window.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::MenuButton>().ok())
+                .find(|b| b.icon_name().as_deref() == Some("open-menu-symbolic"))
+        };
+        settle_until("the compact header shows its menu", || {
+            app.store.state().ui.layout == LayoutClass::Compact
+                && menu().is_some_and(|m| laid_out(&m))
+        });
         let width = app.window.width();
-        let menu = descendants(app.window.upcast_ref())
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::MenuButton>().ok())
-            .find(|b| b.icon_name().as_deref() == Some("open-menu-symbolic"))
-            .expect("header menu");
+        let menu = menu().expect("header menu");
         let bounds = menu.compute_bounds(&app.window).unwrap();
         app.window.close();
         assert_eq!(width, 375, "navigation must not force a wider window");
@@ -103,12 +118,14 @@ fn launch_qa_narrow_change_set_heading_stays_readable() {
             total_removed: 0,
             notices: vec![],
         }));
-        settle(SETTLE);
-        let heading = descendants(app.window.upcast_ref())
-            .into_iter()
-            .filter_map(|w| w.downcast::<gtk::Label>().ok())
-            .find(|l| l.is_mapped() && l.label().as_str() == "Change Set")
-            .expect("Change Set heading");
+        let heading = || {
+            descendants(app.window.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .find(|l| laid_out(l) && l.label().as_str() == "Change Set")
+        };
+        settle_until("the Change Set heading is shown", || heading().is_some());
+        let heading = heading().expect("Change Set heading");
         let size = (heading.width(), heading.height());
         app.window.close();
         assert!(

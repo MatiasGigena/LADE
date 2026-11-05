@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::presentation::state::model::ActionAvailability;
 use crate::presentation::text::bound::TextLimit;
-use crate::views::tests::{SETTLE, descendants, settle};
+use crate::views::tests::{descendants, laid_out, settle_until};
 use crate::views::widgets::{
     Dialog, LimitedInput, MessageKind, action_row, compact_action, counts, disclosure, dropdown_or,
     find_named, inline_message, list_action_row, rebuild_preserving_focus, set_focus_key,
@@ -196,7 +196,9 @@ fn a_rebuild_keeps_focus_on_the_widget_with_the_same_key() {
         };
         fill(&container);
         window.present();
-        settle(SETTLE);
+        settle_until("the keyed buttons are shown", || {
+            find_named(container.upcast_ref(), "k:second").is_some_and(|w| laid_out(&w))
+        });
         let second = find_named(container.upcast_ref(), "k:second").expect("keyed widget");
         assert!(second.grab_focus());
         rebuild_preserving_focus(&container, || fill(&container));
@@ -270,10 +272,10 @@ fn a_dialog_lists_its_errors_and_cancel_closes_it() {
         let cancel = dialog.add_cancel();
         dialog.add_button("Rename", &["primary"]);
         dialog.present();
-        settle(SETTLE);
+        settle_until("the dialog opens", || dialog.window.is_visible());
         assert!(dialog.window.is_visible());
         cancel.emit_clicked();
-        settle(SETTLE);
+        settle_until("cancel closes the dialog", || !dialog.window.is_visible());
         assert!(!dialog.window.is_visible());
         opener.close();
     });

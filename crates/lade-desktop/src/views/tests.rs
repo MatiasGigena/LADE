@@ -3,14 +3,17 @@ mod launch_qa;
 mod panes;
 mod widgets;
 
+use std::time::Instant;
+
 use super::*;
 use crate::presentation::controller::intents::RecordingSink;
 use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::store::PresentationState;
 use crate::presentation::test_fixture;
 
-/// How long each step lets GTK lay out and draw before it is checked.
-pub(super) const SETTLE: Duration = Duration::from_millis(300);
+/// How long a step may take to reach its expected state before the test fails. Generous, so a
+/// loaded display server does not fail a test; a step that is ready sooner does not wait for it.
+const PATIENCE: Duration = Duration::from_secs(10);
 
 pub(super) fn app(width: i32, height: i32) -> Rc<App> {
     load_css();
@@ -35,8 +38,14 @@ pub(super) fn app(width: i32, height: i32) -> Rc<App> {
     );
     app.window.set_default_size(width, height);
     app.present();
-    settle(SETTLE);
+    settle_until("the window is laid out", || laid_out(&app.window));
     app
+}
+
+/// Whether `widget` is mapped and has been given a size.
+pub(super) fn laid_out(widget: &impl IsA<gtk::Widget>) -> bool {
+    let widget = widget.as_ref();
+    widget.is_mapped() && widget.width() > 0 && widget.height() > 0
 }
 
 pub(super) fn descendants(widget: &gtk::Widget) -> Vec<gtk::Widget> {
@@ -81,8 +90,22 @@ pub(super) fn button_named(widget: &impl IsA<gtk::Widget>, text: &str) -> Option
         })
 }
 
-/// Runs the default main context for `duration`, dispatching events as they arrive, so
-/// layout, frame clock ticks and idle handlers queued by the step under test complete.
+/// Runs the default main context, dispatching layout, frame clock ticks and idle handlers, until
+/// `condition` holds. Panics naming `what` if it still does not hold after [`PATIENCE`].
+pub(super) fn settle_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let context = glib::MainContext::default();
+    let deadline = Instant::now() + PATIENCE;
+    // Wakes the blocking iteration regularly so the condition is checked even when idle.
+    let tick = glib::timeout_add_local(Duration::from_millis(10), || glib::ControlFlow::Continue);
+    while !condition() {
+        assert!(Instant::now() < deadline, "timed out waiting until {what}");
+        context.iteration(true);
+    }
+    tick.remove();
+}
+
+/// Runs the default main context for `duration` whatever the state. Only for screenshot
+/// capture, which has no condition to wait for beyond the drawing having finished.
 pub(super) fn settle(duration: Duration) {
     let context = glib::MainContext::default();
     let elapsed = Rc::new(Cell::new(false));
