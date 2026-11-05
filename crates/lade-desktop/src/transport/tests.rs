@@ -371,9 +371,8 @@ fn newest_change(dir: &Path) -> Option<SystemTime> {
 /// release, or older than the service sources. Cargo does not rebuild lade-system for
 /// `cargo test -p lade-desktop`, so the binary may predate the code under test.
 fn laded_problem(laded: &Path) -> Option<String> {
-    let built = match fs::metadata(laded).and_then(|m| m.modified()) {
-        Ok(built) => built,
-        Err(_) => return Some(format!("{} is missing", laded.display())),
+    let Ok(built) = fs::metadata(laded).and_then(|m| m.modified()) else {
+        return Some(format!("{} is missing", laded.display()));
     };
     let version = Command::new(laded)
         .arg("--version")
@@ -496,7 +495,7 @@ fn real_service_workspace_objective_execution_and_change_set() {
     let _ = tx2.send(Input::Shutdown);
 
     send(Intent::CreateObjective {
-        workspace_id: workspace.workspace_id.clone(),
+        workspace_id: workspace.id.clone(),
         title: "Say hello".into(),
         intent: ObjectiveIntent {
             outcome: "hello.txt contains hi".into(),

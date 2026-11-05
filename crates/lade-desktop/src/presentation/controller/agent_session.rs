@@ -294,7 +294,8 @@ mod tests {
     use super::*;
     use crate::presentation::controller::tests::main_selected;
     use crate::presentation::state::agent_session::{
-        AgentSessionUpdate, Catalog, ModelInfo, ProviderInfo, ProviderStatus, UiDialog, UiPrompt,
+        AgentSessionState, AgentSessionUpdate, Catalog, ModelInfo, ProviderInfo, ProviderStatus,
+        UiDialog, UiPrompt,
     };
     use crate::presentation::state::model::Load;
     use crate::presentation::test_fixture;
@@ -362,7 +363,7 @@ mod tests {
     fn readiness_tells_apart_no_catalogue_no_provider_loading_and_no_models() {
         let (controller, sink, _) = main_selected();
         controller.store.update(|s| {
-            s.agent_session = Default::default();
+            s.agent_session = AgentSessionState::default();
             ((), Vec::new())
         });
         assert_eq!(controller.readiness(), Readiness::CatalogLoading);
@@ -492,12 +493,11 @@ mod tests {
             .selected_detail()
             .map(|d| d.summary.execution.state);
         let result = controller.compact_session();
-        match state {
-            Some(ExecutionState::Idle) => assert!(result.is_ok()),
-            _ => {
-                assert!(result.is_err());
-                assert!(sink.intents.borrow().is_empty());
-            }
+        if let Some(ExecutionState::Idle) = state {
+            assert!(result.is_ok());
+        } else {
+            assert!(result.is_err());
+            assert!(sink.intents.borrow().is_empty());
         }
     }
 

@@ -91,6 +91,10 @@ pub fn wide_sizes(width: i32) -> WideSizes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag shows or hides one independent part of the window"
+)]
 pub struct Composition {
     pub rail: bool,
     pub centre: bool,

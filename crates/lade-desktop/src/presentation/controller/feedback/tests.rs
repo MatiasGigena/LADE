@@ -87,7 +87,7 @@ fn a_feedback_batch_takes_at_most_the_wire_bound_and_defers_the_rest() {
         let editors = (0..MAX_FEEDBACK_BATCH + 44)
             .map(|n| {
                 DraftEditor::from_durable(&Draft {
-                    draft_id: DraftId::new(format!("draft-{n}")),
+                    id: DraftId::new(format!("draft-{n}")),
                     objective_id: id.clone(),
                     destination_session_id: session.clone(),
                     reference: template.clone(),
@@ -198,7 +198,7 @@ fn draft_removal_waits_for_its_first_save_to_prevent_resurrection() {
             .find(|draft| draft.draft_id == draft_id)
             .unwrap();
         Draft {
-            draft_id: draft_id.clone(),
+            id: draft_id.clone(),
             objective_id: objective_id.clone(),
             destination_session_id: editor.destination_session_id.clone(),
             reference: editor.reference.clone(),

@@ -152,7 +152,7 @@ impl Activity {
                 }
             }
         });
-        panel.append(&session::session_section(&self.controller, detail, report));
+        panel.append(&session::session_section(&self.controller, detail, &report));
         let resources = vbox(space::GROUP);
         resources.append(&widgets::section_title(session::RESOURCES_TITLE));
         resources.append(&session::resources_section(&self.controller));

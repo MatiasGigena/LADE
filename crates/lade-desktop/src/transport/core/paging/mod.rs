@@ -102,7 +102,7 @@ impl Core {
             data.drafts
                 .iter()
                 .map(convert::draft)
-                .map(|draft| (draft.draft_id.clone(), draft)),
+                .map(|draft| (draft.id.clone(), draft)),
         );
         if let Some(next) = data.next_after {
             let intent = Intent::LoadDrafts {

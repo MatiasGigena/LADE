@@ -125,14 +125,8 @@ impl App {
             }),
             None => sink,
         };
-        let controller = Controller::new(store.clone(), sink);
-        let window = gtk::ApplicationWindow::builder()
-            .application(application)
-            .title("LADE")
-            .default_width(1440)
-            .default_height(900)
-            .build();
-        window.add_css_class("lade-window");
+        let controller = Controller::new(Rc::clone(&store), sink);
+        let window = main_window(application);
 
         let header = header::Header::new(&controller);
         let rail = rail::Rail::new(&controller);
@@ -149,73 +143,22 @@ impl App {
         notice.set_visible(false);
         root.append(&notice);
 
-        let region_bar = widgets::hbox(0);
-        region_bar.add_css_class("region-bar");
-        region_bar.set_visible(false);
-        let switches = widgets::hbox(0);
-        switches.add_css_class("segmented");
-        widgets::set_accessible_label(&switches, "Region");
-        let mut region_switches = Vec::new();
-        for region in [Region::Objectives, Region::Main, Region::Inspector] {
-            let toggle = gtk::ToggleButton::with_label(region.switch_label());
-            toggle.set_tooltip_text(Some(region.switch_tooltip()));
-            if let Some((_, first)) = region_switches.first() {
-                toggle.set_group(Some(first));
-            }
-            switches.append(&toggle);
-            region_switches.push((region, toggle));
-        }
-        region_bar.append(&switches);
+        let (region_bar, region_switches) = region_bar();
         root.append(&region_bar);
 
-        let centre = gtk::Stack::new();
-        centre.add_named(&workbench.root, Some("workbench"));
-        centre.add_named(&activity.root, Some("activity"));
-        centre.add_named(&terminal.root, Some("terminal"));
-        centre.set_hexpand(true);
-        centre.set_vexpand(true);
-        centre.set_vhomogeneous(false);
-        centre.set_hhomogeneous(false);
-        centre.add_css_class("centre-stack");
-        let centre_region = widgets::region_scroll(&centre);
-        centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
-        centre_region.set_hexpand(true);
-        centre_region.add_css_class("centre-region");
-        centre_region.add_css_class("sheet");
-        centre_region.set_overflow(gtk::Overflow::Hidden);
-        widgets::set_accessible_label(&centre_region, "Main work area");
-        inspector.root.set_hexpand(false);
-        inspector.root.add_css_class("sheet");
-        inspector.root.set_overflow(gtk::Overflow::Hidden);
-        widgets::set_accessible_label(&inspector.root, "Inspector");
-        let right = gtk::Paned::new(gtk::Orientation::Horizontal);
-        right.set_start_child(Some(&centre_region));
-        right.set_end_child(Some(&inspector.root));
-        right.set_resize_start_child(true);
-        right.set_resize_end_child(false);
-        right.set_shrink_start_child(false);
-        right.set_shrink_end_child(true);
-        right.set_wide_handle(false);
-        let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-        paned.set_start_child(Some(&rail.root));
-        paned.set_end_child(Some(&right));
-        paned.set_resize_start_child(false);
-        paned.set_shrink_start_child(true);
-        paned.set_shrink_end_child(false);
-        paned.set_position(264);
-        paned.set_wide_handle(false);
-        paned.connect_position_notify(|p| {
-            let clamped = p.position().clamp(224, 280);
-            if clamped != p.position() {
-                p.set_position(clamped);
-            }
-        });
+        let centre = centre_stack(&[
+            (workbench.root.upcast_ref(), "workbench"),
+            (activity.root.upcast_ref(), "activity"),
+            (terminal.root.upcast_ref(), "terminal"),
+        ]);
+        let centre_region = centre_region(&centre);
+        let (paned, right) = panes(
+            rail.root.upcast_ref(),
+            &centre_region,
+            inspector.root.upcast_ref(),
+        );
 
-        let probe = gtk::DrawingArea::new();
-        probe.set_hexpand(true);
-        probe.set_content_height(0);
-        probe.set_can_target(false);
-        probe.set_focusable(false);
+        let probe = width_probe();
         root.prepend(&probe);
 
         let empty = widgets::vbox(widgets::space::GROUP);
@@ -229,7 +172,7 @@ impl App {
 
         let app = Rc::new(Self {
             window,
-            store: store.clone(),
+            store,
             controller,
             header,
             rail,
@@ -269,7 +212,7 @@ impl App {
         }
         app.connect();
         let weak = Rc::downgrade(&app);
-        store.subscribe(move |changes| {
+        app.store.subscribe(move |changes| {
             if let Some(app) = weak.upgrade() {
                 app.refresh(changes);
             }
@@ -595,3 +538,108 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+/// The bar of toggles that switches between regions when only one fits, hidden until then.
+fn region_bar() -> (gtk::Box, Vec<(Region, gtk::ToggleButton)>) {
+    let region_bar = widgets::hbox(0);
+    region_bar.add_css_class("region-bar");
+    region_bar.set_visible(false);
+    let switches = widgets::hbox(0);
+    switches.add_css_class("segmented");
+    widgets::set_accessible_label(&switches, "Region");
+    let mut region_switches = Vec::new();
+    for region in [Region::Objectives, Region::Main, Region::Inspector] {
+        let toggle = gtk::ToggleButton::with_label(region.switch_label());
+        toggle.set_tooltip_text(Some(region.switch_tooltip()));
+        if let Some((_, first)) = region_switches.first() {
+            toggle.set_group(Some(first));
+        }
+        switches.append(&toggle);
+        region_switches.push((region, toggle));
+    }
+    region_bar.append(&switches);
+    (region_bar, region_switches)
+}
+
+/// The centre stack, holding one named page per centre view.
+fn centre_stack(pages: &[(&gtk::Widget, &str)]) -> gtk::Stack {
+    let centre = gtk::Stack::new();
+    for (page, name) in pages {
+        centre.add_named(*page, Some(name));
+    }
+    centre.set_hexpand(true);
+    centre.set_vexpand(true);
+    centre.set_vhomogeneous(false);
+    centre.set_hhomogeneous(false);
+    centre.add_css_class("centre-stack");
+    centre
+}
+
+/// The scrolled sheet the centre stack sits in.
+fn centre_region(centre: &gtk::Stack) -> gtk::ScrolledWindow {
+    let centre_region = widgets::region_scroll(centre);
+    centre_region.set_hscrollbar_policy(gtk::PolicyType::External);
+    centre_region.set_hexpand(true);
+    centre_region.add_css_class("centre-region");
+    centre_region.add_css_class("sheet");
+    centre_region.set_overflow(gtk::Overflow::Hidden);
+    widgets::set_accessible_label(&centre_region, "Main work area");
+    centre_region
+}
+
+/// The rail beside the centre and inspector, as the outer pane and the inner one on its right.
+fn panes(
+    rail: &gtk::Widget,
+    centre_region: &gtk::ScrolledWindow,
+    inspector: &gtk::Widget,
+) -> (gtk::Paned, gtk::Paned) {
+    inspector.set_hexpand(false);
+    inspector.add_css_class("sheet");
+    inspector.set_overflow(gtk::Overflow::Hidden);
+    widgets::set_accessible_label(inspector, "Inspector");
+    let right = gtk::Paned::new(gtk::Orientation::Horizontal);
+    right.set_start_child(Some(centre_region));
+    right.set_end_child(Some(inspector));
+    right.set_resize_start_child(true);
+    right.set_resize_end_child(false);
+    right.set_shrink_start_child(false);
+    right.set_shrink_end_child(true);
+    right.set_wide_handle(false);
+    let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
+    paned.set_start_child(Some(rail));
+    paned.set_end_child(Some(&right));
+    paned.set_resize_start_child(false);
+    paned.set_shrink_start_child(true);
+    paned.set_shrink_end_child(false);
+    paned.set_position(264);
+    paned.set_wide_handle(false);
+    paned.connect_position_notify(|p| {
+        let clamped = p.position().clamp(224, 280);
+        if clamped != p.position() {
+            p.set_position(clamped);
+        }
+    });
+    (paned, right)
+}
+
+/// The application's main window, before it has any content.
+fn main_window(application: &gtk::Application) -> gtk::ApplicationWindow {
+    let window = gtk::ApplicationWindow::builder()
+        .application(application)
+        .title("LADE")
+        .default_width(1440)
+        .default_height(900)
+        .build();
+    window.add_css_class("lade-window");
+    window
+}
+
+/// An invisible, full-width strip whose allocation reports the window's usable width.
+fn width_probe() -> gtk::DrawingArea {
+    let probe = gtk::DrawingArea::new();
+    probe.set_hexpand(true);
+    probe.set_content_height(0);
+    probe.set_can_target(false);
+    probe.set_focusable(false);
+    probe
+}

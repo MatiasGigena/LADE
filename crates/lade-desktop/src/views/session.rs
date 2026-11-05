@@ -12,8 +12,8 @@ use super::widgets::{
 use crate::presentation::controller::{Controller, SessionUse};
 use crate::presentation::state::agent_session::{
     ForkPosition, ModelChoice, ModelInfo, ModelPicker, ModelRow, PickerChoices, ProviderInfo,
-    ProviderStatus, Readiness, ResourceKind, ResourceState, ThinkingLevel, UiAnswer, UiDialog,
-    UiPrompt,
+    ProviderStatus, Readiness, ResourceKind, ResourceState, SessionState, SessionTree,
+    ThinkingLevel, UiAnswer, UiDialog, UiPrompt,
 };
 use crate::presentation::state::model::{ActionAvailability, ObjectiveDetail};
 
@@ -238,7 +238,7 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
 pub fn session_section(
     controller: &Rc<Controller>,
     detail: &ObjectiveDetail,
-    report: Rc<dyn Fn(Result<(), String>)>,
+    report: &Rc<dyn Fn(Result<(), String>)>,
 ) -> gtk::Box {
     let s = section("Agent Session (pi)");
     let objective = detail.summary.objective_id.clone();
@@ -250,7 +250,25 @@ pub fn session_section(
             state.agent_session.exports.get(&objective).cloned(),
         )
     };
-    match &session {
+    session_status(&s, session.as_ref(), export.as_deref());
+    s.append(&session_tools(controller, report));
+    s.append(&label(
+        "Fork, clone and import start a new pi session; feedback addressed to the previous one is \
+         refused. Moving in the tree changes only the conversation, never files. Imports keep the \
+         conversation and never restore approvals or Git state.",
+        &["meta"],
+    ));
+
+    if let Some(tree) = tree {
+        s.append(&session_tree(controller, &tree, report));
+    }
+    s
+}
+
+/// The session's model, thinking level and pi id, or a note until it reports them, and the last
+/// export.
+fn session_status(s: &gtk::Box, session: Option<&SessionState>, export: Option<&str>) {
+    match session {
         Some(reported) => {
             s.append(&label(
                 &format!(
@@ -273,15 +291,18 @@ pub fn session_section(
             &["meta"],
         )),
     }
-    if let Some(path) = &export {
+    if let Some(path) = export {
         let line = widgets::line_label(path, &["mono", "meta"], gtk::pango::EllipsizeMode::Start);
         line.set_tooltip_text(Some(path));
         s.append(&field("Last export", &line));
     }
+}
 
+/// The session commands, each enabled when the session allows it.
+fn session_tools(controller: &Rc<Controller>, report: &Rc<dyn Fn(Result<(), String>)>) -> gtk::Box {
     let tools = vbox(space::TIGHT);
     let button = |text: &str, when: SessionUse, run: Rc<dyn Fn() -> Result<(), String>>| {
-        let report = report.clone();
+        let report = Rc::clone(report);
         widgets::list_action_row(
             text,
             &controller.session_availability(when),
@@ -321,7 +342,7 @@ pub fn session_section(
         SessionUse::Running,
         Rc::new(move || c.export_session()),
     ));
-    let (c, r) = (controller.clone(), report.clone());
+    let (c, r) = (controller.clone(), Rc::clone(report));
     let import = widgets::list_action_row(
         "Import session…",
         &controller.session_availability(SessionUse::BetweenTurns),
@@ -344,65 +365,63 @@ pub fn session_section(
         },
     );
     tools.append(&import);
-    s.append(&tools);
-    s.append(&label(
-        "Fork, clone and import start a new pi session; feedback addressed to the previous one is \
-         refused. Moving in the tree changes only the conversation, never files. Imports keep the \
-         conversation and never restore approvals or Git state.",
-        &["meta"],
-    ));
+    tools
+}
 
-    if let Some(tree) = tree {
-        let between_turns = controller.session_availability(SessionUse::BetweenTurns);
-        let list = vbox(space::TIGHT);
-        list.append(&widgets::section_title("Session tree"));
-        if tree.truncated {
-            list.append(&label("Older entries are not shown.", &["meta"]));
-        }
-        let start = tree.entries.len().saturating_sub(TREE_ROWS);
-        for node in &tree.entries[start..] {
-            let row = hbox(space::ITEM);
-            let current = tree.leaf_id.as_deref() == Some(node.entry_id.as_str());
-            let text = format!(
-                "{}{}{}: {}{}",
-                "  ".repeat(node.depth.min(12)),
-                if current { "● " } else { "" },
-                node.kind,
-                node.label,
-                node.bookmark
-                    .as_ref()
-                    .map(|b| format!(" [{b}]"))
-                    .unwrap_or_default()
-            );
-            let entry = label(&text, if current { &[] } else { &["meta"] });
-            entry.set_hexpand(true);
-            row.append(&entry);
-            let enabled = between_turns == ActionAvailability::Enabled;
-            let go = widgets::button("Go here", &[]);
-            go.set_sensitive(enabled);
-            set_accessible_label(&go, &format!("Go to {}", node.label));
-            let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-            go.connect_clicked(move |_| r(c.navigate_session(&id)));
-            row.append(&go);
-            if node.user {
-                let fork = widgets::button("Fork", &[]);
-                fork.set_sensitive(enabled);
-                fork.set_tooltip_text(Some("New session with the history before this message"));
-                let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-                fork.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::Before)));
-                row.append(&fork);
-            }
-            let clone = widgets::button("Clone", &[]);
-            clone.set_sensitive(enabled);
-            clone.set_tooltip_text(Some("New session with the history up to here"));
-            let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-            clone.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::At)));
-            row.append(&clone);
-            list.append(&row);
-        }
-        s.append(&list);
+/// The newest entries of the session tree, each with the moves it allows.
+fn session_tree(
+    controller: &Rc<Controller>,
+    tree: &SessionTree,
+    report: &Rc<dyn Fn(Result<(), String>)>,
+) -> gtk::Box {
+    let between_turns = controller.session_availability(SessionUse::BetweenTurns);
+    let list = vbox(space::TIGHT);
+    list.append(&widgets::section_title("Session tree"));
+    if tree.truncated {
+        list.append(&label("Older entries are not shown.", &["meta"]));
     }
-    s
+    let start = tree.entries.len().saturating_sub(TREE_ROWS);
+    for node in &tree.entries[start..] {
+        let row = hbox(space::ITEM);
+        let current = tree.leaf_id.as_deref() == Some(node.entry_id.as_str());
+        let text = format!(
+            "{}{}{}: {}{}",
+            "  ".repeat(node.depth.min(12)),
+            if current { "● " } else { "" },
+            node.kind,
+            node.label,
+            node.bookmark
+                .as_ref()
+                .map(|b| format!(" [{b}]"))
+                .unwrap_or_default()
+        );
+        let entry = label(&text, if current { &[] } else { &["meta"] });
+        entry.set_hexpand(true);
+        row.append(&entry);
+        let enabled = between_turns == ActionAvailability::Enabled;
+        let go = widgets::button("Go here", &[]);
+        go.set_sensitive(enabled);
+        set_accessible_label(&go, &format!("Go to {}", node.label));
+        let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+        go.connect_clicked(move |_| r(c.navigate_session(&id)));
+        row.append(&go);
+        if node.user {
+            let fork = widgets::button("Fork", &[]);
+            fork.set_sensitive(enabled);
+            fork.set_tooltip_text(Some("New session with the history before this message"));
+            let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+            fork.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::Before)));
+            row.append(&fork);
+        }
+        let clone = widgets::button("Clone", &[]);
+        clone.set_sensitive(enabled);
+        clone.set_tooltip_text(Some("New session with the history up to here"));
+        let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+        clone.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::At)));
+        row.append(&clone);
+        list.append(&row);
+    }
+    list
 }
 
 pub const RESOURCES_TITLE: &str = "LADE profile resources";

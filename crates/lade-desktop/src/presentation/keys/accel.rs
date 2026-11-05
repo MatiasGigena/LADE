@@ -1,6 +1,10 @@
 //! One shortcut: parsed from GTK accelerator syntax, compared, and shown in GTK and human form.
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each modifier is an independent flag, as in GTK accelerator syntax"
+)]
 pub struct Accel {
     pub shift: bool,
     pub control: bool,

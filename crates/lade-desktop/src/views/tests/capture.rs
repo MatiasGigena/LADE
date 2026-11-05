@@ -156,7 +156,7 @@ fn populate(app: &App) {
     let item = |seq: u64, role, title: &str, text: &str, tool: Option<&str>| ActivityItem {
         item_id: ActivityItemId::new(format!("capture-{seq}")),
         seq,
-        at: Timestamp(1_790_000_000_000 - (10 - seq as i64) * 60_000),
+        at: Timestamp(1_790_000_000_000 - (10 - i64::try_from(seq).unwrap()) * 60_000),
         role,
         title: title.into(),
         text: text.into(),
@@ -189,8 +189,8 @@ fn shoot(window: &gtk::Window, dir: &std::path::Path, name: &str) {
         Some(&gtk::graphene::Rect::new(
             0.0,
             0.0,
-            width as f32,
-            height as f32,
+            f32::from(u16::try_from(width).unwrap()),
+            f32::from(u16::try_from(height).unwrap()),
         )),
     );
     texture

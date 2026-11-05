@@ -170,7 +170,7 @@ fn disconnect_restarts_both_collections_and_ignores_old_continuations() {
     let complete = core.on_reply(ok(drafts, draft_list(vec![wire_draft(12)], false)));
     assert!(
         matches!(&complete.updates[..], [StoreUpdate::Drafts { drafts, .. }]
-        if drafts.len() == 1 && drafts[0].draft_id.as_str() == wire_draft(12).draft_id.as_str())
+        if drafts.len() == 1 && drafts[0].id.as_str() == wire_draft(12).draft_id.as_str())
     );
 }
 
@@ -211,10 +211,7 @@ fn draft_completion_preserves_same_revision_events_additions_and_successful_dele
         panic!("complete drafts")
     };
     assert_eq!(
-        drafts
-            .iter()
-            .map(|d| d.draft_id.as_str())
-            .collect::<Vec<_>>(),
+        drafts.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
         [wire_draft(10), wire_draft(12), wire_draft(2)]
             .iter()
             .map(|d| d.draft_id.as_str())

@@ -145,7 +145,7 @@ impl PresentationState {
 
     pub fn active_workspace(&self) -> Option<&Workspace> {
         let id = self.active_workspace.as_ref()?;
-        self.workspaces.iter().find(|w| &w.workspace_id == id)
+        self.workspaces.iter().find(|w| &w.id == id)
     }
 
     pub fn objective(&self, id: &ObjectiveId) -> Option<&ObjectiveSummary> {

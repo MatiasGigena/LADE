@@ -293,7 +293,7 @@ fn integrating_needs_a_valid_approval() {
         assert!(controller.integrate().is_err(), "{spent:?}");
     }
     edit_detail(&controller, |d| {
-        d.approval = Some(approval(ApprovalState::Valid))
+        d.approval = Some(approval(ApprovalState::Valid));
     });
     controller.integrate().unwrap();
     assert_eq!(

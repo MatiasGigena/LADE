@@ -50,7 +50,8 @@ fn launch_qa_compact_objective_form_keeps_actions_on_screen() {
         );
         assert!(
             error_bounds.y() >= 0.0
-                && error_bounds.y() + error_bounds.height() < (height - 60) as f32,
+                && error_bounds.y() + error_bounds.height()
+                    < f32::from(u16::try_from(height - 60).unwrap()),
             "validation is outside the visible form: {error_bounds:?} in height {height}"
         );
     });

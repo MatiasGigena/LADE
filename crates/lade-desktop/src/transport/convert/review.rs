@@ -216,7 +216,7 @@ pub fn to_reference(r: &view::Reference) -> Result<wire::Reference, Invalid> {
 
 pub fn draft(d: &wire::Draft) -> view::Draft {
     view::Draft {
-        draft_id: view::DraftId::new(d.draft_id.as_str()),
+        id: view::DraftId::new(d.draft_id.as_str()),
         objective_id: view::ObjectiveId::new(d.objective_id.as_str()),
         destination_session_id: view::SessionId::new(d.destination_session_id.as_str()),
         reference: reference(&d.reference),

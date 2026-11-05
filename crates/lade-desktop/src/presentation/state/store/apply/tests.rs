@@ -39,7 +39,7 @@ fn change_list(o: &ObjectiveId, basis: Basis, files: &[&str]) -> ChangeList {
 
 fn workspace(id: &str) -> Workspace {
     Workspace {
-        workspace_id: WorkspaceId::new(id),
+        id: WorkspaceId::new(id),
         path: RepoPath::utf8(id),
         name: id.to_owned(),
         default_branch: None,

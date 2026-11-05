@@ -9,7 +9,7 @@ use crate::presentation::state::agent_session::ThinkingLevel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Workspace {
-    pub workspace_id: WorkspaceId,
+    pub id: WorkspaceId,
     pub path: RepoPath,
     pub name: String,
     pub default_branch: Option<String>,

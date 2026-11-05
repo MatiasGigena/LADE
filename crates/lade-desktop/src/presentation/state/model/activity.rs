@@ -42,7 +42,7 @@ pub enum DraftState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Draft {
-    pub draft_id: DraftId,
+    pub id: DraftId,
     pub objective_id: ObjectiveId,
     pub destination_session_id: SessionId,
     pub reference: Reference,

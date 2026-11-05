@@ -28,7 +28,7 @@ impl Keymap {
         {
             return Err(format!("unknown field “{key}”"));
         }
-        if object.get("version").and_then(|v| v.as_u64()) != Some(1) {
+        if object.get("version").is_none_or(|v| v.as_u64() != Some(1)) {
             return Err("“version” must be 1".to_owned());
         }
         let bindings = object

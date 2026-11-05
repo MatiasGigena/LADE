@@ -251,19 +251,19 @@ impl Controller {
                     .push("Submitting feedback is not offered for this Objective".to_owned()),
             }
         }
-        let stale: Vec<&BatchItem> = items.iter().filter(|i| i.stale).collect();
-        if !stale.is_empty() {
-            let names: Vec<String> = stale
+        let stale_items: Vec<&BatchItem> = items.iter().filter(|i| i.stale).collect();
+        if !stale_items.is_empty() {
+            let names: Vec<String> = stale_items
                 .iter()
                 .map(|i| format!("{} (draft {})", i.reference_label, i.draft_id.short()))
                 .collect();
             blockers.push(format!(
                 "{} stale item{} block{} the whole batch: {} — re-anchor or remove {}",
-                stale.len(),
-                if stale.len() == 1 { "" } else { "s" },
-                if stale.len() == 1 { "s" } else { "" },
+                stale_items.len(),
+                if stale_items.len() == 1 { "" } else { "s" },
+                if stale_items.len() == 1 { "s" } else { "" },
                 names.join("; "),
-                if stale.len() == 1 { "it" } else { "them" },
+                if stale_items.len() == 1 { "it" } else { "them" },
             ));
         }
         if state

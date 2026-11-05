@@ -23,6 +23,10 @@ struct Saved {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the pending wrap and each terminal mode are independent flags the escape sequences set"
+)]
 pub struct Screen {
     cols: usize,
     rows: usize,

@@ -91,7 +91,7 @@ pub fn settings(s: &wire::Settings) -> view::Settings {
 
 pub fn workspace(w: &wire::Workspace) -> view::Workspace {
     view::Workspace {
-        workspace_id: view::WorkspaceId::new(w.workspace_id.as_str()),
+        id: view::WorkspaceId::new(w.workspace_id.as_str()),
         path: path(&w.path),
         name: w.name.clone(),
         default_branch: w.default_branch.clone(),

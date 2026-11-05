@@ -514,7 +514,7 @@ impl Core {
 
     fn draft_changed(&mut self, draft: Draft) {
         if let Some(pages) = self.draft_pages.get_mut(&draft.objective_id) {
-            pages.change(draft.draft_id.clone(), draft);
+            pages.change(draft.id.clone(), draft);
         }
     }
 

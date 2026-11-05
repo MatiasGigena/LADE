@@ -26,7 +26,7 @@ pub(super) fn refusal_changes(objective_id: ObjectiveId, surface: ActionSurface)
 
 fn reconcile_drafts(editors: &mut Vec<DraftEditor>, drafts: &[Draft]) {
     for draft in drafts {
-        match editors.iter_mut().find(|e| e.draft_id == draft.draft_id) {
+        match editors.iter_mut().find(|e| e.draft_id == draft.id) {
             Some(editor) => {
                 if draft.revision == editor.durable_revision() {
                     editor.reconciled();
@@ -36,7 +36,7 @@ fn reconcile_drafts(editors: &mut Vec<DraftEditor>, drafts: &[Draft]) {
             None => editors.push(DraftEditor::from_durable(draft)),
         }
     }
-    let listed = |editor: &DraftEditor| drafts.iter().any(|d| d.draft_id == editor.draft_id);
+    let listed = |editor: &DraftEditor| drafts.iter().any(|d| d.id == editor.draft_id);
     for editor in editors.iter_mut() {
         if editor.durable_revision() == 0 && !listed(editor) {
             editor.reconciled();
@@ -409,9 +409,9 @@ impl PresentationState {
         if self
             .active_workspace
             .as_ref()
-            .is_none_or(|id| !workspaces.iter().any(|w| &w.workspace_id == id))
+            .is_none_or(|id| !workspaces.iter().any(|w| &w.id == id))
         {
-            self.active_workspace = workspaces.first().map(|w| w.workspace_id.clone());
+            self.active_workspace = workspaces.first().map(|w| w.id.clone());
         }
         self.workspaces = workspaces;
         self.objectives = objectives;
@@ -430,12 +430,8 @@ impl PresentationState {
     }
 
     fn apply_workspace_opened(&mut self, workspace: Workspace) -> Vec<Change> {
-        self.active_workspace = Some(workspace.workspace_id.clone());
-        match self
-            .workspaces
-            .iter_mut()
-            .find(|w| w.workspace_id == workspace.workspace_id)
-        {
+        self.active_workspace = Some(workspace.id.clone());
+        match self.workspaces.iter_mut().find(|w| w.id == workspace.id) {
             Some(existing) => *existing = workspace,
             None => self.workspaces.push(workspace),
         }
@@ -467,7 +463,7 @@ impl PresentationState {
     fn apply_draft_changed(&mut self, draft: &Draft) -> Vec<Change> {
         let objective_id = draft.objective_id.clone();
         let editors = self.drafts.entry(objective_id.clone()).or_default();
-        let Some(editor) = editors.iter_mut().find(|e| e.draft_id == draft.draft_id) else {
+        let Some(editor) = editors.iter_mut().find(|e| e.draft_id == draft.id) else {
             editors.push(DraftEditor::from_durable(draft));
             return vec![Change::Drafts(objective_id)];
         };
@@ -477,7 +473,7 @@ impl PresentationState {
         if was_unsent != (editor.state == DraftState::Unsent) || had_text != editor.body {
             vec![Change::Drafts(objective_id)]
         } else {
-            vec![Change::DraftStatus(draft.draft_id.clone())]
+            vec![Change::DraftStatus(draft.id.clone())]
         }
     }
 

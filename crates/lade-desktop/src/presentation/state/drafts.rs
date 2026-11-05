@@ -103,7 +103,7 @@ impl DraftEditor {
 
     pub fn from_durable(draft: &Draft) -> Self {
         let mut editor = Self::new_local(
-            draft.draft_id.clone(),
+            draft.id.clone(),
             draft.objective_id.clone(),
             draft.destination_session_id.clone(),
             draft.reference.clone(),
@@ -338,7 +338,7 @@ mod tests {
 
     fn durable(body: &str, revision: u64) -> Draft {
         Draft {
-            draft_id: DraftId::new("d1"),
+            id: DraftId::new("d1"),
             objective_id: ObjectiveId::new("o1"),
             destination_session_id: SessionId::new("s1"),
             reference: reference(),

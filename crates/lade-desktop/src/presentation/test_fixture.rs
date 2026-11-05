@@ -406,7 +406,7 @@ fn reference(path: &str, version: ReferenceVersion, needle: &str, side: Side) ->
 
 fn draft(n: u8, reference: Reference, body: &str, revision: u64, stale: bool) -> Draft {
     Draft {
-        draft_id: DraftId::new(format!("d1000000-0000-4000-8000-00000000000{n}")),
+        id: DraftId::new(format!("d1000000-0000-4000-8000-00000000000{n}")),
         objective_id: id(MAIN_OBJECTIVE),
         destination_session_id: SessionId::new(SESSION),
         reference,
@@ -550,7 +550,7 @@ fn settings() -> Settings {
 
 fn workspace() -> Workspace {
     Workspace {
-        workspace_id: WorkspaceId::new(WORKSPACE),
+        id: WorkspaceId::new(WORKSPACE),
         path: RepoPath::utf8("/tmp/lade-sample"),
         name: "lade-sample".into(),
         default_branch: Some("main".into()),

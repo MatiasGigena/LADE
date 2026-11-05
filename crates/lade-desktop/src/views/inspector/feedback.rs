@@ -173,12 +173,12 @@ impl Inspector {
             return;
         };
         let status = editor.status(state.connection.is_connected());
-        let stale = editor.stale;
+        let is_stale = editor.stale;
         drop(state);
         let shown = w.stale.first_child().is_some();
-        if shown != stale {
+        if shown != is_stale {
             widgets::clear(&w.stale);
-            if stale {
+            if is_stale {
                 w.stale.append(&inline_message(
                     MessageKind::Warning,
                     "Stale reference — the inspected bytes changed. Re-anchor or remove this item; it blocks the whole batch.",

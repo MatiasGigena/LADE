@@ -138,13 +138,11 @@ mod tests {
 
     impl Notifier for Recording {
         fn notify(&self, request: &AttentionRequest) -> Result<(), String> {
-            match self.fail {
-                Some(why) => Err(why.to_owned()),
-                None => {
-                    self.sent.borrow_mut().push(request.clone());
-                    Ok(())
-                }
+            if let Some(why) = self.fail {
+                return Err(why.to_owned());
             }
+            self.sent.borrow_mut().push(request.clone());
+            Ok(())
         }
     }
 

@@ -338,8 +338,12 @@ mod tests {
     fn select(text: &str, a: TextPos, b: TextPos) -> MappedSelection {
         let lines = file(text);
         let mapped = map_selection(&lines, a, b).expect("selection maps");
+        let (start, end) = (
+            usize::try_from(mapped.start).unwrap(),
+            usize::try_from(mapped.end).unwrap(),
+        );
         assert_eq!(
-            &text.as_bytes()[mapped.start as usize..mapped.end as usize],
+            &text.as_bytes()[start..end],
             mapped.selected_text.as_bytes(),
             "selected text must equal the exact source bytes"
         );
