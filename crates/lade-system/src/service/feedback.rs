@@ -25,8 +25,8 @@ use crate::storage;
 
 use super::capture::CapturePurpose;
 use super::convert::{
-    conflict, core_mode, core_reference, domain_rejection, durability, invalid, not_found,
-    parse_uuid, wire_draft, wire_input,
+    artifact_rejection, conflict, core_mode, core_reference, domain_rejection, durability, invalid,
+    not_found, parse_uuid, wire_draft, wire_input,
 };
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
@@ -239,9 +239,9 @@ impl Service {
                 range.start(),
                 usize::try_from(range.byte_len()).unwrap_or(usize::MAX),
             )
-            .map_err(|_| {
-                durability("The commented file version couldn't be read. Open the file again.")
-            })?;
+            .map_err(artifact_rejection(
+                "The commented file version couldn't be read. Open the file again.",
+            ))?;
         if page.offset != range.start() || page.data != reference.selected_text().as_bytes() {
             return Err(invalid(
                 "The selected text no longer matches the file. Select it again.",

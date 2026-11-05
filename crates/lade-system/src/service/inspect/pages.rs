@@ -16,7 +16,7 @@ use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::CaptureRow;
 
 use crate::service::convert::{
-    durability, git_rejection, invalid, not_found, preview, repo_path, wire_id, wire_path,
+    artifact_rejection, git_rejection, invalid, not_found, preview, repo_path, wire_id, wire_path,
 };
 use crate::service::jobs::{self, FileBytes, LargeBlobs};
 
@@ -187,8 +187,8 @@ pub(super) fn chunk_page(
     query: &FileReadQuery,
     label: &str,
 ) -> Result<FileContent, Rejection> {
-    let unreadable = |_| durability("retained content unreadable");
-    let probe = artifacts.read_page(digest, 0, 8000).map_err(unreadable)?;
+    let unreadable = artifact_rejection("retained content unreadable");
+    let probe = artifacts.read_page(digest, 0, 8000).map_err(&unreadable)?;
     let binary = probe.data.contains(&0);
     let page = artifacts
         .read_page(
@@ -196,7 +196,7 @@ pub(super) fn chunk_page(
             query.offset.value(),
             (query.limit.value() as usize).min(MAX_ARTIFACT_PAGE),
         )
-        .map_err(unreadable)?;
+        .map_err(&unreadable)?;
     let mut length = page.data.len();
     let text = if binary {
         None
@@ -250,7 +250,7 @@ pub(super) fn chunk_page(
 pub(super) fn retain(artifacts: &ArtifactStore, bytes: &[u8]) -> Result<Digest, Rejection> {
     let digest = artifacts
         .put(bytes)
-        .map_err(|_| durability("content could not be retained"))?;
+        .map_err(artifact_rejection("content could not be retained"))?;
     Digest::parse(digest.to_hex()).map_err(|_| invalid("the content digest is not canonical"))
 }
 

@@ -24,7 +24,7 @@ use crate::support::fs::ensure_private_dir;
 
 use super::{COMMAND_TIMEOUT, MAX_IMPORT_BYTES, Op, PendingCommand};
 use crate::service::convert::{
-    conflict, domain_rejection, durability, invalid, not_found, wire_id,
+    conflict, domain_rejection, durability, invalid, io_rejection, not_found, wire_id,
 };
 use crate::service::resources::snapshot;
 use crate::service::{Completed, Flow, ReqCtx, Service};
@@ -210,12 +210,9 @@ impl Service {
             ctx,
             result: snapshot(&source, &dest, &approved)
                 .map(|resources| (resources, dest))
-                .map_err(|e| {
-                    format!(
-                        "The profile could not be prepared for the session ({}).",
-                        e.kind()
-                    )
-                }),
+                .map_err(io_rejection(
+                    "The profile could not be prepared for the session",
+                )),
         });
         Flow::Deferred
     }
@@ -224,12 +221,10 @@ impl Service {
         &mut self,
         oid: ObjectiveId,
         ctx: ReqCtx,
-        result: Result<(WorkerResources, PathBuf), String>,
+        result: Result<(WorkerResources, PathBuf), Rejection>,
     ) {
         self.rt(oid).busy = None;
-        match result
-            .map_err(|why| Rejection::new(ErrorCode::DurabilityFailure, SafeAction::Refresh, &why))
-        {
+        match result {
             Ok((resources, _)) => {
                 if let Err(rejection) = self.command_target(oid, Op::Reload) {
                     self.finish(ctx, Err(rejection));

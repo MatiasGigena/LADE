@@ -1,3 +1,5 @@
+use std::io;
+
 use lade_core::DomainError;
 use lade_core::domain::execution::ExecutionState;
 use lade_core::domain::feedback::{AcceptedInput, DeliveryState, Draft, DraftState};
@@ -17,6 +19,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{self as wire_types, Counter, DeliveryMode, Id};
 
 use super::state::ObjState;
+use crate::adapters::artifacts::ArtifactError;
 use crate::adapters::git::{self, GitError};
 use crate::support::wire_ts;
 
@@ -74,6 +77,49 @@ pub fn durability(detail: &str) -> Rejection {
         SafeAction::QueryOperation,
         detail,
     )
+}
+
+/// The rejection for an artifact store failure, logged with its cause; `detail` says what could
+/// not be done. Content over the store's limit is `limit_reached` and missing content is
+/// `not_found`, so neither asks the user to retry an operation that cannot succeed.
+pub fn artifact_rejection(detail: &'static str) -> impl Fn(ArtifactError) -> Rejection {
+    move |error| {
+        eprintln!("laded: artifact store failed: {error}");
+        match error {
+            ArtifactError::TooLarge { size, limit } => Rejection::new(
+                ErrorCode::LimitReached,
+                SafeAction::None,
+                &format!("{detail}: {size} bytes exceed the {limit}-byte limit"),
+            ),
+            ArtifactError::NotFound => Rejection::new(
+                ErrorCode::NotFound,
+                SafeAction::Refresh,
+                &format!("{detail}: the retained content is missing"),
+            ),
+            ArtifactError::Io { .. } | ArtifactError::InvalidDigest | ArtifactError::Corrupt => {
+                durability(detail)
+            }
+        }
+    }
+}
+
+/// The rejection for a filesystem failure: `detail` with the error's kind, under the code that
+/// kind calls for (a missing path is `not_found`, a refused one `permission_denied`, a full disk
+/// `limit_reached`, anything else a durability failure).
+pub fn io_rejection(detail: &'static str) -> impl Fn(io::Error) -> Rejection {
+    move |error| {
+        let kind = error.kind();
+        let detail = format!("{detail} ({kind})");
+        let (code, action) = match kind {
+            io::ErrorKind::NotFound => (ErrorCode::NotFound, SafeAction::Refresh),
+            io::ErrorKind::PermissionDenied => (ErrorCode::PermissionDenied, SafeAction::None),
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
+                (ErrorCode::LimitReached, SafeAction::None)
+            }
+            _ => return durability(&detail),
+        };
+        Rejection::new(code, action, &detail)
+    }
 }
 
 #[must_use]
@@ -543,5 +589,27 @@ mod tests {
         let rejection = domain_rejection(error);
         assert_eq!(rejection.code, ErrorCode::StaleTarget);
         assert_eq!(rejection.action, SafeAction::Refresh);
+    }
+
+    #[test]
+    fn io_and_artifact_failures_keep_their_cause_in_the_code() {
+        let io = |kind| io_rejection("import")(io::Error::from(kind)).code;
+        assert_eq!(io(io::ErrorKind::NotFound), ErrorCode::NotFound);
+        assert_eq!(
+            io(io::ErrorKind::PermissionDenied),
+            ErrorCode::PermissionDenied
+        );
+        assert_eq!(io(io::ErrorKind::StorageFull), ErrorCode::LimitReached);
+        assert_eq!(io(io::ErrorKind::Interrupted), ErrorCode::DurabilityFailure);
+        let artifact = |error| artifact_rejection("store")(error).code;
+        assert_eq!(
+            artifact(ArtifactError::TooLarge { size: 2, limit: 1 }),
+            ErrorCode::LimitReached
+        );
+        assert_eq!(artifact(ArtifactError::NotFound), ErrorCode::NotFound);
+        assert_eq!(
+            artifact(ArtifactError::Corrupt),
+            ErrorCode::DurabilityFailure
+        );
     }
 }

@@ -14,7 +14,7 @@ use lade_protocol::types::WirePath;
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::git::{self, ChangedFile, CommitSpec, MergeOutcome, Repository};
 
-use crate::service::convert::{conflict, domain_rejection, durability, git_rejection};
+use crate::service::convert::{artifact_rejection, conflict, domain_rejection, git_rejection};
 use crate::service::projection::actions::NO_CHANGES_TO_FREEZE;
 
 use super::read::{counts, reference_stale, target_commit};
@@ -189,7 +189,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let digest = input
         .artifacts
         .put(&manifest(&target, &tree, &files))
-        .map_err(|_| durability("manifest artifact could not be stored"))?;
+        .map_err(artifact_rejection("manifest artifact could not be stored"))?;
     let branch_ref = format!("refs/heads/{}", input.git_branch);
     let old = repo.resolve_ref(&branch_ref).map_err(git_rejection)?;
     repo.update_ref_cas(&branch_ref, &commit, old.as_ref())
@@ -260,7 +260,7 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
             let digest = input
                 .artifacts
                 .put(&manifest(&target, &tree, &files))
-                .map_err(|_| durability("manifest artifact could not be stored"))?;
+                .map_err(artifact_rejection("manifest artifact could not be stored"))?;
             repo.retain(&input.retain_ref, &tree)
                 .map_err(git_rejection)?;
             Ok(RefreshOut::Rebuilt {

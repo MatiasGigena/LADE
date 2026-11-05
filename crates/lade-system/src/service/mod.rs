@@ -138,12 +138,12 @@ pub(crate) enum Completed {
     },
     ProfileImport {
         ctx: ReqCtx,
-        result: Result<ImportReport, String>,
+        result: Result<ImportReport, Rejection>,
     },
     Reload {
         oid: ObjectiveId,
         ctx: ReqCtx,
-        result: Result<(WorkerResources, PathBuf), String>,
+        result: Result<(WorkerResources, PathBuf), Rejection>,
     },
     TerminalOpen {
         oid: ObjectiveId,

@@ -17,7 +17,7 @@ use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
-use super::convert::{invalid, preview, wire_path};
+use super::convert::{invalid, io_rejection, preview, wire_path};
 use super::{Completed, Flow, ReqCtx, Service, StartError};
 use crate::support::now_ms;
 
@@ -173,7 +173,7 @@ impl Service {
         self.spawn(move || Completed::ProfileImport {
             ctx,
             result: profile::import(&source, &profile)
-                .map_err(|e| format!("The profile could not be imported ({}).", e.kind())),
+                .map_err(io_rejection("The profile could not be imported")),
         });
         Flow::Deferred
     }
@@ -181,25 +181,18 @@ impl Service {
     pub(crate) fn profile_import_done(
         &mut self,
         ctx: ReqCtx,
-        result: Result<profile::ImportReport, String>,
+        result: Result<profile::ImportReport, Rejection>,
     ) {
-        let reply = match result {
-            Ok(report) => {
-                self.catalog.data = None;
-                let inventory = self.inventory();
-                self.emit(Event::ResourcesChanged(inventory.clone()));
-                Ok(ReplyData::ProfileImport(ProfileImportResult {
-                    copied: report.copied.iter().map(|c| preview(c, 256)).collect(),
-                    skipped: report.skipped.iter().map(|s| preview(s, 512)).collect(),
-                    inventory,
-                }))
-            }
-            Err(why) => Err(Rejection::new(
-                ErrorCode::PermissionDenied,
-                SafeAction::None,
-                &why,
-            )),
-        };
+        let reply = result.map(|report| {
+            self.catalog.data = None;
+            let inventory = self.inventory();
+            self.emit(Event::ResourcesChanged(inventory.clone()));
+            ReplyData::ProfileImport(ProfileImportResult {
+                copied: report.copied.iter().map(|c| preview(c, 256)).collect(),
+                skipped: report.skipped.iter().map(|s| preview(s, 512)).collect(),
+                inventory,
+            })
+        });
         self.finish(ctx, reply);
     }
 }

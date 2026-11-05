@@ -15,7 +15,7 @@ use sha2::{Digest as _, Sha256};
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore};
 use crate::adapters::git::{self, ChangedFile, GitError, Repository};
 
-use crate::service::convert::{durability, git_rejection, not_found};
+use crate::service::convert::{artifact_rejection, git_rejection, not_found};
 use crate::support::hex;
 
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
@@ -123,7 +123,7 @@ impl LargeBlobs {
         let digest = repo
             .with_blob_reader(id, |reader| artifacts.put_reader(reader))
             .map_err(git_rejection)?
-            .map_err(|_| durability("content could not be retained"))?;
+            .map_err(artifact_rejection("content could not be retained"))?;
         let mut memory = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         memory.retain(|(blob, _)| blob != id);
         memory.push_back((id.clone(), digest));
