@@ -370,12 +370,7 @@ impl WorkerLauncher for SandboxLauncher {
         let output = scratch.join("catalog.json");
         let mut argv = vec![node.into_os_string()];
         argv.extend(config.node_args.iter().cloned());
-        argv.push(
-            config
-                .worker_dir
-                .join("src/catalog.ts")
-                .into_os_string(),
-        );
+        argv.push(config.worker_dir.join("src/catalog.ts").into_os_string());
         argv.push(output.clone().into_os_string());
         if let Some(models) = models {
             argv.push(models.as_os_str().to_os_string());
