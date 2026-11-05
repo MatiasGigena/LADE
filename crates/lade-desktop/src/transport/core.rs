@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use lade_protocol::client::{
-    DraftCursor, Event, EventFrame, Rejection, Reply, ReplyData, ReplyResult, Request, RequestFrame,
+    DraftCursor, Event, EventFrame, Rejection, Reply, ReplyData, ReplyResult, Request,
+    RequestClass, RequestFrame,
 };
 use lade_protocol::types::{Counter, Id};
 
@@ -203,11 +204,11 @@ impl Core {
                 return not_sent(&intent, "invalid_request", &invalid.0, invalid.0.clone());
             }
         };
-        let mutating = request.name().is_mutating();
+        let class = request.name().class();
         if !self.connected {
-            return self.submit_disconnected(&intent, mutating);
+            return self.submit_disconnected(&intent, class);
         }
-        if !mutating {
+        if class != RequestClass::Command {
             return self.submit_query(intent, request, context);
         }
         let mut step = Step::default();
@@ -232,24 +233,26 @@ impl Core {
         step
     }
 
-    /// Terminal intents are refused, commands fail with a notice, and queries wait for the
-    /// next connection.
-    fn submit_disconnected(&mut self, intent: &Intent, mutating: bool) -> Step {
+    /// Interactions are refused (they are never replayed), commands fail with a notice, and
+    /// queries wait for the next connection.
+    fn submit_disconnected(&mut self, intent: &Intent, class: RequestClass) -> Step {
         const REASON: &str = "the window is not connected to the service";
-        if let Some(objective_id) = intent.terminal_objective() {
-            return Step {
+        match (class, intent.terminal_objective()) {
+            (RequestClass::Query, _) => {
+                self.remember_query(intent);
+                Step::default()
+            }
+            (RequestClass::Interaction, Some(objective_id)) => Step {
                 updates: vec![StoreUpdate::TerminalProblem {
                     objective_id: objective_id.clone(),
                     message: format!("{} was not sent: {REASON}.", intent.label()),
                 }],
                 frames: Vec::new(),
-            };
+            },
+            (RequestClass::Command | RequestClass::Interaction, _) => {
+                not_sent(intent, "not_connected", REASON, "not connected".into())
+            }
         }
-        if mutating {
-            return not_sent(intent, "not_connected", REASON, "not connected".into());
-        }
-        self.remember_query(intent);
-        Step::default()
     }
 
     fn submit_query(&mut self, intent: Intent, request: Request, context: Context) -> Step {

@@ -114,8 +114,20 @@ macro_rules! wire_name {
     };
 }
 
+/// How a request is handled across retries and reconnects.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum RequestClass {
+    /// Read-only; no `operation_id`. A client may resend it after a reconnect.
+    Query,
+    /// Mutating; carries an `operation_id` and is journaled, so a retry returns the first outcome.
+    Command,
+    /// Acts on a live service-owned resource (a terminal); no `operation_id`, never journaled,
+    /// replayed or resent after a reconnect.
+    Interaction,
+}
+
 macro_rules! requests {
-    ($($variant:ident = $wire:literal, $mutating:literal, $payload:ty => $data:ty;)*) => {
+    ($($variant:ident = $wire:literal, $class:ident, $payload:ty => $data:ty;)*) => {
         #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
         pub enum RequestName { $($variant),* }
         impl RequestName {
@@ -126,8 +138,13 @@ macro_rules! requests {
             pub fn parse(name: &str) -> Option<Self> {
                 match name { $($wire => Some(RequestName::$variant),)* _ => None }
             }
+            pub const fn class(self) -> RequestClass {
+                match self { $(RequestName::$variant => RequestClass::$class),* }
+            }
+            /// Whether the request is a [`RequestClass::Command`], the only class that carries an
+            /// `operation_id`.
             pub const fn is_mutating(self) -> bool {
-                match self { $(RequestName::$variant => $mutating),* }
+                matches!(self.class(), RequestClass::Command)
             }
         }
 
@@ -183,55 +200,55 @@ macro_rules! requests {
 }
 
 requests! {
-    Snapshot = "snapshot", false, Empty => SnapshotData;
-    ObjectiveGet = "objective.get", false, ObjectiveSelector => Box<ObjectiveDetail>;
-    ActivityPage = "activity.page", false, ActivityPageQuery => ActivityPage;
-    ChangesList = "changes.list", false, ChangesListQuery => ChangeList;
-    FileRead = "file.read", false, FileReadQuery => FileContent;
-    DiffGet = "diff.get", false, DiffGetQuery => FileDiff;
-    Search = "search", false, SearchQuery => SearchResults;
-    DraftsList = "drafts.list", false, DraftsListQuery => DraftList;
-    InputsList = "inputs.list", false, InputsListQuery => InputList;
-    OperationGet = "operation.get", false, OperationGetQuery => OperationStatus;
-    WorkspaceOpen = "workspace.open", true, WorkspaceOpenCommand => Workspace;
-    ObjectiveCreate = "objective.create", true, ObjectiveCreateCommand => Box<ObjectiveDetail>;
-    ObjectiveUpdateIntent = "objective.update_intent", true, ObjectiveUpdateIntentCommand => Box<ObjectiveDetail>;
-    ExecutionStart = "execution.start", true, ExecutionStartCommand => Box<ObjectiveDetail>;
-    ExecutionCancel = "execution.cancel", true, ObjectiveSelector => Box<ObjectiveDetail>;
-    ExecutionResume = "execution.resume", true, ObjectiveSelector => Box<ObjectiveDetail>;
-    MessageSend = "message.send", true, MessageSendCommand => InputSummary;
-    DraftSave = "draft.save", true, DraftSaveCommand => Draft;
-    DraftDelete = "draft.delete", true, DraftDeleteCommand => Empty;
-    FeedbackSubmit = "feedback.submit", true, FeedbackSubmitCommand => InputSummary;
-    ReviewFreeze = "review.freeze", true, ObjectiveSelector => CandidateSummary;
-    ReviewReturn = "review.return", true, CandidateCommand => Box<ObjectiveDetail>;
-    ReviewVerify = "review.verify", true, ReviewVerifyCommand => VerificationSummary;
-    ReviewApprove = "review.approve", true, ReviewApproveCommand => ApprovalSummary;
-    ReviewRefresh = "review.refresh", true, CandidateCommand => CandidateSummary;
-    ReviewIntegrate = "review.integrate", true, ReviewIntegrateCommand => Box<ObjectiveDetail>;
-    ObjectiveComplete = "objective.complete", true, ObjectiveSelector => Box<ObjectiveDetail>;
-    ObjectiveDiscard = "objective.discard", true, ObjectiveSelector => Box<ObjectiveDetail>;
-    ObjectiveCleanup = "objective.cleanup", true, ObjectiveCleanupCommand => Box<ObjectiveDetail>;
-    SettingsUpdate = "settings.update", true, SettingsUpdateCommand => Settings;
-    ModelsList = "models.list", false, ModelsListQuery => ModelCatalog;
-    SessionTree = "session.tree", false, ObjectiveSelector => SessionTree;
-    ResourcesList = "resources.list", false, Empty => ResourceInventory;
-    SessionNavigate = "session.navigate", true, SessionNavigateCommand => SessionState;
-    SessionFork = "session.fork", true, SessionForkCommand => SessionState;
-    SessionImport = "session.import", true, SessionImportCommand => SessionState;
-    SessionExport = "session.export", true, ObjectiveSelector => SessionExport;
-    SessionCompact = "session.compact", true, SessionCompactCommand => SessionState;
-    SessionReload = "session.reload", true, ObjectiveSelector => SessionState;
-    SessionConfigure = "session.configure", true, SessionConfigureCommand => SessionState;
-    ResourceDecide = "resource.decide", true, ResourceDecideCommand => ResourceInventory;
-    ProfileImport = "profile.import", true, ProfileImportCommand => ProfileImportResult;
-    UiRespond = "ui.respond", true, UiRespondCommand => Empty;
-    TerminalOpen = "terminal.open", false, TerminalOpenCommand => TerminalInfo;
-    TerminalInput = "terminal.input", false, TerminalInputCommand => Empty;
-    TerminalResize = "terminal.resize", false, TerminalResizeCommand => Empty;
-    TerminalClose = "terminal.close", false, TerminalSelector => Empty;
-    ServiceStop = "service.stop", true, ServiceStopCommand => Empty;
-    ObjectiveDeleteHistory = "objective.delete_history", true, ObjectiveDeleteHistoryCommand => Box<ObjectiveDetail>;
+    Snapshot = "snapshot", Query, Empty => SnapshotData;
+    ObjectiveGet = "objective.get", Query, ObjectiveSelector => Box<ObjectiveDetail>;
+    ActivityPage = "activity.page", Query, ActivityPageQuery => ActivityPage;
+    ChangesList = "changes.list", Query, ChangesListQuery => ChangeList;
+    FileRead = "file.read", Query, FileReadQuery => FileContent;
+    DiffGet = "diff.get", Query, DiffGetQuery => FileDiff;
+    Search = "search", Query, SearchQuery => SearchResults;
+    DraftsList = "drafts.list", Query, DraftsListQuery => DraftList;
+    InputsList = "inputs.list", Query, InputsListQuery => InputList;
+    OperationGet = "operation.get", Query, OperationGetQuery => OperationStatus;
+    WorkspaceOpen = "workspace.open", Command, WorkspaceOpenCommand => Workspace;
+    ObjectiveCreate = "objective.create", Command, ObjectiveCreateCommand => Box<ObjectiveDetail>;
+    ObjectiveUpdateIntent = "objective.update_intent", Command, ObjectiveUpdateIntentCommand => Box<ObjectiveDetail>;
+    ExecutionStart = "execution.start", Command, ExecutionStartCommand => Box<ObjectiveDetail>;
+    ExecutionCancel = "execution.cancel", Command, ObjectiveSelector => Box<ObjectiveDetail>;
+    ExecutionResume = "execution.resume", Command, ObjectiveSelector => Box<ObjectiveDetail>;
+    MessageSend = "message.send", Command, MessageSendCommand => InputSummary;
+    DraftSave = "draft.save", Command, DraftSaveCommand => Draft;
+    DraftDelete = "draft.delete", Command, DraftDeleteCommand => Empty;
+    FeedbackSubmit = "feedback.submit", Command, FeedbackSubmitCommand => InputSummary;
+    ReviewFreeze = "review.freeze", Command, ObjectiveSelector => CandidateSummary;
+    ReviewReturn = "review.return", Command, CandidateCommand => Box<ObjectiveDetail>;
+    ReviewVerify = "review.verify", Command, ReviewVerifyCommand => VerificationSummary;
+    ReviewApprove = "review.approve", Command, ReviewApproveCommand => ApprovalSummary;
+    ReviewRefresh = "review.refresh", Command, CandidateCommand => CandidateSummary;
+    ReviewIntegrate = "review.integrate", Command, ReviewIntegrateCommand => Box<ObjectiveDetail>;
+    ObjectiveComplete = "objective.complete", Command, ObjectiveSelector => Box<ObjectiveDetail>;
+    ObjectiveDiscard = "objective.discard", Command, ObjectiveSelector => Box<ObjectiveDetail>;
+    ObjectiveCleanup = "objective.cleanup", Command, ObjectiveCleanupCommand => Box<ObjectiveDetail>;
+    SettingsUpdate = "settings.update", Command, SettingsUpdateCommand => Settings;
+    ModelsList = "models.list", Query, ModelsListQuery => ModelCatalog;
+    SessionTree = "session.tree", Query, ObjectiveSelector => SessionTree;
+    ResourcesList = "resources.list", Query, Empty => ResourceInventory;
+    SessionNavigate = "session.navigate", Command, SessionNavigateCommand => SessionState;
+    SessionFork = "session.fork", Command, SessionForkCommand => SessionState;
+    SessionImport = "session.import", Command, SessionImportCommand => SessionState;
+    SessionExport = "session.export", Command, ObjectiveSelector => SessionExport;
+    SessionCompact = "session.compact", Command, SessionCompactCommand => SessionState;
+    SessionReload = "session.reload", Command, ObjectiveSelector => SessionState;
+    SessionConfigure = "session.configure", Command, SessionConfigureCommand => SessionState;
+    ResourceDecide = "resource.decide", Command, ResourceDecideCommand => ResourceInventory;
+    ProfileImport = "profile.import", Command, ProfileImportCommand => ProfileImportResult;
+    UiRespond = "ui.respond", Command, UiRespondCommand => Empty;
+    TerminalOpen = "terminal.open", Interaction, TerminalOpenCommand => TerminalInfo;
+    TerminalInput = "terminal.input", Interaction, TerminalInputCommand => Empty;
+    TerminalResize = "terminal.resize", Interaction, TerminalResizeCommand => Empty;
+    TerminalClose = "terminal.close", Interaction, TerminalSelector => Empty;
+    ServiceStop = "service.stop", Command, ServiceStopCommand => Empty;
+    ObjectiveDeleteHistory = "objective.delete_history", Command, ObjectiveDeleteHistoryCommand => Box<ObjectiveDetail>;
 }
 wire_name!(RequestName);
 

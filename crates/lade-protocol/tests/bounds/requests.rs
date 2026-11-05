@@ -4,7 +4,7 @@ use lade_protocol::{
     ClientBody, ClientEnvelope, Framing, Message,
     client::{
         Empty, ErrorCode, MessageSendCommand, ObjectiveSelector, Rejection, Reply, ReplyData,
-        ReplyResult, Request, RequestFrame, RequestName, SafeAction,
+        ReplyResult, Request, RequestClass, RequestFrame, RequestName, SafeAction,
     },
     decode_client_frame, encode,
     types::DeliveryMode,
@@ -81,6 +81,17 @@ fn operation_id_presence_is_bound_to_the_request_name() {
     assert!(RequestFrame::new(typed_id(1), None, send.request).is_err());
     for name in RequestName::ALL {
         assert_eq!(RequestName::parse(name.as_str()), Some(*name));
+    }
+}
+#[test]
+fn only_terminal_requests_are_interactions() {
+    for name in RequestName::ALL {
+        assert_eq!(
+            name.class() == RequestClass::Interaction,
+            name.as_str().starts_with("terminal."),
+            "{name:?}"
+        );
+        assert_eq!(name.is_mutating(), name.class() == RequestClass::Command);
     }
 }
 #[test]
