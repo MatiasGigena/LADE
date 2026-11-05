@@ -273,6 +273,10 @@ a reused `request_id` with different content is `duplicate_conflict`):
   `$STATE/worktrees/<id>`; never the shared checkout) and calls the launcher with `worker.start`. Launch failure →
   execution `failed` with the reason, notice and a system activity item. Resume re-queues input blocked only by the
   stopped execution (`blocked: execution_unavailable`) of the same association — never uncertain input.
+- Checks and terminals use the service's own sandbox probe, run once while the service starts. A passing probe is
+  kept; a failing one is logged with its cause (once per distinct cause) and retried off the service thread every
+  storage check (5 s). Until it passes, `review.verify` and `terminal.open` are refused with `execution_unavailable`
+  and their actions are disabled; when it passes, every Objective is projected again. Projection never runs a probe.
 - `execution.cancel`: core `request_stop` (Stopping), `session.abort` to the worker, then `terminate` on the pool; the
   observed exit moves the execution to `cancelled`.
 - `message.send`: durable acceptance (`accept_message`) then ordered dispatch.

@@ -183,6 +183,7 @@ impl Service {
                 out,
             } => self.launch_done(oid, generation, out),
             Completed::Storage { usage } => self.storage_measured(usage),
+            Completed::Sandbox { result } => self.sandbox_probed(result),
             Completed::Capture {
                 oid,
                 purpose,

@@ -22,8 +22,8 @@ mod test_harness;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use lade_core::domain::ids::{CandidateId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
@@ -36,7 +36,9 @@ use rusqlite::Transaction;
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::git::{GitError, SquashOutcome};
 use crate::adapters::profile::ImportReport;
-use crate::adapters::sandbox::{STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxTools};
+use crate::adapters::sandbox::{
+    STORAGE_CHECK_INTERVAL, SandboxCgroups, SandboxError, SandboxTools, sandbox_available,
+};
 use crate::storage::{self, OperationKey, OperationState, Store};
 use crate::supervision::{SupervisorEvent, Terminal, WorkerLauncher};
 use crate::transport::Inbound;
@@ -156,6 +158,9 @@ pub(crate) enum Completed {
     Storage {
         usage: Vec<execution::StorageUsage>,
     },
+    Sandbox {
+        result: Result<SandboxTools, SandboxError>,
+    },
     Done,
 }
 
@@ -208,7 +213,7 @@ pub(crate) struct Service {
     queue_tx: SyncSender<Msg>,
     pools: jobs::Pools,
     held: Option<Vec<(bool, jobs::Task)>>,
-    sandbox: OnceLock<Option<SandboxTools>>,
+    sandbox: SandboxProbe,
     cgroups: Option<Arc<SandboxCgroups>>,
     limits: ResourceLimits,
     test_fixture_provider: bool,
@@ -246,7 +251,12 @@ fn recordable(rejection: &Rejection) -> bool {
 }
 
 impl Service {
-    /// Builds a service over `pools` with empty in-memory state; `load_durable` then fills it.
+    /// Builds a service over `pools`, loads its durable state, recovers from an unclean stop and
+    /// probes the sandbox, so a service is never seen with its records still unloaded.
+    ///
+    /// # Errors
+    ///
+    /// The [`StartError`] of a store read or of restart recovery.
     #[expect(
         clippy::too_many_arguments,
         reason = "each argument is a separately built resource the service takes ownership of"
@@ -260,8 +270,8 @@ impl Service {
         supervisor_tx: SyncSender<SupervisorEvent>,
         queue_tx: SyncSender<Msg>,
         pools: jobs::Pools,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, StartError> {
+        let mut service = Self {
             store,
             paths,
             artifacts,
@@ -284,7 +294,7 @@ impl Service {
             input_seq: 0,
             live: execution::LiveActivity::default(),
             ticks: 0,
-            sandbox: OnceLock::new(),
+            sandbox: SandboxProbe::default(),
             catalog: models::CatalogCache::default(),
             extension_approvals: HashMap::new(),
             agent_sessions: agent_session::AgentSessions::default(),
@@ -297,7 +307,14 @@ impl Service {
             storage: limits::StorageState::new(config.storage_limit_bytes),
             cgroups: config.cgroups.clone(),
             test_fixture_provider: config.test_fixture_provider,
-        }
+        };
+        service.load()?;
+        service.load_resources()?;
+        service.load_agent_sessions()?;
+        // Recovery reconciles the loaded Objectives and journal, so it runs last.
+        service.recover()?;
+        service.sandbox_probed(probe_sandbox());
+        Ok(service)
     }
 
     fn run(mut self, queue: &Receiver<Msg>) {
@@ -416,20 +433,74 @@ impl Service {
         }
         if u128::from(self.ticks).is_multiple_of(STORAGE_CHECK_TICKS) {
             self.check_storage();
+            self.recheck_sandbox();
         }
         self.check_timeouts();
         self.expire_session_commands();
     }
 
+    /// The sandbox tools when the last probe passed; never probes, so projection and requests
+    /// never wait for bubblewrap on the service thread.
     pub(crate) fn sandbox_tools(&self) -> Option<SandboxTools> {
-        self.sandbox
-            .get_or_init(|| {
-                let tools = SandboxTools::locate().ok()?;
-                crate::adapters::sandbox::sandbox_available(&tools).ok()?;
-                Some(tools)
-            })
-            .clone()
+        self.sandbox.tools.clone()
     }
+
+    /// Probes again off the service thread while the sandbox is unavailable.
+    fn recheck_sandbox(&mut self) {
+        if self.sandbox.tools.is_some() || self.sandbox.probing {
+            return;
+        }
+        self.sandbox.probing = true;
+        self.spawn(|| Completed::Sandbox {
+            result: probe_sandbox(),
+        });
+    }
+
+    /// Records a probe: success is kept for the life of the service, and each new failure cause
+    /// is logged once. When the sandbox becomes available, every Objective is projected again so
+    /// clients see checks and terminals enabled.
+    pub(crate) fn sandbox_probed(&mut self, result: Result<SandboxTools, SandboxError>) {
+        self.sandbox.probing = false;
+        match result {
+            Ok(tools) => {
+                self.sandbox.tools = Some(tools);
+                if self.sandbox.failure.take().is_some() {
+                    eprintln!("laded: sandbox check passed; checks and terminals are available");
+                    let ids: Vec<ObjectiveId> = self.objectives.keys().copied().collect();
+                    for oid in ids {
+                        self.emit_objective(oid);
+                    }
+                }
+            }
+            Err(error) => {
+                let cause = error.to_string();
+                if self.sandbox.failure.as_deref() != Some(cause.as_str()) {
+                    eprintln!(
+                        "laded: sandbox check failed, checks and terminals are unavailable \
+                         (retried every {}s): {cause}",
+                        STORAGE_CHECK_INTERVAL.as_secs()
+                    );
+                }
+                self.sandbox.failure = Some(cause);
+            }
+        }
+    }
+}
+
+/// The bubblewrap sandbox that checks and terminals run in, as last probed. Success is kept;
+/// a failure is retried on the storage-check tick, the way the agent launcher's preflight
+/// re-probes until it passes, so installing bubblewrap needs no restart.
+#[derive(Default)]
+struct SandboxProbe {
+    tools: Option<SandboxTools>,
+    probing: bool,
+    failure: Option<String>,
+}
+
+fn probe_sandbox() -> Result<SandboxTools, SandboxError> {
+    let tools = SandboxTools::locate()?;
+    sandbox_available(&tools)?;
+    Ok(tools)
 }
 
 /// Logs a store failure at `stage` with its cause and rejects with `detail`: the policy for every

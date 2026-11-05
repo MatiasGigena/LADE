@@ -420,8 +420,8 @@ fn boot(
         supervisor_tx,
         queue_tx,
         Pools::default(),
-    );
-    service.load_durable().expect("load durable state");
+    )
+    .expect("load durable state");
     service.held = Some(Vec::new());
     (service, queue, supervisor)
 }

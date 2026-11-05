@@ -255,8 +255,7 @@ pub fn start(
         supervisor_tx,
         queue_tx.clone(),
         pools,
-    );
-    service.load_durable()?;
+    )?;
     service.check_free_space();
     eprintln!("laded: limits {}", config.limits);
     let epoch = service.epoch.clone();
@@ -295,17 +294,6 @@ pub fn start(
         epoch,
         _lock: lock,
     })
-}
-
-impl Service {
-    /// Loads the durable state into memory and recovers from an unclean stop. Recovery
-    /// reconciles the loaded Objectives and journal, so it runs last.
-    pub(crate) fn load_durable(&mut self) -> Result<(), StartError> {
-        self.load()?;
-        self.load_resources()?;
-        self.load_agent_sessions()?;
-        self.recover()
-    }
 }
 
 /// Starts the thread that queues a [`Msg::Tick`] every [`TICK`] until the returned sender is
