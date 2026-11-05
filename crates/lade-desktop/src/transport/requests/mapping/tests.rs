@@ -500,7 +500,7 @@ fn every_intent_maps_to_its_request_and_encodes_against_the_schema() {
                     "a command on an Objective is refused on its surface: {intent:?}"
                 );
             }
-            Context::DraftDelete(label, _) => {
+            Context::DraftDelete { label, .. } => {
                 assert!(matches!(intent, Intent::DeleteDraft { .. }), "{intent:?}");
                 assert_eq!(*label, intent.label());
             }

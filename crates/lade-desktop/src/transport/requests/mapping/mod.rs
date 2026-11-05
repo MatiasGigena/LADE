@@ -383,7 +383,10 @@ fn feedback_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 draft_id: id(draft_id.as_str(), "draft id")?,
                 expected_revision: Counter::new(*expected_revision),
             }),
-            Context::DraftDelete(label, draft_id.clone()),
+            Context::DraftDelete {
+                label,
+                draft_id: draft_id.clone(),
+            },
         ),
         I::SubmitFeedback {
             objective_id,
@@ -503,7 +506,10 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 cols: Counter::new(u64::from(*cols)),
                 rows: Counter::new(u64::from(*rows)),
             }),
-            Context::Terminal(objective_id.clone(), label),
+            Context::Terminal {
+                label,
+                objective_id: objective_id.clone(),
+            },
         ),
         I::TerminalInput {
             objective_id,
@@ -514,7 +520,10 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 terminal_id: id(terminal_id, "terminal id")?,
                 data: data.clone(),
             }),
-            Context::Terminal(objective_id.clone(), label),
+            Context::Terminal {
+                label,
+                objective_id: objective_id.clone(),
+            },
         ),
         I::ResizeTerminal {
             objective_id,
@@ -527,7 +536,10 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 cols: Counter::new(u64::from(*cols)),
                 rows: Counter::new(u64::from(*rows)),
             }),
-            Context::Terminal(objective_id.clone(), label),
+            Context::Terminal {
+                label,
+                objective_id: objective_id.clone(),
+            },
         ),
         I::CloseTerminal {
             objective_id,
@@ -536,7 +548,10 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             Request::TerminalClose(wire::TerminalSelector {
                 terminal_id: id(terminal_id, "terminal id")?,
             }),
-            Context::Terminal(objective_id.clone(), label),
+            Context::Terminal {
+                label,
+                objective_id: objective_id.clone(),
+            },
         ),
         _ => return Err(misrouted(label)),
     })

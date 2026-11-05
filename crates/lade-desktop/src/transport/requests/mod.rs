@@ -45,10 +45,16 @@ pub enum Context {
     Models(Option<String>),
     Tree(ObjectiveId),
     Resources,
-    Terminal(ObjectiveId, &'static str),
+    Terminal {
+        label: &'static str,
+        objective_id: ObjectiveId,
+    },
     Stop,
     /// Deleting this draft. A delete names no objective; the draft's own state carries it.
-    DraftDelete(&'static str, DraftId),
+    DraftDelete {
+        label: &'static str,
+        draft_id: DraftId,
+    },
     Command {
         label: &'static str,
         objective_id: Option<ObjectiveId>,
@@ -83,10 +89,12 @@ impl Context {
             | Self::Search { .. }
             | Self::Models(_)
             | Self::Resources
-            | Self::DraftDelete(..)
+            | Self::DraftDelete { .. }
             | Self::Stop => None,
             Self::Tree(o)
-            | Self::Terminal(o, _)
+            | Self::Terminal {
+                objective_id: o, ..
+            }
             | Self::Objective(o)
             | Self::Activity(o)
             | Self::Changes(o, _)
@@ -114,8 +122,8 @@ impl Context {
             Self::Tree(_) => "Load session tree",
             Self::Resources => "Load profile resources",
             Self::Command { label, .. }
-            | Self::Terminal(_, label)
-            | Self::DraftDelete(label, _) => label,
+            | Self::Terminal { label, .. }
+            | Self::DraftDelete { label, .. } => label,
             Self::Stop => "Exit and stop the service",
         }
     }

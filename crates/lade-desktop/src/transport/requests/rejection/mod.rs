@@ -113,7 +113,9 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
         Context::Search { .. } => updates.push(StoreUpdate::SearchFailed {
             message: refused.message,
         }),
-        Context::Terminal(o, _) => updates.push(StoreUpdate::TerminalRefused {
+        Context::Terminal {
+            objective_id: o, ..
+        } => updates.push(StoreUpdate::TerminalRefused {
             objective_id: o.clone(),
             refusal: refused,
         }),
@@ -125,7 +127,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
         | Context::Models(_)
         | Context::Tree(_)
         | Context::Resources => updates.push(notice(NoticeScope::General, refused)),
-        Context::DraftDelete(_, draft_id) => updates.push(StoreUpdate::DraftDeleteRefused {
+        Context::DraftDelete { draft_id, .. } => updates.push(StoreUpdate::DraftDeleteRefused {
             draft_id: draft_id.clone(),
             refusal: refused,
         }),

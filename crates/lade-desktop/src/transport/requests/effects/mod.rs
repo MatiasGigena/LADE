@@ -117,7 +117,7 @@ pub fn reply_effects(context: &Context, data: &ReplyData) -> Effects {
         }
         ReplyData::DraftSave(d) => updates.push(StoreUpdate::DraftChanged(convert::draft(d))),
         ReplyData::DraftDelete(_) => match context {
-            Context::DraftDelete(_, draft_id) => updates.push(StoreUpdate::DraftDeleted {
+            Context::DraftDelete { draft_id, .. } => updates.push(StoreUpdate::DraftDeleted {
                 draft_id: draft_id.clone(),
             }),
             _ => mismatched(context, data),
@@ -129,7 +129,9 @@ pub fn reply_effects(context: &Context, data: &ReplyData) -> Effects {
         }
         ReplyData::SettingsUpdate(s) => updates.push(StoreUpdate::Settings(convert::settings(s))),
         ReplyData::TerminalOpen(info) => match context {
-            Context::Terminal(o, _) => updates.push(terminal_opened(o, info)),
+            Context::Terminal { objective_id, .. } => {
+                updates.push(terminal_opened(objective_id, info));
+            }
             _ => mismatched(context, data),
         },
         ReplyData::ServiceStop(_) => updates.push(StoreUpdate::ServiceStopped),

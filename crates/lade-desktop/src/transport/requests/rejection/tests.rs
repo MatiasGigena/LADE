@@ -346,9 +346,15 @@ fn view_queries_fail_on_the_view_that_asked() {
         [StoreUpdate::SearchFailed { .. }]
     ));
     assert!(matches!(
-        rejection_effects(&Context::Terminal(oid(), "Open terminal"), &refused)
-            .updates
-            .as_slice(),
+        rejection_effects(
+            &Context::Terminal {
+                label: "Open terminal",
+                objective_id: oid(),
+            },
+            &refused
+        )
+        .updates
+        .as_slice(),
         [StoreUpdate::TerminalRefused { .. }]
     ));
     for context in [&Context::Objective(oid()), &search] {

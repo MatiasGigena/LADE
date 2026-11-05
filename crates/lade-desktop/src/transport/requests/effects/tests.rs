@@ -212,7 +212,10 @@ fn agent_session_replies_and_events_reach_the_store() {
 #[test]
 fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
     use crate::presentation::terminal::{TerminalEnd, TerminalMode as ViewMode};
-    let context = Context::Terminal(oid(), "Open terminal");
+    let context = Context::Terminal {
+        label: "Open terminal",
+        objective_id: oid(),
+    };
     let effects = reply_effects(
         &context,
         &ReplyData::TerminalOpen(wire::TerminalInfo {
@@ -339,7 +342,10 @@ fn recovered_outcomes_leave_draft_and_input_records_to_current_state() {
 
 #[test]
 fn recovered_deletions_and_objective_details_apply_like_current_replies() {
-    let delete = Context::DraftDelete("Delete draft", DraftId::new(D));
+    let delete = Context::DraftDelete {
+        label: "Delete draft",
+        draft_id: DraftId::new(D),
+    };
     let deleted = ReplyData::DraftDelete(wire::Empty {});
     assert_eq!(recovered_effects(&delete, &deleted), None);
     assert!(
@@ -398,7 +404,10 @@ fn an_oversized_terminal_size_is_clamped_and_a_stop_is_reported() {
         rows: Counter::new(40),
     };
     let effects = reply_effects(
-        &Context::Terminal(oid(), "Open terminal"),
+        &Context::Terminal {
+            label: "Open terminal",
+            objective_id: oid(),
+        },
         &ReplyData::TerminalOpen(info),
     );
     assert!(matches!(
