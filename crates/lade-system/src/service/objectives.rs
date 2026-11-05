@@ -9,8 +9,8 @@ use lade_core::domain::ids::{ObjectiveId, WorkspaceId};
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
 use lade_core::domain::review::Review;
 use lade_protocol::client::{
-    ErrorCode, ObjectiveCreateCommand, ObjectiveUpdateIntentCommand, Rejection, ReplyData,
-    SafeAction, SettingsUpdateCommand, Start, WorkspaceOpenCommand,
+    ErrorCode, ObjectiveCreateCommand, Rejection, ReplyData, SafeAction, SettingsUpdateCommand,
+    Start, UpdateIntentCommand, WorkspaceOpenCommand,
 };
 
 use crate::adapters::git;
@@ -41,7 +41,7 @@ impl Service {
         if let Some(existing) = self.workspaces.values().find(|ws| ws.path == top) {
             return Ok(ReplyData::WorkspaceOpen(Self::wire_workspace(
                 existing,
-                REPLY_BRANCHES,
+                Self::workspace_branches(existing, REPLY_BRANCHES),
             )));
         }
         let (row, fresh) =
@@ -71,7 +71,7 @@ impl Service {
         if fresh {
             sql(storage::insert_workspace(self.store.conn(), &row))?;
         }
-        let reply = Self::wire_workspace(&ws, REPLY_BRANCHES);
+        let reply = Self::wire_workspace(&ws, Self::workspace_branches(&ws, REPLY_BRANCHES));
         self.workspaces.insert(ws.id, ws);
         Ok(ReplyData::WorkspaceOpen(reply))
     }
@@ -160,7 +160,7 @@ impl Service {
     pub(super) fn objective_update_intent(
         &mut self,
         ctx: &mut ReqCtx,
-        cmd: &ObjectiveUpdateIntentCommand,
+        cmd: &UpdateIntentCommand,
     ) -> Result<ReplyData, Rejection> {
         let oid = self.objective_id(&cmd.objective_id)?;
         self.check_idle(oid)?;
@@ -362,7 +362,7 @@ mod tests {
         let mut harness = Harness::new("objectives-intent");
         let (id, oid) = harness.create_objective("Intent");
         let update = |revision: u64, outcome: &str| {
-            Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
+            Request::ObjectiveUpdateIntent(UpdateIntentCommand {
                 objective_id: id.clone(),
                 expected_intent_revision: Counter::new(revision),
                 intent: Intent {

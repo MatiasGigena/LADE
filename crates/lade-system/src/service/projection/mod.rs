@@ -216,14 +216,23 @@ impl Service {
         })
     }
 
-    pub(crate) fn wire_workspace(ws: &WsState, max_branches: usize) -> Workspace {
-        let mut branches: Vec<String> = if max_branches == 0 {
-            Vec::new()
-        } else {
-            ws.repo
-                .list_branches()
-                .map(|b| b.into_iter().map(|b| b.name).collect())
-                .unwrap_or_default()
+    /// Up to `max` of the Workspace's branches as the client lists them: no verification
+    /// branches, the default branch first. Runs `git for-each-ref` unless `max` is 0; when the
+    /// listing fails, the failure is logged and no branches are offered.
+    pub(crate) fn workspace_branches(ws: &WsState, max: usize) -> Vec<String> {
+        if max == 0 {
+            return Vec::new();
+        }
+        let mut branches: Vec<String> = match ws.repo.list_branches() {
+            Ok(branches) => branches.into_iter().map(|b| b.name).collect(),
+            Err(e) => {
+                eprintln!(
+                    "laded: could not list branches workspace={} code={}",
+                    ws.id,
+                    e.code()
+                );
+                return Vec::new();
+            }
         };
         branches.retain(|b| !b.starts_with("lade/verify/") && !b.is_empty() && b.len() <= 255);
         if let Some(default) = &ws.default_branch
@@ -232,7 +241,12 @@ impl Service {
             let default = branches.remove(index);
             branches.insert(0, default);
         }
-        branches.truncate(max_branches);
+        branches.truncate(max);
+        branches
+    }
+
+    /// The wire Workspace with `branches` from `workspace_branches`; runs no Git.
+    pub(crate) fn wire_workspace(ws: &WsState, branches: Vec<String>) -> Workspace {
         Workspace {
             workspace_id: wire_id(ws.id.uuid()),
             path: wire_path(ws.path.as_os_str().as_encoded_bytes()),

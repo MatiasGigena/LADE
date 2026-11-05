@@ -254,7 +254,7 @@ impl Service {
         let workspaces = workspace_states
             .into_iter()
             .take(64)
-            .map(|ws| Self::wire_workspace(ws, max_branches))
+            .map(|ws| Self::wire_workspace(ws, Self::workspace_branches(ws, max_branches)))
             .collect();
         let mut states: Vec<&ObjState> = self.objectives.values().chain(objective).collect();
         states.sort_by_key(|st| {
