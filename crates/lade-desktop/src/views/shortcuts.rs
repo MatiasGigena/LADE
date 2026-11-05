@@ -8,7 +8,7 @@ use gtk4 as gtk;
 
 use crate::presentation::keys::{self, AppAction};
 use crate::presentation::layout::{self, LayoutClass, Region};
-use crate::presentation::state::model::{NoticeLevel, NoticeScope, ServiceNotice};
+use crate::presentation::state::model::{NoticeLevel, NoticeScope, ReportCode, ServiceNotice};
 use crate::presentation::state::store::{MainView, StoreUpdate};
 
 use super::{App, dialogs};
@@ -21,7 +21,7 @@ impl App {
         if let Some(message) = problem {
             self.store.apply(StoreUpdate::Notice(ServiceNotice {
                 level: NoticeLevel::Warning,
-                code: "keybindings_ignored".to_owned(),
+                code: ReportCode::KeybindingsIgnored,
                 message,
                 scope: NoticeScope::General,
             }));

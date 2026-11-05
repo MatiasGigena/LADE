@@ -111,14 +111,14 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::*;
-    use crate::presentation::state::model::{NoticeLevel, NoticeScope, ServiceNotice};
+    use crate::presentation::state::model::{NoticeLevel, NoticeScope, ReportCode, ServiceNotice};
     use crate::presentation::state::store::PresentationState;
 
     fn notice(n: usize) -> StoreUpdate {
         StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Info,
-            code: format!("n{n}"),
-            message: String::new(),
+            code: ReportCode::Recovered,
+            message: format!("n{n}"),
             scope: NoticeScope::General,
         })
     }
@@ -141,12 +141,12 @@ mod tests {
             }
         }
         producer.join().unwrap();
-        let codes: Vec<String> = store
+        let messages: Vec<String> = store
             .state()
             .notices
             .iter()
-            .map(|n| n.code.clone())
+            .map(|n| n.message.clone())
             .collect();
-        assert_eq!(codes, ["n0", "n1", "n2", "n3", "n4"]);
+        assert_eq!(messages, ["n0", "n1", "n2", "n3", "n4"]);
     }
 }

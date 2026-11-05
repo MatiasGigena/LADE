@@ -5,7 +5,7 @@ use lade_protocol::client::{self as wire, Rejection};
 use super::{Context, Effects, refresh_objective};
 use crate::presentation::controller::intents::Intent;
 use crate::presentation::state::model::{
-    ActionSurface, DraftId, NoticeLevel, NoticeScope, Refusal, ServiceNotice,
+    ActionSurface, DraftId, NoticeLevel, NoticeScope, Refusal, ReportCode, ServiceNotice,
 };
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::text::format::sentence;
@@ -40,7 +40,7 @@ fn technical_details(rejection: &Rejection) -> String {
 
 pub fn refusal(action: &str, rejection: &Rejection) -> Refusal {
     Refusal {
-        code: convert::error_code(rejection.code),
+        code: ReportCode::Rejected(rejection.code),
         message: format!("Couldn't {action}. {}", reason_and_advice(rejection)),
         details: technical_details(rejection),
     }
@@ -75,13 +75,12 @@ fn stale_drafts_note(batch: &[DraftId], rejection: &Rejection) -> Option<String>
 
 pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
     let mut effects = Effects::default();
-    let code = convert::error_code(rejection.code);
     let mut refused = refusal(&context.action(), rejection);
     let updates = &mut effects.updates;
     let notice = |scope, refused: Refusal| {
         StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: code.to_owned(),
+            code: refused.code,
             message: refused.message,
             scope,
         })

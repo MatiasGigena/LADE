@@ -1,6 +1,7 @@
 use super::*;
 use crate::presentation::state::model::{
-    ActivityItem, ActivityItemId, ActivityRole, ExecutionState, Lifecycle, NoticeScope, Timestamp,
+    ActivityItem, ActivityItemId, ActivityRole, ExecutionState, Lifecycle, NoticeLevel,
+    NoticeScope, ReportCode, Timestamp,
 };
 
 /// An Assistant activity item with no title or tool.
@@ -83,8 +84,8 @@ fn notices_received_keeps_counting_past_the_retained_cap() {
     let mut state = PresentationState::default();
     for n in 0..MAX_NOTICES + 5 {
         state.apply(StoreUpdate::Notice(ServiceNotice {
-            level: crate::presentation::state::model::NoticeLevel::Warning,
-            code: "c".into(),
+            level: NoticeLevel::Warning,
+            code: ReportCode::Recovered,
             message: format!("notice {n}"),
             scope: NoticeScope::General,
         }));

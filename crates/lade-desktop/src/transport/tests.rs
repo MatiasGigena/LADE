@@ -22,7 +22,7 @@ use super::requests::{
 use crate::presentation::controller::intents::{Intent, StartPoint};
 use crate::presentation::state::model::{
     Basis, ConnectionState, DeliveryMode, ExecutionState, Intent as ObjectiveIntent, ModelRef,
-    ObjectiveId, RepoPath,
+    ObjectiveId, RepoPath, ReportCode,
 };
 use crate::presentation::state::store::StoreUpdate;
 
@@ -278,7 +278,7 @@ fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
     wait_for(
         &updates,
         "unknown outcome notice",
-        |u| matches!(u, StoreUpdate::Notice(n) if n.code == "unknown_operation"),
+        |u| matches!(u, StoreUpdate::Notice(n) if n.code == ReportCode::NotReceived),
     );
     wait_for(&updates, "lease held", |u| {
         u == &StoreUpdate::Connection(ConnectionState::LeaseHeld)

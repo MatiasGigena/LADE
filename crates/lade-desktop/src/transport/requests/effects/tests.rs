@@ -2,7 +2,7 @@ use lade_protocol::client::{self as wire, ReplyData};
 use lade_protocol::types::{Counter, Digest, Id};
 
 use crate::presentation::state::agent_session::AgentSessionUpdate;
-use crate::presentation::state::model::{ModelRef, Refusal};
+use crate::presentation::state::model::{ModelRef, Refusal, ReportCode};
 use crate::transport::convert;
 use crate::transport::requests::tests::*;
 use crate::transport::requests::*;
@@ -249,7 +249,7 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
         vec![StoreUpdate::TerminalRefused {
             objective_id: oid(),
             refusal: Refusal {
-                code: "invalid_lifecycle",
+                code: ReportCode::Rejected(wire::ErrorCode::InvalidLifecycle),
                 message: "Couldn't open terminal. Start the agent once to create this Objective's worktree.".into(),
                 details: "invalid_lifecycle: Start the agent once to create this Objective's worktree.".into(),
             },

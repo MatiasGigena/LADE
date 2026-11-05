@@ -1,7 +1,9 @@
+use lade_protocol::client::{ErrorCode, NoticeCode};
+
 use crate::presentation::layout::LayoutClass;
 use crate::presentation::state::model::{
     Basis, ChangeList, ChangeStatus, ChangedFile, NoticeLevel, NoticeScope, ObjectiveId, RepoPath,
-    ServiceNotice,
+    ReportCode, ServiceNotice,
 };
 use crate::presentation::test_fixture;
 use crate::views::tests::{app, descendants, laid_out, settle_until};
@@ -143,7 +145,7 @@ fn launch_qa_opening_workspace_resolves_its_previous_error() {
         let app = app(1440, 900);
         app.store.apply(StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: "invalid_request".into(),
+            code: ReportCode::Rejected(ErrorCode::InvalidRequest),
             message:
                 "Couldn't open workspace. Path is not the top level of a non-bare Git repository."
                     .into(),
@@ -161,7 +163,7 @@ fn launch_qa_opening_workspace_resolves_its_previous_error() {
         let stale = app.notice.is_visible();
         app.store.apply(StoreUpdate::Notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: "storage_pressure".into(),
+            code: ReportCode::Service(NoticeCode::StorageLow),
             message: "Storage is running low.".into(),
             scope: NoticeScope::General,
         }));

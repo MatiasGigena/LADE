@@ -88,7 +88,7 @@ pub fn fallback_reason(code: wire::ErrorCode) -> &'static str {
 pub fn notice(n: &wire::ServiceNotice) -> view::ServiceNotice {
     view::ServiceNotice {
         level: notice_level(n.level),
-        code: n.code.as_str().to_owned(),
+        code: view::ReportCode::Service(n.code),
         message: n.message.clone(),
         scope: view::NoticeScope::General,
     }

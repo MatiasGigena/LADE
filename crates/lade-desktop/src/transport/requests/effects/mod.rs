@@ -11,7 +11,7 @@ use super::{Context, Effects, refresh_objective};
 use crate::presentation::controller::intents::Intent;
 use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
-    self as view, Basis, NoticeLevel, NoticeScope, ObjectiveId, ServiceNotice,
+    self as view, Basis, NoticeLevel, NoticeScope, ObjectiveId, ReportCode, ServiceNotice,
 };
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::terminal::TerminalMode;
@@ -292,7 +292,7 @@ fn profile_imported(result: &wire::ProfileImportResult, effects: &mut Effects) {
         )));
     effects.updates.push(StoreUpdate::Notice(ServiceNotice {
         level: NoticeLevel::Info,
-        code: "profile_import".into(),
+        code: ReportCode::ProfileImported,
         message: format!(
             "Imported {} item(s) into the LADE profile{}. Extensions still need approval.",
             result.copied.len(),

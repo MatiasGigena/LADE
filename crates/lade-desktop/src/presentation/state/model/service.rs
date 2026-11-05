@@ -1,7 +1,41 @@
 //! Service-wide state: search, the connection, notices, settings and loading state.
 
+use lade_protocol::client::{ErrorCode, NoticeCode};
+
 use super::ids::{ModelRef, ObjectiveId, RepoPath};
 use super::review::Basis;
+
+/// The stable code of a refusal or notice: the service's own, or one the desktop gives a
+/// problem or outcome it found itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportCode {
+    /// The service rejected a request.
+    Rejected(ErrorCode),
+    /// The service sent a notice.
+    Service(NoticeCode),
+    /// A request the window could not build.
+    NotSent,
+    /// A command issued while the window was not connected.
+    NotConnected,
+    /// The outcome of a command whose reply was lost is being checked.
+    CheckingOutcome,
+    /// A command whose reply was lost had completed.
+    Recovered,
+    /// The service cannot say how a command whose reply was lost ended.
+    Uncertain,
+    /// The service reports a command whose reply was lost as blocked.
+    Blocked,
+    /// A command whose reply was lost never reached the service.
+    NotReceived,
+    /// The terminal pane could not reach its terminal.
+    TerminalProblem,
+    /// A draft could not be saved.
+    SaveFailed,
+    /// The keybindings file was ignored.
+    KeybindingsIgnored,
+    /// A profile import finished.
+    ProfileImported,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SearchScope {
@@ -74,7 +108,7 @@ pub enum NoticeScope {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceNotice {
     pub level: NoticeLevel,
-    pub code: String,
+    pub code: ReportCode,
     pub message: String,
     pub scope: NoticeScope,
 }

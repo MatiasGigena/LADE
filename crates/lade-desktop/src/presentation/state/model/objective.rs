@@ -5,6 +5,7 @@ use super::ids::{
     ApprovalId, CandidateId, GitId, ModelRef, ObjectiveId, RepoPath, SessionId, Timestamp,
     VerificationId, WorkspaceId,
 };
+use super::service::ReportCode;
 use crate::presentation::state::agent_session::ThinkingLevel;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -303,8 +304,7 @@ pub enum ActionSurface {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
-    /// The stable error code: the service's, or the desktop's own for a local problem.
-    pub code: &'static str,
+    pub code: ReportCode,
     pub message: String,
     /// Technical details for display only.
     pub details: String,

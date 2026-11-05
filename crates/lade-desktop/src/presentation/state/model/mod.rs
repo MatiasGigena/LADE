@@ -27,6 +27,6 @@ pub use review::{
     ReferenceVersion, Side,
 };
 pub use service::{
-    ConnectionState, Load, NoticeLevel, NoticeScope, SearchResult, SearchResultKind, SearchResults,
-    SearchScope, ServiceNotice, Settings,
+    ConnectionState, Load, NoticeLevel, NoticeScope, ReportCode, SearchResult, SearchResultKind,
+    SearchResults, SearchScope, ServiceNotice, Settings,
 };

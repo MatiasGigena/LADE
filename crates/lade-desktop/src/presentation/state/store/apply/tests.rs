@@ -1,3 +1,5 @@
+use lade_protocol::client::ErrorCode;
+
 use super::*;
 use crate::presentation::state::agent_session::AgentSessionUpdate;
 use crate::presentation::state::model::{
@@ -221,7 +223,7 @@ fn extension_dialogs_are_dropped_with_the_link_and_reannounced_after_it() {
 
 fn refusal(message: &str) -> Refusal {
     Refusal {
-        code: "invalid_lifecycle",
+        code: ReportCode::Rejected(ErrorCode::InvalidLifecycle),
         message: message.into(),
         details: format!("invalid_lifecycle: {message}"),
     }
@@ -265,7 +267,7 @@ fn command_notes_are_kept_apart_from_refusals() {
     let o = ObjectiveId::new("o");
     let note = ServiceNotice {
         level: crate::presentation::state::model::NoticeLevel::Info,
-        code: "query_operation".into(),
+        code: ReportCode::CheckingOutcome,
         message: "Checking outcome of “Integrate”…".into(),
         scope: NoticeScope::General,
     };
@@ -328,7 +330,7 @@ fn draft_refusals_land_on_the_draft_and_its_objective() {
     state.apply(StoreUpdate::DraftSaveRefused {
         draft_id: id.clone(),
         refusal: Refusal {
-            code: "durability_failure",
+            code: ReportCode::Rejected(ErrorCode::DurabilityFailure),
             message: "The draft was not written.".into(),
             details: "durability_failure: the draft was not written".into(),
         },
@@ -636,7 +638,7 @@ fn an_unchanged_command_status_reports_nothing() {
         objective_id: o.clone(),
         status: Some(ServiceNotice {
             level: NoticeLevel::Info,
-            code: "query_operation".into(),
+            code: ReportCode::CheckingOutcome,
             message: "Checking…".into(),
             scope: NoticeScope::General,
         }),
@@ -661,7 +663,10 @@ fn a_delete_refusal_for_an_unknown_draft_becomes_a_coded_warning() {
     assert_eq!(changes, [Change::Notices]);
     let notice = state.notices.last().expect("warning");
     assert_eq!(notice.level, NoticeLevel::Warning);
-    assert_eq!(notice.code, "invalid_lifecycle");
+    assert_eq!(
+        notice.code,
+        ReportCode::Rejected(ErrorCode::InvalidLifecycle)
+    );
     assert_eq!(notice.message, "Couldn't delete draft.");
 }
 

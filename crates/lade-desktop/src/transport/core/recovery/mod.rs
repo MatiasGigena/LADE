@@ -8,7 +8,7 @@ use lade_protocol::client::{
 
 use super::{Core, MAX_RECHECKS, Operation, Pending, Step, notice};
 use crate::presentation::controller::intents::Intent;
-use crate::presentation::state::model::NoticeLevel;
+use crate::presentation::state::model::{NoticeLevel, ReportCode};
 use crate::presentation::state::store::StoreUpdate;
 use crate::transport::requests::{self, Context};
 
@@ -55,7 +55,7 @@ impl Core {
                 let mut step = self.settle_recovered(&operation.context, *data);
                 step.updates.push(StoreUpdate::Notice(notice(
                     NoticeLevel::Info,
-                    "operation_recovered",
+                    ReportCode::Recovered,
                     format!("{label} had completed before the connection dropped."),
                 )));
                 return step;
@@ -97,7 +97,7 @@ impl Core {
         state: OperationState,
         note: Option<String>,
         step: &mut Step,
-    ) -> (NoticeLevel, &'static str, String) {
+    ) -> (NoticeLevel, ReportCode, String) {
         let label = operation.context.label();
         match state {
             OperationState::Accepted | OperationState::Pending
@@ -107,23 +107,23 @@ impl Core {
                 self.rechecks.push(operation);
                 (
                     NoticeLevel::Info,
-                    "query_operation",
+                    ReportCode::CheckingOutcome,
                     format!("Checking outcome of “{label}”… the service is still working on it."),
                 )
             }
             OperationState::Accepted | OperationState::Pending | OperationState::Uncertain => (
                 NoticeLevel::Warning,
-                "uncertain",
+                ReportCode::Uncertain,
                 format!("The outcome of “{label}” is uncertain. Refresh before repeating it."),
             ),
             OperationState::Blocked => (
                 NoticeLevel::Warning,
-                "blocked",
+                ReportCode::Blocked,
                 format!("“{label}” is blocked by the service."),
             ),
             OperationState::Completed => (
                 NoticeLevel::Info,
-                "operation_recovered",
+                ReportCode::Recovered,
                 format!("{label} had completed before the connection dropped."),
             ),
             OperationState::Unknown => {
@@ -139,7 +139,7 @@ impl Core {
                 }
                 (
                     NoticeLevel::Warning,
-                    "unknown_operation",
+                    ReportCode::NotReceived,
                     note.unwrap_or_else(|| {
                         format!(
                             "{label} did not reach the service before the connection dropped; nothing was changed. Try again."

@@ -1,4 +1,6 @@
-use super::model::{Draft, DraftId, DraftState, ObjectiveId, Reference, Refusal, SessionId};
+use super::model::{
+    Draft, DraftId, DraftState, ObjectiveId, Reference, Refusal, ReportCode, SessionId,
+};
 use crate::presentation::text::format::sentence;
 
 pub type Millis = u64;
@@ -234,7 +236,7 @@ impl DraftEditor {
 
     pub fn fail(&mut self, message: &str) {
         self.fail_with(&Refusal {
-            code: "save_failed",
+            code: ReportCode::SaveFailed,
             message: message.to_owned(),
             details: String::new(),
         });
@@ -307,6 +309,8 @@ impl DraftEditor {
 
 #[cfg(test)]
 mod tests {
+    use lade_protocol::client::ErrorCode;
+
     use super::*;
     use crate::presentation::state::model::{
         ArtifactDigest, CaptureId, ReferenceVersion, RepoPath, Side,
@@ -417,7 +421,7 @@ mod tests {
         );
         assert_eq!(e.status(true).label(), "Save failed. Storage full.");
         e.fail_with(&Refusal {
-            code: "durability_failure",
+            code: ReportCode::Rejected(ErrorCode::DurabilityFailure),
             message: "The draft was not written.".into(),
             details: "durability_failure: the draft was not written".into(),
         });

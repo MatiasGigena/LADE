@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use lade_protocol::client::{ErrorCode, Rejection, ReplyData, SafeAction};
 use lade_protocol::types::Id;
 
-use crate::presentation::state::model::{ModelRef, NoticeScope, Refusal};
+use crate::presentation::state::model::{ModelRef, NoticeScope, Refusal, ReportCode};
 use crate::transport::convert;
 use crate::transport::requests::rejection::refusal;
 use crate::transport::requests::tests::*;
@@ -25,7 +25,7 @@ fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface()
         objective_id: oid(),
         surface: ActionSurface::Review,
         refusal: Refusal {
-            code: "invalid_lifecycle",
+            code: ReportCode::Rejected(ErrorCode::InvalidLifecycle),
             message: message.into(),
             details: "invalid_lifecycle: Wait until the agent has stopped.".into(),
         },
@@ -176,7 +176,7 @@ fn a_failed_workspace_open_is_scoped_and_explains_the_folder() {
         panic!("one notice: {:?}", effects.updates);
     };
     assert_eq!(notice.scope, NoticeScope::WorkspaceOpen);
-    assert_eq!(notice.code, "invalid_request");
+    assert_eq!(notice.code, ReportCode::Rejected(ErrorCode::InvalidRequest));
     assert!(
         notice
             .message
@@ -254,7 +254,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
         vec![StoreUpdate::DraftSaveRefused {
             draft_id: DraftId::new(D),
             refusal: Refusal {
-                code: "durability_failure",
+                code: ReportCode::Rejected(ErrorCode::DurabilityFailure),
                 message: "The draft was not written (injected test fault).".into(),
                 details: "durability_failure: The draft was not written (injected test fault)."
                     .into(),
@@ -277,7 +277,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
         vec![StoreUpdate::DraftDeleteRefused {
             draft_id: DraftId::new(D),
             refusal: Refusal {
-                code: "conflict",
+                code: ReportCode::Rejected(ErrorCode::Conflict),
                 message:
                     "Couldn't delete draft. The draft was changed elsewhere. Refresh and try again."
                         .into(),

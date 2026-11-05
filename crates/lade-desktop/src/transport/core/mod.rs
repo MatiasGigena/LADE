@@ -12,7 +12,7 @@ use super::requests::{self, Context, Effects};
 use crate::presentation::controller::intents::Intent;
 use crate::presentation::state::model::{
     ConnectionState, Draft, DraftId, InputId, InputSummary, NoticeLevel, NoticeScope, ObjectiveId,
-    ServiceNotice,
+    ReportCode, ServiceNotice,
 };
 use crate::presentation::state::store::StoreUpdate;
 
@@ -59,17 +59,17 @@ impl Step {
     }
 }
 
-fn notice(level: NoticeLevel, code: &str, message: String) -> ServiceNotice {
+fn notice(level: NoticeLevel, code: ReportCode, message: String) -> ServiceNotice {
     ServiceNotice {
         level,
-        code: code.to_owned(),
+        code,
         message,
         scope: NoticeScope::General,
     }
 }
 
 /// Reports an intent that produced no request; a draft save also marks the draft as failed.
-fn not_sent(intent: &Intent, code: &str, reason: &str, draft_message: String) -> Step {
+fn not_sent(intent: &Intent, code: ReportCode, reason: &str, draft_message: String) -> Step {
     let mut updates = Vec::new();
     if let Intent::SaveDraft { draft_id, .. } = intent {
         updates.push(StoreUpdate::DraftSaveFailed {
@@ -199,7 +199,7 @@ impl Core {
             Ok(Some(mapped)) => mapped,
             Ok(None) => return Step::default(),
             Err(invalid) => {
-                return not_sent(&intent, "invalid_request", &invalid.0, invalid.0.clone());
+                return not_sent(&intent, ReportCode::NotSent, &invalid.0, invalid.0.clone());
             }
         };
         let class = request.name().class();
@@ -247,9 +247,12 @@ impl Core {
                 }],
                 frames: Vec::new(),
             },
-            (RequestClass::Command | RequestClass::Interaction, _) => {
-                not_sent(intent, "not_connected", REASON, "not connected".into())
-            }
+            (RequestClass::Command | RequestClass::Interaction, _) => not_sent(
+                intent,
+                ReportCode::NotConnected,
+                REASON,
+                "not connected".into(),
+            ),
         }
     }
 
@@ -334,7 +337,7 @@ impl Core {
                     objective_id: o.clone(),
                     status: Some(notice(
                         NoticeLevel::Info,
-                        "query_operation",
+                        ReportCode::CheckingOutcome,
                         format!(
                             "Checking outcome of “{}”… (its reply was lost when the connection dropped)",
                             operation.context.label()

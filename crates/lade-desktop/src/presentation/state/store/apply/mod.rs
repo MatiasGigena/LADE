@@ -8,7 +8,8 @@ use crate::presentation::state::drafts::DraftEditor;
 use crate::presentation::state::model::{
     ActionSurface, Basis, ChangeList, ConnectionState, Draft, DraftId, DraftState, FileContent,
     FileDiff, FilePage, InputSummary, Load, NoticeLevel, NoticeScope, ObjectiveDetail, ObjectiveId,
-    ObjectiveSummary, Refusal, RepoPath, ServiceNotice, Settings, VerificationSummary, Workspace,
+    ObjectiveSummary, Refusal, RepoPath, ReportCode, ServiceNotice, Settings, VerificationSummary,
+    Workspace,
 };
 use crate::presentation::terminal::{TerminalEnd, TerminalMode, TerminalSession, TerminalStatus};
 
@@ -213,7 +214,7 @@ impl PresentationState {
             } => self.terminal_problem(
                 objective_id,
                 Refusal {
-                    code: "terminal_problem",
+                    code: ReportCode::TerminalProblem,
                     message,
                     details: String::new(),
                 },
@@ -501,7 +502,7 @@ impl PresentationState {
         }
         self.push_notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: refusal.code.to_owned(),
+            code: refusal.code,
             message: refusal.message,
             scope: NoticeScope::General,
         });

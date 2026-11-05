@@ -4,7 +4,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{Counter, Id};
 
 use crate::presentation::state::drafts::DraftEditor;
-use crate::presentation::state::model::{DeliveryState, DraftId, DraftState, ModelRef};
+use crate::presentation::state::model::{DeliveryState, DraftId, DraftState, ModelRef, ReportCode};
 use crate::presentation::state::store::PresentationState;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
@@ -22,7 +22,7 @@ fn lost_command_reply_is_recovered_with_the_same_operation_id() {
     });
     assert!(refused.frames.is_empty());
     assert!(
-        matches!(refused.updates.as_slice(), [StoreUpdate::Notice(n)] if n.code == "not_connected")
+        matches!(refused.updates.as_slice(), [StoreUpdate::Notice(n)] if n.code == ReportCode::NotConnected)
     );
 
     let step = core.on_welcome(epoch());
@@ -272,12 +272,12 @@ fn status(state: OperationState, outcome: Option<Outcome>) -> ReplyData {
     ReplyData::OperationGet(OperationStatus { state, outcome })
 }
 
-fn warnings(step: &Step) -> Vec<(&str, &str)> {
+fn warnings(step: &Step) -> Vec<(ReportCode, &str)> {
     step.updates
         .iter()
         .filter_map(|u| match u {
             StoreUpdate::Notice(n) if n.level == NoticeLevel::Warning => {
-                Some((n.code.as_str(), n.message.as_str()))
+                Some((n.code, n.message.as_str()))
             }
             _ => None,
         })
@@ -291,12 +291,15 @@ fn a_blocked_operation_is_reported_on_its_objective_and_reloads_it() {
     let step = core.on_reply(ok(&recover, status(OperationState::Blocked, None)));
     assert_eq!(
         warnings(&step),
-        [("blocked", "“Send message” is blocked by the service.")]
+        [(
+            ReportCode::Blocked,
+            "“Send message” is blocked by the service."
+        )]
     );
     assert!(step.updates.iter().any(|u| matches!(
         u,
         StoreUpdate::CommandStatus { objective_id, status: Some(s) }
-            if objective_id == &oid() && s.code == "blocked"
+            if objective_id == &oid() && s.code == ReportCode::Blocked
     )));
     assert!(names(&step).contains(&"objective.get"));
 }
@@ -315,7 +318,7 @@ fn a_refused_outcome_check_reports_the_reason_as_an_unknown_outcome() {
         ),
     ));
     let warnings = warnings(&step);
-    let [("unknown_operation", message)] = warnings.as_slice() else {
+    let [(ReportCode::NotReceived, message)] = warnings.as_slice() else {
         panic!("one unknown-operation warning: {warnings:?}");
     };
     assert!(
@@ -354,7 +357,7 @@ fn a_recovered_rejection_settles_like_the_original_reply() {
         !step
             .updates
             .iter()
-            .any(|u| matches!(u, StoreUpdate::Notice(n) if n.code == "operation_recovered"))
+            .any(|u| matches!(u, StoreUpdate::Notice(n) if n.code == ReportCode::Recovered))
     );
 }
 
@@ -371,7 +374,7 @@ fn a_pending_operation_becomes_uncertain_after_the_last_recheck() {
     assert_eq!(
         warnings(&step),
         [(
-            "uncertain",
+            ReportCode::Uncertain,
             "The outcome of “Send message” is uncertain. Refresh before repeating it."
         )]
     );
@@ -441,7 +444,7 @@ fn a_recovered_objective_detail_older_than_the_reloaded_one_is_dropped() {
     assert!(
         step.updates
             .iter()
-            .any(|u| matches!(u, StoreUpdate::Notice(n) if n.code == "operation_recovered"))
+            .any(|u| matches!(u, StoreUpdate::Notice(n) if n.code == ReportCode::Recovered))
     );
     apply(&mut state, step);
     let held = state.detail(&oid()).unwrap();
