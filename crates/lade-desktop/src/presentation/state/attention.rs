@@ -77,6 +77,9 @@ pub struct Delivery {
 }
 
 impl Delivery {
+    /// Sends `requests` as desktop notifications unless the window is active. A failing
+    /// notifier stops the batch, since the rest would fail the same way. Returns the failure
+    /// to report, only the first time notifications turn out to be unavailable.
     pub fn deliver(
         &mut self,
         requests: &[AttentionRequest],
@@ -86,13 +89,13 @@ impl Delivery {
         if window_active {
             return None;
         }
-        let failure = requests
-            .iter()
-            .find_map(|request| notifier.notify(request).err())?;
-        if std::mem::replace(&mut self.unavailable_reported, true) {
-            return None;
+        for request in requests {
+            if let Err(why) = notifier.notify(request) {
+                let reported = std::mem::replace(&mut self.unavailable_reported, true);
+                return (!reported).then_some(why);
+            }
         }
-        Some(failure)
+        None
     }
 }
 
