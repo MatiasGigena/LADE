@@ -1,7 +1,8 @@
 import { MAX_FRAME, WireError } from "../json.ts";
-import type { ServiceToWorker, WorkerToService } from "../dto.ts";
+import type { ServiceToWorker, WorkerErrorCode, WorkerToService } from "../dto.ts";
 import { BUNDLE, isServiceToWorker, isWorkerToService, VERSION } from "../schema.ts";
 import { decodeWorkerFrame } from "./contract.ts";
+import { safeMessage } from "./text.ts";
 
 export type StartBody = Extract<ServiceToWorker, { kind: "worker.start" }>;
 
@@ -15,9 +16,16 @@ export type ActivityItemBody = Extract<WorkerToService, { kind: "activity.item" 
 
 export type ResultBody = Extract<WorkerToService, { kind: "session.result" }>;
 
+export type ChangedBody = Extract<WorkerToService, { kind: "session.changed" }>;
+
 export type LoadedResource = Extract<WorkerToService, { kind: "resources.loaded" }>["resources"][number];
 
 export type TurnState = Extract<WorkerToService, { kind: "turn.state" }>["state"];
+
+/** A `worker.error` whose message is made safe to leave the worker. */
+export function workerError(code: WorkerErrorCode, message: string): WorkerToService {
+  return { kind: "worker.error", code, message: safeMessage(message) };
+}
 
 export function parseInbound(bytes: Uint8Array): ServiceToWorker {
   const { body } = decodeWorkerFrame(bytes);

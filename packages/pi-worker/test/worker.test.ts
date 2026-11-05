@@ -210,6 +210,15 @@ test("an unknown model fails worker.start with a coded error", () => withWorker(
   assert.equal(worker.kinds("worker.ready").length, 0);
 }));
 
+test("a session_file outside the sessions directory fails worker.start", () => withWorker(async (worker, box) => {
+  worker.send({ ...startBody(box, true), session_file: join(box.root, "elsewhere.jsonl") });
+  assert.equal(await worker.exited, 1);
+  const error = record(worker.kinds("worker.error")[0]);
+  assert.equal(error.code, "startup_failed");
+  assert.match(text(error.message), /session_file must be inside/);
+  assert.equal(worker.kinds("worker.ready").length, 0);
+}));
+
 test("worker.start refuses a launch environment that does not match its session_dir", async () => {
   const box = sandbox();
   const worker = new Worker(box, { PI_CODING_AGENT_DIR: join(box.root, "elsewhere") });

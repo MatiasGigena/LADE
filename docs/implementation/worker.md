@@ -60,12 +60,12 @@ error), plus per-kind aliases of the generated bodies. The test-only reference f
 
 | Inbound | Worker action |
 | --- | --- |
-| `worker.start` | Create (`resume:false`) or reopen (`resume:true`: the given `session_file`, otherwise the most recent session in `<session_dir>/sessions`) the pi session with the optional `thinking` level and `resources` snapshot, then `worker.ready {pi_session_id, session_file}`, `session.changed {reason:"start", generation:"1"}` and `resources.loaded`. |
+| `worker.start` | Open the given `session_file` when it exists (it takes precedence over `resume`; the service sends one only with `resume:true`, and one outside `<session_dir>/sessions/` fails with `startup_failed`), otherwise create (`resume:false`) or reopen the most recent session in `<session_dir>/sessions` (`resume:true`) for the pi session with the optional `thinking` level and `resources` snapshot, then `worker.ready {pi_session_id, session_file}`, `session.changed {reason:"start", generation:"1"}` and `resources.loaded`. |
 | `input.deliver` | `input.received {input_id}` first, then deliver by mode (below). |
-| `session.abort` | `clearQueue()` (reported as a `system` item "Queue cleared" with counts only), then `abort()`; waits until the session is idle. |
+| `session.abort` | Cancels inputs not yet accepted (closing their dialogs), `clearQueue()` (reported as a `system` item "Queue cleared" with counts only), then `abort()`, which also stops compaction and retries; waits until the session is idle. |
 | `session.command {command_id, command}` | One session operation (`tree`, `navigate`, `fork`, `import`, `export`, `compact`, `reload`, `configure`), answered by `session.result {command_id, ok, message?, entries?, leaf_id?, truncated?}`. Not awaited by the read loop (an operation can wait for a dialog); a second command while one runs fails at once. Operations that change the session need an idle session. |
 | `ui.respond {ui_id, generation, answer}` | Answers an open extension dialog of the current generation; anything else is refused and reported. |
-| `worker.shutdown` | Abort if streaming, `dispose()`, flush stdout, exit 0. |
+| `worker.shutdown` | The same abort as `session.abort`, `dispose()`, flush stdout, exit 0 (stdin EOF does the same). |
 
 Delivery modes:
 
@@ -79,7 +79,10 @@ Delivery modes:
 commands are expanded exactly once, by pi, on this single path (the service and client never expand).
 The worker awaits `preflightResult` (acceptance), not the end of the run, before reading the next
 frame; an extension command (`/name` registered by an approved extension) is started without
-awaiting it, because it may wait for a dialog that only a later frame answers. Steering and
+awaiting it: it has no preflight to wait for, it runs extension code at once like a turn, and it may wait
+for a dialog that only a later frame answers. It therefore does not count as a delivery in progress, so
+session commands (for example a reload that replaces its dialogs) stay available while it runs, whereas
+they are refused while a prompt's preflight is pending. Steering and
 follow-up modes are pi's `one-at-a-time`. A rejected input is `worker.error {code:"delivery_failed"}`;
 a failure after acceptance is `session_failed`.
 
@@ -114,9 +117,9 @@ unboundedly either.
 
 ## Sessions, resources and extension UI (IMP-011)
 
-`src/worker/session.ts` (`SessionHost`) owns pi's `AgentSessionRuntime`
-(`createAgentSessionRuntime` with a factory over
-`createAgentSessionFromServices`). Fork and import go through the runtime (`fork`, `importFromJsonl`),
+`src/worker/session.ts` (`SessionHost`) owns pi's `AgentSessionRuntime` (`createAgentSessionRuntime` with a
+factory over `createAgentSessionFromServices`), input delivery, abort and the admission of session commands
+(refused while a prompt's preflight is pending or another command runs). Fork and import go through the runtime (`fork`, `importFromJsonl`),
 which replaces the `AgentSession`; `setRebindSession` re-subscribes and re-binds extensions, and every
 replacement or reload increments the **generation** (starting at 1) reported in `session.changed`
 `{generation, reason, model, thinking, pi_session_id, session_file, leaf_id?}`. Navigation uses

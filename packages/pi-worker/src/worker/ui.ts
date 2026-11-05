@@ -1,11 +1,10 @@
 import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { Id, UiAnswer, UiPrompt, WorkerToService } from "../dto.ts";
+import type { SystemNotice } from "./activity.ts";
 import { counter, newId } from "../schema.ts";
 import { prefix } from "./text.ts";
 import type { RespondBody } from "./wire.ts";
-
-type Notify = (title: string, text: string, isError: boolean) => void;
 
 type ThemeColors = ConstructorParameters<typeof Theme>[0];
 
@@ -34,11 +33,11 @@ interface Pending { generation: number; resolve: (answer: UiAnswer | undefined) 
 
 export class UiBridge {
   private readonly send: (body: WorkerToService) => void;
-  private readonly notify: Notify;
+  private readonly systemNotice: SystemNotice;
   private readonly pending = new Map<Id, Pending>();
   private dialogOpened: (() => void) | undefined;
   private current = 1;
-  constructor(send: (body: WorkerToService) => void, notify: Notify) { this.send = send; this.notify = notify; }
+  constructor(send: (body: WorkerToService) => void, systemNotice: SystemNotice) { this.send = send; this.systemNotice = systemNotice; }
 
   get generation(): number { return this.current; }
 
@@ -146,7 +145,7 @@ export class UiBridge {
       },
       input: async (title, placeholder, opts) => value(await this.ask({ kind: "input", title: prefix(title, 512), placeholder: prefix(placeholder ?? "", 512) }, opts)),
       editor: async (title, prefill) => value(await this.ask({ kind: "editor", title: prefix(title, 512), prefill: prefix(prefill ?? "", 65_536) }, undefined)),
-      notify: (message, type) => { this.notify("Extension notice", message, type === "error"); },
+      notify: (message, type) => { this.systemNotice("Extension notice", message, type === "error"); },
       onTerminalInput: () => () => {},
       setStatus: () => {},
       setWorkingMessage: () => {},

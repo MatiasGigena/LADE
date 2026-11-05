@@ -1,16 +1,13 @@
 // Must stay the first import: stdio.ts redirects console and stdout to stderr before every other module (above all the SDK)
 // is evaluated, so that only protocol frames reach stdout.
 import { writeFrame } from "./worker/stdio.ts";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ServiceToWorker, WorkerErrorCode } from "./dto.ts";
+import type { ServiceToWorker, WorkerErrorCode, WorkerToService } from "./dto.ts";
 import { ActivityMapper } from "./worker/activity.ts";
 import { InboundError, StdioChannel } from "./worker/channel.ts";
 import { installGateway, installNoNetwork } from "./worker/gateway.ts";
-import { abort, deliver, SessionHost, StartError } from "./worker/session.ts";
-import type { InputGate } from "./worker/session.ts";
-import { safeMessage } from "./worker/text.ts";
+import { SessionHost, StartError } from "./worker/session.ts";
 import { UiBridge } from "./worker/ui.ts";
-import type { CommandBody, DeliverBody } from "./worker/wire.ts";
+import { workerError } from "./worker/wire.ts";
 
 const EXIT_OK = 0;
 
@@ -29,8 +26,13 @@ const channel = new StdioChannel(process.stdin, writeFrame, process.stdout);
 
 process.stdout.on("error", () => process.exit(EXIT_INTERNAL));
 
+/** Queues a frame. A frame the worker cannot encode is a worker bug: its rejection reaches `failed` as unhandled. */
+function emit(body: WorkerToService): void {
+  void channel.send(body);
+}
+
 function report(code: WorkerErrorCode, message: string): void {
-  void channel.send({ kind: "worker.error", code, message: safeMessage(message) });
+  emit(workerError(code, message));
 }
 
 async function exit(status: number, host: SessionHost | undefined): Promise<void> {
@@ -39,27 +41,21 @@ async function exit(status: number, host: SessionHost | undefined): Promise<void
   process.exit(status);
 }
 
-function failed(error: Error): void {
-  process.stderr.write(`lade-worker: internal failure (${error.name})\n`);
+function failed(cause: unknown): void {
+  process.stderr.write(`lade-worker: internal failure (${cause instanceof Error ? cause.name : "non-error"})\n`);
   report("internal", "the worker failed unexpectedly");
   void exit(EXIT_INTERNAL, undefined);
 }
 
 process.on("uncaughtException", failed);
 
-process.on("unhandledRejection", reason => failed(reason instanceof Error ? reason : new Error("rejection")));
+process.on("unhandledRejection", failed);
 
-function cleared(mapper: ActivityMapper): (steering: number, followUp: number) => void {
-  return (steering, followUp) => mapper.system("Queue cleared", `${steering} steering and ${followUp} follow-up message(s) were discarded before abort.`, false);
-}
-
+/** Routes service frames: the first opens the session, the rest go to its `SessionHost`. */
 class Server {
-  private readonly mapper = new ActivityMapper(item => { void channel.send(item); });
-  private readonly ui = new UiBridge(body => { void channel.send(body); }, (title, text, isError) => this.mapper.system(title, text, isError));
+  private readonly mapper = new ActivityMapper(emit);
+  private readonly ui = new UiBridge(emit, this.mapper.system);
   private host: SessionHost | undefined;
-  private delivery = Promise.resolve();
-  private preparing = 0;
-  private inputEpoch = 0;
 
   async run(): Promise<void> {
     try {
@@ -69,12 +65,12 @@ class Server {
         if (status !== undefined) return exit(status, this.host);
       }
 
-      await this.settle();
+      await this.host?.abort();
 
       return exit(EXIT_OK, this.host);
     } catch (error) {
       if (!(error instanceof InboundError)) throw error;
-      this.cancelInputs();
+      this.host?.cancelInputs();
       report("protocol_violation", error.message);
 
       return exit(EXIT_PROTOCOL, this.host);
@@ -89,7 +85,7 @@ class Server {
       return EXIT_PROTOCOL;
     }
 
-    const opening = new SessionHost(body, item => { void channel.send(item); }, this.ui, session => session.subscribe(event => this.mapper.handle(event)), (title, text, isError) => this.mapper.system(title, text, isError));
+    const opening = new SessionHost(body, emit, this.ui, this.mapper);
 
     try {
       await opening.open();
@@ -101,7 +97,6 @@ class Server {
     }
 
     this.host = opening;
-    await channel.send({ kind: "worker.ready", pi_session_id: opening.session.sessionId, session_file: opening.session.sessionFile ?? body.session_dir });
     opening.announce();
 
     return undefined;
@@ -115,17 +110,16 @@ class Server {
 
         return EXIT_PROTOCOL;
       case "input.deliver":
-        await this.enqueue(host, body);
+        await host.enqueue(body);
 
         return undefined;
       case "session.abort":
-        this.cancelInputs();
-        host.session.abortCompaction();
-        await abort(host.session, cleared(this.mapper));
+        await host.abort();
 
         return undefined;
       case "session.command":
-        await this.command(host, body);
+        // Not awaited: a command can wait for a dialog that a later frame answers.
+        void host.command(body).then(emit);
 
         return undefined;
       case "ui.respond": {
@@ -137,7 +131,7 @@ class Server {
       }
 
       case "worker.shutdown":
-        await this.settle();
+        await host.abort();
 
         return EXIT_OK;
       default: {
@@ -146,50 +140,6 @@ class Server {
         return unhandled;
       }
     }
-  }
-
-  private cancelInputs(): void {
-    this.inputEpoch++;
-    this.ui.cancel();
-  }
-
-  /** Cancels pending inputs and aborts a running turn before the worker exits. */
-  private async settle(): Promise<void> {
-    this.cancelInputs();
-
-    if (this.host?.session.isStreaming) await abort(this.host.session, cleared(this.mapper));
-  }
-
-  private async enqueue(host: SessionHost, body: DeliverBody): Promise<void> {
-    const session = host.session;
-    await channel.send({ kind: "input.received", input_id: body.input_id });
-    const epoch = this.inputEpoch;
-    this.preparing++;
-    this.delivery = this.delivery.then(() => this.deliverInput(session, host.gate, body, epoch));
-    await this.ui.runUntilDialog(() => this.delivery);
-  }
-
-  private async deliverInput(session: AgentSession, gate: InputGate, body: DeliverBody, epoch: number): Promise<void> {
-    const current = (): boolean => epoch === this.inputEpoch;
-
-    try {
-      if (!current()) return;
-      await deliver(session, gate, body, error => report("session_failed", error.message), current);
-    } catch (error) {
-      if (current()) report("delivery_failed", error instanceof Error ? error.message : "input was rejected");
-    } finally {
-      this.preparing--;
-    }
-  }
-
-  private async command(host: SessionHost, body: CommandBody): Promise<void> {
-    if (this.preparing > 0) {
-      await channel.send({ kind: "session.result", command_id: body.command_id, ok: false, message: "input delivery is in progress; answer its dialog, stop or wait for it to finish" });
-
-      return;
-    }
-
-    void host.command(body).then(result => channel.send(result));
   }
 }
 

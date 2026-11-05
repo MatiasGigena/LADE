@@ -16,6 +16,9 @@ type StreamEvent = Extract<AgentSessionEvent, { type: "message_update" }>["assis
 
 type ToolOutput = Pick<AgentToolResult<void>, "content">;
 
+/** Reports a worker-side event to the user as a `system` activity item. */
+export type SystemNotice = (title: string, text: string, isError: boolean) => void;
+
 interface Bounded { text: string; truncated: boolean; bytes: number }
 
 export function boundText(text: string): Bounded {
@@ -92,9 +95,9 @@ export class ActivityMapper {
     }
   }
 
-  system(title: string, text: string, isError: boolean): void {
+  readonly system: SystemNotice = (title, text, isError) => {
     this.item(newId(), "system", title, text, isError, undefined);
-  }
+  };
 
   private compactionEnd(reason: string, aborted: boolean, willRetry: boolean, error: string | undefined, tokensBefore: number | undefined): void {
     if (aborted) this.system("Compaction aborted", `Context compaction (${reason}) was aborted.`, false);

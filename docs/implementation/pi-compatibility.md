@@ -40,7 +40,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| Resume the Objective's session | Supported | `worker.start` carries the recorded `session_file` of the current association, so resume reopens exactly that pi session (also after a fork or import) | `worker.test.ts` resume; S `tree_fork_export_import_…` [integrated] |
+| Resume the Objective's session | Supported | `worker.start` carries the recorded `session_file` of the current association, so resume reopens exactly that pi session (also after a fork or import); a `session_file` outside `<session_dir>/sessions/` fails the start with `startup_failed` | `worker.test.ts` resume; S `tree_fork_export_import_…` [integrated] |
 | Session tree inspection | Supported | `session.tree` → the last 1024 entries (`message`, `compaction`, `branch_summary`, `model_change`, `thinking_change`, `label`, `custom`, …) with leaf and `truncated` | W "tree navigation …"; S [integrated] |
 | Tree navigation ("go here") | Supported | `session.navigate` moves pi's leaf only (`navigateTree`, no summary). **Files in the worktree are never rewound**; the Change Set is unaffected. Needs an idle session | W asserts the worktree file is unchanged after navigating [integrated] |
 | Fork / clone | Supported | `session.fork {entry_id, position: before|at}` → pi `AgentSessionRuntime.fork`. The service **rebinds** the Objective to a new LADE session id (association revision + 1): input or feedback addressed to the old session is refused as `stale_association`; a system item says no approval, verification or Git state was carried over | W; S (`stale_association` after fork) [integrated] |
