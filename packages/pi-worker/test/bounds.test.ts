@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import clientSchema from "../../../contracts/v1/schema.json" with { type: "json" };
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { Reassembler } from "./reference/chunks.ts";
@@ -6,7 +7,7 @@ import { decode, decodeWorkerFrame, isServiceToWorker, isWorkerToService, MAX_CH
 import { decoder, encode, encodeWorkerBody } from "./reference/framing.ts";
 import type { WorkerBody } from "../src/dto.ts";
 import { RequestHistory } from "./reference/history.ts";
-import { boundedJson, WireError, MAX_FRAME, MAX_NODES } from "../src/json.ts";
+import { boundedJson, WireError, MAX_FRAME, MAX_NODES, MAX_STRING } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 
 function id(n: number): string { return `00000000-0000-4000-8000-${n.toString(16).padStart(12, "0")}`; }
@@ -145,7 +146,7 @@ test("draft and input pages round-trip at the exact frame bound and reject one b
     let remaining = MAX_FRAME - Buffer.byteLength(JSON.stringify(page));
 
     for (const record of records) {
-      const max = draft ? 256 * 1024 : 1024;
+      const max = draft ? MAX_STRING : clientSchema.$defs.Preview.maxLength;
       const controls = Math.min(max, Math.floor(remaining / 6));
       const ascii = Math.min(max - controls, remaining - controls * 6);
       record[field] = "\u0001".repeat(controls) + "a".repeat(ascii);
