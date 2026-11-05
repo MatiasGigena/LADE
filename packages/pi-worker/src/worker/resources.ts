@@ -22,7 +22,9 @@ const MAX_RESOURCES = 256;
 
 export const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
-export class HashError extends Error {}
+class HashError extends Error {
+  readonly name = "HashError";
+}
 
 function walk(root: string, dir: string, depth: number, files: string[]): void {
   if (depth > MAX_DEPTH) throw new HashError("extension directory is nested too deeply");

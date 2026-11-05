@@ -12,9 +12,16 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 
+/**
+ * Rejection codes of the bounded parser, the frame codecs and the conformance corpus (`contracts/v1/fixtures.json`);
+ * the same wire codes as the Rust `lade_protocol::WireError`.
+ */
+export type WireCode = "closed" | "truncated_frame" | "frame_size" | "invalid_utf8" | "invalid_json" | "duplicate_key" | "invalid_schema" | "version_mismatch" | "limit_reached" | "stale_execution" | "chunk_order" | "chunk_length" | "chunk_checksum" | "duplicate_conflict";
+
 export class WireError extends Error {
-  readonly code: string;
-  constructor(code: string) { super(code); this.code = code; }
+  readonly name = "WireError";
+  readonly code: WireCode;
+  constructor(code: WireCode) { super(code); this.code = code; }
 }
 
 /** Orders strings by UTF-16 code unit: the order of `Array.prototype.sort` without a comparator. */

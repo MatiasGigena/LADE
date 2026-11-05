@@ -20,12 +20,12 @@ type RuntimeOptions = Parameters<CreateAgentSessionRuntimeFactory>[0];
 
 type ChangeReason = Extract<WorkerToService, { kind: "session.changed" }>["reason"];
 
+/** A failure to open the session, reported to the service with its code and message. */
 export class StartError extends Error {
+  readonly name = "StartError";
   readonly code: WorkerErrorCode;
   constructor(code: WorkerErrorCode, message: string) { super(message); this.code = code; }
 }
-
-class CommandError extends Error {}
 
 function isThinking(level: string): level is ThinkingLevel {
   return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level);
@@ -68,9 +68,13 @@ export class SessionHost {
   }
 
   get session(): AgentSession {
-    if (!this.runtimeHost) throw new StartError("internal", "session runtime is not open");
+    return this.runtime.session;
+  }
 
-    return this.runtimeHost.session;
+  private get runtime(): AgentSessionRuntime {
+    if (!this.runtimeHost) throw new Error("session runtime is not open");
+
+    return this.runtimeHost;
   }
 
   async open(): Promise<void> {
@@ -126,7 +130,7 @@ export class SessionHost {
     const services: AgentSessionServices = { cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader, diagnostics: [] };
     const model = modelRuntime.getModel(this.model.provider, this.model.id);
 
-    if (!model) throw new StartError("startup_failed", "the requested model is not registered");
+    if (!model) throw new Error("the requested model is not registered");
     const options: Parameters<typeof createAgentSessionFromServices>[0] = { services, sessionManager, model, tools: WORKER_TOOLS };
 
     if (sessionStartEvent) options.sessionStartEvent = sessionStartEvent;
@@ -247,14 +251,12 @@ export class SessionHost {
   }
 
   private idle(what: string): void {
-    if (this.session.isStreaming || this.session.isCompacting) throw new CommandError(`${what} needs an idle session; stop or wait for the current turn`);
+    if (this.session.isStreaming || this.session.isCompacting) throw new Error(`${what} needs an idle session; stop or wait for the current turn`);
   }
 
   private async execute(body: CommandBody, result: ResultBody): Promise<void> {
     const command = body.command;
-    const runtime = this.runtimeHost;
-
-    if (!runtime) throw new CommandError("session runtime is not open");
+    const runtime = this.runtime;
     const session = runtime.session;
 
     switch (command.op) {
@@ -271,11 +273,11 @@ export class SessionHost {
       case "import":
         this.idle("importing");
 
-        if (!isInside(join(this.start.session_dir, "imports"), command.path)) throw new CommandError("imports are read only from the service's import directory");
+        if (!isInside(join(this.start.session_dir, "imports"), command.path)) throw new Error("imports are read only from the service's import directory");
 
         return this.replaceSession("import", () => runtime.importFromJsonl(command.path, this.start.cwd));
       case "export":
-        if (!isInside(join(this.start.session_dir, "exports"), command.path)) throw new CommandError("exports are written only to the service's export directory");
+        if (!isInside(join(this.start.session_dir, "exports"), command.path)) throw new Error("exports are written only to the service's export directory");
         mkdirSync(dirname(command.path), { recursive: true, mode: 0o700 });
         session.exportToJsonl(command.path);
 
@@ -289,7 +291,7 @@ export class SessionHost {
       case "reload":
         this.idle("reload");
 
-        if (!isInside(this.start.session_dir, command.resources.profile_dir)) throw new CommandError("the profile snapshot must be inside session_dir");
+        if (!isInside(this.start.session_dir, command.resources.profile_dir)) throw new Error("the profile snapshot must be inside session_dir");
 
         return this.reload(command.resources);
       case "configure":
@@ -315,10 +317,10 @@ export class SessionHost {
   private async navigate(session: AgentSession, entryId: string): Promise<void> {
     this.idle("tree navigation");
 
-    if (!session.sessionManager.getEntry(entryId)) throw new CommandError("no such session entry");
+    if (!session.sessionManager.getEntry(entryId)) throw new Error("no such session entry");
     const outcome = await session.navigateTree(entryId, { summarize: false });
 
-    if (outcome.cancelled) throw new CommandError("tree navigation was cancelled by an extension");
+    if (outcome.cancelled) throw new Error("tree navigation was cancelled by an extension");
     this.changed("navigate");
   }
 
@@ -329,7 +331,7 @@ export class SessionHost {
 
     if (!outcome.cancelled) return;
     this.reason = "start";
-    throw new CommandError(`${reason} was cancelled by an extension`);
+    throw new Error(`${reason} was cancelled by an extension`);
   }
 
   private async configure(runtime: AgentSessionRuntime, model: Model, thinking: ThinkingLevel): Promise<void> {
@@ -337,7 +339,7 @@ export class SessionHost {
     const session = runtime.session;
     const registered = runtime.services.modelRuntime.getModel(model.provider, model.id);
 
-    if (!registered) throw new CommandError("the requested model is not registered");
+    if (!registered) throw new Error("the requested model is not registered");
     await session.setModel(registered);
     this.model = model;
     session.setThinkingLevel(thinking);

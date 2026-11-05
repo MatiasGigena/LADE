@@ -2,6 +2,8 @@ import { once } from "node:events";
 import type { EventEmitter } from "node:events";
 import type { Readable } from "node:stream";
 import type { ServiceToWorker, WorkerToService } from "../dto.ts";
+import { WireError } from "../json.ts";
+import type { WireCode } from "../json.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "./wire.ts";
 
 export const DELTA_BUDGET = 4 * 1024 * 1024;
@@ -12,6 +14,22 @@ const MAX_COALESCED_DELTA = 64 * 1024;
 const FRAME_OVERHEAD = 256;
 
 const DELTA_OVERHEAD = 128;
+
+/** A service frame the decoder rejected: a protocol violation, unlike a `WireError` raised for the worker's own frames. */
+export class InboundError extends Error {
+  readonly name = "InboundError";
+  readonly code: WireCode;
+  constructor(code: WireCode) { super(`rejected inbound frame (${code})`); this.code = code; }
+}
+
+/** Runs one decoder step, reporting its rejection as an `InboundError`. */
+function decoded(step: () => void): void {
+  try {
+    step();
+  } catch (error) {
+    throw error instanceof WireError ? new InboundError(error.code) : error;
+  }
+}
 
 function weight(body: WorkerToService): number {
   switch (body.kind) {
@@ -71,11 +89,11 @@ export class StdioChannel {
     const frames: ServiceToWorker[] = [];
 
     for await (const chunk of this.input) {
-      decoder.push(Buffer.from(chunk), frame => { frames.push(frame); });
+      decoded(() => decoder.push(Buffer.from(chunk), frame => { frames.push(frame); }));
 
       for (let frame = frames.shift(); frame !== undefined; frame = frames.shift()) yield frame;
     }
 
-    decoder.finish();
+    decoded(() => decoder.finish());
   }
 }

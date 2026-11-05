@@ -1,9 +1,10 @@
+// Must stay the first import: stdio.ts redirects console and stdout to stderr before every other module (above all the SDK)
+// is evaluated, so that only protocol frames reach stdout.
 import { writeFrame } from "./worker/stdio.ts";
-import { WireError } from "./json.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServiceToWorker, WorkerErrorCode } from "./dto.ts";
 import { ActivityMapper } from "./worker/activity.ts";
-import { StdioChannel } from "./worker/channel.ts";
+import { InboundError, StdioChannel } from "./worker/channel.ts";
 import { installGateway, installNoNetwork } from "./worker/gateway.ts";
 import { abort, deliver, SessionHost, StartError } from "./worker/session.ts";
 import type { InputGate } from "./worker/session.ts";
@@ -11,13 +12,13 @@ import { safeMessage } from "./worker/text.ts";
 import { UiBridge } from "./worker/ui.ts";
 import type { CommandBody, DeliverBody } from "./worker/wire.ts";
 
-export const EXIT_OK = 0;
+const EXIT_OK = 0;
 
-export const EXIT_START = 1;
+const EXIT_START = 1;
 
-export const EXIT_PROTOCOL = 2;
+const EXIT_PROTOCOL = 2;
 
-export const EXIT_INTERNAL = 70;
+const EXIT_INTERNAL = 70;
 
 const gatewaySocket = process.env.LADE_GATEWAY_SOCKET;
 
@@ -46,7 +47,7 @@ function failed(error: Error): void {
 
 process.on("uncaughtException", failed);
 
-process.on("unhandledRejection", (reason: Error) => failed(reason instanceof Error ? reason : new Error("rejection")));
+process.on("unhandledRejection", reason => failed(reason instanceof Error ? reason : new Error("rejection")));
 
 function cleared(mapper: ActivityMapper): (steering: number, followUp: number) => void {
   return (steering, followUp) => mapper.system("Queue cleared", `${steering} steering and ${followUp} follow-up message(s) were discarded before abort.`, false);
@@ -72,9 +73,9 @@ class Server {
 
       return exit(EXIT_OK, this.host);
     } catch (error) {
-      if (!(error instanceof WireError)) throw error;
+      if (!(error instanceof InboundError)) throw error;
       this.cancelInputs();
-      report("protocol_violation", `rejected inbound frame (${error.code})`);
+      report("protocol_violation", error.message);
 
       return exit(EXIT_PROTOCOL, this.host);
     }

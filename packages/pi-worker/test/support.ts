@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
 import { boundedJson, MAX_ENTRIES, MAX_NODES, WireError } from "../src/json.ts";
+import type { WireCode } from "../src/json.ts";
 import { BUNDLE, decode, decodeWorkerFrame } from "./reference/protocol.ts";
 import { decoder, encode, encodeWorker } from "./reference/framing.ts";
 import type { Framing } from "./reference/framing.ts";
@@ -52,7 +53,9 @@ function framed(bytes: Buffer, framing: Framing): Buffer {
   return Buffer.concat([head, bytes]);
 }
 
-function outcome(action: () => void): string {
+type Outcome = WireCode | "ok";
+
+function outcome(action: () => void): Outcome {
   try {
     action();
 
@@ -87,7 +90,7 @@ function reassemblyContext(fixture: Fixture) {
   return { owner: envelope.body.owner, generation: envelope.body.execution_generation };
 }
 
-function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
+function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): Outcome {
   const frames = decoder(framing, codec.decode);
   let count = 0;
 
@@ -116,7 +119,7 @@ function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, str
   });
 }
 
-function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
+function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): Outcome {
   let previous = outcome(() => assert.deepEqual(codec.decode(bytes), boundedJson(bytes)));
 
   for (const framing of ["client", "worker"] as const) {
@@ -132,17 +135,12 @@ function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
   return previous;
 }
 
-function transportCase<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing): string {
-  let previous: string | undefined;
+function transportCase<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing): Outcome {
+  const [first, ...others] = [1, 3, LARGE_STRIDE, bytes.length].map(stride => stream(codec, bytes, framing, stride, 0));
 
-  for (const stride of [1, 3, LARGE_STRIDE, bytes.length]) {
-    const result = stream(codec, bytes, framing, stride, 0);
+  for (const result of others) assert.equal(result, first);
 
-    if (previous !== undefined) assert.equal(result, previous);
-    previous = result;
-  }
-
-  return previous ?? "missing_result";
+  return first ?? assert.fail("no transport stride ran");
 }
 
 function rejected(code: "interrupted" | "durability_failure"): ReplyResult {
@@ -200,7 +198,7 @@ const MODES = new Map<string, (c: Fixture) => void>([
   ["history", historyMode],
 ]);
 
-export function run(c: Fixture): string {
+export function run(c: Fixture): Outcome {
   const mode = MODES.get(c.mode);
 
   if (mode === undefined) throw new Error("unknown fixture mode");

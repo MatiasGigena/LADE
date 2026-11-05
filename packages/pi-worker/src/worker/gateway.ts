@@ -20,9 +20,17 @@ const HEADER_END = "\r\n\r\n";
 
 const AUTHORITY = /^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}$/;
 
-export class GatewayError extends Error {
-  readonly code: string;
-  constructor(code: string, message: string) { super(message); this.code = code; }
+type GatewayCode = "network_unavailable" | "gateway_timeout" | "gateway_protocol" | "gateway_refused" | "gateway_target";
+
+class GatewayError extends Error {
+  readonly name = "GatewayError";
+  readonly code: GatewayCode;
+  constructor(code: GatewayCode, message: string) { super(message); this.code = code; }
+}
+
+/** A tunnel rejection as an Error; `tunnel` itself rejects only with `GatewayError`s and socket errors. */
+function tunnelFailure(cause: unknown): Error {
+  return cause instanceof Error ? cause : new GatewayError("gateway_protocol", "gateway tunnel failed");
 }
 
 function networkUnavailable(): GatewayError {
@@ -144,7 +152,7 @@ class GatewayHttpAgent extends http.Agent {
   override createConnection(options: ClientRequestArgs, callback: Connected): undefined {
     tunnel(this.socketPath, authorityOf(hostOf(options), options.port ?? HTTP_PORT)).then(
       socket => { callback(null, socket); socket.resume(); },
-      (error: Error) => callback(error),
+      cause => callback(tunnelFailure(cause)),
     );
   }
 }
@@ -163,7 +171,7 @@ class GatewayHttpsAgent extends https.Agent {
 
     tunnel(this.socketPath, authorityOf(host, options.port ?? HTTPS_PORT)).then(
       socket => secure(socket, options, host, servername, callback),
-      (error: Error) => callback(error),
+      cause => callback(tunnelFailure(cause)),
     );
   }
 }
@@ -191,7 +199,7 @@ function connectThrough(socketPath: string, tls: buildConnector.connector, optio
   tunnel(socketPath, authorityOf(options.hostname, options.port || (encrypted ? HTTPS_PORT : HTTP_PORT))).then(socket => {
     if (encrypted) tls({ ...options, httpSocket: socket }, callback);
     else callback(null, socket);
-  }, (error: Error) => callback(error, null));
+  }, cause => callback(tunnelFailure(cause), null));
 }
 
 export function installGateway(socketPath: string): void {

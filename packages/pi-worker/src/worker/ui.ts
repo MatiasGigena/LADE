@@ -25,7 +25,8 @@ const BACKGROUNDS: ThemeBackgrounds = { selectedBg: "", userMessageBg: "", custo
 
 const PLAIN = new Theme(COLORS, BACKGROUNDS, "256color", { name: "lade-plain" });
 
-export class UnsupportedUiError extends Error {
+class UnsupportedUiError extends Error {
+  readonly name = "UnsupportedUiError";
   constructor(surface: string) { super(`LADE does not support the extension UI surface "${surface}" (terminal-only); the request fails instead of being answered`); }
 }
 
