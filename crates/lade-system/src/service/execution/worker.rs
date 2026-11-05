@@ -138,15 +138,13 @@ impl Service {
             return;
         }
         let session = st.objective().execution().session().map(|s| s.session_id);
-        let committed = self.commit(None, None, |tx| {
-            Self::save_tx(tx, &st)?;
+        let committed = self.commit_obj_with(None, None, st, |tx| {
             if let Some(session) = session {
                 storage::record_pi_session(tx, session, pi_session_id, session_file)?;
             }
             Ok(())
         });
         if Self::persisted("the ready worker", oid, committed) {
-            self.objectives.insert(oid, st);
             self.emit_objective(oid);
             self.dispatch_queued(oid, None);
         }
@@ -231,8 +229,7 @@ impl Service {
             }
         }
         let now = now_ms();
-        let committed = self.commit(None, None, |tx| {
-            Self::save_tx(tx, &st)?;
+        let committed = self.commit_obj_with(None, None, st, |tx| {
             for input in &lost {
                 storage::save_delivery(tx, input.id, &input.delivery, now)?;
             }
@@ -241,7 +238,6 @@ impl Service {
         if !Self::persisted("the worker exit", oid, committed) {
             return;
         }
-        self.objectives.insert(oid, st);
         for input in &lost {
             self.emit(Event::InputChanged(wire_input(input)));
         }

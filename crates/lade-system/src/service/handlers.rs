@@ -7,6 +7,7 @@ use lade_protocol::client::{
     ReplyData, Request, Settings, SnapshotData,
 };
 use lade_protocol::types::{Counter, Id};
+use rusqlite::Transaction;
 
 use crate::storage;
 
@@ -65,7 +66,22 @@ impl Service {
         outcome: Option<&ReplyData>,
         st: ObjState,
     ) -> Result<(), Rejection> {
-        self.commit(ctx, outcome, |tx| Self::save_tx(tx, &st))?;
+        self.commit_obj_with(ctx, outcome, st, |_| Ok(()))
+    }
+
+    /// Saves `st` together with the rows `extra` writes in one transaction, then replaces the
+    /// in-memory Objective, so the map changes only once the commit succeeds.
+    pub(crate) fn commit_obj_with(
+        &mut self,
+        ctx: Option<&mut ReqCtx>,
+        outcome: Option<&ReplyData>,
+        st: ObjState,
+        extra: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<()>,
+    ) -> Result<(), Rejection> {
+        self.commit(ctx, outcome, |tx| {
+            Self::save_tx(tx, &st)?;
+            extra(tx)
+        })?;
         self.objectives.insert(st.objective().id(), st);
         Ok(())
     }

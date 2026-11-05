@@ -215,11 +215,9 @@ impl Service {
         st.row.integration_conflict = false;
         let data = ReplyData::ReviewIntegrate(Box::new(self.fresh_detail(&st)));
         let now = now_ms();
-        self.commit(Some(ctx), Some(&data), |tx| {
-            Self::save_tx(tx, &st)?;
+        self.commit_obj_with(Some(ctx), Some(&data), st, |tx| {
             storage::update_journal(tx, journal_id, JournalState::Done, Some(&commit), None, now)
         })?;
-        self.objectives.insert(oid, st);
         Ok(data)
     }
 

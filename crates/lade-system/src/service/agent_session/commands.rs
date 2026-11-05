@@ -312,6 +312,9 @@ impl Service {
         st.objective_mut()
             .select_model(model, ts_now())
             .map_err(domain_rejection)?;
+        // `reply` reads the selected model and thinking level back from the service, and its
+        // data is journaled in the same commit, so both change first and are restored if the
+        // commit fails.
         let previous_model = self.objectives.insert(oid, st.clone());
         let previous = self.agent_sessions.thinking.insert(oid, thinking);
         let data = ReplyData::SessionConfigure(reply(self));

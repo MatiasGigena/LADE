@@ -64,14 +64,12 @@ impl Service {
         let data = ReplyData::ExecutionStart(Box::new(self.fresh_detail(&st)));
         let association = st.objective().execution().session().cloned();
         let now = now_ms();
-        self.commit(Some(ctx), Some(&data), |tx| {
-            Self::save_tx(tx, &st)?;
+        self.commit_obj_with(Some(ctx), Some(&data), st, |tx| {
             if let Some(association) = &association {
                 storage::save_session(tx, oid, association, generation.value(), now)?;
             }
             Ok(())
         })?;
-        self.objectives.insert(oid, st);
         self.launch(oid, false);
         self.emit_objective(oid);
         Ok(data)
@@ -152,8 +150,7 @@ impl Service {
         }
         let data = ReplyData::ExecutionResume(Box::new(self.fresh_detail(&st)));
         let now = now_ms();
-        self.commit(Some(ctx), Some(&data), |tx| {
-            Self::save_tx(tx, &st)?;
+        self.commit_obj_with(Some(ctx), Some(&data), st, |tx| {
             if let Some(association) = &association {
                 storage::save_session(tx, oid, association, generation.value(), now)?;
             }
@@ -162,7 +159,6 @@ impl Service {
             }
             Ok(())
         })?;
-        self.objectives.insert(oid, st);
         for input in &requeued {
             self.emit(Event::InputChanged(wire_input(input)));
         }
