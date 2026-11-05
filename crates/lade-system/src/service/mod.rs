@@ -434,20 +434,26 @@ impl Service {
 
 /// Logs a store failure in `Service::commit` with its stage and cause, then rejects with
 /// `detail`.
-fn store_failed(
+/// Logs a store failure at `stage` with its cause and rejects with `detail`: the policy for every
+/// SQLite error a request meets.
+pub(crate) fn store_failed(
     stage: &'static str,
     detail: &'static str,
 ) -> impl Fn(rusqlite::Error) -> Rejection {
     move |e| {
-        eprintln!("laded: store {stage} failed: {}", sql_code(&e));
+        eprintln!("laded: store {stage} failed: {}", sql_cause(&e));
         durability(detail)
     }
 }
 
-fn sql_code(error: &rusqlite::Error) -> &'static str {
+/// The cause of a store failure for the log: SQLite's primary and extended result codes, which
+/// tell a full disk, a busy or locked database and corruption apart, or the kind of mapping error.
+fn sql_cause(error: &rusqlite::Error) -> String {
     match error {
-        rusqlite::Error::SqliteFailure(_, _) => "sqlite_failure",
-        rusqlite::Error::InvalidColumnType(..) => "invalid_column",
-        _ => "sql_error",
+        rusqlite::Error::SqliteFailure(e, _) => {
+            format!("sqlite {:?} (extended code {})", e.code, e.extended_code)
+        }
+        rusqlite::Error::InvalidColumnType(..) => "invalid_column".into(),
+        _ => "sql_error".into(),
     }
 }

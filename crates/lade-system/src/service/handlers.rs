@@ -11,15 +11,19 @@ use rusqlite::Transaction;
 
 use crate::storage;
 
-use super::convert::{conflict, durability, not_found, parse_uuid};
+use super::convert::{conflict, not_found, parse_uuid};
 use super::state::{ObjState, Runtime, WsState};
-use super::{Completed, Flow, ReqCtx, Service};
+use super::{Completed, Flow, ReqCtx, Service, store_failed};
 
 pub(super) const SNAPSHOT_OBJECTIVES: usize = 400;
 const SNAPSHOT_BRANCHES: usize = 64;
 
+/// A store read or write outside [`Service::commit`], logged and rejected as `commit` does.
 pub(crate) fn sql<T>(result: rusqlite::Result<T>) -> Result<T, Rejection> {
-    result.map_err(|_| durability("LADE couldn't record this, so nothing was changed. Try again."))
+    result.map_err(store_failed(
+        "query",
+        "LADE couldn't reach its records, so nothing was changed. Try again.",
+    ))
 }
 
 impl Service {
