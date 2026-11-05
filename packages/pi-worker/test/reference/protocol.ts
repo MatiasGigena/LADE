@@ -5,7 +5,7 @@ import type { JsonValue } from "../../src/json.ts";
 import { matches, versioned } from "../../src/schema.ts";
 import type { Contract } from "../../src/schema.ts";
 
-export { BUNDLE, counter, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_ITEM_TEXT_BYTES, MAX_PATH_BYTES, MAX_TRANSFER, MAX_TRANSFERS, newId, parseId, record, VERSION } from "../../src/schema.ts";
+export { BUNDLE, counter, isServiceToWorker, isWorkerToService, MAX_CHUNK, MAX_ITEM_TEXT_BYTES, MAX_PATH_BYTES, MAX_TRANSFER, MAX_TRANSFERS, isRecord, newId, parseId, VERSION } from "../../src/schema.ts";
 
 export { decodeWorkerFrame, validateWorker } from "../../src/worker/contract.ts";
 

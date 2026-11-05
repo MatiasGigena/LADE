@@ -35,7 +35,7 @@ export interface Schema {
 
 export interface Contract { root: Schema; definitions: Record<string, Schema> }
 
-export function record(value: JsonValue): value is JsonObject {
+export function isRecord(value: JsonValue | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -117,7 +117,7 @@ export function matches(value: JsonValue, definition: Schema, contract: Contract
       const properties = definition.properties;
       const required = definition.required;
 
-      return properties !== undefined && required !== undefined && record(value) &&
+      return properties !== undefined && required !== undefined && isRecord(value) &&
         required.every(key => Object.hasOwn(value, key)) &&
         Object.keys(value).every(key => {
           const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
@@ -154,7 +154,7 @@ export function matches(value: JsonValue, definition: Schema, contract: Contract
 }
 
 export function versioned(value: JsonValue): JsonObject {
-  if (!record(value) || value.protocol !== VERSION || value.bundle !== BUNDLE) throw new WireError("version_mismatch");
+  if (!isRecord(value) || value.protocol !== VERSION || value.bundle !== BUNDLE) throw new WireError("version_mismatch");
 
   return value;
 }

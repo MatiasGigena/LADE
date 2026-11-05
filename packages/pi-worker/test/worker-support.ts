@@ -10,7 +10,7 @@ import { boundedJson } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { piEnvironment } from "../src/worker/session.ts";
-import { BUNDLE, VERSION } from "../src/schema.ts";
+import { BUNDLE, isRecord, VERSION } from "../src/schema.ts";
 
 export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "worker.ts");
 
@@ -28,10 +28,6 @@ export function sandbox(): Sandbox {
 
 export function cleanup(box: Sandbox): void {
   rmSync(box.root, { recursive: true, force: true });
-}
-
-function isRecord(value: JsonValue | undefined): value is JsonObject {
-  return value !== null && value !== undefined && !Array.isArray(value) && value === Object(value);
 }
 
 export function record(value: JsonValue | undefined): JsonObject {

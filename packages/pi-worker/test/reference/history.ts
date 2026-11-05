@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Body, Id, Reply } from "../../src/dto.ts";
 import { WireError } from "../../src/json.ts";
 import type { JsonValue } from "../../src/json.ts";
-import { record } from "./protocol.ts";
+import { isRecord } from "./protocol.ts";
 
 export type ReplyResult = Reply["result"];
 
@@ -17,7 +17,7 @@ export class RequestHistory {
     function canonical(value: JsonValue): JsonValue {
       if (Array.isArray(value)) return value.map(canonical);
 
-      if (record(value)) {
+      if (isRecord(value)) {
         return Object.fromEntries(Object.keys(value).sort().map(key => {
           const entry = value[key];
 
