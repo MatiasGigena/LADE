@@ -23,6 +23,15 @@ const MODES: [DeliveryMode; 3] = [
     DeliveryMode::FollowUp,
 ];
 
+/// The delivery mode at a mode dropdown position. With no selection (GTK reports
+/// `INVALID_LIST_POSITION`) a message is a plain prompt.
+fn mode_at(position: u32) -> DeliveryMode {
+    MODES
+        .get(position as usize)
+        .copied()
+        .unwrap_or(DeliveryMode::Prompt)
+}
+
 fn fit(container: &gtk::Box) {
     container.set_visible(container.first_child().is_some());
 }
@@ -156,7 +165,7 @@ impl Activity {
             160,
         )));
         let row = hbox(space::GROUP);
-        let mode = widgets::dropdown(&["Prompt", "Steer", "Follow-up"]);
+        let mode = widgets::dropdown(&MODES.map(format::mode_label));
         mode.set_hexpand(false);
         set_accessible_label(&mode, "Delivery mode");
         mode.set_valign(gtk::Align::Center);
@@ -215,11 +224,7 @@ impl Activity {
             scroll_pending: Cell::new(false),
         });
         let set_explain = move |d: &gtk::DropDown| {
-            let mode = MODES
-                .get(d.selected() as usize)
-                .copied()
-                .unwrap_or(DeliveryMode::Prompt);
-            explain.set_text(format::mode_explanation(mode));
+            explain.set_text(format::mode_explanation(mode_at(d.selected())));
         };
         set_explain(&activity.mode);
         let this = Rc::downgrade(&activity);
@@ -284,12 +289,12 @@ impl Activity {
     }
 
     fn store_composer(&self) {
-        let mode = MODES[self.mode.selected() as usize % MODES.len()];
+        let mode = mode_at(self.mode.selected());
         self.controller.set_composer(&self.composer_text(), mode);
     }
 
     pub fn send(&self) {
-        let mode = MODES[self.mode.selected() as usize % MODES.len()];
+        let mode = mode_at(self.mode.selected());
         widgets::clear(&self.composer_error);
         match self.controller.send_message(&self.composer_text(), mode) {
             Ok(()) => {

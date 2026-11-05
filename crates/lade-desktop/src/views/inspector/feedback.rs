@@ -288,7 +288,10 @@ impl Inspector {
             return;
         };
         let s = section("Submit feedback");
-        let mode = widgets::dropdown_or(&["Steer", "Follow-up"], "No delivery mode available");
+        let mode = widgets::dropdown_or(
+            &FEEDBACK_MODES.map(format::mode_label),
+            "No delivery mode available",
+        );
         set_accessible_label(&mode, "Delivery mode");
         set_focus_key(&mode, "submit:mode");
         if let Some(index) = FEEDBACK_MODES
