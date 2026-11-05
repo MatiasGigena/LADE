@@ -50,6 +50,43 @@ fn history_too_large() -> Rejection {
     )
 }
 
+/// One page of `eligible` (sorted, and already past the request's cursor) that fits a reply
+/// frame: at most `limit` items, stopping before the first that would push the reply over
+/// `MAX_FRAME`. `to_wire` gives an item's wire form, its JSON length and the cursor that resumes
+/// after it, and
+/// `reply` wraps a page with its next cursor (`None` when nothing is left). When not even the
+/// first item fits, the page is refused as too large rather than returned empty.
+fn page_within_frame<E, T, C: Clone>(
+    request_id: &Id,
+    eligible: &[E],
+    limit: usize,
+    to_wire: impl Fn(&E) -> (T, usize, C),
+    reply: impl Fn(Vec<T>, Option<C>) -> ReplyData,
+) -> Result<ReplyData, Rejection> {
+    let mut items = Vec::new();
+    let mut content_bytes: usize = 0;
+    let mut last = None;
+    for (index, item) in eligible.iter().enumerate().take(limit) {
+        let (wire, wire_len, cursor) = to_wire(item);
+        let more = index + 1 < eligible.len();
+        let overhead = reply_json_len(request_id, reply(Vec::new(), more.then(|| cursor.clone())));
+        let next_content = content_bytes
+            .saturating_add(usize::from(!items.is_empty()))
+            .saturating_add(wire_len);
+        if overhead.saturating_add(next_content) > MAX_FRAME {
+            break;
+        }
+        items.push(wire);
+        content_bytes = next_content;
+        last = Some(cursor);
+    }
+    if items.is_empty() && !eligible.is_empty() {
+        return Err(history_too_large());
+    }
+    let next_after = (items.len() < eligible.len()).then_some(last).flatten();
+    Ok(reply(items, next_after))
+}
+
 impl Service {
     pub(super) fn drafts_list(
         &self,
@@ -73,42 +110,21 @@ impl Service {
             })
             .collect();
         eligible.sort_by_key(|draft| (draft.record().created_at.unix_ms(), draft.id()));
-        let mut drafts = Vec::new();
-        let mut content_bytes: usize = 0;
-        let mut last = None;
-        for (index, draft) in eligible
-            .iter()
-            .enumerate()
-            .take(query.limit.value() as usize)
-        {
-            let wire = wire_draft(st, draft);
-            let cursor = DraftCursor {
-                created_at: wire_ts(draft.record().created_at.unix_ms()),
-                draft_id: wire.draft_id.clone(),
-            };
-            let more = index + 1 < eligible.len();
-            let overhead = reply_json_len(
-                request_id,
-                ReplyData::DraftsList(DraftList {
-                    drafts: Vec::new(),
-                    next_after: more.then_some(cursor.clone()),
-                }),
-            );
-            let next_content = content_bytes
-                .saturating_add(usize::from(!drafts.is_empty()))
-                .saturating_add(json_len(&wire));
-            if overhead.saturating_add(next_content) > MAX_FRAME {
-                break;
-            }
-            drafts.push(wire);
-            content_bytes = next_content;
-            last = Some(cursor);
-        }
-        if drafts.is_empty() && !eligible.is_empty() {
-            return Err(history_too_large());
-        }
-        let next_after = (drafts.len() < eligible.len()).then_some(last).flatten();
-        Ok(ReplyData::DraftsList(DraftList { drafts, next_after }))
+        page_within_frame(
+            request_id,
+            &eligible,
+            query.limit.value() as usize,
+            |draft| {
+                let wire = wire_draft(st, draft);
+                let cursor = DraftCursor {
+                    created_at: wire_ts(draft.record().created_at.unix_ms()),
+                    draft_id: wire.draft_id.clone(),
+                };
+                let wire_len = json_len(&wire);
+                (wire, wire_len, cursor)
+            },
+            |drafts, next_after| ReplyData::DraftsList(DraftList { drafts, next_after }),
+        )
     }
 
     pub(super) fn inputs_list(
@@ -120,39 +136,17 @@ impl Service {
         let after = query.after.as_ref().map_or(0, Counter::value);
         let mut eligible: Vec<_> = st.inputs.iter().filter(|(seq, _)| *seq > after).collect();
         eligible.sort_by_key(|(seq, _)| *seq);
-        let mut inputs = Vec::new();
-        let mut content_bytes: usize = 0;
-        let mut last = None;
-        for (index, (seq, input)) in eligible
-            .iter()
-            .enumerate()
-            .take(query.limit.value() as usize)
-        {
-            let wire = wire_input(input);
-            let cursor = Counter::new(*seq);
-            let more = index + 1 < eligible.len();
-            let overhead = reply_json_len(
-                request_id,
-                ReplyData::InputsList(InputList {
-                    inputs: Vec::new(),
-                    next_after: more.then_some(cursor.clone()),
-                }),
-            );
-            let next_content = content_bytes
-                .saturating_add(usize::from(!inputs.is_empty()))
-                .saturating_add(json_len(&wire));
-            if overhead.saturating_add(next_content) > MAX_FRAME {
-                break;
-            }
-            inputs.push(wire);
-            content_bytes = next_content;
-            last = Some(cursor);
-        }
-        if inputs.is_empty() && !eligible.is_empty() {
-            return Err(history_too_large());
-        }
-        let next_after = (inputs.len() < eligible.len()).then_some(last).flatten();
-        Ok(ReplyData::InputsList(InputList { inputs, next_after }))
+        page_within_frame(
+            request_id,
+            &eligible,
+            query.limit.value() as usize,
+            |(seq, input)| {
+                let wire = wire_input(input);
+                let wire_len = json_len(&wire);
+                (wire, wire_len, Counter::new(*seq))
+            },
+            |inputs, next_after| ReplyData::InputsList(InputList { inputs, next_after }),
+        )
     }
 
     fn check_draft_representation(
@@ -569,11 +563,13 @@ mod tests {
     use lade_protocol::client::{
         DraftDeleteCommand, ExecutionStartCommand, InputsListQuery, Request,
     };
+    use std::sync::Mutex;
+
     use lade_protocol::types::{Counter, DeliveryMode, Model, PageLimit};
 
     use super::*;
     use crate::service::convert::wire_id;
-    use crate::service::test_harness::Harness;
+    use crate::service::test_harness::{Harness, WorkerLog};
     use crate::supervision::WorkerEvent;
 
     fn start(harness: &mut Harness, id: &Id) {
@@ -597,7 +593,7 @@ mod tests {
         }))
     }
 
-    fn delivered(log: &std::sync::Mutex<crate::service::test_harness::WorkerLog>) -> Vec<String> {
+    fn delivered(log: &Mutex<WorkerLog>) -> Vec<String> {
         log.lock()
             .expect("log")
             .sent
