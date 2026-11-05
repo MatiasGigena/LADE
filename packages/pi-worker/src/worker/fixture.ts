@@ -1,6 +1,7 @@
 import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "./pi-ai.ts";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Message, Model, SimpleStreamOptions, TextContent, ToolCall, TranscriptContext } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { compareCodeUnits } from "../json.ts";
 
 export const FIXTURE_PROVIDER = "lade-fixture";
 
@@ -24,9 +25,27 @@ interface Directives { writes: Array<{ path: string; content: string }>; fail: b
 
 const DIRECTIVE = /^\s*lade-fixture:\s*([a-z]+)(?:[ \t]+(.*))?$/;
 
+const MAX_DELAY_MS = 2_000;
+
 function unescape(text: string): string {
   return text.replace(/\\(\\|n|t)/g, (_match, code: string) => code === "n" ? "\n" : code === "t" ? "\t" : "\\");
 }
+
+function addWrite(found: Directives, rest: string): void {
+  const space = rest.search(/[ \t]/);
+  const path = space < 0 ? rest : rest.slice(0, space);
+
+  if (path.length > 0) found.writes.push({ path, content: unescape(space < 0 ? "" : rest.slice(space + 1)) });
+}
+
+const VERBS = new Map<string, (found: Directives, rest: string) => void>([
+  ["fail", found => { found.fail = true; }],
+  ["echo", found => { found.echo = true; }],
+  ["system", found => { found.system = true; }],
+  ["transient", found => { found.transient = true; }],
+  ["delay", (found, rest) => { found.delayMs = Math.min(MAX_DELAY_MS, Math.max(0, Number.parseInt(rest, 10) || 0)); }],
+  ["write", addWrite],
+]);
 
 function directives(text: string): Directives {
   const found: Directives = { writes: [], fail: false, delayMs: 0, echo: false, system: false, transient: false };
@@ -34,21 +53,7 @@ function directives(text: string): Directives {
   for (const line of text.split("\n")) {
     const match = DIRECTIVE.exec(line.replace(/\r$/, ""));
 
-    if (!match) continue;
-    const verb = match[1];
-    const rest = match[2] ?? "";
-
-    if (verb === "fail") found.fail = true;
-    else if (verb === "echo") found.echo = true;
-    else if (verb === "system") found.system = true;
-    else if (verb === "transient") found.transient = true;
-    else if (verb === "delay") found.delayMs = Math.min(2_000, Math.max(0, Number.parseInt(rest, 10) || 0));
-    else if (verb === "write") {
-      const space = rest.search(/[ \t]/);
-      const path = space < 0 ? rest : rest.slice(0, space);
-
-      if (path.length > 0) found.writes.push({ path, content: unescape(space < 0 ? "" : rest.slice(space + 1)) });
-    }
+    if (match) VERBS.get(match[1] ?? "")?.(found, match[2] ?? "");
   }
 
   return found;
@@ -80,8 +85,14 @@ function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
 const transientFailed = new Set<string>();
 
-function transientKey(message: Message | undefined): string {
-  return message ? `${message.timestamp}:${userText(message)}` : "";
+/** True the first time a transient directive is seen for this user message, so its retry succeeds. */
+function firstTransientAttempt(message: Message | undefined): boolean {
+  const key = message ? `${message.timestamp}:${userText(message)}` : "";
+
+  if (transientFailed.has(key)) return false;
+  transientFailed.add(key);
+
+  return true;
 }
 
 function chunks(text: string): string[] {
@@ -94,56 +105,59 @@ function chunks(text: string): string[] {
   return out;
 }
 
-function plan(context: TranscriptContext): Script {
+type Reply = Omit<Script, "delayMs">;
+
+function textReply(text: string): Reply {
+  return { text, calls: [], fail: false };
+}
+
+function toolSummary(results: ReadonlyArray<{ isError: boolean }>): Reply {
+  const failed = results.filter(result => result.isError).length;
+
+  return textReply(`lade-fixture: ${results.length - failed} of ${results.length} tool call(s) succeeded. Done.`);
+}
+
+function systemMarkers(context: TranscriptContext): Reply {
+  const markers = [...new Set(getCurrentSystemPrompt(context.messages).match(MARKER) ?? [])].sort(compareCodeUnits);
+
+  return textReply(`lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`);
+}
+
+function writeCalls(writes: Directives["writes"], users: number): Reply {
+  return {
+    text: `lade-fixture: writing ${writes.length} file(s) with the write tool.`,
+    calls: writes.map((write, n) => ({ type: "toolCall", id: `lade-fixture-${users}-${n + 1}`, name: "write", arguments: { path: write.path, content: write.content } })),
+    fail: false,
+  };
+}
+
+function reply(context: TranscriptContext, lastUser: number, script: Directives): Reply {
   const messages = context.messages;
-  let lastUser = -1;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") { lastUser = i; break; }
-  }
-
   const latest = messages[lastUser];
-  const script = directives(latest ? userText(latest) : "");
   const results = messages.slice(lastUser + 1).flatMap(message => message.role === "toolResult" ? [message] : []);
   const users = messages.filter(message => message.role === "user").length;
 
-  if (results.length > 0) {
-    const failed = results.filter(result => result.isError).length;
+  if (results.length > 0) return toolSummary(results);
 
-    return {
-      text: `lade-fixture: ${results.length - failed} of ${results.length} tool call(s) succeeded. Done.`,
-      calls: [], fail: false, delayMs: script.delayMs,
-    };
-  }
+  if (script.fail) return { text: "", calls: [], fail: true };
 
-  if (script.fail) return { text: "", calls: [], fail: true, delayMs: script.delayMs };
+  if (script.transient && firstTransientAttempt(latest)) return { text: "", calls: [], fail: true, transient: true };
 
-  if (script.transient && !transientFailed.has(transientKey(latest))) {
-    transientFailed.add(transientKey(latest));
+  if (script.echo) return textReply(`lade-fixture echo: ${latest ? userText(latest) : ""}`);
 
-    return { text: "", calls: [], fail: true, delayMs: script.delayMs, transient: true };
-  }
+  if (script.system) return systemMarkers(context);
 
-  if (script.echo) return { text: `lade-fixture echo: ${latest ? userText(latest) : ""}`, calls: [], fail: false, delayMs: script.delayMs };
+  if (script.writes.length > 0) return writeCalls(script.writes, users);
 
-  if (script.system) {
-    const markers = [...new Set(getCurrentSystemPrompt(context.messages).match(MARKER) ?? [])].sort();
+  return textReply(`lade-fixture scripted reply (offline fixture model, not a real model). The context holds ${users} user message(s).`);
+}
 
-    return { text: `lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`, calls: [], fail: false, delayMs: script.delayMs };
-  }
+function plan(context: TranscriptContext): Script {
+  const lastUser = context.messages.findLastIndex(message => message.role === "user");
+  const latest = context.messages[lastUser];
+  const script = directives(latest ? userText(latest) : "");
 
-  if (script.writes.length > 0) {
-    return {
-      text: `lade-fixture: writing ${script.writes.length} file(s) with the write tool.`,
-      calls: script.writes.map((write, n) => ({ type: "toolCall", id: `lade-fixture-${users}-${n + 1}`, name: "write", arguments: { path: write.path, content: write.content } })),
-      fail: false, delayMs: script.delayMs,
-    };
-  }
-
-  return {
-    text: `lade-fixture scripted reply (offline fixture model, not a real model). The context holds ${users} user message(s).`,
-    calls: [], fail: false, delayMs: script.delayMs,
-  };
+  return { ...reply(context, lastUser, script), delayMs: script.delayMs };
 }
 
 async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream): Promise<void> {
