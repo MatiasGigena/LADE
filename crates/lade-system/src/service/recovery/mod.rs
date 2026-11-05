@@ -13,6 +13,8 @@ use crate::storage::{self, JournalRow, JournalState, OperationKey, OperationStat
 
 use super::state::{ObjState, WsState};
 use super::{Service, StartError};
+use crate::supervision::{sweep_sockets, sweep_stale};
+use crate::support::fs::service_uid;
 use crate::support::now_ms;
 
 impl Service {
@@ -299,7 +301,7 @@ impl Service {
     }
 
     fn sweep(&mut self) {
-        match crate::supervision::sweep_stale(&self.paths.run) {
+        match sweep_stale(&self.paths.run) {
             Ok(report) if !report.killed.is_empty() => {
                 eprintln!(
                     "laded: killed {} stale worker sandbox(es)",
@@ -309,7 +311,7 @@ impl Service {
             Ok(_) => {}
             Err(e) => eprintln!("laded: stale worker sweep failed: {}", e.kind()),
         }
-        if let Err(e) = crate::supervision::sweep_sockets(&self.paths.sockets) {
+        if let Err(e) = sweep_sockets(&self.paths.sockets) {
             eprintln!("laded: stale gateway socket sweep failed: {}", e.kind());
         }
         kill_stale_sandboxes(&self.paths.state);
@@ -349,7 +351,7 @@ impl Service {
 
 fn kill_stale_sandboxes(state: &Path) {
     let me = std::process::id();
-    let uid = crate::support::fs::service_uid();
+    let uid = service_uid();
     let state_bytes = state.as_os_str().as_encoded_bytes();
     let mut targets = Vec::new();
     if let Ok(entries) = fs::read_dir("/proc") {

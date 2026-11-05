@@ -8,7 +8,7 @@ use super::writable::human_bytes;
 use super::*;
 use crate::service::ResourceLimits;
 use crate::service::test_harness::Harness;
-use crate::supervision::WorkerEvent;
+use crate::supervision::{SupervisorEvent, WorkerEvent};
 
 fn model(provider: &str) -> Model {
     Model {
@@ -229,18 +229,16 @@ fn events_of_an_older_generation_are_ignored() {
         .execution()
         .generation()
         .value();
-    harness
-        .service
-        .on_supervisor(crate::supervision::SupervisorEvent {
-            binding: LaunchBinding {
-                objective_id: oid.to_string(),
-                execution_generation: generation - 1,
-            },
-            event: WorkerEvent::Exited {
-                code: Some(1),
-                signal: None,
-            },
-        });
+    harness.service.on_supervisor(SupervisorEvent {
+        binding: LaunchBinding {
+            objective_id: oid.to_string(),
+            execution_generation: generation - 1,
+        },
+        event: WorkerEvent::Exited {
+            code: Some(1),
+            signal: None,
+        },
+    });
     assert_eq!(state(&harness, oid), ExecutionState::Idle);
 }
 

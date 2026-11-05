@@ -10,6 +10,7 @@ use lade_protocol::client::{
 use lade_protocol::types::Id;
 
 use crate::adapters::git;
+use crate::fault;
 use crate::service::convert::{domain_rejection, durability_failure, invalid};
 use crate::service::handlers::sql;
 use crate::service::jobs;
@@ -234,7 +235,7 @@ impl Service {
     ) {
         self.rt(oid).busy = None;
         if result.is_ok() {
-            crate::fault::point("cleanup.removed");
+            fault::point("cleanup.removed");
         }
         let outcome = (|| {
             result?;

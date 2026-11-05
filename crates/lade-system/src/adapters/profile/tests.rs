@@ -1,9 +1,10 @@
 use super::models::{endpoint, variable};
 use super::*;
+use crate::support::random_fill;
 
 fn temp(tag: &str) -> PathBuf {
     let mut bytes = [0u8; 8];
-    crate::support::random_fill(&mut bytes).unwrap();
+    random_fill(&mut bytes).unwrap();
     let dir = std::env::temp_dir().join(format!("lade-profile-{tag}-{}", hex(&bytes)));
     fs::create_dir_all(&dir).unwrap();
     dir

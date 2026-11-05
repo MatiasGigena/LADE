@@ -10,6 +10,7 @@ use rustix::process::{Pid, Signal};
 use sha2::{Digest, Sha256};
 
 use crate::adapters::sandbox::{CgroupLeaf, find_program};
+use crate::support::hex;
 
 /// How often namespace-init discovery re-reads `/proc` for the sandbox's first child. Linux
 /// gives no notification when a process forks, so discovery polls until `INIT_DISCOVERY`.
@@ -194,7 +195,7 @@ pub(crate) fn kill_record(record: &PidRecord) -> bool {
 pub fn sandbox_marker(run_dir: &Path) -> String {
     let canonical = fs::canonicalize(run_dir).unwrap_or_else(|_| run_dir.to_path_buf());
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
-    format!("LADE_SANDBOX_{}", crate::support::hex(&digest[..8]))
+    format!("LADE_SANDBOX_{}", hex(&digest[..8]))
 }
 
 fn marked(marker: &str) -> Vec<u32> {

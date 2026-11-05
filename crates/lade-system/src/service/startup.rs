@@ -14,7 +14,7 @@ use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Id};
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::sandbox::{SandboxCgroups, WRITABLE_STORAGE_BYTES};
 use crate::storage::{self, Store, StoreError};
-use crate::supervision::launcher::RESERVED_GENERATION;
+use crate::supervision::launcher::{MAX_SOCKET_PATH, RESERVED_GENERATION};
 use crate::supervision::{
     GATEWAY_SOCKET_DIR, SupervisorEvent, WorkerLauncher, gateway_socket_path, socket_path_fits,
 };
@@ -85,7 +85,7 @@ impl std::fmt::Display for StartError {
                 "socket path {} is longer than the {} bytes a Unix socket address holds; \
                  choose a shorter --runtime-dir (for example under $XDG_RUNTIME_DIR)",
                 path.display(),
-                crate::supervision::launcher::MAX_SOCKET_PATH
+                MAX_SOCKET_PATH
             ),
             Self::StateDir(e) => write!(f, "state directory: {e}"),
             Self::PrivateDir(path, e) => write!(f, "{}: {e}", path.display()),

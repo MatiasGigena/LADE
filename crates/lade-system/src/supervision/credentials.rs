@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::secret_service::{Lookup, SecretService};
+use crate::adapters::profile::CUSTOM_VAR_PREFIX;
 use crate::adapters::providers::{BUILT_IN_PROVIDERS, built_in_provider};
 use crate::adapters::sandbox::FIXTURE_SWITCH;
 use crate::support::fs::service_uid;
@@ -36,14 +37,13 @@ fn known_var(name: &str) -> bool {
 
 #[must_use]
 pub fn custom_var(name: &str) -> bool {
-    name.strip_prefix(crate::adapters::profile::CUSTOM_VAR_PREFIX)
-        .is_some_and(|rest| {
-            !rest.is_empty()
-                && name.len() <= 128
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        })
+    name.strip_prefix(CUSTOM_VAR_PREFIX).is_some_and(|rest| {
+        !rest.is_empty()
+            && name.len() <= 128
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 #[derive(Clone, PartialEq, Eq)]

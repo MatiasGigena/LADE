@@ -11,6 +11,7 @@ use crate::storage;
 use crate::supervision::{SupervisorEvent, WorkerEvent};
 
 use super::activity::ActivityUpdate;
+use crate::fault;
 use crate::service::capture::CapturePurpose;
 use crate::service::convert::{parse_uuid, wire_id, wire_input, wire_mode};
 use crate::service::jobs;
@@ -323,7 +324,7 @@ impl Service {
             return false;
         }
         if let DispatchDecision::Dispatch { .. } = decision {
-            crate::fault::point("dispatch.recorded");
+            fault::point("dispatch.recorded");
             let body = WorkerBody::Deliver {
                 input_id: wire_id(id.uuid()),
                 mode: wire_mode(input.mode),

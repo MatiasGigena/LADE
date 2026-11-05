@@ -10,6 +10,7 @@ use lade_core::domain::review::{IntegrationPlan, InvalidationReason};
 use lade_protocol::client::{Rejection, ReplyData, ReviewIntegrateCommand};
 
 use crate::adapters::git::{GitError, Repository, SquashOutcome, SquashRequest};
+use crate::fault;
 use crate::service::convert::{domain_rejection, git_rejection, not_found, parse_uuid};
 use crate::service::state::ObjState;
 use crate::service::{Completed, Flow, ReqCtx, Service};
@@ -60,7 +61,7 @@ impl Service {
             self.finish(ctx, Err(rejection));
             return Flow::Done;
         }
-        crate::fault::point("integrate.intent");
+        fault::point("integrate.intent");
         self.start_squash(oid, ctx, plan, journal, repo);
         Flow::Deferred
     }
@@ -204,7 +205,7 @@ impl Service {
         journal_id: Uuid,
         squash: &SquashOutcome,
     ) -> Result<ReplyData, Rejection> {
-        crate::fault::point("integrate.applied");
+        fault::point("integrate.applied");
         let mut st = self.obj(oid)?.clone();
         st.review
             .complete_integration(&mut st.row.objective, plan, ts_now())

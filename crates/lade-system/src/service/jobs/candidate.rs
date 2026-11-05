@@ -18,6 +18,7 @@ use crate::service::convert::{artifact_rejection, conflict, domain_rejection, gi
 use crate::service::projection::actions::NO_CHANGES_TO_FREEZE;
 
 use super::read::{counts, reference_stale, target_commit};
+use crate::fault;
 
 pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> {
     let mut out = format!(
@@ -100,7 +101,7 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
         _ => {
             repo.retain(&format!("capture-{}", input.capture_id), &tree)
                 .map_err(git_rejection)?;
-            crate::fault::point("capture.retained");
+            fault::point("capture.retained");
             (input.capture_id, false)
         }
     };
@@ -194,7 +195,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let old = repo.resolve_ref(&branch_ref).map_err(git_rejection)?;
     repo.update_ref_cas(&branch_ref, &commit, old.as_ref())
         .map_err(git_rejection)?;
-    crate::fault::point("freeze.branch_moved");
+    fault::point("freeze.branch_moved");
     repo.retain(&input.candidate_ref, &commit)
         .map_err(git_rejection)?;
     if let Err(e) = repo.sync_worktree_index(&worktree, &input.git_branch, &commit) {

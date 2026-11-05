@@ -13,10 +13,11 @@ use lade_core::domain::review::VerificationEnd;
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::git::{CommitSpec, Repository};
 use crate::adapters::sandbox::{
-    Limits, SandboxCgroups, SandboxTools, VERIFICATION_OUTPUT_LIMIT, VERIFICATION_TIMEOUT,
-    VerificationLaunch, run_bounded_with, verification_spec,
+    Limits, SandboxCgroups, SandboxError, SandboxTools, VERIFICATION_OUTPUT_LIMIT,
+    VERIFICATION_TIMEOUT, VerificationLaunch, run_bounded_with, verification_spec,
 };
-use crate::supervision::sweep::place_sandbox;
+use crate::fault;
+use crate::supervision::sweep::{PidRecord, place_sandbox};
 
 pub fn disk_usage(roots: &[PathBuf]) -> u64 {
     let mut total = 0u64;
@@ -106,7 +107,7 @@ pub fn verify(input: &VerifyInput) -> VerifyOut {
         Ok(worktree) => worktree,
         Err(e) => return error(&format!("verification copy failed: {}", e.code())),
     };
-    crate::fault::point("verify.copy");
+    fault::point("verify.copy");
     let result = run_verification(input, tools);
     let _ = repo.worktree_remove(&worktree, true);
     let _ = fs::remove_dir_all(&input.copy_dir);
@@ -122,9 +123,7 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
         .ok_or_else(|| "verification program not found in /usr/bin or /bin".to_string())?;
     let mut argv: Vec<OsString> = vec![program.into_os_string()];
     argv.extend(input.argv.iter().skip(1).map(OsString::from));
-    let built = |e: crate::adapters::sandbox::SandboxError| {
-        format!("verification sandbox could not be built: {}", e.code())
-    };
+    let built = |e: SandboxError| format!("verification sandbox could not be built: {}", e.code());
     let mut spec = verification_spec(&VerificationLaunch {
         work_dir: input.copy_dir.clone(),
         argv,
@@ -153,9 +152,7 @@ fn run_verification(input: &VerifyInput, tools: &SandboxTools) -> Result<VerifyO
         VERIFICATION_TIMEOUT,
         VERIFICATION_OUTPUT_LIMIT,
         |pid| match &leaf {
-            Some(leaf) => place_sandbox(pid, leaf, || {
-                crate::supervision::sweep::PidRecord::of(pid).is_none()
-            }),
+            Some(leaf) => place_sandbox(pid, leaf, || PidRecord::of(pid).is_none()),
             None => Ok(()),
         },
     )

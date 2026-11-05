@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::storage::backup;
+use crate::storage::{SCHEMA_VERSION, backup};
 use crate::support::fs::{ensure_private_dir, service_uid};
 use crate::support::{now_ms, wire_ts};
 
@@ -457,7 +457,7 @@ fn write_export(
     let _ = writeln!(
         text,
         "supported_schema={} database_schema={database}",
-        crate::storage::SCHEMA_VERSION
+        SCHEMA_VERSION
     );
     let _ = writeln!(text, "kernel={}", kernel.trim());
     text.push_str(

@@ -5,6 +5,7 @@ use super::{
     ChangeStatus, CommitSpec, GitError, GitId, InProgress, MIN_MERGE_TREE_VERSION, RepoPath,
     Repository, Result, TargetBusyReason, Worktree, validate_branch_name,
 };
+use crate::fault;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
@@ -188,7 +189,7 @@ impl Repository {
                 GitError::StaleRef { current, .. } => GitError::TargetMoved { current },
                 other => other,
             })?;
-        crate::fault::point("integrate.ref_moved");
+        fault::point("integrate.ref_moved");
         let Some(worktree) = worktree else {
             return Ok(SquashOutcome {
                 commit,

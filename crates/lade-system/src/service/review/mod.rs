@@ -32,6 +32,8 @@ use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::projection::actions::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
+use crate::fault;
+use crate::supervision::sweep::sandbox_marker;
 use crate::support::{new_uuid, ts_now};
 
 pub(crate) use integrate::Integrations;
@@ -193,7 +195,7 @@ impl Service {
                 .ok_or_else(|| not_found("candidate"))?;
             let data = ReplyData::ReviewFreeze(wire_candidate(candidate));
             self.commit_obj(Some(&mut ctx), Some(&data), st)?;
-            crate::fault::point("freeze.recorded");
+            fault::point("freeze.recorded");
             Ok((data, out.changed))
         })();
         match outcome {
@@ -286,7 +288,7 @@ impl Service {
             base_target: candidate.base_target_commit.clone(),
             argv: cmd.command,
             objective: oid.to_string(),
-            marker: crate::supervision::sweep::sandbox_marker(&self.paths.run),
+            marker: sandbox_marker(&self.paths.run),
             cgroups: self.cgroups.clone(),
         };
         self.commit_obj(Some(ctx), Some(&data), st)?;

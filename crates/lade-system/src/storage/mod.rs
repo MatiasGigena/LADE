@@ -15,6 +15,7 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 
 use schema::{MIGRATIONS, latest};
 
+use crate::support::now_ms;
 pub use preferences::{ApprovalRow, load_approvals, load_thinking, save_approval, save_thinking};
 pub use rows::{
     ActivityRow, CaptureRow, JournalRow, JournalState, ObjectiveRow, OperationKey, OperationRow,
@@ -183,7 +184,7 @@ impl Store {
             tx.execute_batch(sql)?;
             tx.execute(
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
-                rusqlite::params![version, crate::support::now_ms()],
+                rusqlite::params![version, now_ms()],
             )?;
             tx.commit()?;
         }

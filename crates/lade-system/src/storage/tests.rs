@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use super::schema::SCHEMA_V1;
 use super::*;
+use crate::support::now_ms;
 
 const V2: &str = "CREATE TABLE added_in_v2 (id INTEGER PRIMARY KEY);";
 const OLD: &[(i64, &str)] = &[(1, SCHEMA_V1)];
@@ -13,7 +14,7 @@ fn temp_state(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "lade-store-{name}-{}-{}",
         std::process::id(),
-        crate::support::now_ms()
+        now_ms()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::DirBuilder::new()

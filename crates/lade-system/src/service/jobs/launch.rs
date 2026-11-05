@@ -14,6 +14,8 @@ use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
 };
 
+use crate::fault;
+use crate::service::resources;
 use crate::support::fs::ensure_private_dir;
 
 pub struct LaunchInput {
@@ -76,7 +78,7 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     if let Some(wanted) = &input.provision {
         match provision(&input.repo, wanted, &request.worktree) {
             Ok(branch) => {
-                crate::fault::point("launch.provisioned");
+                fault::point("launch.provisioned");
                 provisioned_branch = Some(branch);
             }
             Err(reason) => {
@@ -102,7 +104,7 @@ pub fn launch(input: LaunchInput) -> LaunchOut {
     let mut request = request;
     if let Some(profile) = &input.profile {
         let dest = request.session_dir.join("profile");
-        match crate::service::resources::snapshot(&profile.source, &dest, &profile.approved) {
+        match resources::snapshot(&profile.source, &dest, &profile.approved) {
             Ok(snapshot) => {
                 if let lade_protocol::worker::WorkerBody::Start { resources, .. } =
                     &mut request.start

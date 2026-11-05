@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use sha2::{Digest as _, Sha256};
 
 use crate::support::fs::ensure_private_dir;
+use crate::support::hex;
 
 pub const MAX_ARTIFACT_PAGE: usize = 1 << 20;
 const CHUNK: usize = 64 << 10;
@@ -56,7 +57,7 @@ impl ArtifactDigest {
 
     #[must_use]
     pub fn to_hex(&self) -> String {
-        crate::support::hex(&self.0)
+        hex(&self.0)
     }
 }
 
