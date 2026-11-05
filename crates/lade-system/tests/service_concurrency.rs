@@ -10,7 +10,7 @@ mod service_support;
 use std::fs;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -146,6 +146,109 @@ fn output_until(client: &mut Client, terminal: &Id, needle: &str) -> String {
     seen
 }
 
+/// Has each Objective's agent write its own file, and the first try one into the second's
+/// worktree when sandboxed, then waits for the files and for every agent to go idle.
+fn write_one_file_each(client: &mut Client, objectives: &[Id], trees: &[PathBuf], sandboxed: bool) {
+    let sent: Vec<Id> = objectives
+        .iter()
+        .enumerate()
+        .map(|(i, o)| send_message(client, o, &format!("lade-fixture: write f{i}.txt from-{i}")))
+        .collect();
+    for request in sent {
+        result(client.wait_reply(&request)).unwrap();
+    }
+    if sandboxed {
+        let escape = trees[1].join("escape.txt");
+        let request = send_message(
+            client,
+            &objectives[0],
+            &format!("lade-fixture: write {} stolen", escape.display()),
+        );
+        result(client.wait_reply(&request)).unwrap();
+    }
+    for (i, tree) in trees.iter().enumerate() {
+        let file = tree.join(format!("f{i}.txt"));
+        eventually(&format!("{} written", file.display()), || {
+            file.exists().then_some(())
+        });
+    }
+    for objective in objectives {
+        wait_state(client, objective, ExecutionState::Idle);
+    }
+}
+
+/// The first Objective's terminal sees its own worktree but neither the second's nor the
+/// session store.
+fn assert_terminal_confined(client: &mut Client, objective: &Id, env: &Env, trees: &[PathBuf]) {
+    let terminal = open_terminal(client, objective).unwrap();
+    let sessions = env.root.path().join("state/sessions");
+    type_line(
+        client,
+        &terminal,
+        &format!(
+            "test -e {}; echo W_$?; test -e {}; echo S_$?; test -e {}/f0.txt; echo O_$?; echo END_$((3+4))",
+            trees[1].display(),
+            sessions.display(),
+            trees[0].display()
+        ),
+    );
+    let seen = output_until(client, &terminal, "END_7");
+    assert!(seen.contains("W_1"), "{seen}");
+    assert!(seen.contains("S_1"), "{seen}");
+    assert!(seen.contains("O_0"), "{seen}");
+    client
+        .call(Request::TerminalClose(TerminalSelector {
+            terminal_id: terminal,
+        }))
+        .unwrap();
+}
+
+/// Each Objective has its own branch, in its own repository, checked out in its worktree.
+fn assert_one_branch_each(
+    client: &mut Client,
+    objectives: &[Id],
+    (repo_a, repo_b): (&Path, &Path),
+    trees: &[PathBuf],
+) {
+    let details: Vec<ObjectiveDetail> = objectives.iter().map(|o| detail(client, o)).collect();
+    let mut branches: Vec<&str> = details.iter().map(|d| d.branch.as_str()).collect();
+    branches.sort_unstable();
+    branches.dedup();
+    assert_eq!(branches.len(), 4, "one branch per Objective");
+    assert_eq!(refs(repo_a, "refs/heads/lade/").len(), 3);
+    assert_eq!(refs(repo_b, "refs/heads/lade/").len(), 1);
+    for (d, tree) in details.iter().zip(trees) {
+        assert_eq!(
+            git(tree, &["symbolic-ref", "HEAD"]),
+            format!("refs/heads/{}", d.branch)
+        );
+    }
+    assert!(
+        refs(repo_b, "refs/heads/")
+            .iter()
+            .all(|r| !details[..3].iter().any(|d| r.ends_with(&d.branch)))
+    );
+}
+
+/// Each frozen candidate's retention ref lives in its Objective's repository only.
+fn assert_candidate_refs_stay_home(
+    client: &mut Client,
+    objectives: &[Id],
+    (repo_a, repo_b): (&Path, &Path),
+) {
+    for (i, d) in objectives.iter().map(|o| detail(client, o)).enumerate() {
+        let candidate = current_candidate(&d);
+        let (own, other) = if i == 3 {
+            (repo_b, repo_a)
+        } else {
+            (repo_a, repo_b)
+        };
+        let name = format!("refs/lade/retain/candidate-{}", candidate.as_str());
+        assert_eq!(refs(own, &name).len(), 1, "candidate ref in its repository");
+        assert!(refs(other, &name).is_empty(), "candidate ref leaked");
+    }
+}
+
 #[test]
 fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_serialize() {
     let env = Env::new("conc-four");
@@ -172,38 +275,7 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
         wait_state(&mut client, objective, ExecutionState::Idle);
     }
     let trees: Vec<_> = objectives.iter().map(|o| worktree(&env, o)).collect();
-    let sent: Vec<Id> = objectives
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            send_message(
-                &mut client,
-                o,
-                &format!("lade-fixture: write f{i}.txt from-{i}"),
-            )
-        })
-        .collect();
-    for request in sent {
-        result(client.wait_reply(&request)).unwrap();
-    }
-    if sandboxed {
-        let escape = trees[1].join("escape.txt");
-        let request = send_message(
-            &mut client,
-            &objectives[0],
-            &format!("lade-fixture: write {} stolen", escape.display()),
-        );
-        result(client.wait_reply(&request)).unwrap();
-    }
-    for (i, tree) in trees.iter().enumerate() {
-        let file = tree.join(format!("f{i}.txt"));
-        eventually(&format!("{} written", file.display()), || {
-            file.exists().then_some(())
-        });
-    }
-    for objective in &objectives {
-        wait_state(&mut client, objective, ExecutionState::Idle);
-    }
+    write_one_file_each(&mut client, &objectives, &trees, sandboxed);
     for (i, tree) in trees.iter().enumerate() {
         for j in 0..trees.len() {
             assert_eq!(
@@ -220,65 +292,14 @@ fn four_concurrent_objectives_stay_isolated_and_same_target_integrations_seriali
             !trees[1].join("escape.txt").exists(),
             "grant crossed Objectives"
         );
-        let terminal = open_terminal(&mut client, &objectives[0]).unwrap();
-        let sessions = env.root.path().join("state/sessions");
-        type_line(
-            &mut client,
-            &terminal,
-            &format!(
-                "test -e {}; echo W_$?; test -e {}; echo S_$?; test -e {}/f0.txt; echo O_$?; echo END_$((3+4))",
-                trees[1].display(),
-                sessions.display(),
-                trees[0].display()
-            ),
-        );
-        let seen = output_until(&mut client, &terminal, "END_7");
-        assert!(seen.contains("W_1"), "{seen}");
-        assert!(seen.contains("S_1"), "{seen}");
-        assert!(seen.contains("O_0"), "{seen}");
-        client
-            .call(Request::TerminalClose(TerminalSelector {
-                terminal_id: terminal,
-            }))
-            .unwrap();
+        assert_terminal_confined(&mut client, &objectives[0], &env, &trees);
     }
-    let details: Vec<ObjectiveDetail> = objectives.iter().map(|o| detail(&mut client, o)).collect();
-    let mut branches: Vec<&str> = details.iter().map(|d| d.branch.as_str()).collect();
-    branches.sort_unstable();
-    branches.dedup();
-    assert_eq!(branches.len(), 4, "one branch per Objective");
-    assert_eq!(refs(&env.repo, "refs/heads/lade/").len(), 3);
-    assert_eq!(refs(&repo_b, "refs/heads/lade/").len(), 1);
-    for (d, tree) in details.iter().zip(&trees) {
-        assert_eq!(
-            git(tree, &["symbolic-ref", "HEAD"]),
-            format!("refs/heads/{}", d.branch)
-        );
-    }
-    assert!(
-        refs(&repo_b, "refs/heads/")
-            .iter()
-            .all(|r| !details[..3].iter().any(|d| r.ends_with(&d.branch)))
-    );
+    assert_one_branch_each(&mut client, &objectives, (&env.repo, &repo_b), &trees);
 
     for objective in &objectives {
         freeze(&mut client, objective);
     }
-    for (i, d) in objectives
-        .iter()
-        .map(|o| detail(&mut client, o))
-        .enumerate()
-    {
-        let candidate = current_candidate(&d);
-        let (own, other) = if i == 3 {
-            (&repo_b, &env.repo)
-        } else {
-            (&env.repo, &repo_b)
-        };
-        let name = format!("refs/lade/retain/candidate-{}", candidate.as_str());
-        assert_eq!(refs(own, &name).len(), 1, "candidate ref in its repository");
-        assert!(refs(other, &name).is_empty(), "candidate ref leaked");
-    }
+    assert_candidate_refs_stay_home(&mut client, &objectives, (&env.repo, &repo_b));
     let approvals: Vec<Id> = objectives.iter().map(|o| approve(&mut client, o)).collect();
     let main_before = git(&env.repo, &["rev-parse", "main"]);
 

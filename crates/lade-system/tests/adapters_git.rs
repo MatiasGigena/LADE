@@ -12,14 +12,14 @@ use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use adapters_support::{TempDir, commit_all, git, git_os, init_repo, status};
 use lade_core::domain::ids::{GitAlgorithm, GitId};
 use lade_system::adapters::git::{
-    ChangeStatus, CommitSpec, GitError, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
-    RepoPath, Repository, SquashRequest, Worktree, empty_tree, escape_branch_name, parse_id,
-    unescape_branch_name, validate_branch_name, validate_refname,
+    ChangeStatus, CommitSpec, FileDiff, GitError, GrepQuery, LineKind, MAX_DIFF_LINES,
+    MergeOutcome, RepoPath, Repository, SquashRequest, Worktree, empty_tree, escape_branch_name,
+    parse_id, unescape_branch_name, validate_branch_name, validate_refname,
 };
 
 fn path(bytes: &[u8]) -> RepoPath {
@@ -280,10 +280,10 @@ fn retention_ref_survives_gc_prune() {
     repo.release_retention("capture-1", &kept).unwrap();
 }
 
-#[test]
-fn numstat_hunks_and_byte_offsets() {
-    let tmp = TempDir::new("diff");
-    let repo_dir = init_repo(tmp.path(), "sha1");
+/// A repository whose two commits change line endings, UTF-8 text, a deleted, an added and a
+/// truncated file. Returns the repository and the base and changed commits.
+fn diff_fixture(root: &Path) -> (PathBuf, String, String) {
+    let repo_dir = init_repo(root, "sha1");
     fs::write(repo_dir.join("crlf.txt"), "alpha\r\nbeta\r\ngamma\r\n").unwrap();
     fs::write(repo_dir.join("utf8.txt"), "añb\nçdé\n日本語\nend").unwrap();
     fs::write(repo_dir.join("gone.txt"), "x\ny\n").unwrap();
@@ -302,6 +302,44 @@ fn numstat_hunks_and_byte_offsets() {
     });
     fs::write(repo_dir.join("huge.txt"), &huge).unwrap();
     let new_hex = commit_all(&repo_dir, "change");
+    (repo_dir, base_hex, new_hex)
+}
+
+/// `file`'s diff between the `(base, new)` commits, after checking that every line's byte
+/// offset points at its text in the old or new blob.
+fn checked_diff(
+    repo: &Repository,
+    repo_dir: &Path,
+    (base, new): (&GitId, &GitId),
+    file: &str,
+) -> FileDiff {
+    let diff = repo
+        .diff_hunks(base, new, &path(file.as_bytes()), None)
+        .unwrap();
+    let new_blob = fs::read(repo_dir.join(file)).unwrap();
+    let old_blob = diff
+        .old_blob
+        .as_ref()
+        .map(|b| git_os(repo_dir, &["cat-file", "blob", b.hex()]))
+        .unwrap_or_default();
+    for line in diff.hunks.iter().flat_map(|h| &h.lines) {
+        if let Some(start) = line.new_byte_start {
+            let start = usize::try_from(start).unwrap();
+            assert!(new_blob[start..].starts_with(&line.text), "{file} new");
+            assert!(start == 0 || new_blob[start - 1] == b'\n');
+        }
+        if let Some(start) = line.old_byte_start {
+            let start = usize::try_from(start).unwrap();
+            assert!(old_blob[start..].starts_with(&line.text), "{file} old");
+        }
+    }
+    diff
+}
+
+#[test]
+fn numstat_hunks_and_byte_offsets() {
+    let tmp = TempDir::new("diff");
+    let (repo_dir, base_hex, new_hex) = diff_fixture(tmp.path());
     let repo = Repository::open(&repo_dir).unwrap();
     let (base, new) = (id(&repo, &base_hex), id(&repo, &new_hex));
 
@@ -315,29 +353,7 @@ fn numstat_hunks_and_byte_offsets() {
     assert_eq!(counts(b"gone.txt"), (ChangeStatus::Deleted, 0, 2));
     assert_eq!(counts(b"new.txt"), (ChangeStatus::Added, 2, 0));
 
-    let check_offsets = |file: &str| {
-        let diff = repo
-            .diff_hunks(&base, &new, &path(file.as_bytes()), None)
-            .unwrap();
-        let new_blob = fs::read(repo_dir.join(file)).unwrap();
-        let old_blob = diff
-            .old_blob
-            .as_ref()
-            .map(|b| git_os(&repo_dir, &["cat-file", "blob", b.hex()]))
-            .unwrap_or_default();
-        for line in diff.hunks.iter().flat_map(|h| &h.lines) {
-            if let Some(start) = line.new_byte_start {
-                let start = usize::try_from(start).unwrap();
-                assert!(new_blob[start..].starts_with(&line.text), "{file} new");
-                assert!(start == 0 || new_blob[start - 1] == b'\n');
-            }
-            if let Some(start) = line.old_byte_start {
-                let start = usize::try_from(start).unwrap();
-                assert!(old_blob[start..].starts_with(&line.text), "{file} old");
-            }
-        }
-        diff
-    };
+    let check_offsets = |file: &str| checked_diff(&repo, &repo_dir, (&base, &new), file);
     let crlf = check_offsets("crlf.txt");
     assert!(!crlf.binary && !crlf.truncated);
     let lines = &crlf.hunks[0].lines;
@@ -430,26 +446,13 @@ fn ref_validation_rejects_revision_syntax_and_invalid_git_names() {
     }
 }
 
-#[test]
-fn malicious_repository_configuration_never_executes() {
-    let tmp = TempDir::new("malicious");
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    fs::write(
-        repo_dir.join(".gitattributes"),
-        "*.txt filter=evil merge=evil diff=evil\n",
-    )
-    .unwrap();
-    fs::write(repo_dir.join("shared.txt"), "1\n2\n3\n").unwrap();
-    commit_all(&repo_dir, "attributes");
-    git(&repo_dir, &["checkout", "-q", "-b", "side"]);
-    fs::write(repo_dir.join("shared.txt"), "1\nside\n3\n").unwrap();
-    let side = commit_all(&repo_dir, "side");
-    git(&repo_dir, &["checkout", "-q", "main"]);
-
-    let markers = tmp.path().join("markers");
+/// Points every hook, filter, driver, pager, editor and signing program of `repo_dir` at a
+/// command that leaves a marker. Returns the directory the markers would appear in.
+fn arm_hooks_and_drivers(root: &Path, repo_dir: &Path) -> PathBuf {
+    let markers = root.join("markers");
     fs::create_dir(&markers).unwrap();
     let marker_cmd = |name: &str| format!("touch {}/{name}; cat", markers.display());
-    let hook_dir = tmp.path().join("evil-hooks");
+    let hook_dir = root.join("evil-hooks");
     fs::create_dir(&hook_dir).unwrap();
     let hooks = [
         "pre-commit",
@@ -489,8 +492,28 @@ fn malicious_repository_configuration_never_executes() {
         ("gc.auto", "1".into()),
     ];
     for (key, value) in &config {
-        git(&repo_dir, &["config", key, value]);
+        git(repo_dir, &["config", key, value]);
     }
+    markers
+}
+
+#[test]
+fn malicious_repository_configuration_never_executes() {
+    let tmp = TempDir::new("malicious");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    fs::write(
+        repo_dir.join(".gitattributes"),
+        "*.txt filter=evil merge=evil diff=evil\n",
+    )
+    .unwrap();
+    fs::write(repo_dir.join("shared.txt"), "1\n2\n3\n").unwrap();
+    commit_all(&repo_dir, "attributes");
+    git(&repo_dir, &["checkout", "-q", "-b", "side"]);
+    fs::write(repo_dir.join("shared.txt"), "1\nside\n3\n").unwrap();
+    let side = commit_all(&repo_dir, "side");
+    git(&repo_dir, &["checkout", "-q", "main"]);
+
+    let markers = arm_hooks_and_drivers(tmp.path(), &repo_dir);
 
     let repo = Repository::open(&repo_dir).unwrap();
     let main = repo.resolve_commit("refs/heads/main").unwrap();

@@ -720,6 +720,25 @@ fn node() -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
+/// A worker that reports its environment, what it may read and write, and greets the gateway.
+const WORKER_PROBE: &str = r"
+const fs = require('node:fs');
+const net = require('node:net');
+const report = {
+  home: process.env.HOME,
+  term: process.env.TERM,
+  pi: process.env.PI_CODING_AGENT_DIR,
+  key: process.env.FIXTURE_API_KEY,
+  envKeys: Object.keys(process.env).sort(),
+  root: fs.existsSync('/root'),
+  headReadable: fs.readFileSync(process.argv[2] + '/HEAD', 'utf8').startsWith('ref:'),
+};
+try { fs.writeFileSync(process.argv[2] + '/HEAD', 'x'); report.repoWritable = true; } catch { report.repoWritable = false; }
+try { fs.writeFileSync('./edited.txt', 'worker edit'); report.worktreeWritable = true; } catch { report.worktreeWritable = false; }
+const sock = net.connect(process.env.LADE_GATEWAY_SOCKET, () => sock.end('hello gateway'));
+sock.on('close', () => console.log(JSON.stringify(report)));
+";
+
 #[test]
 fn worker_sandbox_runs_node_with_gateway_socket_only() {
     let Some(tools) = tools() else { return };
@@ -748,27 +767,7 @@ fn worker_sandbox_runs_node_with_gateway_socket_only() {
         received
     });
     let entry = worker.join("worker.js");
-    fs::write(
-        &entry,
-        r"
-const fs = require('node:fs');
-const net = require('node:net');
-const report = {
-  home: process.env.HOME,
-  term: process.env.TERM,
-  pi: process.env.PI_CODING_AGENT_DIR,
-  key: process.env.FIXTURE_API_KEY,
-  envKeys: Object.keys(process.env).sort(),
-  root: fs.existsSync('/root'),
-  headReadable: fs.readFileSync(process.argv[2] + '/HEAD', 'utf8').startsWith('ref:'),
-};
-try { fs.writeFileSync(process.argv[2] + '/HEAD', 'x'); report.repoWritable = true; } catch { report.repoWritable = false; }
-try { fs.writeFileSync('./edited.txt', 'worker edit'); report.worktreeWritable = true; } catch { report.worktreeWritable = false; }
-const sock = net.connect(process.env.LADE_GATEWAY_SOCKET, () => sock.end('hello gateway'));
-sock.on('close', () => console.log(JSON.stringify(report)));
-",
-    )
-    .unwrap();
+    fs::write(&entry, WORKER_PROBE).unwrap();
     let spec = worker_spec(&WorkerLaunch {
         node,
         worker_dir: worker.clone(),

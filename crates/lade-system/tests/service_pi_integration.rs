@@ -315,6 +315,39 @@ fn profile_import_copies_only_and_never_touches_the_source() {
     assert_eq!(snapshot_tree(&source), before);
 }
 
+/// The extension's dialog answers only for its own generation, and only once.
+fn answer_the_dialog_once(client: &mut Client, objective: &Id) {
+    send(client, objective, "/ask now");
+    let Event::UiRequest(request) =
+        client.wait_event("ui.request", |e| matches!(e, Event::UiRequest(_)))
+    else {
+        unreachable!()
+    };
+    assert_eq!(request.generation, Counter::new(2));
+    assert!(matches!(request.prompt, UiPrompt::Confirm { .. }));
+    let respond = |generation: u64| {
+        Request::UiRespond(UiRespondCommand {
+            objective_id: objective.clone(),
+            ui_id: request.ui_id.clone(),
+            generation: Counter::new(generation),
+            answer: UiAnswer::Confirm { confirmed: true },
+        })
+    };
+    let stale = client.call(respond(1)).unwrap_err();
+    assert_eq!(stale.code, ErrorCode::StaleExecution);
+    assert!(matches!(
+        client.call(respond(2)),
+        Ok(ReplyData::UiRespond(_))
+    ));
+    let closed = client.wait_event("ui.closed", |e| matches!(e, Event::UiClosed(_)));
+    assert!(matches!(closed, Event::UiClosed(c) if c.reason == UiCloseReason::Answered));
+    wait_activity(client, objective, "confirmed=true");
+    assert_eq!(
+        client.call(respond(2)).unwrap_err().code,
+        ErrorCode::NotFound
+    );
+}
+
 #[test]
 fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations() {
     let env = Env::new("svc-resources");
@@ -377,35 +410,7 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
     let second = wait_activity(&mut client, &objective, "Generation 2.");
     assert!(second.contains("Extensions: ask.js"), "{second}");
 
-    send(&mut client, &objective, "/ask now");
-    let Event::UiRequest(request) =
-        client.wait_event("ui.request", |e| matches!(e, Event::UiRequest(_)))
-    else {
-        unreachable!()
-    };
-    assert_eq!(request.generation, Counter::new(2));
-    assert!(matches!(request.prompt, UiPrompt::Confirm { .. }));
-    let respond = |generation: u64| {
-        Request::UiRespond(UiRespondCommand {
-            objective_id: objective.clone(),
-            ui_id: request.ui_id.clone(),
-            generation: Counter::new(generation),
-            answer: UiAnswer::Confirm { confirmed: true },
-        })
-    };
-    let stale = client.call(respond(1)).unwrap_err();
-    assert_eq!(stale.code, ErrorCode::StaleExecution);
-    assert!(matches!(
-        client.call(respond(2)),
-        Ok(ReplyData::UiRespond(_))
-    ));
-    let closed = client.wait_event("ui.closed", |e| matches!(e, Event::UiClosed(_)));
-    assert!(matches!(closed, Event::UiClosed(c) if c.reason == UiCloseReason::Answered));
-    wait_activity(&mut client, &objective, "confirmed=true");
-    assert_eq!(
-        client.call(respond(2)).unwrap_err().code,
-        ErrorCode::NotFound
-    );
+    answer_the_dialog_once(&mut client, &objective);
 
     write(
         &profile(&env).join("extensions/ask.js"),
@@ -425,6 +430,90 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
     }
     let third = wait_activity(&mut client, &objective, "Generation 3.");
     assert!(third.contains("Extensions: none"), "{third}");
+}
+
+/// Moving to the first of the two user messages in the session tree changes the leaf but keeps
+/// `kept`. Returns the second user message's entry id.
+fn navigate_without_rewinding(client: &mut Client, objective: &Id, kept: &Path) -> String {
+    let tree = match client.call(Request::SessionTree(ObjectiveSelector {
+        objective_id: objective.clone(),
+    })) {
+        Ok(ReplyData::SessionTree(tree)) => tree,
+        other => panic!("session.tree: {other:?}"),
+    };
+    let users: Vec<_> = tree
+        .entries
+        .iter()
+        .filter(|e| e.kind == TreeEntryKind::User)
+        .collect();
+    assert_eq!(users.len(), 2);
+    match client.call(Request::SessionNavigate(SessionNavigateCommand {
+        objective_id: objective.clone(),
+        entry_id: users[0].entry_id.clone(),
+    })) {
+        Ok(ReplyData::SessionNavigate(state)) => assert_ne!(state.leaf_id, tree.leaf_id),
+        other => panic!("session.navigate: {other:?}"),
+    }
+    assert_eq!(
+        fs::read_to_string(kept).unwrap(),
+        "one",
+        "tree navigation never rewinds files"
+    );
+    users[1].entry_id.clone()
+}
+
+/// An export is a pi session file; importing it starts a new session without changing the
+/// source, the approvals or the Objective's `branch`, and a file that is not a session is
+/// refused.
+fn export_then_import(client: &mut Client, env: &Env, objective: &Id, branch: &str) {
+    let exported = match client.call(Request::SessionExport(ObjectiveSelector {
+        objective_id: objective.clone(),
+    })) {
+        Ok(ReplyData::SessionExport(export)) => PathBuf::from(export.path.to_os_string()),
+        other => panic!("session.export: {other:?}"),
+    };
+    let header = fs::read_to_string(&exported).unwrap();
+    assert!(header.starts_with("{\"type\":\"session\""));
+    let original = fs::read(&exported).unwrap();
+
+    let imported = match client.call(Request::SessionImport(SessionImportCommand {
+        objective_id: objective.clone(),
+        path: WirePath::from_os_str(exported.as_os_str()).unwrap(),
+    })) {
+        Ok(ReplyData::SessionImport(session)) => session,
+        other => panic!("session.import: {other:?}"),
+    };
+    assert_eq!(
+        fs::read(&exported).unwrap(),
+        original,
+        "import never modifies its source"
+    );
+    let imported_detail = detail(client, objective);
+    assert_eq!(imported_detail.lifecycle, Lifecycle::Active);
+    assert!(
+        imported_detail.approval.is_none(),
+        "an import never restores approvals"
+    );
+    assert_eq!(
+        imported_detail.branch, branch,
+        "an import never changes Git state"
+    );
+    assert_eq!(
+        imported.session_id.as_ref(),
+        Some(&imported_detail.session.unwrap().session_id)
+    );
+    let not_session = env.root.path().join("not-a-session.jsonl");
+    fs::write(&not_session, "{\"type\":\"message\"}\n").unwrap();
+    assert_eq!(
+        client
+            .call(Request::SessionImport(SessionImportCommand {
+                objective_id: objective.clone(),
+                path: WirePath::from_os_str(not_session.as_os_str()).unwrap(),
+            }))
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidRequest
+    );
 }
 
 #[test]
@@ -450,36 +539,13 @@ fn tree_fork_export_import_and_routing_follow_the_session() {
     let kept = worktree(&env, &objective).join("kept.txt");
     assert_eq!(fs::read_to_string(&kept).unwrap(), "one");
 
-    let tree = match client.call(Request::SessionTree(ObjectiveSelector {
-        objective_id: objective.clone(),
-    })) {
-        Ok(ReplyData::SessionTree(tree)) => tree,
-        other => panic!("session.tree: {other:?}"),
-    };
-    let users: Vec<_> = tree
-        .entries
-        .iter()
-        .filter(|e| e.kind == TreeEntryKind::User)
-        .collect();
-    assert_eq!(users.len(), 2);
-    match client.call(Request::SessionNavigate(SessionNavigateCommand {
-        objective_id: objective.clone(),
-        entry_id: users[0].entry_id.clone(),
-    })) {
-        Ok(ReplyData::SessionNavigate(state)) => assert_ne!(state.leaf_id, tree.leaf_id),
-        other => panic!("session.navigate: {other:?}"),
-    }
-    assert_eq!(
-        fs::read_to_string(&kept).unwrap(),
-        "one",
-        "tree navigation never rewinds files"
-    );
+    let second_user = navigate_without_rewinding(&mut client, &objective, &kept);
 
     let before = detail(&mut client, &objective);
     let old = before.session.clone().unwrap();
     let forked = match client.call(Request::SessionFork(SessionForkCommand {
         objective_id: objective.clone(),
-        entry_id: users[1].entry_id.clone(),
+        entry_id: second_user,
         position: ForkPosition::Before,
     })) {
         Ok(ReplyData::SessionFork(state)) => state,
@@ -508,54 +574,7 @@ fn tree_fork_export_import_and_routing_follow_the_session() {
         .unwrap_err();
     assert_eq!(stale.code, ErrorCode::StaleAssociation);
 
-    let exported = match client.call(Request::SessionExport(ObjectiveSelector {
-        objective_id: objective.clone(),
-    })) {
-        Ok(ReplyData::SessionExport(export)) => PathBuf::from(export.path.to_os_string()),
-        other => panic!("session.export: {other:?}"),
-    };
-    let header = fs::read_to_string(&exported).unwrap();
-    assert!(header.starts_with("{\"type\":\"session\""));
-    let original = fs::read(&exported).unwrap();
-
-    let imported = match client.call(Request::SessionImport(SessionImportCommand {
-        objective_id: objective.clone(),
-        path: WirePath::from_os_str(exported.as_os_str()).unwrap(),
-    })) {
-        Ok(ReplyData::SessionImport(session)) => session,
-        other => panic!("session.import: {other:?}"),
-    };
-    assert_eq!(
-        fs::read(&exported).unwrap(),
-        original,
-        "import never modifies its source"
-    );
-    let imported_detail = detail(&mut client, &objective);
-    assert_eq!(imported_detail.lifecycle, Lifecycle::Active);
-    assert!(
-        imported_detail.approval.is_none(),
-        "an import never restores approvals"
-    );
-    assert_eq!(
-        imported_detail.branch, before.branch,
-        "an import never changes Git state"
-    );
-    assert_eq!(
-        imported.session_id.as_ref(),
-        Some(&imported_detail.session.unwrap().session_id)
-    );
-    let not_session = env.root.path().join("not-a-session.jsonl");
-    fs::write(&not_session, "{\"type\":\"message\"}\n").unwrap();
-    assert_eq!(
-        client
-            .call(Request::SessionImport(SessionImportCommand {
-                objective_id: objective.clone(),
-                path: WirePath::from_os_str(not_session.as_os_str()).unwrap(),
-            }))
-            .unwrap_err()
-            .code,
-        ErrorCode::InvalidRequest
-    );
+    export_then_import(&mut client, &env, &objective, &before.branch);
     assert_eq!(fs::read_to_string(&kept).unwrap(), "one");
 }
 

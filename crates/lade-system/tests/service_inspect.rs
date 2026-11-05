@@ -18,7 +18,7 @@ use lade_protocol::client::{
     ObjectiveSelector, Reference, ReferenceVersion, ReplyData, Request, ReviewApproveCommand,
     ReviewIntegrateCommand, SearchQuery, SearchScope, Side,
 };
-use lade_protocol::types::{Counter, DeliveryMode, Id, PageLimit, ReadLimit, WirePath};
+use lade_protocol::types::{Counter, DeliveryMode, Digest, Id, PageLimit, ReadLimit, WirePath};
 use service_support::*;
 use sha2::{Digest as _, Sha256};
 
@@ -255,27 +255,11 @@ fn diff_lines_distinguish_final_bare_cr_from_crlf() {
     service.shutdown();
 }
 
-#[test]
-fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
-    let env = Env::new("svc-large");
-    let line = "0123456789 abcdefghij ÄÖÜ ünïcödé text line for the large file test\n";
-    let mut content = String::with_capacity((64 << 20) + 4096);
-    while content.len() <= 64 << 20 {
-        content.push_str(line);
-    }
-    fs::write(env.repo.join("large.txt"), &content).unwrap();
-    commit_all(&env.repo, "large file");
-    let service = env.start(FakeLauncher::shared());
-    let mut client = env.connect();
-    let ws = open_workspace(&mut client, &env.repo);
-    let objective = create_objective(&mut client, &ws.workspace_id, "Large").objective_id;
-    start_execution(&mut client, &objective);
-    wait_state(&mut client, &objective, ExecutionState::Idle);
-    let capture = changes(&mut client, &objective, Basis::Working)
-        .capture_id
-        .unwrap();
-
-    let first = match read_at(&mut client, &objective, "large.txt", 0) {
+/// Reads `large.txt`, repeated `line`s making up `content`, as bounded pages from the start,
+/// the next page and the tail, and refuses an offset inside a character. Returns the file's
+/// artifact digest.
+fn assert_read_in_chunks(client: &mut Client, objective: &Id, content: &str, line: &str) -> Digest {
+    let first = match read_at(client, objective, "large.txt", 0) {
         ReplyData::FileRead(page) => page,
         other => panic!("{other:?}"),
     };
@@ -299,7 +283,7 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
         });
     assert_eq!(first.artifact_digest.as_str(), digest);
 
-    let next = match read_at(&mut client, &objective, "large.txt", length) {
+    let next = match read_at(client, objective, "large.txt", length) {
         ReplyData::FileRead(page) => page,
         other => panic!("{other:?}"),
     };
@@ -312,7 +296,7 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
         &content.as_bytes()[at..at + len]
     );
     let tail_offset = content.len() as u64 - line.len() as u64;
-    let last = match read_at(&mut client, &objective, "large.txt", tail_offset) {
+    let last = match read_at(client, objective, "large.txt", tail_offset) {
         ReplyData::FileRead(page) => page,
         other => panic!("{other:?}"),
     };
@@ -330,6 +314,30 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
         }))
         .unwrap_err();
     assert_eq!(refused.code, ErrorCode::InvalidRequest);
+    first.artifact_digest
+}
+
+#[test]
+fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
+    let env = Env::new("svc-large");
+    let line = "0123456789 abcdefghij ÄÖÜ ünïcödé text line for the large file test\n";
+    let mut content = String::with_capacity((64 << 20) + 4096);
+    while content.len() <= 64 << 20 {
+        content.push_str(line);
+    }
+    fs::write(env.repo.join("large.txt"), &content).unwrap();
+    commit_all(&env.repo, "large file");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    let objective = create_objective(&mut client, &ws.workspace_id, "Large").objective_id;
+    start_execution(&mut client, &objective);
+    wait_state(&mut client, &objective, ExecutionState::Idle);
+    let capture = changes(&mut client, &objective, Basis::Working)
+        .capture_id
+        .unwrap();
+
+    let first_digest = assert_read_in_chunks(&mut client, &objective, &content, line);
 
     let session = detail(&mut client, &objective).session.unwrap();
     let save = |client: &mut Client, draft: &Id| {
@@ -339,7 +347,7 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
                 objective_id: objective.clone(),
                 expected_revision: Counter::new(0),
                 reference: Reference {
-                    artifact_digest: first.artifact_digest.clone(),
+                    artifact_digest: first_digest.clone(),
                     path: WirePath::from_bytes(b"large.txt".to_vec()).unwrap(),
                     version: ReferenceVersion::Working {
                         capture_id: capture.clone(),

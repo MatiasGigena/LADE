@@ -7,6 +7,8 @@
 
 mod service_support;
 
+use std::path::Path;
+
 use lade_core::domain::ids::{ObjectiveId, Uuid, WorkspaceId};
 use lade_core::domain::objectives::{BranchName, Intent as CoreIntent, Objective};
 use lade_protocol::client::{
@@ -326,16 +328,23 @@ fn snapshot_byte_budget_preserves_all_objectives_and_exact_settings() {
     );
 }
 
-#[test]
-fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
-    let env = Env::new("svc-snapshot-nodes");
-    let service = env.start(FakeLauncher::shared());
-    let mut client = env.connect();
-    let ws = open_workspace(&mut client, &env.repo);
-    create_objective(&mut client, &ws.workspace_id, "Snapshot record");
-    drop(client);
-    service.shutdown();
-    seed_objectives(&env, 400, "x");
+/// A detached worktree of `repo` at `path`, which the service sees as one more repository.
+fn add_detached_worktree(repo: &Path, path: &Path) {
+    git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "-q",
+            path.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+}
+
+/// 64 branches in the fixture repository and 63 more workspaces, one per detached worktree.
+fn seed_branches_and_workspaces(env: &Env) {
     for index in 0..64 {
         git(
             &env.repo,
@@ -349,17 +358,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
     let store = env.store();
     for index in 1..64 {
         let path = env.root.path().join(format!("repository-{index}"));
-        git(
-            &env.repo,
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                "-q",
-                path.to_str().unwrap(),
-                "HEAD",
-            ],
-        );
+        add_detached_worktree(&env.repo, &path);
         storage::insert_workspace(
             store.conn(),
             &WorkspaceRow {
@@ -372,7 +371,21 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
         )
         .unwrap();
     }
+}
+
+#[test]
+fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
+    let env = Env::new("svc-snapshot-nodes");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    create_objective(&mut client, &ws.workspace_id, "Snapshot record");
+    drop(client);
+    service.shutdown();
+    seed_objectives(&env, 400, "x");
+    seed_branches_and_workspaces(&env);
     let settings = dense_settings(32, 256);
+    let store = env.store();
     storage::save_settings(store.conn(), &settings).unwrap();
     drop(store);
     let service = env.start(FakeLauncher::shared());
@@ -390,17 +403,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
         start: Start::Target,
     }));
     let new_repo = env.root.path().join("another-repository");
-    git(
-        &env.repo,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            "-q",
-            new_repo.to_str().unwrap(),
-            "HEAD",
-        ],
-    );
+    add_detached_worktree(&env.repo, &new_repo);
     let open = client.call(Request::WorkspaceOpen(
         lade_protocol::client::WorkspaceOpenCommand {
             path: lade_protocol::types::WirePath::from_os_str(new_repo.as_os_str()).unwrap(),

@@ -11,8 +11,8 @@ use std::fs;
 use std::path::Path;
 
 use lade_protocol::client::{
-    ActionName, ApprovalState, Basis, CandidateCommand, CandidateStatus, DeliveryState,
-    DiffGetQuery, DraftRevision, DraftSaveCommand, ErrorCode, Event, ExecutionState,
+    ActionName, ApprovalState, Basis, CandidateCommand, CandidateStatus, CandidateSummary,
+    DeliveryState, DiffGetQuery, DraftRevision, DraftSaveCommand, ErrorCode, Event, ExecutionState,
     FeedbackSubmitCommand, Lifecycle, MessageSendCommand, ObjectiveCleanupCommand, ObjectiveDetail,
     ObjectiveSelector, Reference, ReferenceVersion, ReplyData, Request, ReviewApproveCommand,
     ReviewIntegrateCommand, ReviewVerifyCommand, SearchQuery, SearchScope, Side, VerificationState,
@@ -54,7 +54,7 @@ fn wait_file(client: &mut Client, objective: &Id, path: &str, content: &str) {
     );
 }
 
-fn freeze(client: &mut Client, objective: &Id) -> lade_protocol::client::CandidateSummary {
+fn freeze(client: &mut Client, objective: &Id) -> CandidateSummary {
     match client.call(Request::ReviewFreeze(ObjectiveSelector {
         objective_id: objective.clone(),
     })) {
@@ -102,26 +102,8 @@ fn head(repo: &Path) -> String {
     git(repo, &["rev-parse", "HEAD"])
 }
 
-#[test]
-fn full_loop_with_the_real_worker() {
-    let env = Env::new("svc-flow");
-    let (launcher, sandboxed) = best_launcher(&env);
-    eprintln!("full loop sandboxed: {sandboxed}");
-    let service = env.start(launcher);
-    let mut client = env.connect();
-    let ws = open_workspace(&mut client, &env.repo);
-    assert_eq!(ws.default_branch.as_deref(), Some("main"));
-    let objective = create_objective(&mut client, &ws.workspace_id, "Greeting").objective_id;
-    start_execution(&mut client, &objective);
-    wait_state(&mut client, &objective, ExecutionState::Idle);
-
-    send_message(&mut client, &objective, "lade-fixture: write hello.txt hi");
-    wait_file(&mut client, &objective, "hello.txt", "hi");
-    assert!(
-        !env.repo.join("hello.txt").exists(),
-        "shared checkout untouched"
-    );
-    client.wait_event("activity", |e| matches!(e, Event::ActivityAppended(_)));
+/// The agent's activity is listed and its file is found in the working capture.
+fn browse_activity_and_search(client: &mut Client, workspace: &Id, objective: &Id) {
     match client.call(Request::ActivityPage(
         lade_protocol::client::ActivityPageQuery {
             objective_id: objective.clone(),
@@ -133,7 +115,7 @@ fn full_loop_with_the_real_worker() {
         other => panic!("{other:?}"),
     }
     match client.call(Request::Search(SearchQuery {
-        workspace_id: ws.workspace_id.clone(),
+        workspace_id: workspace.clone(),
         scope: SearchScope::Files,
         query: "hello".into(),
         limit: PageLimit::parse("10").unwrap(),
@@ -146,11 +128,14 @@ fn full_loop_with_the_real_worker() {
         }
         other => panic!("{other:?}"),
     }
+}
 
-    let list = changes(&mut client, &objective, Basis::Working);
+/// Feedback anchored on `hello.txt` reaches the agent, which edits the file again.
+fn submit_feedback_on_hello(client: &mut Client, objective: &Id) {
+    let list = changes(client, objective, Basis::Working);
     let capture = list.capture_id.clone().unwrap();
-    let file = read_file(&mut client, &objective, Basis::Working, "hello.txt");
-    let detail_now = detail(&mut client, &objective);
+    let file = read_file(client, objective, Basis::Working, "hello.txt");
+    let detail_now = detail(client, objective);
     let session = detail_now.session.clone().unwrap();
     let draft = new_id();
     client
@@ -194,8 +179,135 @@ fn full_loop_with_the_real_worker() {
         matches!(e, Event::InputChanged(i) if i.input_id == input.input_id
             && i.delivery == DeliveryState::Received)
     });
-    wait_file(&mut client, &objective, "hello.txt", "hi there");
+    wait_file(client, objective, "hello.txt", "hi there");
+    wait_state(client, objective, ExecutionState::Idle);
+}
+
+/// Runs a check when the sandbox works and approves on it, or approves with an override
+/// reason when it does not. Returns the approval.
+fn check_then_approve(
+    client: &mut Client,
+    env: &Env,
+    objective: &Id,
+    candidate: &CandidateSummary,
+    can_verify: bool,
+) -> Id {
+    let verify = Request::ReviewVerify(ReviewVerifyCommand {
+        objective_id: objective.clone(),
+        candidate_id: candidate.candidate_id.clone(),
+        command: vec!["sh".into(), "-c".into(), "test -f hello.txt".into()],
+    });
+    if can_verify {
+        let started = match client.call(verify).unwrap() {
+            ReplyData::ReviewVerify(v) => v,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(started.state, VerificationState::Running);
+        let done = client.wait_event("verification finished", |e| {
+            matches!(e, Event::VerificationChanged(v) if v.verification_id == started.verification_id
+                && v.state != VerificationState::Running)
+        });
+        let Event::VerificationChanged(done) = done else {
+            unreachable!()
+        };
+        assert_eq!(
+            done.state,
+            VerificationState::Passed,
+            "{}",
+            done.output_tail
+        );
+        assert!(
+            !env.root
+                .path()
+                .join("state/verify")
+                .join(started.verification_id.as_str())
+                .exists()
+        );
+        let current = detail(client, objective);
+        assert!(action_enabled(&current, ActionName::ReviewApprove));
+        approval_id(approve(client, &current, &candidate.candidate_id, None).unwrap())
+    } else {
+        eprintln!("note: bubblewrap unavailable; approving with an override reason");
+        assert_eq!(
+            client.call(verify).unwrap_err().code,
+            ErrorCode::ExecutionUnavailable
+        );
+        let current = detail(client, objective);
+        assert!(approve(client, &current, &candidate.candidate_id, None).is_err());
+        approval_id(
+            approve(
+                client,
+                &current,
+                &candidate.candidate_id,
+                Some("no sandbox on host"),
+            )
+            .unwrap(),
+        )
+    }
+}
+
+/// Cleanup removes the worktree and branch but keeps the retention refs, which deleting the
+/// history then removes while the integration stays.
+fn clean_up_then_delete_history(
+    client: &mut Client,
+    env: &Env,
+    objective: &Id,
+    branch: &str,
+    after: &str,
+) {
+    match client.call(Request::ObjectiveCleanup(ObjectiveCleanupCommand {
+        objective_id: objective.clone(),
+        confirm_data_loss: false,
+    })) {
+        Ok(ReplyData::ObjectiveCleanup(d)) => {
+            assert!(d.badges.contains(&lade_protocol::client::Badge::CleanedUp));
+        }
+        other => panic!("cleanup: {other:?}"),
+    }
+    assert!(!worktree(env, objective).exists());
+    assert!(git(&env.repo, &["branch", "--list", branch]).is_empty());
+    let retained = git(&env.repo, &["for-each-ref", "refs/lade/retain/"]);
+    assert!(retained.contains("candidate-"), "{retained}");
+
+    match client.call(Request::ObjectiveDeleteHistory(
+        lade_protocol::client::ObjectiveDeleteHistoryCommand {
+            objective_id: objective.clone(),
+            confirm_history_loss: true,
+        },
+    )) {
+        Ok(ReplyData::ObjectiveDeleteHistory(d)) => {
+            assert_eq!(d.history_deleted, Some(true));
+            assert_eq!(d.lifecycle, Lifecycle::Integrated);
+        }
+        other => panic!("delete history: {other:?}"),
+    }
+    assert!(git(&env.repo, &["for-each-ref", "refs/lade/retain/"]).is_empty());
+    assert_eq!(head(&env.repo), after, "the integration stays");
+}
+
+#[test]
+fn full_loop_with_the_real_worker() {
+    let env = Env::new("svc-flow");
+    let (launcher, sandboxed) = best_launcher(&env);
+    eprintln!("full loop sandboxed: {sandboxed}");
+    let service = env.start(launcher);
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    assert_eq!(ws.default_branch.as_deref(), Some("main"));
+    let objective = create_objective(&mut client, &ws.workspace_id, "Greeting").objective_id;
+    start_execution(&mut client, &objective);
     wait_state(&mut client, &objective, ExecutionState::Idle);
+
+    send_message(&mut client, &objective, "lade-fixture: write hello.txt hi");
+    wait_file(&mut client, &objective, "hello.txt", "hi");
+    assert!(
+        !env.repo.join("hello.txt").exists(),
+        "shared checkout untouched"
+    );
+    client.wait_event("activity", |e| matches!(e, Event::ActivityAppended(_)));
+    browse_activity_and_search(&mut client, &ws.workspace_id, &objective);
+
+    submit_feedback_on_hello(&mut client, &objective);
 
     let candidate = freeze(&mut client, &objective);
     assert_eq!(candidate.status, CandidateStatus::Current);
@@ -239,58 +351,7 @@ fn full_loop_with_the_real_worker() {
         other => panic!("{other:?}"),
     }
 
-    let verify = Request::ReviewVerify(ReviewVerifyCommand {
-        objective_id: objective.clone(),
-        candidate_id: candidate.candidate_id.clone(),
-        command: vec!["sh".into(), "-c".into(), "test -f hello.txt".into()],
-    });
-    let approval = if can_verify {
-        let started = match client.call(verify).unwrap() {
-            ReplyData::ReviewVerify(v) => v,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(started.state, VerificationState::Running);
-        let done = client.wait_event("verification finished", |e| {
-            matches!(e, Event::VerificationChanged(v) if v.verification_id == started.verification_id
-                && v.state != VerificationState::Running)
-        });
-        let Event::VerificationChanged(done) = done else {
-            unreachable!()
-        };
-        assert_eq!(
-            done.state,
-            VerificationState::Passed,
-            "{}",
-            done.output_tail
-        );
-        assert!(
-            !env.root
-                .path()
-                .join("state/verify")
-                .join(started.verification_id.as_str())
-                .exists()
-        );
-        let current = detail(&mut client, &objective);
-        assert!(action_enabled(&current, ActionName::ReviewApprove));
-        approval_id(approve(&mut client, &current, &candidate.candidate_id, None).unwrap())
-    } else {
-        eprintln!("note: bubblewrap unavailable; approving with an override reason");
-        assert_eq!(
-            client.call(verify).unwrap_err().code,
-            ErrorCode::ExecutionUnavailable
-        );
-        let current = detail(&mut client, &objective);
-        assert!(approve(&mut client, &current, &candidate.candidate_id, None).is_err());
-        approval_id(
-            approve(
-                &mut client,
-                &current,
-                &candidate.candidate_id,
-                Some("no sandbox on host"),
-            )
-            .unwrap(),
-        )
-    };
+    let approval = check_then_approve(&mut client, &env, &objective, &candidate, can_verify);
 
     let before = head(&env.repo);
     let integrated = match integrate(&mut client, &objective, &approval).unwrap() {
@@ -308,35 +369,7 @@ fn full_loop_with_the_real_worker() {
     assert!(git(&env.repo, &["status", "--porcelain"]).is_empty());
     assert!(git(&env.repo, &["log", "-1", "--format=%s"]).contains("Greeting"));
 
-    let branch = integrated.branch.clone();
-    match client.call(Request::ObjectiveCleanup(ObjectiveCleanupCommand {
-        objective_id: objective.clone(),
-        confirm_data_loss: false,
-    })) {
-        Ok(ReplyData::ObjectiveCleanup(d)) => {
-            assert!(d.badges.contains(&lade_protocol::client::Badge::CleanedUp));
-        }
-        other => panic!("cleanup: {other:?}"),
-    }
-    assert!(!worktree(&env, &objective).exists());
-    assert!(git(&env.repo, &["branch", "--list", &branch]).is_empty());
-    let retained = git(&env.repo, &["for-each-ref", "refs/lade/retain/"]);
-    assert!(retained.contains("candidate-"), "{retained}");
-
-    match client.call(Request::ObjectiveDeleteHistory(
-        lade_protocol::client::ObjectiveDeleteHistoryCommand {
-            objective_id: objective.clone(),
-            confirm_history_loss: true,
-        },
-    )) {
-        Ok(ReplyData::ObjectiveDeleteHistory(d)) => {
-            assert_eq!(d.history_deleted, Some(true));
-            assert_eq!(d.lifecycle, Lifecycle::Integrated);
-        }
-        other => panic!("delete history: {other:?}"),
-    }
-    assert!(git(&env.repo, &["for-each-ref", "refs/lade/retain/"]).is_empty());
-    assert_eq!(head(&env.repo), after, "the integration stays");
+    clean_up_then_delete_history(&mut client, &env, &objective, &integrated.branch, &after);
     drop(client);
     service.shutdown();
 }

@@ -126,6 +126,20 @@ fn started_objective(env: &Env, client: &mut Client, title: &str) -> Id {
     objective
 }
 
+/// Without a sandbox, opening a terminal is refused and the action carries the same reason.
+fn assert_terminal_refused_without_sandbox(client: &mut Client, objective: &Id) {
+    let refused = client.call(open_command(objective)).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
+    let projected = detail(client, objective)
+        .available_actions
+        .into_iter()
+        .find(|a| a.action == ActionName::TerminalOpen)
+        .unwrap();
+    assert!(!projected.enabled);
+    assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
+    eprintln!("note: sandbox unavailable; terminal refused as expected");
+}
+
 #[test]
 fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     let env = Env::new("svc-term-scope");
@@ -133,16 +147,7 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     let mut client = env.connect();
     let objective = started_objective(&env, &mut client, "Terminal scope");
     if !sandbox_works() {
-        let refused = client.call(open_command(&objective)).unwrap_err();
-        assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
-        let projected = detail(&mut client, &objective)
-            .available_actions
-            .into_iter()
-            .find(|a| a.action == ActionName::TerminalOpen)
-            .unwrap();
-        assert!(!projected.enabled);
-        assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
-        eprintln!("note: sandbox unavailable; terminal refused as expected");
+        assert_terminal_refused_without_sandbox(&mut client, &objective);
         return;
     }
     let refused = client
