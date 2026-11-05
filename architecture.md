@@ -75,7 +75,11 @@ crates/
     service/                    # application layer: one module per capability
                                 #   (objectives, feedback, capture, inspect, review,
                                 #   execution, agent_session, models, resources,
-                                #   terminal), dispatch, recovery, convert.rs, and
+                                #   terminal); handlers.rs (request dispatch and the
+                                #   shared commit and busy helpers), link.rs (client
+                                #   link and event stream), jobs/ (off-thread Git,
+                                #   verification and launch work), recovery/,
+                                #   startup.rs, state.rs, limits.rs, convert.rs, and
                                 #   projection/ (summaries, details, offered actions
                                 #   and the reply budget)
     storage/                    # SQLite schema, migrations, rows, backups
