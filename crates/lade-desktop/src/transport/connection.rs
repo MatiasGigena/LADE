@@ -81,7 +81,11 @@ pub fn sibling_service() -> Option<PathBuf> {
 
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
 
-pub fn random_id() -> Id {
+/// A fresh id for a request or operation, or for a test's scratch name. Those ids only
+/// correlate replies and recognise resends, so they must be unique but need not be secret:
+/// when `/dev/urandom` cannot be read, a mix of the time, process id and a counter stands in.
+/// That fallback is unique within the process but not random.
+pub fn unique_id() -> Id {
     let mut bytes = [0u8; 16];
     let read = File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
     if read.is_err() {
@@ -249,13 +253,20 @@ pub enum Input {
     Shutdown,
 }
 
+/// Whether this connection attempt has started `laded`, when the window may start it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spawn {
+    NotTried,
+    Started,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Phase {
     Connecting {
         started: Instant,
         attempt: u32,
         next: Instant,
-        spawned: bool,
+        spawn: Spawn,
         after_loss: bool,
     },
     Connected,
@@ -269,7 +280,7 @@ impl Phase {
             started: now,
             attempt: 0,
             next: now + delay,
-            spawned: false,
+            spawn: Spawn::NotTried,
             after_loss,
         }
     }
@@ -311,7 +322,7 @@ pub fn spawn_driver<S: UpdateSink>(
     thread::Builder::new()
         .name("lade-transport".into())
         .spawn(move || {
-            let core = Core::new(random_id, config.open.clone());
+            let core = Core::new(unique_id, config.open.clone());
             let mut driver = Driver {
                 config,
                 sink,
@@ -381,7 +392,7 @@ impl<S: UpdateSink> Driver<S> {
             started,
             attempt,
             next,
-            spawned,
+            spawn,
             after_loss,
         } = self.phase
         else {
@@ -405,23 +416,30 @@ impl<S: UpdateSink> Driver<S> {
             START_WINDOW
         };
         let in_window = started.elapsed() < window;
-        let mut spawned_now = spawned;
+        let mut spawn = spawn;
         let failure: Option<String> = match connect(&self.config.runtime_dir) {
             Ok(link) => return self.connected(link),
-            Err(ConnectError::NotRunning) => {
-                let mut why = "LADE could not reach the local service.".to_owned();
-                match &self.config.spawn {
-                    Some(spawn) if !spawned => {
-                        spawned_now = true;
-                        if spawn_service(spawn, &self.config.runtime_dir).is_err() {
-                            why = "LADE could not start the local service (laded).".into();
+            Err(ConnectError::NotRunning) => match (&self.config.spawn, spawn) {
+                // Waiting for it again would not help, so a failed start is reported at once.
+                (Some(service), Spawn::NotTried) => {
+                    match spawn_service(service, &self.config.runtime_dir) {
+                        Ok(()) => {
+                            spawn = Spawn::Started;
+                            None
                         }
+                        Err(e) => Some(format!(
+                            "LADE could not start the local service ({}): {e}.",
+                            service.program.display()
+                        )),
                     }
-                    Some(_) => {}
-                    None => why.push_str(" Start it with “laded serve”, then retry."),
                 }
-                (!in_window).then_some(why)
-            }
+                (Some(_), Spawn::Started) => (!in_window)
+                    .then(|| "LADE started the local service but could not reach it.".to_owned()),
+                (None, _) => (!in_window).then(|| {
+                    "LADE could not reach the local service. Start it with “laded serve”, then retry."
+                        .to_owned()
+                }),
+            },
             Err(ConnectError::Refused) if attempt < 3 => None,
             Err(ConnectError::Refused) => Some(
                 "The service refused this window's credentials. If it was just restarted, retry."
@@ -439,7 +457,7 @@ impl<S: UpdateSink> Driver<S> {
                     started,
                     attempt,
                     next: Instant::now() + backoff(attempt, after_loss),
-                    spawned: spawned_now,
+                    spawn,
                     after_loss,
                 };
                 true
@@ -588,9 +606,9 @@ mod tests {
     }
 
     #[test]
-    fn random_ids_are_distinct_version_4_uuids() {
-        let a = random_id();
-        let b = random_id();
+    fn unique_ids_are_distinct_version_4_uuids() {
+        let a = unique_id();
+        let b = unique_id();
         assert_ne!(a, b);
         assert!(Id::parse(a.as_str()).is_ok());
         assert_eq!(a.as_str().as_bytes()[14], b'4');

@@ -14,7 +14,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 
-use super::connection::{self, Config, ConnectError, Input, random_id, spawn_driver};
+use super::connection::{self, Config, ConnectError, Input, spawn_driver, unique_id};
 use super::requests::{
     self,
     tests::{epoch, snapshot_data},
@@ -37,7 +37,7 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(tag: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("lade-{tag}-{}", &random_id().as_str()[..8]));
+        let path = std::env::temp_dir().join(format!("lade-{tag}-{}", &unique_id().as_str()[..8]));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         Self(path)
     }
@@ -162,7 +162,7 @@ fn serve_gap_then_lose_a_command(listener: &UnixListener) -> Id {
     let mut link = accept(listener);
     link.send(ClientBody::Welcome {
         service_epoch: epoch(),
-        lease_id: random_id(),
+        lease_id: unique_id(),
     });
     let first = link.request();
     assert_eq!(first.request.name(), wire::RequestName::Snapshot);
@@ -192,7 +192,7 @@ fn serve_unknown_outcome(listener: &UnixListener, operation_id: &Id) {
     let mut link = accept(listener);
     link.send(ClientBody::Welcome {
         service_epoch: epoch(),
-        lease_id: random_id(),
+        lease_id: unique_id(),
     });
     let mut saw_query = false;
     for _ in 0..2 {
@@ -301,6 +301,38 @@ fn missing_service_without_spawn_reports_unavailable() {
         unreachable!()
     };
     assert!(reason.contains("laded serve"), "{reason}");
+    let _ = tx.send(Input::Shutdown);
+}
+
+#[test]
+fn a_service_that_cannot_be_started_reports_why_at_once() {
+    let dir = TempDir::new("nospawn");
+    let program = dir.0.join("missing-laded");
+    let (tx, rx) = channel();
+    let (updates_tx, updates) = channel();
+    let config = Config {
+        runtime_dir: dir.0.join("run"),
+        spawn: Some(connection::SpawnService {
+            program: program.clone(),
+            state_dir: None,
+        }),
+        open: None,
+    };
+    spawn_driver(config, updates_tx, tx.clone(), rx).unwrap();
+    let update = wait_for(&updates, "unavailable", |u| {
+        matches!(
+            u,
+            StoreUpdate::Connection(ConnectionState::Unavailable { .. })
+        )
+    });
+    let StoreUpdate::Connection(ConnectionState::Unavailable { reason }) = update else {
+        unreachable!()
+    };
+    assert!(
+        reason.starts_with("LADE could not start the local service")
+            && reason.contains(&program.display().to_string()),
+        "{reason}"
+    );
     let _ = tx.send(Input::Shutdown);
 }
 
