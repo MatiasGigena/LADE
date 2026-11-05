@@ -1,8 +1,7 @@
 use crate::presentation::state::model::{
-    ActionAvailability, ActionName, ActivityRole, ApprovalState, Attention, Basis, CandidateStatus,
-    ChangeStatus, DeliveryMode, DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle,
-    ObjectiveDetail, Reference, ReferenceVersion, SearchScope, Side, Timestamp, VerificationState,
-    VerificationSummary,
+    ActivityRole, ApprovalState, Attention, Basis, CandidateStatus, ChangeStatus, DeliveryMode,
+    DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle, ObjectiveDetail, Reference,
+    ReferenceVersion, SearchScope, Side, Timestamp, VerificationState,
 };
 
 pub fn attention_label(attention: Attention) -> &'static str {
@@ -58,19 +57,6 @@ pub fn execution_label(execution: &Execution) -> String {
             Some(reason) => format!("Failed — {reason}"),
             None => "Failed".to_owned(),
         },
-    }
-}
-
-#[expect(
-    dead_code,
-    reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
-)]
-pub fn execution_label_for(detail: &ObjectiveDetail) -> String {
-    let label = execution_label(&detail.summary.execution);
-    if detail.availability(ActionName::ExecutionResume) == ActionAvailability::Enabled {
-        format!("{label} — resumable")
-    } else {
-        label
     }
 }
 
@@ -344,18 +330,6 @@ pub fn command_line(argv: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-#[expect(
-    dead_code,
-    reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
-)]
-pub fn verification_summary_line(v: &VerificationSummary) -> String {
-    let (sign, label) = verification_result(v.state);
-    match v.exit_code {
-        Some(code) => format!("{sign} {label} · exit {code}"),
-        None => format!("{sign} {label}"),
-    }
 }
 
 pub fn split_argv(input: &str) -> Result<Vec<String>, &'static str> {

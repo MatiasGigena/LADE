@@ -76,14 +76,6 @@ impl EditGuard {
         }
     }
 
-    #[expect(
-        dead_code,
-        reason = "not wired into any view yet; kept until the owner decides whether to surface or delete it"
-    )]
-    pub fn limit(&self) -> TextLimit {
-        self.limit
-    }
-
     pub fn begin(&mut self, snapshot: Snapshot) {
         self.generation = self.generation.wrapping_add(1);
         self.rejected = None;
