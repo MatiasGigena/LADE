@@ -40,6 +40,9 @@ const EXTENSION = `export default function (pi) {
 }
 `;
 
+/** A long turn, so that several of them leave the session something to compact. */
+const LONG_TURN = "context ".repeat(4_000);
+
 interface Profile { dir: string; extension: string }
 
 function write(path: string, content: string): void {
@@ -81,7 +84,7 @@ async function prompt(worker: Worker, body: string): Promise<number> {
   return mark;
 }
 
-async function command(worker: Worker, payload: JsonObject): Promise<JsonObject> {
+function command(worker: Worker, payload: JsonObject): Promise<JsonObject> {
   const id = randomUUID();
   const mark = worker.frames.length;
   worker.send({ kind: "session.command", command_id: id, command: payload });
@@ -355,7 +358,7 @@ test("export writes the current branch; import restores conversation metadata on
 }));
 
 test("manual compaction, model/thinking configuration and retries surface as activity", () => withProfile(async worker => {
-  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${"context ".repeat(4_000)}`);
+  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${LONG_TURN}`);
   const mark = worker.frames.length;
   const compacted = await command(worker, { op: "compact", instructions: "keep it short" });
 
@@ -380,7 +383,7 @@ test("a second command while one runs fails at once; a foreign profile path is r
   const outside = await command(worker, { op: "reload", resources: { profile_dir: "/", extensions: [] } });
   assert.equal(outside.ok, false, "a profile outside the session dir is refused");
 
-  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${"context ".repeat(4_000)}`);
+  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${LONG_TURN}`);
   const first = randomUUID();
   const second = randomUUID();
   const mark = worker.frames.length;
