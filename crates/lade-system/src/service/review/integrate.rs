@@ -51,15 +51,11 @@ impl Service {
         });
         let (oid, st, plan, repo) = match prepared {
             Ok(prepared) => prepared,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         let journal = integration_journal(oid, &st, &plan);
         if let Err(rejection) = self.record_integration_intent(&ctx, &journal) {
-            self.finish(ctx, Err(rejection));
-            return Flow::Done;
+            return self.reject(ctx, rejection);
         }
         fault::point("integrate.intent");
         self.start_squash(oid, ctx, plan, journal, repo);
@@ -76,8 +72,7 @@ impl Service {
         key: &(WorkspaceId, String),
     ) -> Flow {
         if let Err(rejection) = self.check_idle(oid) {
-            self.finish(ctx, Err(rejection));
-            return Flow::Done;
+            return self.reject(ctx, rejection);
         }
         self.rt(oid).busy = Some(Busy::Integrate);
         if let Some(waiting) = self.integrations.queued.get_mut(key) {

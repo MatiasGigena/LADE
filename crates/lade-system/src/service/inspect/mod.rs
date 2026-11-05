@@ -147,10 +147,7 @@ impl Service {
     ) -> Flow {
         let resolved = oid.and_then(|oid| Ok((oid, self.resolve(oid, basis)?, self.repo_of(oid)?)));
         match resolved {
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+            Err(rejection) => self.reject(ctx, rejection),
             Ok((oid, Basis2::NeedsCapture, _)) => {
                 let st = &self.objectives[&oid];
                 let input = st
@@ -168,10 +165,7 @@ impl Service {
                         });
                         Flow::Deferred
                     }
-                    Err(rejection) => {
-                        self.finish(ctx, Err(rejection));
-                        Flow::Done
-                    }
+                    Err(rejection) => self.reject(ctx, rejection),
                 }
             }
             Ok((_, Basis2::Ready(resolved), repo)) => {
@@ -188,10 +182,7 @@ impl Service {
     pub(crate) fn changes_list(&mut self, ctx: ReqCtx, query: ChangesListQuery) -> Flow {
         let oid = match self.objective_id(&query.objective_id) {
             Ok(oid) => oid,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         let st = &self.objectives[&oid];
         if let (Basis::Working, Some(worktree)) = (&query.basis, st.row.worktree.clone()) {
@@ -204,10 +195,7 @@ impl Service {
                     });
                     return Flow::Deferred;
                 }
-                Err(rejection) => {
-                    self.finish(ctx, Err(rejection));
-                    return Flow::Done;
-                }
+                Err(rejection) => return self.reject(ctx, rejection),
             }
         }
         let basis = query.basis.clone();
@@ -292,14 +280,10 @@ impl Service {
     pub(crate) fn search(&mut self, ctx: ReqCtx, query: SearchQuery) -> Flow {
         let workspace = match parse_uuid(&query.workspace_id) {
             Ok(uuid) => lade_core::domain::ids::WorkspaceId::new(uuid),
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         let Some(ws) = self.workspaces.get(&workspace).cloned() else {
-            self.finish(ctx, Err(not_found("workspace")));
-            return Flow::Done;
+            return self.reject(ctx, not_found("workspace"));
         };
         if query.scope == SearchScope::Objectives {
             let needle = query.query.to_lowercase();
@@ -349,8 +333,7 @@ impl Service {
         } else {
             let branch = ws.default_branch.clone().unwrap_or_else(|| "main".into());
             let Some(tree) = self.resolve_target(workspace, &branch) else {
-                self.finish(ctx, Err(not_found("default branch")));
-                return Flow::Done;
+                return self.reject(ctx, not_found("default branch"));
             };
             let label = format!("branch {branch} at {}", &tree.hex()[..12]);
             let repo = ws.repo.clone();

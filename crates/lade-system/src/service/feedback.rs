@@ -53,9 +53,8 @@ fn history_too_large() -> Rejection {
 /// One page of `eligible` (sorted, and already past the request's cursor) that fits a reply
 /// frame: at most `limit` items, stopping before the first that would push the reply over
 /// `MAX_FRAME`. `to_wire` gives an item's wire form, its JSON length and the cursor that resumes
-/// after it, and
-/// `reply` wraps a page with its next cursor (`None` when nothing is left). When not even the
-/// first item fits, the page is refused as too large rather than returned empty.
+/// after it, and `reply` wraps a page with its next cursor (`None` when nothing is left). When not
+/// even the first item fits, the page is refused as too large rather than returned empty.
 fn page_within_frame<E, T, C: Clone>(
     request_id: &Id,
     eligible: &[E],
@@ -471,10 +470,7 @@ impl Service {
                 });
                 Flow::Deferred
             }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+            Err(rejection) => self.reject(ctx, rejection),
         }
     }
 

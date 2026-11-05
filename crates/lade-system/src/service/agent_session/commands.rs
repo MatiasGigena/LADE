@@ -106,10 +106,7 @@ impl Service {
             .and_then(|oid| self.command_target(oid, op).map(|()| oid));
         match prepared {
             Ok(oid) => self.send_command(ctx, oid, op, command, None),
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+            Err(rejection) => self.reject(ctx, rejection),
         }
     }
 
@@ -158,10 +155,7 @@ impl Service {
                 };
                 self.send_command(ctx, oid, Op::Export, command, Some(path))
             }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+            Err(rejection) => self.reject(ctx, rejection),
         }
     }
 
@@ -184,10 +178,7 @@ impl Service {
                 };
                 self.send_command(ctx, oid, Op::Import, command, None)
             }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+            Err(rejection) => self.reject(ctx, rejection),
         }
     }
 
@@ -197,10 +188,7 @@ impl Service {
             .and_then(|oid| self.command_target(oid, Op::Reload).map(|()| oid));
         let oid = match prepared {
             Ok(oid) => oid,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         let source = self.profile_dir();
         let dest = self.session_dir(oid).join("profile");
@@ -270,15 +258,11 @@ impl Service {
         })();
         let (oid, model, live) = match prepared {
             Ok(found) => found,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         if live {
             if let Err(rejection) = self.command_target(oid, Op::Configure) {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
+                return self.reject(ctx, rejection);
             }
             let command = SessionCommand::Configure {
                 model: cmd.model,
@@ -287,8 +271,7 @@ impl Service {
             return self.send_command(ctx, oid, Op::Configure, command, None);
         }
         if let Err(rejection) = self.preflight(model.provider()) {
-            self.finish(ctx, Err(rejection));
-            return Flow::Done;
+            return self.reject(ctx, rejection);
         }
         let result = self.persist_selection(Some(&mut ctx), oid, model, cmd.thinking, |service| {
             service.session_state(oid, SessionChangeReason::Configure)

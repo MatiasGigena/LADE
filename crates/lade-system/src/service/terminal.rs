@@ -102,74 +102,82 @@ impl Service {
     }
 
     pub(crate) fn terminal_open(&mut self, ctx: ReqCtx, cmd: &TerminalOpenCommand) -> Flow {
-        let prepared = (|| {
-            let oid = self.objective_id(&cmd.objective_id)?;
-            let cols = size(&cmd.cols, MAX_COLS, "columns")?;
-            let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
-            let writable = self.terminal_scope(oid)?;
-            let starting = self.terminals.opening.iter().filter(|o| **o == oid).count();
-            let open = self
-                .terminals
-                .open
-                .values()
-                .filter(|t| t.oid == oid)
-                .count()
-                + starting;
-            let total = self.terminals.open.len() + self.terminals.opening.len();
-            let max = self.limits.max_terminals;
-            if total >= max || open >= MAX_PER_OBJECTIVE {
-                return Err(Rejection::new(
-                    ErrorCode::LimitReached,
-                    SafeAction::None,
-                    &format!(
-                        "Too many terminals are open ({open} of {MAX_PER_OBJECTIVE} for this Objective, {total} of {max} in total). Close one first."
-                    ),
-                ));
-            }
-            if writable && let Some(why) = self.storage_blocker() {
-                return Err(limit_reached(&why));
-            }
-            let tools = self
-                .sandbox_tools()
-                .ok_or_else(|| unavailable(TERMINAL_SANDBOX_UNAVAILABLE))?;
-            let st = self.obj(oid)?;
-            let ws = self.ws_of(st)?;
-            let terminal_id = new_uuid();
-            let request = TerminalRequest {
-                objective_id: oid.to_string(),
-                terminal_id: terminal_id.to_string(),
-                worktree: st.row.worktree.clone().unwrap_or_default(),
-                repo_common_dir: ws.repo.common_dir().to_path_buf(),
-                writable,
-                cols,
-                rows,
-                run_dir: self.paths.run.clone(),
-                limits: TERMINAL_LIMITS,
-                cgroups: self.cgroups.clone(),
-            };
-            Ok((oid, terminal_id, tools, request))
-        })();
-        let (oid, terminal_id, tools, request) = match prepared {
+        let (oid, job) = match self.prepare_terminal(cmd) {
             Ok(prepared) => prepared,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         self.terminals.opening.push(oid);
-        let writable = request.writable;
-        self.spawn(move || Completed::TerminalOpen {
+        self.spawn(move || job(ctx));
+        Flow::Deferred
+    }
+
+    /// Checks the terminal's scope and quotas and returns the job that starts it in the
+    /// Objective's sandbox.
+    fn prepare_terminal(
+        &self,
+        cmd: &TerminalOpenCommand,
+    ) -> Result<
+        (
+            ObjectiveId,
+            impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+        ),
+        Rejection,
+    > {
+        let oid = self.objective_id(&cmd.objective_id)?;
+        let cols = size(&cmd.cols, MAX_COLS, "columns")?;
+        let rows = size(&cmd.rows, MAX_ROWS, "rows")?;
+        let writable = self.terminal_scope(oid)?;
+        let starting = self.terminals.opening.iter().filter(|o| **o == oid).count();
+        let open = self
+            .terminals
+            .open
+            .values()
+            .filter(|t| t.oid == oid)
+            .count()
+            + starting;
+        let total = self.terminals.open.len() + self.terminals.opening.len();
+        let max = self.limits.max_terminals;
+        if total >= max || open >= MAX_PER_OBJECTIVE {
+            return Err(Rejection::new(
+                ErrorCode::LimitReached,
+                SafeAction::None,
+                &format!(
+                    "Too many terminals are open ({open} of {MAX_PER_OBJECTIVE} for this Objective, {total} of {max} in total). Close one first."
+                ),
+            ));
+        }
+        if writable && let Some(why) = self.storage_blocker() {
+            return Err(limit_reached(&why));
+        }
+        let tools = self
+            .sandbox_tools()
+            .ok_or_else(|| unavailable(TERMINAL_SANDBOX_UNAVAILABLE))?;
+        let st = self.obj(oid)?;
+        let ws = self.ws_of(st)?;
+        let terminal_id = new_uuid();
+        let request = TerminalRequest {
+            objective_id: oid.to_string(),
+            terminal_id: terminal_id.to_string(),
+            worktree: st.row.worktree.clone().unwrap_or_default(),
+            repo_common_dir: ws.repo.common_dir().to_path_buf(),
+            writable,
+            cols,
+            rows,
+            run_dir: self.paths.run.clone(),
+            limits: TERMINAL_LIMITS,
+            cgroups: self.cgroups.clone(),
+        };
+        Ok((oid, move |ctx| Completed::TerminalOpen {
             oid,
             ctx,
             terminal_id: wire_id(terminal_id),
             writable,
-            size: (request.cols, request.rows),
+            size: (cols, rows),
             result: Terminal::open(&tools, &request).map_err(|e| {
                 eprintln!("laded: terminal could not start: {}", e.kind());
                 unavailable("The terminal could not start. Try again.")
             }),
-        });
-        Flow::Deferred
+        }))
     }
 
     pub(crate) fn terminal_open_done(

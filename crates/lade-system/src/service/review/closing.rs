@@ -22,55 +22,49 @@ use crate::support::ts_now;
 
 impl Service {
     pub(crate) fn objective_complete(&mut self, ctx: ReqCtx, id: &Id) -> Flow {
-        let prepared = (|| {
-            let oid = self.objective_id(id)?;
-            self.check_idle(oid)?;
-            let st = self.obj(oid)?;
-            if !matches!(
-                st.row.objective.lifecycle(),
-                Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen
-            ) {
-                return Err(domain_rejection(DomainError::InvalidLifecycle(
-                    "objective is approved or closed",
-                )));
-            }
-            if st.row.objective.execution().state().is_live() {
-                return Err(domain_rejection(DomainError::InvalidLifecycle(
-                    "stop execution first",
-                )));
-            }
-            let ws = self.ws_of(st)?;
-            let record = st.row.objective.record();
-            Ok((
-                oid,
-                ws.repo.clone(),
-                st.row.worktree.clone(),
-                record.integration_target.as_str().to_string(),
-                record.start_commit.clone(),
-            ))
-        })();
-        match prepared {
-            Ok((oid, repo, worktree, target, start)) => {
-                self.rt(oid).busy = Some(Busy::Complete);
-                let scratch = self.paths.tmp.clone();
-                self.spawn(move || Completed::Complete {
-                    oid,
-                    ctx,
-                    result: jobs::change_set_empty(
-                        &repo,
-                        worktree.as_deref(),
-                        &scratch,
-                        &target,
-                        &start,
-                    ),
-                });
-                Flow::Deferred
-            }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+        let prepared = self.prepare_complete(id);
+        self.start_deferred(ctx, Busy::Complete, prepared)
+    }
+
+    /// Checks that the Objective can complete and returns the job that asks Git whether its
+    /// change set is empty.
+    fn prepare_complete(
+        &self,
+        id: &Id,
+    ) -> Result<
+        (
+            ObjectiveId,
+            impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+        ),
+        Rejection,
+    > {
+        let oid = self.objective_id(id)?;
+        self.check_idle(oid)?;
+        let st = self.obj(oid)?;
+        if !matches!(
+            st.row.objective.lifecycle(),
+            Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen
+        ) {
+            return Err(domain_rejection(DomainError::InvalidLifecycle(
+                "objective is approved or closed",
+            )));
         }
+        if st.row.objective.execution().state().is_live() {
+            return Err(domain_rejection(DomainError::InvalidLifecycle(
+                "stop execution first",
+            )));
+        }
+        let repo = self.ws_of(st)?.repo.clone();
+        let record = st.row.objective.record();
+        let worktree = st.row.worktree.clone();
+        let target = record.integration_target.as_str().to_string();
+        let start = record.start_commit.clone();
+        let scratch = self.paths.tmp.clone();
+        Ok((oid, move |ctx| Completed::Complete {
+            oid,
+            ctx,
+            result: jobs::change_set_empty(&repo, worktree.as_deref(), &scratch, &target, &start),
+        }))
     }
 
     pub(crate) fn complete_done(
@@ -112,53 +106,53 @@ impl Service {
     }
 
     pub(crate) fn objective_cleanup(&mut self, ctx: ReqCtx, cmd: &ObjectiveCleanupCommand) -> Flow {
-        let prepared = (|| {
-            let oid = self.objective_id(&cmd.objective_id)?;
-            self.check_idle(oid)?;
-            let st = self.obj(oid)?;
-            if st.row.objective.execution().state().is_live() {
-                return Err(domain_rejection(DomainError::InvalidLifecycle(
-                    "stop execution first",
-                )));
-            }
-            let mut probe = st.clone();
-            probe
-                .row
-                .objective
-                .cleanup(st.unsent_drafts(), cmd.confirm_data_loss, ts_now())
-                .map_err(domain_rejection)?;
-            let ws = self.ws_of(st)?;
-            Ok((
-                oid,
-                ws.repo.clone(),
-                st.row.worktree.clone(),
-                st.row.git_branch.clone(),
-            ))
-        })();
-        match prepared {
-            Ok((oid, repo, worktree, branch)) => {
-                let confirm = cmd.confirm_data_loss;
-                let scratch = self.paths.tmp.clone();
-                self.rt(oid).busy = Some(Busy::Cleanup);
-                self.spawn(move || Completed::Cleanup {
-                    oid,
-                    ctx,
-                    confirm,
-                    result: jobs::cleanup(
-                        &repo,
-                        worktree.as_deref(),
-                        branch.as_deref(),
-                        &scratch,
-                        confirm,
-                    ),
-                });
-                Flow::Deferred
-            }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+        let prepared = self.prepare_cleanup(cmd);
+        self.start_deferred(ctx, Busy::Cleanup, prepared)
+    }
+
+    /// Checks that the Objective can be cleaned up and returns the job that removes its
+    /// worktree and branch.
+    fn prepare_cleanup(
+        &self,
+        cmd: &ObjectiveCleanupCommand,
+    ) -> Result<
+        (
+            ObjectiveId,
+            impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+        ),
+        Rejection,
+    > {
+        let oid = self.objective_id(&cmd.objective_id)?;
+        self.check_idle(oid)?;
+        let st = self.obj(oid)?;
+        if st.row.objective.execution().state().is_live() {
+            return Err(domain_rejection(DomainError::InvalidLifecycle(
+                "stop execution first",
+            )));
         }
+        let mut probe = st.clone();
+        probe
+            .row
+            .objective
+            .cleanup(st.unsent_drafts(), cmd.confirm_data_loss, ts_now())
+            .map_err(domain_rejection)?;
+        let repo = self.ws_of(st)?.repo.clone();
+        let worktree = st.row.worktree.clone();
+        let branch = st.row.git_branch.clone();
+        let confirm = cmd.confirm_data_loss;
+        let scratch = self.paths.tmp.clone();
+        Ok((oid, move |ctx| Completed::Cleanup {
+            oid,
+            ctx,
+            confirm,
+            result: jobs::cleanup(
+                &repo,
+                worktree.as_deref(),
+                branch.as_deref(),
+                &scratch,
+                confirm,
+            ),
+        }))
     }
 
     pub(crate) fn objective_delete_history(
@@ -166,44 +160,48 @@ impl Service {
         ctx: ReqCtx,
         cmd: &ObjectiveDeleteHistoryCommand,
     ) -> Flow {
-        let prepared = (|| {
-            let oid = self.objective_id(&cmd.objective_id)?;
-            self.check_idle(oid)?;
-            let st = self.obj(oid)?;
-            if let Some(reason) = delete_history_blocker(st) {
-                return Err(domain_rejection(DomainError::InvalidLifecycle(reason)));
-            }
-            if !cmd.confirm_history_loss {
-                return Err(invalid(
-                    "deleting history needs explicit confirmation (confirm_history_loss)",
-                ));
-            }
-            let mut refs = sql(storage::capture_retention_refs(self.store.conn(), oid))?;
-            for candidate in st.review.candidates() {
-                let base = format!("{}candidate-{}", git::RETENTION_PREFIX, candidate.id);
-                refs.push(format!("{base}-tree"));
-                refs.push(base);
-            }
-            if let Some(branch) = &st.row.git_branch {
-                refs.push(format!("refs/heads/{branch}"));
-            }
-            Ok((oid, self.ws_of(st)?.repo.clone(), refs))
-        })();
-        match prepared {
-            Ok((oid, repo, refs)) => {
-                self.rt(oid).busy = Some(Busy::DeleteHistory);
-                self.spawn(move || Completed::DeleteHistory {
-                    oid,
-                    ctx,
-                    result: jobs::delete_refs(&repo, &refs),
-                });
-                Flow::Deferred
-            }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+        let prepared = self.prepare_delete_history(cmd);
+        self.start_deferred(ctx, Busy::DeleteHistory, prepared)
+    }
+
+    /// Checks that the Objective's history can be deleted and returns the job that deletes its
+    /// retained refs.
+    fn prepare_delete_history(
+        &self,
+        cmd: &ObjectiveDeleteHistoryCommand,
+    ) -> Result<
+        (
+            ObjectiveId,
+            impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+        ),
+        Rejection,
+    > {
+        let oid = self.objective_id(&cmd.objective_id)?;
+        self.check_idle(oid)?;
+        let st = self.obj(oid)?;
+        if let Some(reason) = delete_history_blocker(st) {
+            return Err(domain_rejection(DomainError::InvalidLifecycle(reason)));
         }
+        if !cmd.confirm_history_loss {
+            return Err(invalid(
+                "deleting history needs explicit confirmation (confirm_history_loss)",
+            ));
+        }
+        let mut refs = sql(storage::capture_retention_refs(self.store.conn(), oid))?;
+        for candidate in st.review.candidates() {
+            let base = format!("{}candidate-{}", git::RETENTION_PREFIX, candidate.id);
+            refs.push(format!("{base}-tree"));
+            refs.push(base);
+        }
+        if let Some(branch) = &st.row.git_branch {
+            refs.push(format!("refs/heads/{branch}"));
+        }
+        let repo = self.ws_of(st)?.repo.clone();
+        Ok((oid, move |ctx| Completed::DeleteHistory {
+            oid,
+            ctx,
+            result: jobs::delete_refs(&repo, &refs),
+        }))
     }
 
     pub(crate) fn delete_history_done(

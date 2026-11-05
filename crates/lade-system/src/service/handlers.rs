@@ -12,7 +12,7 @@ use rusqlite::Transaction;
 use crate::storage;
 
 use super::convert::{conflict, not_found, parse_uuid};
-use super::state::{ObjState, Runtime, WsState};
+use super::state::{Busy, ObjState, Runtime, WsState};
 use super::{Completed, Flow, ReqCtx, Service, store_failed};
 
 pub(super) const SNAPSHOT_OBJECTIVES: usize = 400;
@@ -52,6 +52,37 @@ impl Service {
 
     pub(crate) fn rt(&mut self, oid: ObjectiveId) -> &mut Runtime {
         self.runtime.entry(oid).or_default()
+    }
+
+    /// Answers a request refused before any work started.
+    pub(crate) fn reject(&mut self, ctx: ReqCtx, rejection: Rejection) -> Flow {
+        self.finish(ctx, Err(rejection));
+        Flow::Done
+    }
+
+    /// Starts a deferred request from its checked preparation: a rejection is answered at once;
+    /// otherwise the Objective is marked `busy` until the job's continuation clears it, and the
+    /// job runs with the request's context.
+    pub(crate) fn start_deferred(
+        &mut self,
+        ctx: ReqCtx,
+        busy: Busy,
+        prepared: Result<
+            (
+                ObjectiveId,
+                impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+            ),
+            Rejection,
+        >,
+    ) -> Flow {
+        match prepared {
+            Ok((oid, job)) => {
+                self.rt(oid).busy = Some(busy);
+                self.spawn(move || job(ctx));
+                Flow::Deferred
+            }
+            Err(rejection) => self.reject(ctx, rejection),
+        }
     }
 
     pub(crate) fn check_idle(&self, oid: ObjectiveId) -> Result<(), Rejection> {
@@ -313,7 +344,6 @@ mod tests {
 
     use super::*;
     use crate::service::convert::wire_id;
-    use crate::service::state::Busy;
     use crate::service::test_harness::Harness;
     use crate::support::new_uuid;
 

@@ -55,10 +55,7 @@ impl Service {
         })();
         let oid = match prepared {
             Ok(oid) => oid,
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                return Flow::Done;
-            }
+            Err(rejection) => return self.reject(ctx, rejection),
         };
         self.rt(oid).busy = Some(Busy::Freeze);
         self.exclude_terminal_writers(oid);
@@ -77,13 +74,11 @@ impl Service {
             && let Err(e) = st.row.objective.request_stop(ts_now())
         {
             self.rt(oid).busy = None;
-            self.finish(ctx, Err(domain_rejection(e)));
-            return Flow::Done;
+            return self.reject(ctx, domain_rejection(e));
         }
         if let Err(rejection) = self.commit_obj(None, None, st) {
             self.rt(oid).busy = None;
-            self.finish(ctx, Err(rejection));
-            return Flow::Done;
+            return self.reject(ctx, rejection);
         }
         ctx.recorded = false;
         self.rt(oid).waiting_freeze = Some((ctx, Instant::now()));
@@ -382,69 +377,66 @@ impl Service {
     }
 
     pub(crate) fn review_refresh(&mut self, ctx: ReqCtx, cmd: &CandidateCommand) -> Flow {
-        let prepared = (|| {
-            let oid = self.objective_id(&cmd.objective_id)?;
-            self.check_idle(oid)?;
-            let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
-            let st = self.obj(oid)?.clone();
-            if !matches!(
-                st.row.objective.lifecycle(),
-                Lifecycle::Frozen | Lifecycle::Approved
-            ) {
-                return Err(domain_rejection(DomainError::InvalidLifecycle(
-                    "refresh requires a frozen candidate",
-                )));
-            }
-            let candidate = st
-                .review
-                .current_candidate()
-                .filter(|c| c.id == candidate_id)
-                .ok_or_else(|| domain_rejection(DomainError::StaleCandidate))?
-                .clone();
-            let target = self
-                .fresh_target(&st)
-                .ok_or_else(|| not_found("integration target branch"))?;
-            if target == candidate.base_target_commit {
-                return Err(conflict("target has not moved"));
-            }
-            let ws = self.ws_of(&st)?;
-            let new_id = CandidateId::new(new_uuid());
-            Ok((
-                oid,
-                candidate_id,
-                new_id,
-                RefreshInput {
-                    repo: ws.repo.clone(),
-                    artifacts: self.artifacts.clone(),
-                    target_branch: st
-                        .row
-                        .objective
-                        .record()
-                        .integration_target
-                        .as_str()
-                        .to_string(),
-                    candidate_commit: candidate.commit,
-                    retain_ref: format!("candidate-{new_id}-tree"),
-                },
-            ))
-        })();
-        match prepared {
-            Ok((oid, candidate_id, new_id, input)) => {
-                self.rt(oid).busy = Some(Busy::Refresh);
-                self.spawn(move || Completed::Refresh {
-                    oid,
-                    ctx,
-                    candidate_id,
-                    new_id,
-                    result: jobs::refresh(&input),
-                });
-                Flow::Deferred
-            }
-            Err(rejection) => {
-                self.finish(ctx, Err(rejection));
-                Flow::Done
-            }
+        let prepared = self.prepare_refresh(cmd);
+        self.start_deferred(ctx, Busy::Refresh, prepared)
+    }
+
+    /// Checks that the current candidate can be refreshed onto the moved target and returns the
+    /// job that rebuilds it as a new candidate.
+    fn prepare_refresh(
+        &mut self,
+        cmd: &CandidateCommand,
+    ) -> Result<
+        (
+            ObjectiveId,
+            impl FnOnce(ReqCtx) -> Completed + Send + 'static,
+        ),
+        Rejection,
+    > {
+        let oid = self.objective_id(&cmd.objective_id)?;
+        self.check_idle(oid)?;
+        let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
+        let st = self.obj(oid)?.clone();
+        if !matches!(
+            st.row.objective.lifecycle(),
+            Lifecycle::Frozen | Lifecycle::Approved
+        ) {
+            return Err(domain_rejection(DomainError::InvalidLifecycle(
+                "refresh requires a frozen candidate",
+            )));
         }
+        let candidate = st
+            .review
+            .current_candidate()
+            .filter(|c| c.id == candidate_id)
+            .ok_or_else(|| domain_rejection(DomainError::StaleCandidate))?;
+        let target = self
+            .fresh_target(&st)
+            .ok_or_else(|| not_found("integration target branch"))?;
+        if target == candidate.base_target_commit {
+            return Err(conflict("target has not moved"));
+        }
+        let new_id = CandidateId::new(new_uuid());
+        let input = RefreshInput {
+            repo: self.ws_of(&st)?.repo.clone(),
+            artifacts: self.artifacts.clone(),
+            target_branch: st
+                .row
+                .objective
+                .record()
+                .integration_target
+                .as_str()
+                .to_string(),
+            candidate_commit: candidate.commit.clone(),
+            retain_ref: format!("candidate-{new_id}-tree"),
+        };
+        Ok((oid, move |ctx| Completed::Refresh {
+            oid,
+            ctx,
+            candidate_id,
+            new_id,
+            result: jobs::refresh(&input),
+        }))
     }
 
     pub(crate) fn refresh_done(
