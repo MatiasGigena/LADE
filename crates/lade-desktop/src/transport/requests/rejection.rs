@@ -40,6 +40,7 @@ fn technical_details(rejection: &Rejection) -> String {
 
 pub fn refusal(action: &str, rejection: &Rejection) -> Refusal {
     Refusal {
+        code: convert::error_code(rejection.code),
         message: format!("Couldn't {action}. {}", reason_and_advice(rejection)),
         details: technical_details(rejection),
     }
@@ -142,6 +143,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
                 (Some(draft_id), _) => updates.push(StoreUpdate::DraftSaveRefused {
                     draft_id: draft_id.clone(),
                     refusal: Refusal {
+                        code: refused.code,
                         message: reason_and_advice(rejection),
                         details: refused.details,
                     },

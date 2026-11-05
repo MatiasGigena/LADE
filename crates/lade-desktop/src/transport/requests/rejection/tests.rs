@@ -25,6 +25,7 @@ fn command_success_clears_and_rejection_reaches_only_its_objective_and_surface()
         objective_id: oid(),
         surface: ActionSurface::Review,
         refusal: Refusal {
+            code: "invalid_lifecycle",
             message: message.into(),
             details: "invalid_lifecycle: Wait until the agent has stopped.".into(),
         },
@@ -253,6 +254,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
         vec![StoreUpdate::DraftSaveRefused {
             draft_id: DraftId::new(D),
             refusal: Refusal {
+                code: "durability_failure",
                 message: "The draft was not written (injected test fault).".into(),
                 details: "durability_failure: The draft was not written (injected test fault)."
                     .into(),
@@ -275,6 +277,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
         vec![StoreUpdate::DraftDeleteRefused {
             draft_id: DraftId::new(D),
             refusal: Refusal {
+                code: "conflict",
                 message:
                     "Couldn't delete draft. The draft was changed elsewhere. Refresh and try again."
                         .into(),

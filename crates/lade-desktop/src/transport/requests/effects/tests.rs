@@ -241,6 +241,7 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
         vec![StoreUpdate::TerminalRefused {
             objective_id: oid(),
             refusal: Refusal {
+                code: "invalid_lifecycle",
                 message: "Couldn't open terminal. Start the agent once to create this Objective's worktree.".into(),
                 details: "invalid_lifecycle: Start the agent once to create this Objective's worktree.".into(),
             },

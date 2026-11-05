@@ -213,6 +213,7 @@ impl PresentationState {
             } => self.terminal_problem(
                 objective_id,
                 Refusal {
+                    code: "terminal_problem",
                     message,
                     details: String::new(),
                 },
@@ -484,10 +485,9 @@ impl PresentationState {
         if let Some(objective_id) = self.draft_mut(draft_id).map(|d| d.objective_id.clone()) {
             return self.keep_refusal(objective_id, ActionSurface::Drafts, refusal);
         }
-        let code = refusal.details.split(':').next().unwrap_or_default();
         self.push_notice(ServiceNotice {
             level: NoticeLevel::Warning,
-            code: code.to_owned(),
+            code: refusal.code.to_owned(),
             message: refusal.message,
             scope: NoticeScope::General,
         });

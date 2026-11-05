@@ -234,6 +234,7 @@ impl DraftEditor {
 
     pub fn fail(&mut self, message: &str) {
         self.fail_with(&Refusal {
+            code: "save_failed",
             message: message.to_owned(),
             details: String::new(),
         });
@@ -416,6 +417,7 @@ mod tests {
         );
         assert_eq!(e.status(true).label(), "Save failed. Storage full.");
         e.fail_with(&Refusal {
+            code: "durability_failure",
             message: "The draft was not written.".into(),
             details: "durability_failure: the draft was not written".into(),
         });

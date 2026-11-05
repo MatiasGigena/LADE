@@ -303,7 +303,10 @@ pub enum ActionSurface {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
+    /// The stable error code: the service's, or the desktop's own for a local problem.
+    pub code: &'static str,
     pub message: String,
+    /// Technical details for display only.
     pub details: String,
 }
 
