@@ -15,6 +15,12 @@ export const MAX_EXTENSION_BYTES = 8 * 1024 * 1024;
 
 const MAX_DEPTH = 8;
 
+const MAX_RESOURCE_NAME = 256;
+
+const MAX_RESOURCE_MESSAGE = 512;
+
+const MAX_RESOURCES = 256;
+
 export const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 export class HashError extends Error {}
@@ -201,12 +207,12 @@ export class LadeResourceLoader implements ResourceLoader {
   report(): LoadedResource[] {
     const resources = this.inputs.resources;
     const profile = resources?.profile_dir;
-    const label = (path: string): string => prefix(basename(path), 256) || "resource";
+    const label = (path: string): string => prefix(basename(path), MAX_RESOURCE_NAME) || "resource";
     const loaded: LoadedResource[] = [];
 
-    for (const skill of this.getSkills().skills) loaded.push({ kind: "skill", name: prefix(skill.name, 256) || "skill", source: "lade_profile", status: "loaded" });
+    for (const skill of this.getSkills().skills) loaded.push({ kind: "skill", name: prefix(skill.name, MAX_RESOURCE_NAME) || "skill", source: "lade_profile", status: "loaded" });
 
-    for (const prompt of this.getPrompts().prompts) loaded.push({ kind: "prompt", name: prefix(prompt.name, 256) || "prompt", source: "lade_profile", status: "loaded" });
+    for (const prompt of this.getPrompts().prompts) loaded.push({ kind: "prompt", name: prefix(prompt.name, MAX_RESOURCE_NAME) || "prompt", source: "lade_profile", status: "loaded" });
 
     for (const file of this.getAgentsFiles().agentsFiles) loaded.push({ kind: "context", name: label(file.path), source: profile !== undefined && within(profile, file.path) ? "lade_profile" : "repository", status: "loaded" });
     const byPath = new Map((resources?.extensions ?? []).map(extension => [extension.path, extension]));
@@ -220,12 +226,12 @@ export class LadeResourceLoader implements ResourceLoader {
 
     for (const failure of extensions.errors) {
       const approved = byPath.get(failure.path);
-      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: prefix(failure.error.replace(/\p{Cc}+/gu, " "), 512) };
+      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: prefix(failure.error.replace(/\p{Cc}+/gu, " "), MAX_RESOURCE_MESSAGE) };
 
       if (approved) entry.sha256 = approved.sha256;
       loaded.push(entry);
     }
 
-    return [...loaded, ...this.refused].slice(0, 256);
+    return [...loaded, ...this.refused].slice(0, MAX_RESOURCES);
   }
 }
