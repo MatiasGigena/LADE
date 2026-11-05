@@ -19,8 +19,6 @@ export type LoadedResource = Extract<WorkerToService, { kind: "resources.loaded"
 
 export type TurnState = Extract<WorkerToService, { kind: "turn.state" }>["state"];
 
-export const MAX_ERROR_MESSAGE = 512;
-
 export function parseInbound(bytes: Uint8Array): ServiceToWorker {
   const { body } = decodeWorkerFrame(bytes);
 

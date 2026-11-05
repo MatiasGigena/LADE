@@ -2,7 +2,7 @@ import { MAX_ITEM_TEXT_BYTES, newId } from "../schema.ts";
 import type { AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ActivityRole, Id, WorkerToService } from "../dto.ts";
 import type { ActivityItemBody, TurnState } from "./wire.ts";
-import { MAX_ERROR_MESSAGE } from "./wire.ts";
+import { clip, isHighSurrogate, safeMessage } from "./text.ts";
 
 const MAX_ENCODED_TEXT = 900 * 1024;
 
@@ -33,34 +33,12 @@ export function boundText(text: string): Bounded {
   }
 }
 
-export function prefix(text: string, max: number): string {
-  if (text.length <= max) return text;
-
-  return text.slice(0, isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max);
-}
-
-export function safeMessage(text: string): string {
-  const line = text.replace(/\p{Cc}+/gu, " ").replace(/[A-Za-z0-9_\-+/=.]{32,}/g, "[redacted]").trim();
-
-  return line.length > MAX_ERROR_MESSAGE ? `${prefix(line, MAX_ERROR_MESSAGE - 1)}…` : line;
-}
-
-function clip(text: string, max: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
-
-  return line.length > max ? `${prefix(line, max - 1)}…` : line;
-}
-
 function messageText(message: SessionMessage): string {
   if (message.role !== "user") return "";
 
   if (!Array.isArray(message.content)) return message.content;
 
   return message.content.map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
-}
-
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
 }
 
 interface Block { itemId: Id; role: ActivityRole; title: string; sent: number; carry: string; capped: boolean }

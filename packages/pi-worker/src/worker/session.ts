@@ -1,22 +1,18 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionRuntime, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, CreateAgentSessionRuntimeResult, ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
-import type { Model, ThinkingLevel, TreeEntry, WorkerErrorCode, WorkerResources, WorkerToService } from "../dto.ts";
+import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, CreateAgentSessionRuntimeResult, ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { Model, ThinkingLevel, WorkerErrorCode, WorkerResources, WorkerToService } from "../dto.ts";
 import { counter } from "../schema.ts";
-import { prefix, safeMessage } from "./activity.ts";
 import { registerTestFixture } from "./fixture.ts";
+import { isInside, piEnvironment, profilePaths } from "./paths.ts";
 import { LadeResourceLoader } from "./resources.ts";
+import { safeMessage } from "./text.ts";
+import { treePage } from "./tree.ts";
 import type { UiBridge } from "./ui.ts";
 import type { CommandBody, DeliverBody, ResultBody, StartBody } from "./wire.ts";
 
 export const WORKER_TOOLS = ["read", "bash", "edit", "write"];
-
-export const MAX_TREE_ENTRIES = 1024;
-
-const MAX_TREE_BYTES = 900 * 1024;
-
-const MAX_LABEL = 200;
 
 type Bindings = Parameters<AgentSession["bindExtensions"]>[0];
 
@@ -30,93 +26,6 @@ export class StartError extends Error {
 }
 
 class CommandError extends Error {}
-
-export interface ProfilePaths { agentDir: string; sessionsDir: string }
-
-export function profilePaths(sessionDir: string): ProfilePaths {
-  return { agentDir: join(sessionDir, "agent"), sessionsDir: join(sessionDir, "sessions") };
-}
-
-export function piEnvironment(sessionDir: string): ReadonlyArray<readonly [string, string]> {
-  const { agentDir, sessionsDir } = profilePaths(sessionDir);
-
-  return [["PI_CODING_AGENT_DIR", agentDir], ["PI_CODING_AGENT_SESSION_DIR", sessionsDir], ["PI_OFFLINE", "1"], ["PI_SKIP_VERSION_CHECK", "1"], ["PI_TELEMETRY", "0"]];
-}
-
-function inside(parent: string, path: string): boolean {
-  const rel = relative(parent, path);
-
-  return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
-function clip(text: string): string {
-  const line = text.replace(/\s+/g, " ").trim();
-
-  return line.length > MAX_LABEL ? `${prefix(line, MAX_LABEL - 1)}…` : line;
-}
-
-function contentText(content: string | ReadonlyArray<{ type: string; text?: string }>): string {
-  if (!Array.isArray(content)) return String(content);
-
-  return content.map(part => part.type === "text" ? part.text ?? "" : `[${part.type}]`).join(" ");
-}
-
-function describe(entry: SessionEntry): Pick<TreeEntry, "kind" | "label"> {
-  switch (entry.type) {
-    case "message": {
-      const message = entry.message;
-
-      if (message.role === "user") return { kind: "user", label: contentText(message.content) };
-
-      if (message.role === "assistant") return { kind: "assistant", label: contentText(message.content) };
-
-      if (message.role === "toolResult") return { kind: "tool_result", label: `${message.toolName} result` };
-
-      return { kind: "other", label: message.role };
-    }
-
-    case "custom_message": return { kind: "custom_message", label: entry.customType };
-    case "compaction": return { kind: "compaction", label: "Compaction summary" };
-    case "branch_summary": return { kind: "branch_summary", label: "Branch summary" };
-    case "model_change": return { kind: "model_change", label: `${entry.provider}/${entry.modelId}` };
-    case "thinking_level_change": return { kind: "thinking_change", label: entry.thinkingLevel };
-    case "label": return { kind: "label", label: entry.label ?? "label cleared" };
-    case "session_info": return { kind: "session_info", label: entry.name ?? "session info" };
-    case "custom": return { kind: "custom", label: entry.customType };
-    default: return { kind: "other", label: "entry" };
-  }
-}
-
-export function treeEntry(entry: SessionEntry, bookmark: string | undefined): TreeEntry {
-  const { kind, label } = describe(entry);
-  const node: TreeEntry = { kind, entry_id: entry.id, label: clip(label) };
-
-  if (entry.parentId !== null) node.parent_id = entry.parentId;
-
-  if (bookmark !== undefined) node.bookmark = clip(bookmark);
-
-  return node;
-}
-
-export interface TreePage { entries: TreeEntry[]; truncated: boolean }
-
-export function treePage(entries: readonly SessionEntry[], label: (id: string) => string | undefined): TreePage {
-  const page: TreeEntry[] = [];
-  let bytes = 0;
-
-  for (let i = entries.length - 1; i >= 0 && page.length < MAX_TREE_ENTRIES; i--) {
-    const entry = entries[i];
-
-    if (entry === undefined) break;
-    const node = treeEntry(entry, label(entry.id));
-    bytes += Buffer.byteLength(JSON.stringify(node)) + 1;
-
-    if (bytes > MAX_TREE_BYTES) break;
-    page.push(node);
-  }
-
-  return { entries: page.reverse(), truncated: page.length < entries.length };
-}
 
 function isThinking(level: string): level is ThinkingLevel {
   return ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(level);
@@ -176,7 +85,7 @@ export class SessionHost {
     mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
     const profile = start.resources?.profile_dir;
 
-    if (profile !== undefined && !inside(start.session_dir, profile)) throw new StartError("startup_failed", "the profile snapshot must be inside session_dir");
+    if (profile !== undefined && !isInside(start.session_dir, profile)) throw new StartError("startup_failed", "the profile snapshot must be inside session_dir");
     const models = profile === undefined ? null : join(profile, "models.json");
 
     const modelRuntime = await ModelRuntime.create({
@@ -232,7 +141,7 @@ export class SessionHost {
     const start = this.start;
     const file = start.session_file;
 
-    if (file !== undefined && inside(sessionsDir, file) && existsSync(file)) return SessionManager.open(file, sessionsDir, start.cwd);
+    if (file !== undefined && isInside(sessionsDir, file) && existsSync(file)) return SessionManager.open(file, sessionsDir, start.cwd);
 
     return start.resume ? SessionManager.continueRecent(start.cwd, sessionsDir) : SessionManager.create(start.cwd, sessionsDir);
   }
@@ -362,11 +271,11 @@ export class SessionHost {
       case "import":
         this.idle("importing");
 
-        if (!inside(join(this.start.session_dir, "imports"), command.path)) throw new CommandError("imports are read only from the service's import directory");
+        if (!isInside(join(this.start.session_dir, "imports"), command.path)) throw new CommandError("imports are read only from the service's import directory");
 
         return this.replaceSession("import", () => runtime.importFromJsonl(command.path, this.start.cwd));
       case "export":
-        if (!inside(join(this.start.session_dir, "exports"), command.path)) throw new CommandError("exports are written only to the service's export directory");
+        if (!isInside(join(this.start.session_dir, "exports"), command.path)) throw new CommandError("exports are written only to the service's export directory");
         mkdirSync(dirname(command.path), { recursive: true, mode: 0o700 });
         session.exportToJsonl(command.path);
 
@@ -380,7 +289,7 @@ export class SessionHost {
       case "reload":
         this.idle("reload");
 
-        if (!inside(this.start.session_dir, command.resources.profile_dir)) throw new CommandError("the profile snapshot must be inside session_dir");
+        if (!isInside(this.start.session_dir, command.resources.profile_dir)) throw new CommandError("the profile snapshot must be inside session_dir");
 
         return this.reload(command.resources);
       case "configure":

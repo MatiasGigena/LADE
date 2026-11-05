@@ -3,9 +3,11 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import type { AssistantMessage } from "../src/worker/pi-ai.ts";
-import { ActivityMapper, boundText, safeMessage } from "../src/worker/activity.ts";
+import { ActivityMapper, boundText } from "../src/worker/activity.ts";
 import { StdioChannel } from "../src/worker/channel.ts";
-import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
+import { isInside } from "../src/worker/paths.ts";
+import { safeMessage } from "../src/worker/text.ts";
+import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/tree.ts";
 import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
 import type { ServiceToWorker, WorkerToService } from "../src/dto.ts";
@@ -238,4 +240,12 @@ test("a tree page of long labelled entries still fits one session.result frame",
   assert.equal(page.entries.at(-1)?.entry_id, `e${MAX_TREE_ENTRIES - 1}`, "the newest entries are kept, oldest first");
   assert.doesNotThrow(() => encodeOutbound({ kind: "session.result", command_id: ID, ok: true, message: "", entries: page.entries, truncated: true, leaf_id: "e1023" }));
   assert.deepEqual(treePage(entries.slice(0, 3), () => undefined), { entries: entries.slice(0, 3).map(entry => treeEntry(entry, undefined)), truncated: false });
+});
+
+test("path containment compares whole segments", () => {
+  assert.equal(isInside("/s/imports", "/s/imports/..backup.jsonl"), true, "a name that begins with .. is inside");
+  assert.equal(isInside("/s/imports", "/s/imports/a/b.jsonl"), true);
+  assert.equal(isInside("/s/imports", "/s/imports/../b.jsonl"), false);
+  assert.equal(isInside("/s/imports", "/s/imports"), false, "the parent itself is not inside");
+  assert.equal(isInside("/s/imports", "/s/imports-other/b.jsonl"), false);
 });

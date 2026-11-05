@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { boundedJson, compareCodeUnits } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
-import { piEnvironment } from "../src/worker/session.ts";
+import { piEnvironment } from "../src/worker/paths.ts";
 import { BUNDLE, isRecord, VERSION } from "../src/schema.ts";
 
 export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "worker.ts");

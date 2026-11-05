@@ -2,11 +2,12 @@ import { writeFrame } from "./worker/stdio.ts";
 import { WireError } from "./json.ts";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServiceToWorker, WorkerErrorCode } from "./dto.ts";
-import { ActivityMapper, safeMessage } from "./worker/activity.ts";
+import { ActivityMapper } from "./worker/activity.ts";
 import { StdioChannel } from "./worker/channel.ts";
 import { installGateway, installNoNetwork } from "./worker/gateway.ts";
 import { abort, deliver, SessionHost, StartError } from "./worker/session.ts";
 import type { InputGate } from "./worker/session.ts";
+import { safeMessage } from "./worker/text.ts";
 import { UiBridge } from "./worker/ui.ts";
 import type { CommandBody, DeliverBody } from "./worker/wire.ts";
 

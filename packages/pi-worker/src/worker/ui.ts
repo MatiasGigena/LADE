@@ -2,7 +2,7 @@ import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { Id, UiAnswer, UiPrompt, WorkerToService } from "../dto.ts";
 import { counter, newId } from "../schema.ts";
-import { prefix } from "./activity.ts";
+import { prefix } from "./text.ts";
 import type { RespondBody } from "./wire.ts";
 
 type Notify = (title: string, text: string, isError: boolean) => void;

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
-import { basename, isAbsolute, join, relative, sep } from "node:path";
+import { basename, join, relative, sep } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory, LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { prefix } from "./activity.ts";
 import type { WorkerResources } from "../dto.ts";
+import { isInside } from "./paths.ts";
+import { prefix, safeMessage } from "./text.ts";
 import type { LoadedResource } from "./wire.ts";
 
 type ExtensionPaths = Parameters<ResourceLoader["extendResources"]>[0];
@@ -16,8 +17,6 @@ export const MAX_EXTENSION_BYTES = 8 * 1024 * 1024;
 const MAX_DEPTH = 8;
 
 const MAX_RESOURCE_NAME = 256;
-
-const MAX_RESOURCE_MESSAGE = 512;
 
 const MAX_RESOURCES = 256;
 
@@ -100,12 +99,6 @@ export function contextFiles(profileDir: string | undefined, cwd: string): Conte
 
 interface Verified { paths: string[]; report: LoadedResource[] }
 
-function within(parent: string, path: string): boolean {
-  const rel = relative(parent, path);
-
-  return rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
 export function verifyExtensions(resources: WorkerResources | undefined): Verified {
   const verified: Verified = { paths: [], report: [] };
 
@@ -117,7 +110,7 @@ export function verifyExtensions(resources: WorkerResources | undefined): Verifi
       verified.report.push({ kind: "extension", name: extension.name, source: "lade_profile", status: "refused", sha256: extension.sha256, message });
     };
 
-    if (!within(root, extension.path)) { refuse("extension path is outside the LADE profile"); continue; }
+    if (!isInside(root, extension.path)) { refuse("extension path is outside the LADE profile"); continue; }
 
     let actual: string;
 
@@ -214,7 +207,7 @@ export class LadeResourceLoader implements ResourceLoader {
 
     for (const prompt of this.getPrompts().prompts) loaded.push({ kind: "prompt", name: prefix(prompt.name, MAX_RESOURCE_NAME) || "prompt", source: "lade_profile", status: "loaded" });
 
-    for (const file of this.getAgentsFiles().agentsFiles) loaded.push({ kind: "context", name: label(file.path), source: profile !== undefined && within(profile, file.path) ? "lade_profile" : "repository", status: "loaded" });
+    for (const file of this.getAgentsFiles().agentsFiles) loaded.push({ kind: "context", name: label(file.path), source: profile !== undefined && isInside(profile, file.path) ? "lade_profile" : "repository", status: "loaded" });
     const byPath = new Map((resources?.extensions ?? []).map(extension => [extension.path, extension]));
     const extensions = this.getExtensions();
 
@@ -226,7 +219,7 @@ export class LadeResourceLoader implements ResourceLoader {
 
     for (const failure of extensions.errors) {
       const approved = byPath.get(failure.path);
-      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: prefix(failure.error.replace(/\p{Cc}+/gu, " "), MAX_RESOURCE_MESSAGE) };
+      const entry: LoadedResource = { kind: "extension", name: approved?.name ?? label(failure.path), source: "lade_profile", status: "failed", message: safeMessage(failure.error) };
 
       if (approved) entry.sha256 = approved.sha256;
       loaded.push(entry);
