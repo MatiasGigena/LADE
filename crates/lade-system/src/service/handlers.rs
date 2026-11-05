@@ -17,6 +17,8 @@ use super::{Completed, Flow, ReqCtx, Service, store_failed};
 
 pub(super) const SNAPSHOT_OBJECTIVES: usize = 400;
 const SNAPSHOT_BRANCHES: usize = 64;
+/// `workspaces.maxItems` in contracts/v1/schema.json; independent of the branch cap.
+const SNAPSHOT_WORKSPACES: usize = 64;
 
 /// A store read or write outside [`Service::commit`], logged and rejected as `commit` does.
 pub(crate) fn sql<T>(result: rusqlite::Result<T>) -> Result<T, Rejection> {
@@ -257,7 +259,7 @@ impl Service {
         workspace_states.sort_by_key(|ws| ws.id);
         let workspaces = workspace_states
             .into_iter()
-            .take(64)
+            .take(SNAPSHOT_WORKSPACES)
             .map(|ws| Self::wire_workspace(ws, Self::workspace_branches(ws, max_branches)))
             .collect();
         let mut states: Vec<&ObjState> = self.objectives.values().chain(objective).collect();

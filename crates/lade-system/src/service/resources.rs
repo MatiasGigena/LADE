@@ -184,7 +184,7 @@ impl Service {
         result: Result<profile::ImportReport, Rejection>,
     ) {
         let reply = result.map(|report| {
-            self.catalog.data = None;
+            self.invalidate_catalog();
             let inventory = self.inventory();
             self.emit(Event::ResourcesChanged(inventory.clone()));
             ReplyData::ProfileImport(ProfileImportResult {

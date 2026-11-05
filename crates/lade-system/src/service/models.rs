@@ -228,6 +228,11 @@ impl Service {
         }
     }
 
+    /// Forgets the cached catalogue after the profile changed, so the next listing asks pi again.
+    pub(crate) fn invalidate_catalog(&mut self) {
+        self.catalog.data = None;
+    }
+
     fn catalog_reply(&self, data: &CatalogData, query: &ModelsListQuery) -> ReplyData {
         let offered =
             |facts: &ProviderFacts| self.test_fixture_provider || facts.id != FIXTURE_PROVIDER;
