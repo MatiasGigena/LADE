@@ -94,7 +94,6 @@ struct ActionFacts<'a> {
     target: Option<&'a GitId>,
     lifecycle: Lifecycle,
     state: &'a ExecutionState,
-    live: bool,
     /// `BUSY` while any operation runs on the Objective.
     busy_reason: Option<&'static str>,
     /// The running operation is a freeze, which already leaves the worktree read-only.
@@ -102,7 +101,6 @@ struct ActionFacts<'a> {
     review: &'a Review,
     current: Option<&'a Candidate>,
     running_verification: bool,
-    closed: bool,
     target_moved: bool,
     worker_blocker: Option<String>,
     storage_blocker: Option<String>,
@@ -123,7 +121,6 @@ impl<'a> ActionFacts<'a> {
             target,
             lifecycle: record.lifecycle,
             state,
-            live: state.is_live(),
             busy_reason: busy.map(|_| BUSY),
             freezing: busy == Some("freeze"),
             review,
@@ -132,7 +129,6 @@ impl<'a> ActionFacts<'a> {
                 .verifications()
                 .iter()
                 .any(|v| v.outcome == VerificationOutcome::Running),
-            closed: record.lifecycle.is_terminal(),
             target_moved: match (current, target) {
                 (Some(c), Some(t)) => c.base_target_commit != *t,
                 _ => false,
@@ -160,7 +156,7 @@ impl<'a> ActionFacts<'a> {
                 Lifecycle::Defined | Lifecycle::Active if *self.state == ExecutionState::None => {
                     self.worker_blocker.as_deref()
                 }
-                Lifecycle::Defined | Lifecycle::Active if self.live => {
+                Lifecycle::Defined | Lifecycle::Active if self.state.is_live() => {
                     Some("The agent is already running.")
                 }
                 Lifecycle::Defined | Lifecycle::Active => {
@@ -191,7 +187,7 @@ impl<'a> ActionFacts<'a> {
                 {
                     self.worker_blocker.as_deref()
                 }
-                Lifecycle::Active if self.live => Some("The agent is already running."),
+                Lifecycle::Active if self.state.is_live() => Some("The agent is already running."),
                 Lifecycle::Defined | Lifecycle::Active => Some("Start the agent first."),
                 Lifecycle::Frozen | Lifecycle::Approved => {
                     Some("Return the candidate for revision before resuming the agent.")
@@ -200,10 +196,11 @@ impl<'a> ActionFacts<'a> {
             }),
         ));
         let has_session = self.record.execution.session().is_some();
-        let input_note = (!self.live && self.lifecycle == Lifecycle::Active && has_session)
-            .then_some(
-                "The agent is stopped. Your input is kept and delivered after you resume it.",
-            );
+        let input_note =
+            (!self.state.is_live() && self.lifecycle == Lifecycle::Active && has_session)
+                .then_some(
+                    "The agent is stopped. Your input is kept and delivered after you resume it.",
+                );
         let input = |action: ActionName, blocker: Option<&str>| match (blocker, input_note) {
             (None, Some(note)) => AvailableAction {
                 action,
@@ -281,7 +278,43 @@ impl<'a> ActionFacts<'a> {
                 _ => Some(CLOSED),
             }),
         ));
-        let approve = match (self.lifecycle, self.current) {
+        out.push(self.approve_action());
+        out.push(gate(
+            ActionName::ReviewRefresh,
+            self.busy_reason.or(
+                if !matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
+                    Some("Only a frozen candidate can be refreshed.")
+                } else if self.current.is_none() {
+                    Some(NO_CURRENT_CANDIDATE)
+                } else if !self.target_moved {
+                    Some("The Integration Target hasn't moved, so there is nothing to refresh.")
+                } else {
+                    None
+                },
+            ),
+        ));
+        out.push(gate(
+            ActionName::ReviewIntegrate,
+            self.busy_reason.or(if self.lifecycle != Lifecycle::Approved {
+                Some("Approve the candidate before integrating.")
+            } else if self.review.valid_approval().is_none() {
+                Some("The approval is no longer valid. Approve again.")
+            } else if self.target_moved
+                || self.review
+                    .valid_approval()
+                    .zip(self.target)
+                    .is_some_and(|(a, t)| a.target_commit != *t)
+            {
+                Some("The Integration Target moved after approval. Refresh the candidate and approve again.")
+            } else {
+                None
+            }),
+        ));
+    }
+
+    /// Approving the current candidate, which a missing or failed check only qualifies.
+    fn approve_action(&self) -> AvailableAction {
+        match (self.lifecycle, self.current) {
             (Lifecycle::Frozen, Some(c)) if self.busy_reason.is_none() => {
                 if self.target_moved {
                     disabled(
@@ -318,39 +351,7 @@ impl<'a> ActionFacts<'a> {
                 "Freeze the work for review before approving.",
             ),
             _ => disabled(ActionName::ReviewApprove, CLOSED),
-        };
-        out.push(approve);
-        out.push(gate(
-            ActionName::ReviewRefresh,
-            self.busy_reason.or(
-                if !matches!(self.lifecycle, Lifecycle::Frozen | Lifecycle::Approved) {
-                    Some("Only a frozen candidate can be refreshed.")
-                } else if self.current.is_none() {
-                    Some(NO_CURRENT_CANDIDATE)
-                } else if !self.target_moved {
-                    Some("The Integration Target hasn't moved, so there is nothing to refresh.")
-                } else {
-                    None
-                },
-            ),
-        ));
-        out.push(gate(
-            ActionName::ReviewIntegrate,
-            self.busy_reason.or(if self.lifecycle != Lifecycle::Approved {
-                Some("Approve the candidate before integrating.")
-            } else if self.review.valid_approval().is_none() {
-                Some("The approval is no longer valid. Approve again.")
-            } else if self.target_moved
-                || self.review
-                    .valid_approval()
-                    .zip(self.target)
-                    .is_some_and(|(a, t)| a.target_commit != *t)
-            {
-                Some("The Integration Target moved after approval. Refresh the candidate and approve again.")
-            } else {
-                None
-            }),
-        ));
+        }
     }
 
     /// Ending the Objective, cleaning up after it, and opening a terminal.
@@ -361,7 +362,7 @@ impl<'a> ActionFacts<'a> {
             ActionName::ObjectiveComplete,
             self.busy_reason.or(match self.lifecycle {
                 Lifecycle::Defined | Lifecycle::Active | Lifecycle::Frozen => {
-                    if self.live {
+                    if self.state.is_live() {
                         Some(STOP_AGENT_FIRST)
                     } else if self.running_verification {
                         Some(CHECK_RUNNING)
@@ -379,9 +380,9 @@ impl<'a> ActionFacts<'a> {
         ));
         out.push(gate(
             ActionName::ObjectiveDiscard,
-            self.busy_reason.or(if self.closed {
+            self.busy_reason.or(if self.lifecycle.is_terminal() {
                 Some(CLOSED)
-            } else if self.live {
+            } else if self.state.is_live() {
                 Some(STOP_AGENT_FIRST)
             } else if self.running_verification {
                 Some(CHECK_RUNNING)
@@ -391,11 +392,11 @@ impl<'a> ActionFacts<'a> {
         ));
         out.push(gate(
             ActionName::ObjectiveCleanup,
-            self.busy_reason.or(if !self.closed {
+            self.busy_reason.or(if !self.lifecycle.is_terminal() {
                 Some("Clean up becomes available once the Objective is integrated, completed or discarded.")
             } else if self.record.cleaned_up {
                 Some("This Objective is already cleaned up.")
-            } else if self.live {
+            } else if self.state.is_live() {
                 Some(STOP_AGENT_FIRST)
             } else {
                 None

@@ -23,6 +23,11 @@ use crate::adapters::artifacts::ArtifactError;
 use crate::adapters::git::{self, GitError};
 use crate::support::wire_ts;
 
+/// The wire identifier of a domain UUID.
+///
+/// # Panics
+///
+/// Never: every domain UUID is a canonical lowercase v4 UUID, which `Id::parse` accepts.
 #[must_use]
 #[expect(
     clippy::expect_used,

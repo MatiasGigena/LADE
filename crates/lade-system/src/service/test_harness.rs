@@ -114,7 +114,8 @@ pub(crate) struct Harness {
     pub launcher: Arc<FakeLauncher>,
     out: Outbound,
     queue: Receiver<Msg>,
-    _supervisor: Receiver<SupervisorEvent>,
+    /// Held so the supervisor channel stays open for the harness's lifetime.
+    supervisor: Receiver<SupervisorEvent>,
     /// Events read off the link while looking for replies, oldest first.
     pub events: VecDeque<Event>,
     replies: Vec<(Id, ReplyResult)>,
@@ -154,7 +155,7 @@ impl Harness {
             launcher,
             out,
             queue,
-            _supervisor: supervisor,
+            supervisor,
             events: VecDeque::new(),
             replies: Vec::new(),
             root,
@@ -170,7 +171,7 @@ impl Harness {
         self.out = attach(&mut service);
         self.service = service;
         self.queue = queue;
-        self._supervisor = supervisor;
+        self.supervisor = supervisor;
         self.events.clear();
         self.replies.clear();
     }

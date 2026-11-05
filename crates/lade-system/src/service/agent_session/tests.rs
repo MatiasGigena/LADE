@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -444,7 +445,6 @@ fn imports_copy_only_absolute_bounded_pi_session_files() {
     let copy = std::path::PathBuf::from(path);
     assert_ne!(copy, file, "the worker reads a private copy");
     assert_eq!(fs::read_to_string(&copy).expect("copy"), content);
-    use std::os::unix::fs::PermissionsExt;
     assert_eq!(
         fs::metadata(&copy).expect("meta").permissions().mode() & 0o777,
         0o600

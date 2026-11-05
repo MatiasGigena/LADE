@@ -95,9 +95,9 @@ fn a_second_integration_onto_the_same_target_waits_for_the_first() {
     let second_approval = approval_id(harness.approve(&second, &second_candidate));
 
     let first_ctx = Harness::ctx(lade_protocol::client::RequestName::ReviewIntegrate);
-    let first_id = first_ctx.request_id.clone();
+    let first_request = first_ctx.request_id.clone();
     let second_ctx = Harness::ctx(lade_protocol::client::RequestName::ReviewIntegrate);
-    let second_id = second_ctx.request_id.clone();
+    let second_request = second_ctx.request_id.clone();
     let first_cmd = ReviewIntegrateCommand {
         objective_id: first.clone(),
         approval_id: first_approval,
@@ -126,11 +126,11 @@ fn a_second_integration_onto_the_same_target_waits_for_the_first() {
 
     harness.settle();
     assert!(matches!(
-        harness.reply(&first_id),
+        harness.reply(&first_request),
         Some(Ok(ReplyData::ReviewIntegrate(_)))
     ));
     let second_reply = harness
-        .reply(&second_id)
+        .reply(&second_request)
         .expect("the queued request is retried");
     assert_eq!(
         second_reply.expect_err("the target moved").code,

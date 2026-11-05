@@ -176,7 +176,7 @@ impl SandboxWorker {
     /// worker's sandbox is torn down when its last handle drops.
     pub(super) fn start(
         shared: Arc<Shared>,
-        stdio: ChildStdio,
+        pipes: ChildStdio,
         binding: LaunchBinding,
         events: SyncSender<SupervisorEvent>,
     ) -> Result<Self, LaunchError> {
@@ -184,7 +184,7 @@ impl SandboxWorker {
             stdin: Some(stdin),
             stdout: Some(stdout),
             stderr: Some(stderr),
-        } = stdio
+        } = pipes
         else {
             return Err(invalid("missing worker pipes"));
         };

@@ -288,7 +288,7 @@ mod tests {
                 let index = ((o - 16) / 8) as usize;
                 let value = data.args[index];
                 if (o - 16) % 8 == 0 {
-                    value as u32
+                    u32::try_from(value & u64::from(u32::MAX)).expect("masked to the low word")
                 } else {
                     (value >> 32) as u32
                 }

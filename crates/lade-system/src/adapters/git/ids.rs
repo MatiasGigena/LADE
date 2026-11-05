@@ -10,6 +10,10 @@ use lade_core::domain::ids::{GitAlgorithm, GitId};
 use super::{GitError, Result};
 
 /// The id of the empty tree in `algorithm`'s object format.
+///
+/// # Panics
+///
+/// Never: both literals are full, non-zero lowercase object ids of their algorithm.
 #[must_use]
 #[expect(
     clippy::expect_used,

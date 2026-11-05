@@ -256,7 +256,7 @@ impl Repository {
                 (Vec::new(), false)
             }
             (Some(old), Some(new), Some(old_id), Some(new_id)) => {
-                let patch = self
+                let unified = self
                     .git("diff")
                     .read_only()
                     .args([
@@ -274,7 +274,7 @@ impl Repository {
                         new_id.hex(),
                     ])
                     .run()?;
-                if let Some(parsed) = parse_patch(&patch, old, new)? {
+                if let Some(parsed) = parse_patch(&unified, old, new)? {
                     parsed
                 } else {
                     diff.binary = true;

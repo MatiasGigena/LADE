@@ -39,7 +39,7 @@ fn merge_tree_clean_and_conflict() {
             assert!(names.contains(&"main.txt".to_owned()));
             assert!(names.contains(&"other.txt".to_owned()));
         }
-        other => panic!("expected clean merge, got {other:?}"),
+        other @ MergeOutcome::Conflict { .. } => panic!("expected clean merge, got {other:?}"),
     }
 
     git(&repo_dir, &["checkout", "-q", "main"]);
@@ -52,7 +52,7 @@ fn merge_tree_clean_and_conflict() {
         MergeOutcome::Conflict { paths, .. } => {
             assert_eq!(paths, vec![path(b"shared.txt")]);
         }
-        other => panic!("expected conflict, got {other:?}"),
+        other @ MergeOutcome::Clean { .. } => panic!("expected conflict, got {other:?}"),
     }
 }
 
