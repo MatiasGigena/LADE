@@ -139,8 +139,7 @@ impl Service {
                 }
                 Ok(())
             });
-            if committed.is_err() {
-                eprintln!("laded: could not record session replacement objective={oid}");
+            if !Self::persisted("the session replacement", oid, committed) {
                 return;
             }
             self.objectives.insert(oid, st);
@@ -156,16 +155,15 @@ impl Service {
             let recorded = self.commit(None, None, |tx| {
                 storage::record_pi_session(tx, session, &pi.pi_session_id, session_file)
             });
-            if recorded.is_err() {
-                eprintln!("laded: could not record pi session objective={oid}");
-            }
+            Self::persisted("the pi session", oid, recorded);
         }
         if reason == SessionChangeReason::Configure
             && let Ok(model) = ModelRef::new(&pi.model.provider, &pi.model.id)
         {
-            let _ = self.persist_selection(None, oid, model, pi.thinking, |service| {
+            let selected = self.persist_selection(None, oid, model, pi.thinking, |service| {
                 service.session_state(oid, SessionChangeReason::Configure)
             });
+            Self::persisted("the configured model", oid, selected.map(drop));
         }
         let state = self.session_state(oid, reason);
         self.emit(Event::SessionChanged(state));

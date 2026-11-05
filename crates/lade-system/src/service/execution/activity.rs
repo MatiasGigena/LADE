@@ -13,6 +13,7 @@ use crate::storage::{self, ActivityRow};
 
 use crate::service::Service;
 use crate::service::convert::{preview, wire_id};
+use crate::service::handlers::sql;
 use crate::support::{new_uuid, now_ms, wire_ts};
 
 const LIVE_ITEM_RETENTION: Duration = Duration::from_secs(60);
@@ -98,9 +99,11 @@ impl Service {
             is_error,
             truncated: truncated || cut,
         };
-        if storage::upsert_activity(self.store.conn(), oid, &row).is_err() {
-            eprintln!("laded: could not record activity objective={oid}");
-        }
+        Self::persisted(
+            "the activity item",
+            oid,
+            sql(storage::upsert_activity(self.store.conn(), oid, &row)),
+        );
         self.live.deltas.retain(|(_, id, _)| id != item_id);
         let item = wire_activity(&row);
         self.live.items.insert(
@@ -177,7 +180,12 @@ impl Service {
 
     pub(crate) fn flush_activity(&mut self) {
         for live in self.live.items.values_mut().filter(|l| l.dirty) {
-            if storage::upsert_activity(self.store.conn(), live.objective, &live.row).is_ok() {
+            let written = sql(storage::upsert_activity(
+                self.store.conn(),
+                live.objective,
+                &live.row,
+            ));
+            if Self::persisted("the streamed activity text", live.objective, written) {
                 live.dirty = false;
             }
         }

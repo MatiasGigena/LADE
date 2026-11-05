@@ -323,8 +323,7 @@ impl Service {
             Self::save_tx(tx, &st)?;
             storage::set_verification_tail(tx, verification_id, &out.tail)
         });
-        if committed.is_err() {
-            eprintln!("laded: could not record verification result objective={oid}");
+        if !Self::persisted("the verification result", oid, committed) {
             return;
         }
         let summary = st

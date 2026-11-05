@@ -233,14 +233,18 @@ impl Service {
         journal_id: Uuid,
         error: GitError,
     ) -> Rejection {
-        let _ = storage::update_journal(
-            self.store.conn(),
-            journal_id,
-            JournalState::Failed,
-            None,
-            Some(error.code()),
-            now_ms(),
-        );
+        let now = now_ms();
+        let journaled = self.commit(None, None, |tx| {
+            storage::update_journal(
+                tx,
+                journal_id,
+                JournalState::Failed,
+                None,
+                Some(error.code()),
+                now,
+            )
+        });
+        Self::persisted("the failed integration journal", oid, journaled);
         eprintln!(
             "laded: integration refused objective={oid} code={}",
             error.code()
@@ -257,7 +261,8 @@ impl Service {
                 GitError::CheckoutFailed { .. } => st.row.integration_conflict = true,
                 _ => {}
             }
-            let _ = self.commit_obj(None, None, st);
+            let committed = self.commit_obj(None, None, st);
+            Self::persisted("the refused integration", oid, committed);
         }
         git_rejection(error)
     }

@@ -163,12 +163,10 @@ impl Service {
         }
         let input = input.clone();
         let now = now_ms();
-        if self
-            .commit(None, None, |tx| {
-                storage::save_delivery(tx, id, &input.delivery, now)
-            })
-            .is_ok()
-        {
+        let committed = self.commit(None, None, |tx| {
+            storage::save_delivery(tx, id, &input.delivery, now)
+        });
+        if Self::persisted("the received input", oid, committed) {
             self.objectives.insert(oid, st);
             self.emit(Event::InputChanged(wire_input(&input)));
             self.emit_objective(oid);
