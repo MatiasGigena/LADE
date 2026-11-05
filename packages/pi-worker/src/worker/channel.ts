@@ -8,11 +8,16 @@ export const DELTA_BUDGET = 4 * 1024 * 1024;
 
 const MAX_COALESCED_DELTA = 64 * 1024;
 
+/** Estimated bytes of a queued frame's envelope and fixed fields, beyond its text. */
+const FRAME_OVERHEAD = 256;
+
+const DELTA_OVERHEAD = 128;
+
 function weight(body: WorkerToService): number {
   switch (body.kind) {
-    case "activity.item": return Buffer.byteLength(body.text) + 256;
-    case "activity.delta": return Buffer.byteLength(body.append_text) + 128;
-    default: return 256;
+    case "activity.item": return Buffer.byteLength(body.text) + FRAME_OVERHEAD;
+    case "activity.delta": return Buffer.byteLength(body.append_text) + DELTA_OVERHEAD;
+    default: return FRAME_OVERHEAD;
   }
 }
 
