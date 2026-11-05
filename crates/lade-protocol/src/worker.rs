@@ -243,7 +243,7 @@ impl WorkerBody {
     }
 }
 
-/// The model catalogue a worker in catalogue mode (`src/worker/catalog.ts`) writes to its output
+/// The model catalogue a worker in catalogue mode (`src/catalog.ts`) writes to its output
 /// file. It is not a frame and is not schema-checked: fields default when absent so the service can
 /// skip incomplete entries, and it applies its own caps.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

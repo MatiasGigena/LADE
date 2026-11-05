@@ -61,7 +61,7 @@ for path in worker_src.rglob('*.ts'):
     if re.search(r'\bany\b|import\s*\(', text):
         errors.append(f'unreviewed TS escape: {path.relative_to(root)}')
     imports = re.findall(r'(?:from|import)\s+["\']([^"\']+)["\']', text)
-    is_worker = path == worker_src/'worker.ts' or worker_src/'worker' in path.parents
+    is_worker = path in (worker_src/'worker.ts', worker_src/'catalog.ts') or worker_src/'worker' in path.parents
     def reviewed(x):
         if x.startswith(('./', '../')):
             target = (path.parent/x).resolve()

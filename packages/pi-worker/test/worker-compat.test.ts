@@ -399,7 +399,7 @@ test("a second command while one runs fails at once; a foreign profile path is r
 
 function runCatalog(box: Sandbox, name: string, env: Record<string, string>): JsonObject {
   const out = join(box.root, name);
-  execFileSync(process.execPath, [join(dirname(WORKER), "worker", "catalog.ts"), out], { stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, ...env } });
+  execFileSync(process.execPath, [join(dirname(WORKER), "catalog.ts"), out], { stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, ...env } });
 
   return record(JSON.parse(readFileSync(out, "utf8")));
 }

@@ -42,7 +42,7 @@ in `cwd`):
 Read only: `<session_dir>/profile/` (the service's snapshot of the LADE profile, IMP-011) and
 `<session_dir>/imports/` (service copies of sessions to import). The real `~/.pi`, `~/.agents` and the
 repository's `.pi/` are never read or written. The model catalogue for the service is produced by
-`node src/worker/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox
+`node src/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox
 (a script, not an importable module: importing it redirects stdout and disables the network).
 
 ## Protocol mapping
@@ -182,7 +182,7 @@ automatically.
 ## `lade-fixture` provider (test-only)
 
 The offline fixture provider exists only for test harnesses. The worker (`src/worker/session.ts`) and the
-model catalogue (`src/worker/catalog.ts`) register it only when `LADE_TEST_FIXTURE_PROVIDER=1` is set in
+model catalogue (`src/catalog.ts`) register it only when `LADE_TEST_FIXTURE_PROVIDER=1` is set in
 their environment; `laded` sets it in the sandbox only when it was itself started with that switch (see
 [service.md](service.md#test-only-fixture-provider)). Without it the provider is not in the catalogue and a
 `worker.start` naming it fails with `startup_failed` ("the requested model is not registered"). The worker

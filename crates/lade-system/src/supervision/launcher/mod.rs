@@ -373,7 +373,7 @@ impl WorkerLauncher for SandboxLauncher {
         argv.push(
             config
                 .worker_dir
-                .join("src/worker/catalog.ts")
+                .join("src/catalog.ts")
                 .into_os_string(),
         );
         argv.push(output.clone().into_os_string());

@@ -333,7 +333,7 @@ impl WorkerLauncher for NodeLauncher {
     }
 
     fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
-        let script = self.entry.with_file_name("worker").join("catalog.ts");
+        let script = self.entry.with_file_name("catalog.ts");
         let output = scratch.join("catalog.json");
         let mut command = Command::new("node");
         command

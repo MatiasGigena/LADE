@@ -1,9 +1,9 @@
-import "./stdio.ts";
+import "./worker/stdio.ts";
 import { writeFileSync } from "node:fs";
-import { getSupportedThinkingLevels } from "./pi-ai.ts";
+import { getSupportedThinkingLevels } from "./worker/pi-ai.ts";
 import { ModelRuntime, VERSION } from "@earendil-works/pi-coding-agent";
-import { registerTestFixture } from "./fixture.ts";
-import { installNoNetwork } from "./gateway.ts";
+import { registerTestFixture } from "./worker/fixture.ts";
+import { installNoNetwork } from "./worker/gateway.ts";
 
 // The output file shape; the service reads it as `lade_protocol::worker::Catalog`.
 interface CatalogModel { id: string; name: string; reasoning: boolean; thinking: string[] }
