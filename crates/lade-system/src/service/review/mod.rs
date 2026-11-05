@@ -325,20 +325,18 @@ impl Service {
             return;
         }
         st.tails.insert(verification_id, out.tail.clone());
-        let committed = self.commit(None, None, |tx| {
-            Self::save_tx(tx, &st)?;
-            storage::set_verification_tail(tx, verification_id, &out.tail)
-        });
-        if !Self::persisted("the verification result", oid, committed) {
-            return;
-        }
         let summary = st
             .review
             .verifications()
             .iter()
             .find(|v| v.id == verification_id)
             .map(|v| wire_verification(&st, v));
-        self.objectives.insert(oid, st);
+        let committed = self.commit_obj_with(None, None, st, |tx| {
+            storage::set_verification_tail(tx, verification_id, &out.tail)
+        });
+        if !Self::persisted("the verification result", oid, committed) {
+            return;
+        }
         if let Some(summary) = summary {
             self.emit(Event::VerificationChanged(summary));
         }

@@ -127,8 +127,7 @@ impl Service {
                 return;
             }
             let association = st.row.objective.execution().session().cloned();
-            let committed = self.commit(None, None, |tx| {
-                Self::save_tx(tx, &st)?;
+            let committed = self.commit_obj_with(None, None, st, |tx| {
                 if let Some(association) = &association {
                     storage::save_session(tx, oid, association, generation.value(), now)?;
                     storage::record_pi_session(
@@ -143,7 +142,6 @@ impl Service {
             if !Self::persisted("the session replacement", oid, committed) {
                 return;
             }
-            self.objectives.insert(oid, st);
             self.system_item(
                 oid,
                 &format!("Session replaced ({})", wire_reason(reason)),
