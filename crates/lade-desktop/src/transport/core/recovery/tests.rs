@@ -4,11 +4,11 @@ use lade_protocol::client::{
 use lade_protocol::types::{Counter, Id};
 
 use crate::presentation::state::drafts::DraftEditor;
-use crate::presentation::state::model::DraftId;
+use crate::presentation::state::model::{DeliveryState, DraftId, DraftState, ModelRef};
 use crate::presentation::state::store::PresentationState;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
-use crate::transport::requests::tests::{epoch, input_summary, oid, wire_draft};
+use crate::transport::requests::tests::{O, epoch, input_summary, oid, wire_detail, wire_draft};
 
 #[test]
 fn lost_command_reply_is_recovered_with_the_same_operation_id() {
@@ -227,7 +227,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
     );
     assert_eq!(
         state.drafts[&oid()][0].state,
-        crate::presentation::state::model::DraftState::Submitted,
+        DraftState::Submitted,
         "a recovered acknowledgement is historical, not a current draft event"
     );
     apply(
@@ -242,10 +242,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
             ),
         )),
     );
-    assert_eq!(
-        state.inputs[&oid()][0].delivery,
-        crate::presentation::state::model::DeliveryState::Received
-    );
+    assert_eq!(state.inputs[&oid()][0].delivery, DeliveryState::Received);
     apply(
         &mut state,
         core.on_reply(ok(&draft_next, draft_list(vec![wire_draft(11)], false))),
@@ -254,15 +251,9 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
         &mut state,
         core.on_reply(ok(&input_next, input_list(&[78], None))),
     );
-    assert_eq!(
-        state.drafts[&oid()][0].state,
-        crate::presentation::state::model::DraftState::Submitted
-    );
+    assert_eq!(state.drafts[&oid()][0].state, DraftState::Submitted);
     assert!(state.drafts[&oid()][0].stale);
-    assert_eq!(
-        state.inputs[&oid()][0].delivery,
-        crate::presentation::state::model::DeliveryState::Received
-    );
+    assert_eq!(state.inputs[&oid()][0].delivery, DeliveryState::Received);
 }
 
 /// Sends a message, loses the link before its reply and reconnects, returning the
@@ -385,4 +376,95 @@ fn a_pending_operation_becomes_uncertain_after_the_last_recheck() {
         )]
     );
     assert!(core.tick().frames.is_empty(), "no further checks");
+}
+
+/// Starts the agent, loses the link before the reply and reconnects. Returns the focused
+/// `objective.get` and the `operation.get` the reconnect sent.
+fn start_lost_on_reconnect(core: &mut Core) -> (RequestFrame, RequestFrame) {
+    core.submit(Intent::LoadObjective {
+        objective_id: oid(),
+    });
+    core.submit(Intent::StartExecution {
+        objective_id: oid(),
+        model: ModelRef {
+            provider: "lade-fixture".into(),
+            id: "fixture".into(),
+        },
+        thinking: None,
+    });
+    core.on_link_lost();
+    let reconnect = core.on_welcome(epoch());
+    let find = |name| {
+        reconnect
+            .frames
+            .iter()
+            .find(|f| f.request.name() == name)
+            .cloned()
+            .unwrap()
+    };
+    (
+        find(wire::RequestName::ObjectiveGet),
+        find(wire::RequestName::OperationGet),
+    )
+}
+
+fn detail_at(revision: u64, title: &str) -> Box<wire::ObjectiveDetail> {
+    let mut detail = wire_detail(O);
+    detail.revision = Counter::new(revision);
+    detail.title = title.into();
+    Box::new(detail)
+}
+
+fn started(revision: u64) -> ReplyData {
+    status(
+        OperationState::Completed,
+        Some(Outcome::Ok(Box::new(ReplyData::ExecutionStart(detail_at(
+            revision,
+            "as started",
+        ))))),
+    )
+}
+
+#[test]
+fn a_recovered_objective_detail_older_than_the_reloaded_one_is_dropped() {
+    let (mut core, _) = connected();
+    let (reload, recover) = start_lost_on_reconnect(&mut core);
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    apply(
+        &mut state,
+        core.on_reply(ok(
+            &reload,
+            ReplyData::ObjectiveGet(detail_at(5, "current")),
+        )),
+    );
+    let step = core.on_reply(ok(&recover, started(4)));
+    assert!(
+        step.updates
+            .iter()
+            .any(|u| matches!(u, StoreUpdate::Notice(n) if n.code == "operation_recovered"))
+    );
+    apply(&mut state, step);
+    let held = state.detail(&oid()).unwrap();
+    assert_eq!(
+        (held.summary.revision, held.summary.title.as_str()),
+        (5, "current")
+    );
+    assert_eq!(state.objective(&oid()).unwrap().revision, 5);
+}
+
+#[test]
+fn a_recovered_objective_detail_newer_than_the_reloaded_one_is_applied() {
+    let (mut core, _) = connected();
+    let (reload, recover) = start_lost_on_reconnect(&mut core);
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    apply(
+        &mut state,
+        core.on_reply(ok(&reload, ReplyData::ObjectiveGet(detail_at(4, "before")))),
+    );
+    apply(&mut state, core.on_reply(ok(&recover, started(5))));
+    let held = state.detail(&oid()).unwrap();
+    assert_eq!(
+        (held.summary.revision, held.summary.title.as_str()),
+        (5, "as started")
+    );
 }

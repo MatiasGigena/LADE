@@ -704,3 +704,24 @@ fn settings_repaint_the_workspaces_and_the_selected_detail() {
         [Change::Workspaces, Change::Detail(o)]
     );
 }
+
+#[test]
+fn an_objective_older_than_the_one_held_is_dropped() {
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    let o = ObjectiveId::new("o");
+    let mut newer = summary("o", Attention::Working, Lifecycle::Active, 2);
+    newer.revision = 3;
+    state.apply(StoreUpdate::ObjectiveChanged(newer.clone()));
+    let mut older = summary("o", Attention::Idle, Lifecycle::Active, 1);
+    older.revision = 2;
+    assert!(state.apply(StoreUpdate::ObjectiveChanged(older)).is_empty());
+    assert_eq!(state.objective(&o), Some(&newer));
+    let mut same = newer.clone();
+    same.attention = Attention::ReadyForReview;
+    assert_eq!(
+        state.apply(StoreUpdate::ObjectiveChanged(same.clone())),
+        [Change::Objectives, Change::Detail(o.clone())],
+        "the same revision is applied: derived fields can change without a new revision"
+    );
+    assert_eq!(state.objective(&o), Some(&same));
+}

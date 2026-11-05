@@ -8,7 +8,7 @@ use lade_protocol::client::{
 
 use super::{Core, MAX_RECHECKS, Operation, Pending, Step, notice};
 use crate::presentation::controller::intents::Intent;
-use crate::presentation::state::model::{NoticeLevel, ObjectiveId};
+use crate::presentation::state::model::NoticeLevel;
 use crate::presentation::state::store::StoreUpdate;
 use crate::transport::requests::{self, Context};
 
@@ -23,28 +23,12 @@ impl Core {
         frame
     }
 
+    /// Applies a recovered outcome; [`requests::recovered_effects`] decides which are stale.
     fn settle_recovered(&mut self, context: &Context, data: ReplyData) -> Step {
-        let refresh = match &data {
-            ReplyData::DraftSave(draft) => vec![Intent::LoadDrafts {
-                objective_id: ObjectiveId::new(draft.objective_id.as_str()),
-            }],
-            ReplyData::DraftDelete(_) => self
-                .drafts_requested
-                .iter()
-                .map(|objective_id| Intent::LoadDrafts {
-                    objective_id: objective_id.clone(),
-                })
-                .collect(),
-            ReplyData::MessageSend(input) | ReplyData::FeedbackSubmit(input) => {
-                vec![Intent::LoadInputs {
-                    objective_id: ObjectiveId::new(input.objective_id.as_str()),
-                }]
-            }
-            _ => return self.settle(context, ReplyResult::Ok(Box::new(data))),
-        };
-        let mut effects = requests::recovered_effects(context, &data);
-        effects.follow_ups.extend(refresh);
-        self.apply_effects(effects)
+        match requests::recovered_effects(context, &data) {
+            Some(effects) => self.apply_effects(effects),
+            None => self.settle(context, ReplyResult::Ok(Box::new(data))),
+        }
     }
 
     pub(super) fn recovered(&mut self, operation: Operation, result: ReplyResult) -> Step {

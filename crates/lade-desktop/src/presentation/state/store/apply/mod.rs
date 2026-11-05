@@ -237,7 +237,22 @@ impl PresentationState {
         self.activity.entry(objective_id.clone()).or_default()
     }
 
+    /// Whether `summary` is older than the Objective already held. An Objective's revision only
+    /// grows, so an older summary comes from a reply or recovered outcome that fresher state has
+    /// overtaken, and applying it would roll the Objective back.
+    fn superseded(&self, summary: &ObjectiveSummary) -> bool {
+        let id = &summary.objective_id;
+        let listed = self.objective(id).map(|o| o.revision);
+        let detailed = self.detail(id).map(|d| d.summary.revision);
+        listed
+            .max(detailed)
+            .is_some_and(|held| summary.revision < held)
+    }
+
     fn apply_objective_changed(&mut self, summary: ObjectiveSummary) -> Vec<Change> {
+        if self.superseded(&summary) {
+            return Vec::new();
+        }
         let id = summary.objective_id.clone();
         self.objective_revised(&id, summary.revision);
         self.upsert_summary(summary.clone());
@@ -248,6 +263,9 @@ impl PresentationState {
     }
 
     fn apply_objective_detail(&mut self, detail: ObjectiveDetail) -> Vec<Change> {
+        if self.superseded(&detail.summary) {
+            return Vec::new();
+        }
         let id = detail.summary.objective_id.clone();
         self.objective_revised(&id, detail.summary.revision);
         self.upsert_summary(detail.summary.clone());

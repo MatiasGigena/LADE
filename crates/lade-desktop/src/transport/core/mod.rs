@@ -101,7 +101,6 @@ pub struct Core {
     focused: Option<ObjectiveId>,
     activity_loaded: HashSet<ObjectiveId>,
     drafts_reconciled: HashSet<ObjectiveId>,
-    drafts_requested: HashSet<ObjectiveId>,
     draft_pages: HashMap<ObjectiveId, Pages<DraftId, Draft, DraftCursor>>,
     input_pages: HashMap<ObjectiveId, Pages<InputId, InputSummary, Counter>>,
     deferred_saves: Vec<(ObjectiveId, Operation)>,
@@ -124,7 +123,6 @@ impl Core {
             focused: None,
             activity_loaded: HashSet::new(),
             drafts_reconciled: HashSet::new(),
-            drafts_requested: HashSet::new(),
             draft_pages: HashMap::new(),
             input_pages: HashMap::new(),
             deferred_saves: Vec::new(),
@@ -268,9 +266,6 @@ impl Core {
                 before: None,
             } => {
                 self.activity_loaded.insert(objective_id.clone());
-            }
-            Intent::LoadDrafts { objective_id } => {
-                self.drafts_requested.insert(objective_id.clone());
             }
             _ => {}
         }

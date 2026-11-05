@@ -307,30 +307,22 @@ fn a_successful_command_clears_its_status_and_its_surfaces_refusal() {
 fn recovered_outcomes_leave_draft_and_input_records_to_current_state() {
     let save = command("Save draft", None, Vec::new());
     let draft = ReplyData::DraftSave(wire_draft(1));
+    let saved = recovered_effects(&save, &draft).expect("a saved draft is historical");
     assert!(
-        !recovered_effects(&save, &draft)
+        !saved
             .updates
             .iter()
             .any(|u| matches!(u, StoreUpdate::DraftChanged(_)))
     );
-    let delete = Context::DraftDelete("Delete draft", DraftId::new(D));
-    let deleted = ReplyData::DraftDelete(wire::Empty {});
-    assert!(
-        reply_effects(&delete, &deleted)
-            .updates
-            .contains(&StoreUpdate::DraftDeleted {
-                draft_id: DraftId::new(D)
-            })
-    );
-    assert!(
-        !recovered_effects(&delete, &deleted)
-            .updates
-            .iter()
-            .any(|u| matches!(u, StoreUpdate::DraftDeleted { .. }))
+    assert_eq!(
+        saved.follow_ups,
+        [Intent::LoadDrafts {
+            objective_id: oid()
+        }]
     );
     let send = command("Send message", None, Vec::new());
     let accepted = ReplyData::MessageSend(input_summary(&test_id(5)));
-    let recovered = recovered_effects(&send, &accepted);
+    let recovered = recovered_effects(&send, &accepted).expect("an input is historical");
     assert!(
         !recovered
             .updates
@@ -339,9 +331,43 @@ fn recovered_outcomes_leave_draft_and_input_records_to_current_state() {
     );
     assert_eq!(
         recovered.follow_ups,
-        [Intent::LoadObjective {
-            objective_id: oid()
-        }]
+        [
+            Intent::LoadObjective {
+                objective_id: oid()
+            },
+            Intent::LoadInputs {
+                objective_id: oid()
+            },
+        ]
+    );
+}
+
+#[test]
+fn recovered_deletions_and_objective_details_apply_like_current_replies() {
+    let delete = Context::DraftDelete("Delete draft", DraftId::new(D));
+    let deleted = ReplyData::DraftDelete(wire::Empty {});
+    assert_eq!(recovered_effects(&delete, &deleted), None);
+    assert!(
+        reply_effects(&delete, &deleted)
+            .updates
+            .contains(&StoreUpdate::DraftDeleted {
+                draft_id: DraftId::new(D)
+            })
+    );
+    let start = command("Start agent", None, Vec::new());
+    let started = ReplyData::ExecutionStart(Box::new(wire_detail(O)));
+    assert_eq!(recovered_effects(&start, &started), None);
+}
+
+#[test]
+fn a_reply_that_does_not_match_its_context_changes_nothing() {
+    let page = ReplyData::DraftsList(wire::DraftList {
+        drafts: vec![wire_draft(1)],
+        next_after: None,
+    });
+    assert_eq!(
+        reply_effects(&Context::Inputs(oid()), &page),
+        Effects::default()
     );
 }
 
