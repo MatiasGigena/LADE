@@ -79,7 +79,7 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `operation.get` | query | `OperationGetQuery` | `OperationStatus {state, outcome?: {name, result}}` |
 | `workspace.open` | command | `WorkspaceOpenCommand` | `Workspace` |
 | `objective.create` | command | `ObjectiveCreateCommand` | `ObjectiveDetail` |
-| `objective.update_intent` | command | `UpdateIntentCommand` | `ObjectiveDetail` |
+| `objective.update_intent` | command | `ObjectiveUpdateIntentCommand` | `ObjectiveDetail` |
 | `execution.start` | command | `ExecutionStartCommand` | `ObjectiveDetail` |
 | `execution.cancel` / `execution.resume` | command | `ObjectiveSelector` | `ObjectiveDetail` |
 | `message.send` | command | `MessageSendCommand` | `InputSummary` |
@@ -93,7 +93,7 @@ Bodies (`ClientBody`): `hello` (both; version declaration, never authentication)
 | `review.integrate` | command | `ReviewIntegrateCommand` | `ObjectiveDetail` |
 | `objective.complete` / `objective.discard` | command | `ObjectiveSelector` | `ObjectiveDetail` |
 | `objective.cleanup` | command | `ObjectiveCleanupCommand` | `ObjectiveDetail` |
-| `objective.delete_history` | command | `ObjectiveHistoryDeleteCommand {objective_id, confirm_history_loss}` | `ObjectiveDetail` |
+| `objective.delete_history` | command | `ObjectiveDeleteHistoryCommand {objective_id, confirm_history_loss}` | `ObjectiveDetail` |
 | `settings.update` | command | `SettingsUpdateCommand` | `Settings` |
 | `models.list` | query | `ModelsListQuery {provider?}` | `ModelCatalog {sdk_version, providers: ProviderInfo[], models: ModelInfo[], truncated, error?}` |
 | `session.tree` | query | `ObjectiveSelector` | `SessionTree {entries: TreeEntry[], leaf_id?, truncated}` |

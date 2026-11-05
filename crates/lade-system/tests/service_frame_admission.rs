@@ -4,8 +4,9 @@ use lade_core::domain::ids::{ObjectiveId, Uuid, WorkspaceId};
 use lade_core::domain::objectives::{BranchName, Intent as CoreIntent, Objective};
 use lade_protocol::client::{
     Basis, ClientBody, ClientEnvelope, Empty, ErrorCode, ExecutionState, Intent,
-    ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, Outcome, ReplyData, Request,
-    RequestFrame, ReviewVerifyCommand, Settings, SettingsUpdateCommand, Start, UpdateIntentCommand,
+    ObjectiveCreateCommand, ObjectiveSelector, ObjectiveUpdateIntentCommand, OperationGetQuery,
+    Outcome, ReplyData, Request, RequestFrame, ReviewVerifyCommand, Settings,
+    SettingsUpdateCommand, Start,
 };
 use lade_protocol::types::ActivityRole;
 use lade_protocol::{Framing, MAX_FRAME, encode};
@@ -79,7 +80,7 @@ fn an_unrepresentable_intent_update_preserves_the_prior_durable_intent() {
         .call_op(
             operation.clone(),
             sized_intent(
-                Request::ObjectiveUpdateIntent(UpdateIntentCommand {
+                Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
                     objective_id: objective.objective_id.clone(),
                     expected_intent_revision: objective.intent_revision.clone(),
                     intent: Intent {

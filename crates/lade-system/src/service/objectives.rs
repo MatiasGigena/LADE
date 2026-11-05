@@ -9,8 +9,8 @@ use lade_core::domain::ids::{ObjectiveId, WorkspaceId};
 use lade_core::domain::objectives::{BranchName, Intent, NewObjective, Objective, Title};
 use lade_core::domain::review::Review;
 use lade_protocol::client::{
-    ErrorCode, ObjectiveCreateCommand, Rejection, ReplyData, SafeAction, SettingsUpdateCommand,
-    Start, UpdateIntentCommand, WorkspaceOpenCommand,
+    ErrorCode, ObjectiveCreateCommand, ObjectiveUpdateIntentCommand, Rejection, ReplyData,
+    SafeAction, SettingsUpdateCommand, Start, WorkspaceOpenCommand,
 };
 
 use crate::adapters::git;
@@ -160,7 +160,7 @@ impl Service {
     pub(super) fn objective_update_intent(
         &mut self,
         ctx: &mut ReqCtx,
-        cmd: &UpdateIntentCommand,
+        cmd: &ObjectiveUpdateIntentCommand,
     ) -> Result<ReplyData, Rejection> {
         let oid = self.objective_id(&cmd.objective_id)?;
         self.check_idle(oid)?;
@@ -362,7 +362,7 @@ mod tests {
         let mut harness = Harness::new("objectives-intent");
         let (id, oid) = harness.create_objective("Intent");
         let update = |revision: u64, outcome: &str| {
-            Request::ObjectiveUpdateIntent(UpdateIntentCommand {
+            Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
                 objective_id: id.clone(),
                 expected_intent_revision: Counter::new(revision),
                 intent: Intent {

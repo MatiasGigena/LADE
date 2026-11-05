@@ -12,9 +12,9 @@ use lade_system::supervision::{
 
 use lade_protocol::client::{
     ActionName, Basis, CandidateCommand, ErrorCode, ExecutionState, Intent, Lifecycle,
-    MessageSendCommand, ObjectiveCleanupCommand, ObjectiveDetail, ObjectiveSelector, ReplyData,
-    Request, ReviewApproveCommand, ReviewIntegrateCommand, ReviewVerifyCommand,
-    UpdateIntentCommand,
+    MessageSendCommand, ObjectiveCleanupCommand, ObjectiveDetail, ObjectiveSelector,
+    ObjectiveUpdateIntentCommand, ReplyData, Request, ReviewApproveCommand, ReviewIntegrateCommand,
+    ReviewVerifyCommand,
 };
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use service_support::*;
@@ -173,15 +173,17 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
         .last()
         .map_or_else(new_id, |c| c.candidate_id.clone());
     Some(match action {
-        ActionName::ObjectiveUpdateIntent => Request::ObjectiveUpdateIntent(UpdateIntentCommand {
-            objective_id: objective,
-            expected_intent_revision: d.intent_revision.clone(),
-            intent: Intent {
-                outcome: "changed outcome".into(),
-                constraints: "none".into(),
-                acceptance: "checks pass".into(),
-            },
-        }),
+        ActionName::ObjectiveUpdateIntent => {
+            Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
+                objective_id: objective,
+                expected_intent_revision: d.intent_revision.clone(),
+                intent: Intent {
+                    outcome: "changed outcome".into(),
+                    constraints: "none".into(),
+                    acceptance: "checks pass".into(),
+                },
+            })
+        }
         ActionName::ExecutionStart => {
             Request::ExecutionStart(lade_protocol::client::ExecutionStartCommand {
                 objective_id: objective,
@@ -234,7 +236,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
             confirm_data_loss: false,
         }),
         ActionName::ObjectiveDeleteHistory => {
-            Request::ObjectiveDeleteHistory(lade_protocol::client::ObjectiveHistoryDeleteCommand {
+            Request::ObjectiveDeleteHistory(lade_protocol::client::ObjectiveDeleteHistoryCommand {
                 objective_id: objective,
                 confirm_history_loss: true,
             })

@@ -738,7 +738,7 @@
         "start": {"$ref": "#/$defs/Start"}
       }
     },
-    "UpdateIntentCommand": {
+    "ObjectiveUpdateIntentCommand": {
       "type": "object",
       "additionalProperties": false,
       "required": ["objective_id", "expected_intent_revision", "intent"],
@@ -838,7 +838,7 @@
       "required": ["objective_id", "confirm_data_loss"],
       "properties": {"objective_id": {"$ref": "#/$defs/Id"}, "confirm_data_loss": {"type": "boolean"}}
     },
-    "ObjectiveHistoryDeleteCommand": {
+    "ObjectiveDeleteHistoryCommand": {
       "type": "object",
       "additionalProperties": false,
       "required": ["objective_id", "confirm_history_loss"],
@@ -1429,7 +1429,7 @@
             "request_id": {"$ref": "#/$defs/Id"},
             "operation_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "objective.update_intent"},
-            "payload": {"$ref": "#/$defs/UpdateIntentCommand"}
+            "payload": {"$ref": "#/$defs/ObjectiveUpdateIntentCommand"}
           }
         },
         {
@@ -1854,7 +1854,7 @@
             "request_id": {"$ref": "#/$defs/Id"},
             "operation_id": {"$ref": "#/$defs/Id"},
             "name": {"const": "objective.delete_history"},
-            "payload": {"$ref": "#/$defs/ObjectiveHistoryDeleteCommand"}
+            "payload": {"$ref": "#/$defs/ObjectiveDeleteHistoryCommand"}
           }
         }
       ]

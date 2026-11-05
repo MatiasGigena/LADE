@@ -317,7 +317,7 @@ fn full_loop_with_the_real_worker() {
     assert!(retained.contains("candidate-"), "{retained}");
 
     match client.call(Request::ObjectiveDeleteHistory(
-        lade_protocol::client::ObjectiveHistoryDeleteCommand {
+        lade_protocol::client::ObjectiveDeleteHistoryCommand {
             objective_id: objective.clone(),
             confirm_history_loss: true,
         },

@@ -46,10 +46,10 @@ pub use commands::{
     ActivityPageQuery, CandidateCommand, ChangesListQuery, DiffGetQuery, DraftCursor,
     DraftDeleteCommand, DraftSaveCommand, DraftsListQuery, ExecutionStartCommand,
     FeedbackSubmitCommand, FileReadQuery, InputsListQuery, MessageSendCommand,
-    ObjectiveCleanupCommand, ObjectiveCreateCommand, ObjectiveHistoryDeleteCommand,
-    ObjectiveSelector, OperationGetQuery, ReviewApproveCommand, ReviewIntegrateCommand,
-    ReviewVerifyCommand, SearchQuery, ServiceStopCommand, SettingsUpdateCommand,
-    UpdateIntentCommand, WorkspaceOpenCommand,
+    ObjectiveCleanupCommand, ObjectiveCreateCommand, ObjectiveDeleteHistoryCommand,
+    ObjectiveSelector, ObjectiveUpdateIntentCommand, OperationGetQuery, ReviewApproveCommand,
+    ReviewIntegrateCommand, ReviewVerifyCommand, SearchQuery, ServiceStopCommand,
+    SettingsUpdateCommand, WorkspaceOpenCommand,
 };
 pub use envelope::{ClientBody, ClientEnvelope, Direction, Scope};
 pub use event::{ActivityAppended, ActivityDelta, EventFrame, ServiceNotice, WorktreeChanged};
@@ -195,7 +195,7 @@ requests! {
     OperationGet = "operation.get", false, OperationGetQuery => OperationStatus;
     WorkspaceOpen = "workspace.open", true, WorkspaceOpenCommand => Workspace;
     ObjectiveCreate = "objective.create", true, ObjectiveCreateCommand => Box<ObjectiveDetail>;
-    ObjectiveUpdateIntent = "objective.update_intent", true, UpdateIntentCommand => Box<ObjectiveDetail>;
+    ObjectiveUpdateIntent = "objective.update_intent", true, ObjectiveUpdateIntentCommand => Box<ObjectiveDetail>;
     ExecutionStart = "execution.start", true, ExecutionStartCommand => Box<ObjectiveDetail>;
     ExecutionCancel = "execution.cancel", true, ObjectiveSelector => Box<ObjectiveDetail>;
     ExecutionResume = "execution.resume", true, ObjectiveSelector => Box<ObjectiveDetail>;
@@ -231,7 +231,7 @@ requests! {
     TerminalResize = "terminal.resize", false, TerminalResizeCommand => Empty;
     TerminalClose = "terminal.close", false, TerminalSelector => Empty;
     ServiceStop = "service.stop", true, ServiceStopCommand => Empty;
-    ObjectiveDeleteHistory = "objective.delete_history", true, ObjectiveHistoryDeleteCommand => Box<ObjectiveDetail>;
+    ObjectiveDeleteHistory = "objective.delete_history", true, ObjectiveDeleteHistoryCommand => Box<ObjectiveDetail>;
 }
 wire_name!(RequestName);
 

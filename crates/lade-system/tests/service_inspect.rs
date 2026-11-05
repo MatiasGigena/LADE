@@ -6,7 +6,7 @@ use std::io::{Seek, SeekFrom, Write};
 use lade_protocol::client::{
     ActionName, ApprovalState, Basis, ContentNoticeKind, DiffGetQuery, DiffLineKind, DraftRevision,
     DraftSaveCommand, ErrorCode, ExecutionState, FeedbackSubmitCommand, FileEncoding,
-    FileReadQuery, Lifecycle, ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand,
+    FileReadQuery, Lifecycle, ObjectiveCleanupCommand, ObjectiveDeleteHistoryCommand,
     ObjectiveSelector, Reference, ReferenceVersion, ReplyData, Request, ReviewApproveCommand,
     ReviewIntegrateCommand, SearchQuery, SearchScope, Side,
 };
@@ -460,7 +460,7 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
     let branch = detail(&mut client, &objective).branch;
     let delete = |client: &mut Client, confirm: bool| {
         client.call(Request::ObjectiveDeleteHistory(
-            ObjectiveHistoryDeleteCommand {
+            ObjectiveDeleteHistoryCommand {
                 objective_id: objective.clone(),
                 confirm_history_loss: confirm,
             },

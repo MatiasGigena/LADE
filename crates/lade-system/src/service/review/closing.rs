@@ -5,7 +5,7 @@ use lade_core::DomainError;
 use lade_core::domain::ids::ObjectiveId;
 use lade_core::domain::objectives::Lifecycle;
 use lade_protocol::client::{
-    ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand, Rejection, ReplyData,
+    ObjectiveCleanupCommand, ObjectiveDeleteHistoryCommand, Rejection, ReplyData,
 };
 use lade_protocol::types::Id;
 
@@ -161,7 +161,7 @@ impl Service {
     pub(crate) fn objective_delete_history(
         &mut self,
         ctx: ReqCtx,
-        cmd: &ObjectiveHistoryDeleteCommand,
+        cmd: &ObjectiveDeleteHistoryCommand,
     ) -> Flow {
         let prepared = (|| {
             let oid = self.objective_id(&cmd.objective_id)?;

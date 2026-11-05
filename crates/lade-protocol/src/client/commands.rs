@@ -66,7 +66,7 @@ wire_struct!(ObjectiveCreateCommand {
     integration_target: String,
     start: Start,
 });
-wire_struct!(UpdateIntentCommand {
+wire_struct!(ObjectiveUpdateIntentCommand {
     objective_id: Id,
     expected_intent_revision: Counter,
     intent: Intent,
@@ -126,7 +126,7 @@ wire_struct!(ObjectiveCleanupCommand {
     objective_id: Id,
     confirm_data_loss: bool,
 });
-wire_struct!(ObjectiveHistoryDeleteCommand {
+wire_struct!(ObjectiveDeleteHistoryCommand {
     objective_id: Id,
     confirm_history_loss: bool,
 });

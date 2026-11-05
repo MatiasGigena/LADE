@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::fs;
 
 use lade_protocol::client::{
-    CandidateSummary, ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand, ObjectiveSelector,
+    CandidateSummary, ObjectiveCleanupCommand, ObjectiveDeleteHistoryCommand, ObjectiveSelector,
     Request, ReviewIntegrateCommand,
 };
 
@@ -243,7 +243,7 @@ fn an_objective_without_changes_completes_and_a_discarded_one_cleans_up_and_forg
     let (id, oid, _) = harness.frozen("Discard", "discard.txt");
     let early = harness
         .call(Request::ObjectiveDeleteHistory(
-            ObjectiveHistoryDeleteCommand {
+            ObjectiveDeleteHistoryCommand {
                 objective_id: id.clone(),
                 confirm_history_loss: true,
             },
@@ -271,7 +271,7 @@ fn an_objective_without_changes_completes_and_a_discarded_one_cleans_up_and_forg
 
     let unconfirmed = harness
         .call(Request::ObjectiveDeleteHistory(
-            ObjectiveHistoryDeleteCommand {
+            ObjectiveDeleteHistoryCommand {
                 objective_id: id.clone(),
                 confirm_history_loss: false,
             },
@@ -279,7 +279,7 @@ fn an_objective_without_changes_completes_and_a_discarded_one_cleans_up_and_forg
         .expect_err("needs confirmation");
     assert_eq!(unconfirmed.code, ErrorCode::InvalidRequest);
     let deleted = harness.call(Request::ObjectiveDeleteHistory(
-        ObjectiveHistoryDeleteCommand {
+        ObjectiveDeleteHistoryCommand {
             objective_id: id,
             confirm_history_loss: true,
         },
