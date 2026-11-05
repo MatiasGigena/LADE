@@ -1,8 +1,24 @@
 import { createHash } from "node:crypto";
 import type { Body, Id, Reply } from "../../src/dto.ts";
-import { WireError } from "../../src/json.ts";
+import { compareCodeUnits, WireError } from "../../src/json.ts";
 import type { JsonValue } from "../../src/json.ts";
 import { isRecord } from "./protocol.ts";
+
+function canonical(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(canonical);
+
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.keys(value).sort(compareCodeUnits).map(key => {
+      const entry = value[key];
+
+      if (entry === undefined) throw new WireError("invalid_schema");
+
+      return [key, canonical(entry)];
+    }));
+  }
+
+  return value;
+}
 
 export type ReplyResult = Reply["result"];
 
@@ -13,22 +29,6 @@ export class RequestHistory {
     if (body.kind !== "request" || !("operation_id" in body)) throw new WireError("invalid_schema");
     const { request_id, ...content } = body;
     const operationId = body.operation_id;
-
-    function canonical(value: JsonValue): JsonValue {
-      if (Array.isArray(value)) return value.map(canonical);
-
-      if (isRecord(value)) {
-        return Object.fromEntries(Object.keys(value).sort().map(key => {
-          const entry = value[key];
-
-          if (entry === undefined) throw new WireError("invalid_schema");
-
-          return [key, canonical(entry)];
-        }));
-      }
-
-      return value;
-    }
 
     const digest = createHash("sha256").update(JSON.stringify(canonical(content))).digest("hex");
     const request = this.requests.get(request_id);

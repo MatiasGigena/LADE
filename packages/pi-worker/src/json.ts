@@ -17,6 +17,11 @@ export class WireError extends Error {
   constructor(code: string) { super(code); this.code = code; }
 }
 
+/** Orders strings by UTF-16 code unit: the order of `Array.prototype.sort` without a comparator. */
+export function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 const WHITESPACE = /[\x20\t\r\n]/;

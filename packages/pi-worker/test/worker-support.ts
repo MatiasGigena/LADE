@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boundedJson } from "../src/json.ts";
+import { boundedJson, compareCodeUnits } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { piEnvironment } from "../src/worker/session.ts";
@@ -84,7 +84,7 @@ export class Worker {
       for (let end = this.pending.indexOf("\n"); end >= 0; end = this.pending.indexOf("\n")) {
         const frame = record(boundedJson(Buffer.from(this.pending.slice(0, end))));
         this.pending = this.pending.slice(end + 1);
-        assert.deepEqual(Object.keys(frame).sort(), ["body", "bundle", "protocol"]);
+        assert.deepEqual(Object.keys(frame).sort(compareCodeUnits), ["body", "bundle", "protocol"]);
         assert.equal(frame.protocol, VERSION);
         assert.equal(frame.bundle, BUNDLE);
         this.frames.push(record(frame.body));
