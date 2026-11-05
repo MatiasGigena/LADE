@@ -313,6 +313,7 @@ mod tests {
 
     use super::*;
     use crate::service::convert::wire_id;
+    use crate::service::state::Busy;
     use crate::service::test_harness::Harness;
     use crate::support::new_uuid;
 
@@ -357,7 +358,7 @@ mod tests {
         assert_eq!(unknown.code, lade_protocol::client::ErrorCode::NotFound);
         let (_, oid) = harness.create_objective("Busy");
         assert!(harness.service.check_idle(oid).is_ok());
-        harness.service.rt(oid).busy = Some("freeze");
+        harness.service.rt(oid).busy = Some(Busy::Freeze);
         assert_eq!(
             harness.service.check_idle(oid).expect_err("busy").detail,
             super::super::projection::actions::BUSY

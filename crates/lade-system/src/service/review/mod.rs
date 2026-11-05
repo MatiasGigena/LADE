@@ -33,6 +33,7 @@ use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::projection::actions::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::fault;
+use crate::service::state::Busy;
 use crate::supervision::sweep::sandbox_marker;
 use crate::support::{new_uuid, ts_now};
 
@@ -59,7 +60,7 @@ impl Service {
                 return Flow::Done;
             }
         };
-        self.rt(oid).busy = Some("freeze");
+        self.rt(oid).busy = Some(Busy::Freeze);
         self.exclude_terminal_writers(oid);
         let live = self.objectives[&oid]
             .objective()
@@ -429,7 +430,7 @@ impl Service {
         })();
         match prepared {
             Ok((oid, candidate_id, new_id, input)) => {
-                self.rt(oid).busy = Some("refresh");
+                self.rt(oid).busy = Some(Busy::Refresh);
                 self.spawn(move || Completed::Refresh {
                     oid,
                     ctx,

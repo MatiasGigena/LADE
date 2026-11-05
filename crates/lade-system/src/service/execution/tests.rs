@@ -7,6 +7,7 @@ use lade_protocol::worker::{MAX_ITEM_TEXT_BYTES, TurnState, WorkerErrorCode};
 use super::writable::human_bytes;
 use super::*;
 use crate::service::ResourceLimits;
+use crate::service::state::Busy;
 use crate::service::test_harness::Harness;
 use crate::supervision::{SupervisorEvent, WorkerEvent};
 
@@ -456,7 +457,7 @@ fn a_freeze_waiting_too_long_for_the_worker_is_interrupted() {
         .checked_sub(STOP_TIMEOUT + Duration::from_secs(1))
         .expect("uptime");
     let rt = harness.service.rt(oid);
-    rt.busy = Some("freeze");
+    rt.busy = Some(Busy::Freeze);
     rt.waiting_freeze = Some((ctx, long_ago));
     harness.service.rt(other).waiting_freeze = Some((recent, Instant::now()));
     harness.service.check_timeouts();

@@ -7,6 +7,7 @@ use super::MAX_SUMMARY_BADGES;
 use super::actions::{
     BUSY, NO_WORKTREE_YET, delete_history_blocker, freeze_blocker, terminal_blocker,
 };
+use crate::service::state::Busy;
 use crate::service::test_harness::Harness;
 
 fn action(detail: &ObjectiveDetail, name: ActionName) -> &AvailableAction {
@@ -67,7 +68,7 @@ fn a_busy_objective_disables_its_actions_with_the_busy_reason() {
         "a provisioned worktree opens a terminal"
     );
     assert!(freeze_blocker(&st).is_none());
-    harness.service.rt(oid).busy = Some("freeze");
+    harness.service.rt(oid).busy = Some(Busy::Freeze);
     let detail = harness.service.fresh_detail(&st);
     let freeze = action(&detail, ActionName::ReviewFreeze);
     assert!(!freeze.enabled);

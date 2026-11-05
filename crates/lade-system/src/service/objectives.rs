@@ -224,6 +224,7 @@ mod tests {
 
     use super::*;
     use crate::adapters_support::{commit_all, git};
+    use crate::service::state::Busy;
     use crate::service::test_harness::Harness;
 
     fn open(harness: &mut Harness, path: &std::path::Path) -> Result<ReplyData, Rejection> {
@@ -385,7 +386,7 @@ mod tests {
                 .outcome(),
             "better"
         );
-        harness.service.rt(oid).busy = Some("freeze");
+        harness.service.rt(oid).busy = Some(Busy::Freeze);
         let busy = harness.call(update(2, "busy"));
         assert_eq!(busy.expect_err("busy").code, ErrorCode::Conflict);
         let get = harness.call(Request::ObjectiveGet(ObjectiveSelector {

@@ -9,6 +9,7 @@ use lade_protocol::client::{
 use super::*;
 use crate::adapters_support::{commit_all, git};
 use crate::service::limits::Pressure;
+use crate::service::state::Busy;
 use crate::service::test_harness::Harness;
 use crate::storage::JournalState;
 
@@ -114,7 +115,7 @@ fn a_second_integration_onto_the_same_target_waits_for_the_first() {
         harness.service.review_integrate(second_ctx, &second_cmd),
         Flow::Deferred
     ));
-    assert_eq!(harness.service.rt(second_oid).busy, Some("integrate"));
+    assert_eq!(harness.service.rt(second_oid).busy, Some(Busy::Integrate));
     let queued: usize = harness
         .service
         .integrations

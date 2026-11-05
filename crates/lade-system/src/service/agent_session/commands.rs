@@ -27,6 +27,7 @@ use crate::service::convert::{
     conflict, domain_rejection, durability_failure, invalid, io_rejection, not_found, wire_id,
 };
 use crate::service::resources::snapshot;
+use crate::service::state::Busy;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms, ts_now};
 
@@ -204,7 +205,7 @@ impl Service {
         let source = self.profile_dir();
         let dest = self.session_dir(oid).join("profile");
         let approved = self.approved_extensions();
-        self.rt(oid).busy = Some("session reload");
+        self.rt(oid).busy = Some(Busy::SessionReload);
         self.spawn(move || Completed::Reload {
             oid,
             ctx,

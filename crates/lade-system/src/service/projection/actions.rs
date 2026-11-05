@@ -10,7 +10,7 @@ use lade_core::domain::review::{
 use lade_protocol::client::{ActionName, AvailableAction};
 
 use crate::service::Service;
-use crate::service::state::ObjState;
+use crate::service::state::{Busy, ObjState};
 
 pub(crate) const NO_CHANGES_TO_FREEZE: &str =
     "There are no changes to freeze. Complete without changes instead.";
@@ -122,7 +122,7 @@ impl<'a> ActionFacts<'a> {
             lifecycle: record.lifecycle,
             state,
             busy_reason: busy.map(|_| BUSY),
-            freezing: busy == Some("freeze"),
+            freezing: busy == Some(Busy::Freeze),
             review,
             current,
             running_verification: review

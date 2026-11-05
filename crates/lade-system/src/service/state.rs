@@ -55,11 +55,24 @@ impl ObjState {
     }
 }
 
+/// The deferred operation an Objective is running; while one runs, other changes to it are
+/// refused as busy. `Freeze` also lets a read-only terminal stay open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Busy {
+    Freeze,
+    Integrate,
+    Refresh,
+    Complete,
+    Cleanup,
+    DeleteHistory,
+    SessionReload,
+}
+
 #[derive(Default)]
 pub struct Runtime {
     pub control: Option<Box<dyn WorkerControl>>,
     pub launching: Option<u64>,
-    pub busy: Option<&'static str>,
+    pub busy: Option<Busy>,
     pub waiting_freeze: Option<(ReqCtx, Instant)>,
     pub dispatching: bool,
     pub capture_running: bool,

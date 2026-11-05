@@ -12,7 +12,7 @@ use lade_protocol::client::{Rejection, ReplyData, ReviewIntegrateCommand};
 use crate::adapters::git::{GitError, Repository, SquashOutcome, SquashRequest};
 use crate::fault;
 use crate::service::convert::{domain_rejection, git_rejection, not_found, parse_uuid};
-use crate::service::state::ObjState;
+use crate::service::state::{Busy, ObjState};
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage::{self, JournalRow, JournalState, OperationState};
 use crate::support::{new_uuid, now_ms, ts_now};
@@ -79,7 +79,7 @@ impl Service {
             self.finish(ctx, Err(rejection));
             return Flow::Done;
         }
-        self.rt(oid).busy = Some("integrate");
+        self.rt(oid).busy = Some(Busy::Integrate);
         if let Some(waiting) = self.integrations.queued.get_mut(key) {
             waiting.push_back((ctx, cmd.clone()));
         }
@@ -165,7 +165,7 @@ impl Service {
             message: journal.message,
             timestamp: Some(journal.commit_time),
         };
-        self.rt(oid).busy = Some("integrate");
+        self.rt(oid).busy = Some(Busy::Integrate);
         if let Some(key) = self.integration_key(oid) {
             self.integrations.queued.entry(key).or_default();
         }

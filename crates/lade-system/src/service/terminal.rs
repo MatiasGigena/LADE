@@ -15,6 +15,7 @@ use crate::supervision::terminal::{MAX_COLS, MAX_ROWS, Terminal, TerminalExit, T
 use super::convert::{conflict, invalid, limit_reached, not_found, parse_uuid, wire_id};
 use super::projection::actions::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
+use crate::service::state::Busy;
 use crate::support::new_uuid;
 
 pub(crate) const MAX_PER_OBJECTIVE: usize = 4;
@@ -96,7 +97,7 @@ impl Service {
         }
         Ok(match st.objective().lifecycle() {
             Lifecycle::Frozen | Lifecycle::Approved => false,
-            _ => self.runtime.get(&oid).and_then(|r| r.busy) != Some("freeze"),
+            _ => self.runtime.get(&oid).and_then(|r| r.busy) != Some(Busy::Freeze),
         })
     }
 

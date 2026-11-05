@@ -15,6 +15,7 @@ use crate::service::convert::{domain_rejection, durability_failure, invalid};
 use crate::service::handlers::sql;
 use crate::service::jobs;
 use crate::service::projection::actions::delete_history_blocker;
+use crate::service::state::Busy;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage;
 use crate::support::ts_now;
@@ -50,7 +51,7 @@ impl Service {
         })();
         match prepared {
             Ok((oid, repo, worktree, target, start)) => {
-                self.rt(oid).busy = Some("complete");
+                self.rt(oid).busy = Some(Busy::Complete);
                 let scratch = self.paths.tmp.clone();
                 self.spawn(move || Completed::Complete {
                     oid,
@@ -137,7 +138,7 @@ impl Service {
             Ok((oid, repo, worktree, branch)) => {
                 let confirm = cmd.confirm_data_loss;
                 let scratch = self.paths.tmp.clone();
-                self.rt(oid).busy = Some("cleanup");
+                self.rt(oid).busy = Some(Busy::Cleanup);
                 self.spawn(move || Completed::Cleanup {
                     oid,
                     ctx,
@@ -189,7 +190,7 @@ impl Service {
         })();
         match prepared {
             Ok((oid, repo, refs)) => {
-                self.rt(oid).busy = Some("delete_history");
+                self.rt(oid).busy = Some(Busy::DeleteHistory);
                 self.spawn(move || Completed::DeleteHistory {
                     oid,
                     ctx,
