@@ -96,12 +96,12 @@ impl Service {
             human_bytes(bytes),
             human_bytes(self.storage.writable_limit)
         );
-        if st
-            .row
-            .objective
-            .observe_failure(ExecutionGeneration::new(generation), &reason, ts_now())
-            .is_err()
-        {
+        let failed = st.row.objective.observe_failure(
+            ExecutionGeneration::new(generation),
+            &reason,
+            ts_now(),
+        );
+        if Self::applied("the storage limit", oid, failed).is_none() {
             return;
         }
         let recorded = self.commit_obj(None, None, st);

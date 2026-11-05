@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 
+use lade_core::DomainError;
 use lade_core::domain::ids::{CandidateId, ObjectiveId, Uuid, VerificationId, WorkspaceId};
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{ErrorCode, Outcome, Rejection, ReplyData, RequestName, Settings};
@@ -393,6 +394,23 @@ impl Service {
                     rejection.detail
                 );
                 false
+            }
+        }
+    }
+
+    /// Applies the policy for domain transitions that have no request to reject (worker events,
+    /// job completions): a refused transition is logged with what was refused and why, and the
+    /// caller gets `None` and leaves the Objective, its record and its notices unchanged.
+    pub(crate) fn applied<T>(
+        what: &str,
+        oid: ObjectiveId,
+        result: Result<T, DomainError>,
+    ) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                eprintln!("laded: could not apply {what} objective={oid}: {error}");
+                None
             }
         }
     }

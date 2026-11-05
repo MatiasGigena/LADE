@@ -254,9 +254,10 @@ impl Service {
             match &error {
                 GitError::TargetMoved { .. } => {
                     if let Some(current) = self.fresh_target(&st) {
-                        let _ = st
-                            .review
-                            .observe_target(&mut st.row.objective, &current, ts_now());
+                        let observed =
+                            st.review
+                                .observe_target(&mut st.row.objective, &current, ts_now());
+                        Self::applied("the moved integration target", oid, observed);
                     }
                 }
                 GitError::CheckoutFailed { .. } => st.row.integration_conflict = true,

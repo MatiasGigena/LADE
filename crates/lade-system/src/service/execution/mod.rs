@@ -272,24 +272,29 @@ impl Service {
             Err(reason) => {
                 eprintln!("laded: launch failed objective={oid} reason={reason}");
                 if current && state.is_live() {
-                    let _ = st.row.objective.observe_failure(
+                    let failed = st.row.objective.observe_failure(
                         ExecutionGeneration::new(generation),
                         &reason.to_string(),
                         ts_now(),
                     );
-                    let recorded = self.commit_obj(None, None, st);
-                    Self::persisted("the launch failure", oid, recorded);
-                    self.notice(
-                        NoticeLevel::Error,
-                        NoticeCode::ExecutionFailed,
-                        &format!("execution could not start: {reason}"),
-                    );
-                    self.system_item(
-                        oid,
-                        "Execution failed to start",
-                        &format!("The sandboxed worker could not be launched ({reason})."),
-                        true,
-                    );
+                    let applied = Self::applied("the launch failure", oid, failed).is_some();
+                    if applied || out.provisioned_branch.is_some() {
+                        let recorded = self.commit_obj(None, None, st);
+                        Self::persisted("the launch failure", oid, recorded);
+                    }
+                    if applied {
+                        self.notice(
+                            NoticeLevel::Error,
+                            NoticeCode::ExecutionFailed,
+                            &format!("execution could not start: {reason}"),
+                        );
+                        self.system_item(
+                            oid,
+                            "Execution failed to start",
+                            &format!("The sandboxed worker could not be launched ({reason})."),
+                            true,
+                        );
+                    }
                     self.continue_freeze(oid);
                 } else if out.provisioned_branch.is_some() {
                     let recorded = self.commit_obj(None, None, st);
@@ -318,11 +323,12 @@ impl Service {
         };
         let generation = st.row.objective.execution().generation();
         if st.row.objective.execution().state() == &ExecutionState::Stopping
-            && st
-                .row
-                .objective
-                .observe_stopped(generation, ts_now())
-                .is_ok()
+            && Self::applied(
+                "the stopped execution",
+                oid,
+                st.row.objective.observe_stopped(generation, ts_now()),
+            )
+            .is_some()
         {
             let recorded = self.commit_obj(None, None, st);
             if Self::persisted("the stopped execution", oid, recorded) {

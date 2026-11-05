@@ -131,12 +131,8 @@ impl Service {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        if st
-            .row
-            .objective
-            .observe_worker_ready(generation, ts_now())
-            .is_err()
-        {
+        let ready = st.row.objective.observe_worker_ready(generation, ts_now());
+        if Self::applied("the ready worker", oid, ready).is_none() {
             return;
         }
         let session = st.row.objective.execution().session().map(|s| s.session_id);
@@ -160,7 +156,7 @@ impl Service {
         let Some(input) = st.input_mut(id) else {
             return;
         };
-        if input.mark_received(generation).is_err() {
+        if Self::applied("the input receipt", oid, input.mark_received(generation)).is_none() {
             return;
         }
         let input = input.clone();
@@ -180,12 +176,8 @@ impl Service {
         let Some(mut st) = self.objectives.get(&oid).cloned() else {
             return;
         };
-        if st
-            .row
-            .objective
-            .observe_turn(generation, running, ts_now())
-            .is_err()
-        {
+        let turn = st.row.objective.observe_turn(generation, running, ts_now());
+        if Self::applied("the turn state", oid, turn).is_none() {
             return;
         }
         let recorded = self.commit_obj(None, None, st);
@@ -209,7 +201,8 @@ impl Service {
         let mut lost = Vec::new();
         match state {
             ExecutionState::Stopping => {
-                let _ = st.row.objective.observe_stopped(generation, ts_now());
+                let stopped = st.row.objective.observe_stopped(generation, ts_now());
+                Self::applied("the worker exit", oid, stopped);
             }
             state if state.is_live() => {
                 let reason = match (code, signal) {
@@ -217,11 +210,13 @@ impl Service {
                     (None, Some(signal)) => format!("worker terminated by signal {signal}"),
                     _ => "worker exited unexpectedly".to_string(),
                 };
-                let _ = st
+                let failed = st
                     .row
                     .objective
                     .observe_failure(generation, &reason, ts_now());
-                self.notice(NoticeLevel::Error, NoticeCode::ExecutionFailed, &reason);
+                if Self::applied("the worker exit", oid, failed).is_some() {
+                    self.notice(NoticeLevel::Error, NoticeCode::ExecutionFailed, &reason);
+                }
             }
             _ => {}
         }
@@ -312,7 +307,11 @@ impl Service {
         let Some(input) = st.inputs.iter_mut().map(|(_, i)| i).find(|i| i.id == id) else {
             return true;
         };
-        let Ok(decision) = input.dispatch(objective, stale) else {
+        let Some(decision) = Self::applied(
+            &format!("the dispatch of input {id}"),
+            oid,
+            input.dispatch(objective, stale),
+        ) else {
             return true;
         };
         if decision == DispatchDecision::Wait {
