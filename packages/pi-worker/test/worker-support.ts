@@ -16,6 +16,10 @@ export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src",
 
 export const TIMEOUT_MS = 20_000;
 
+const POLL_MS = 200;
+
+const STDERR_EXCERPT = 2_000;
+
 export interface Sandbox { root: string; home: string; sessionDir: string; cwd: string }
 
 export function sandbox(): Sandbox {
@@ -116,11 +120,11 @@ export class Worker {
 
       if (found) return found;
 
-      if (this.child.exitCode !== null) assert.fail(`worker exited (${this.child.exitCode}) before the expected frame; stderr: ${this.stderr.slice(0, 2000)}`);
+      if (this.child.exitCode !== null) assert.fail(`worker exited (${this.child.exitCode}) before the expected frame; stderr: ${this.stderr.slice(0, STDERR_EXCERPT)}`);
 
       if (Date.now() > deadline) assert.fail(`timed out waiting for a frame; got ${JSON.stringify(this.frames.map(frame => frame.kind))}`);
       await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, 200);
+        const timer = setTimeout(resolve, POLL_MS);
         this.wake = () => { clearTimeout(timer); resolve(); };
       });
     }
