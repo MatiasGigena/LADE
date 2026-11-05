@@ -128,6 +128,10 @@ impl Controller {
         });
     }
 
+    /// Remembers whether the rail's archive is open. Unlike the other setters this reports no
+    /// [`Change`]: the disclosure the user just toggled already shows the new state, and
+    /// rebuilding the rail would replace that widget mid-click. The flag only seeds the
+    /// disclosure the next time the rail is rebuilt for another reason.
     pub fn set_archive_expanded(&self, expanded: bool) {
         self.store.update(|s| {
             s.ui.archive_expanded = expanded;
@@ -151,20 +155,13 @@ impl Controller {
     }
 
     pub fn select_objective(&self, id: &ObjectiveId) {
-        let (changed, view, basis, has_changes, has_inputs, has_drafts) = self.store.update(|s| {
+        let changed = self.store.update(|s| {
             let changed = s.ui.selected.as_ref() != Some(id);
             s.ui.selected = Some(id.clone());
-            let basis = s.objective_ui_mut(id).basis.clone();
-            let result = (
-                changed,
-                s.ui.view,
-                basis,
-                matches!(s.changes.get(id), Some(Load::Loaded(_))),
-                s.inputs.contains_key(id),
-                s.drafts.contains_key(id),
-            );
+            // From now on the Objective keeps its own basis and file selection.
+            s.objective_ui_mut(id);
             (
-                result,
+                changed,
                 if changed {
                     vec![Change::Selection]
                 } else {
@@ -175,10 +172,18 @@ impl Controller {
         if !changed {
             return;
         }
+        let state = self.store.state();
+        let view = state.ui.view;
+        let basis = state.selected_ui().map(|u| u.basis.clone());
+        let file = state.selected_ui().and_then(|u| u.file.clone());
+        let has_changes = matches!(state.changes.get(id), Some(Load::Loaded(_)));
+        let has_drafts = state.drafts.contains_key(id);
+        let has_inputs = state.inputs.contains_key(id);
+        drop(state);
         self.emit(Intent::LoadObjective {
             objective_id: id.clone(),
         });
-        if !has_changes {
+        if !has_changes && let Some(basis) = basis {
             self.load_changes(id, basis);
         }
         if !has_drafts {
@@ -194,11 +199,6 @@ impl Controller {
         if view == MainView::Activity {
             self.ensure_activity(id);
         }
-        let file = self
-            .store
-            .state()
-            .selected_ui()
-            .and_then(|u| u.file.clone());
         if let Some(path) = file {
             self.load_viewer(id, &path);
         } else {
