@@ -11,7 +11,7 @@ use lade_protocol::client::{
     self as wire, ClientBody, ClientEnvelope, Event, EventFrame, NoticeCode, NoticeLevel, Reply,
     ReplyData, Request, ServiceNotice,
 };
-use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter};
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Counter, Id};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
 
 use super::connection::{self, Config, ConnectError, Input, random_id, spawn_driver};
@@ -156,79 +156,95 @@ fn event(sequence: u64) -> ClientBody {
     ClientBody::Event(requests::tests::event(sequence))
 }
 
+/// Welcomes the first link, answers its snapshot, sends events 6 and 8 so the client resyncs,
+/// and drops the link before replying to the command that follows. Returns its operation id.
+fn serve_gap_then_lose_a_command(listener: &UnixListener) -> Id {
+    let mut link = accept(listener);
+    link.send(ClientBody::Welcome {
+        service_epoch: epoch(),
+        lease_id: random_id(),
+    });
+    let first = link.request();
+    assert_eq!(first.request.name(), wire::RequestName::Snapshot);
+    assert!(first.operation_id.is_none());
+    link.send(ClientBody::Reply(Reply::ok(
+        first.request_id,
+        snapshot_data(5),
+    )));
+    link.send(event(6));
+    link.send(event(8));
+    let resync = link.request();
+    assert_eq!(resync.request.name(), wire::RequestName::Snapshot);
+    link.send(ClientBody::Reply(Reply::ok(
+        resync.request_id,
+        snapshot_data(8),
+    )));
+    let command = link.request();
+    assert_eq!(command.request.name(), wire::RequestName::ReviewFreeze);
+    let operation_id = command.operation_id.clone().expect("operation id");
+    drop(link);
+    operation_id
+}
+
+/// Welcomes the reconnecting client and answers its snapshot and the outcome query for
+/// `operation_id` with an unknown outcome.
+fn serve_unknown_outcome(listener: &UnixListener, operation_id: &Id) {
+    let mut link = accept(listener);
+    link.send(ClientBody::Welcome {
+        service_epoch: epoch(),
+        lease_id: random_id(),
+    });
+    let mut saw_query = false;
+    for _ in 0..2 {
+        let frame = link.request();
+        match frame.request {
+            Request::Snapshot(_) => {
+                link.send(ClientBody::Reply(Reply::ok(
+                    frame.request_id,
+                    snapshot_data(9),
+                )));
+            }
+            Request::OperationGet(query) => {
+                assert_eq!(&query.operation_id, operation_id);
+                saw_query = true;
+                link.send(ClientBody::Reply(Reply::ok(
+                    frame.request_id,
+                    ReplyData::OperationGet(wire::OperationStatus {
+                        state: wire::OperationState::Unknown,
+                        outcome: None,
+                    }),
+                )));
+            }
+            other => panic!("unexpected request after reconnect: {other:?}"),
+        }
+    }
+    assert!(saw_query);
+    drop(link);
+}
+
+/// Refuses the next link: another client holds the controlling lease.
+fn refuse_lease(listener: &UnixListener) {
+    let mut link = accept(listener);
+    link.send(ClientBody::Event(EventFrame {
+        service_epoch: epoch(),
+        sequence: Counter::new(0),
+        event: Event::ServiceNotice(ServiceNotice {
+            level: NoticeLevel::Error,
+            code: NoticeCode::LeaseHeld,
+            message: "another client holds the controlling lease".into(),
+        }),
+    }));
+}
+
 #[test]
 fn fake_server_handshake_gap_resync_reconnect_and_lease_refusal() {
     let dir = TempDir::new("fake");
     let runtime = dir.0.join("run");
     let listener = fake_runtime(&runtime);
     let server = thread::spawn(move || {
-        let mut link = accept(&listener);
-        link.send(ClientBody::Welcome {
-            service_epoch: epoch(),
-            lease_id: random_id(),
-        });
-        let first = link.request();
-        assert_eq!(first.request.name(), wire::RequestName::Snapshot);
-        assert!(first.operation_id.is_none());
-        link.send(ClientBody::Reply(Reply::ok(
-            first.request_id,
-            snapshot_data(5),
-        )));
-        link.send(event(6));
-        link.send(event(8));
-        let resync = link.request();
-        assert_eq!(resync.request.name(), wire::RequestName::Snapshot);
-        link.send(ClientBody::Reply(Reply::ok(
-            resync.request_id,
-            snapshot_data(8),
-        )));
-        let command = link.request();
-        assert_eq!(command.request.name(), wire::RequestName::ReviewFreeze);
-        let operation_id = command.operation_id.clone().expect("operation id");
-        drop(link);
-
-        let mut link = accept(&listener);
-        link.send(ClientBody::Welcome {
-            service_epoch: epoch(),
-            lease_id: random_id(),
-        });
-        let mut saw_query = false;
-        for _ in 0..2 {
-            let frame = link.request();
-            match frame.request {
-                Request::Snapshot(_) => {
-                    link.send(ClientBody::Reply(Reply::ok(
-                        frame.request_id,
-                        snapshot_data(9),
-                    )));
-                }
-                Request::OperationGet(query) => {
-                    assert_eq!(query.operation_id, operation_id);
-                    saw_query = true;
-                    link.send(ClientBody::Reply(Reply::ok(
-                        frame.request_id,
-                        ReplyData::OperationGet(wire::OperationStatus {
-                            state: wire::OperationState::Unknown,
-                            outcome: None,
-                        }),
-                    )));
-                }
-                other => panic!("unexpected request after reconnect: {other:?}"),
-            }
-        }
-        assert!(saw_query);
-        drop(link);
-
-        let mut link = accept(&listener);
-        link.send(ClientBody::Event(EventFrame {
-            service_epoch: epoch(),
-            sequence: Counter::new(0),
-            event: Event::ServiceNotice(ServiceNotice {
-                level: NoticeLevel::Error,
-                code: NoticeCode::LeaseHeld,
-                message: "another client holds the controlling lease".into(),
-            }),
-        }));
+        let operation_id = serve_gap_then_lose_a_command(&listener);
+        serve_unknown_outcome(&listener, &operation_id);
+        refuse_lease(&listener);
     });
 
     let (tx, updates) = start(&runtime, None);
@@ -444,26 +460,25 @@ fn git(repo: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?}");
 }
 
-#[test]
-fn real_service_workspace_objective_execution_and_change_set() {
-    let Some(laded) = laded() else {
-        return;
-    };
-    let dir = TempDir::new("live");
-    let repo = dir.0.join("repo");
-    fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
+/// A Git repository at `repo` with one commit of `README.md` on `main`.
+fn fixture_repo(repo: &Path) -> PathBuf {
+    fs::create_dir(repo).unwrap();
+    git(repo, &["init", "-q", "-b", "main"]);
     fs::write(repo.join("README.md"), "hello\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-q", "-m", "init"]);
-    let runtime = dir.0.join("run");
-    let mut service = Service(
-        Command::new(&laded)
+    git(repo, &["add", "."]);
+    git(repo, &["commit", "-q", "-m", "init"]);
+    repo.to_path_buf()
+}
+
+/// Starts `laded` with the fixture provider and waits for its control socket in `runtime`.
+fn serve(laded: &Path, state: &Path, runtime: &Path) -> Service {
+    let service = Service(
+        Command::new(laded)
             .arg("serve")
             .arg("--state-dir")
-            .arg(dir.0.join("state"))
+            .arg(state)
             .arg("--runtime-dir")
-            .arg(&runtime)
+            .arg(runtime)
             .env("LADE_TEST_FIXTURE_PROVIDER", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -475,6 +490,152 @@ fn real_service_workspace_objective_execution_and_change_set() {
         assert!(Instant::now() < deadline, "laded did not start");
         thread::sleep(PROCESS_POLL);
     }
+    service
+}
+
+/// Loads the working Change Set, the diff and the file page of the agent's `hello.txt`.
+fn inspect_hello(
+    send: &impl Fn(Intent),
+    updates: &Receiver<StoreUpdate>,
+    objective_id: &ObjectiveId,
+) {
+    send(Intent::LoadChanges {
+        objective_id: objective_id.clone(),
+        basis: Basis::Working,
+    });
+    let StoreUpdate::Changes(list) = wait_for(
+        updates,
+        "change set",
+        |u| matches!(u, StoreUpdate::Changes(l) if !l.files.is_empty()),
+    ) else {
+        unreachable!()
+    };
+    let path = RepoPath::utf8("hello.txt");
+    assert!(list.files.iter().any(|f| f.path == path), "{list:?}");
+    assert!(list.capture_id.is_some());
+    send(Intent::LoadDiff {
+        objective_id: objective_id.clone(),
+        basis: Basis::Working,
+        path: path.clone(),
+    });
+    let StoreUpdate::Diff(diff) = wait_for(updates, "diff", |u| matches!(u, StoreUpdate::Diff(_)))
+    else {
+        unreachable!()
+    };
+    assert!(
+        diff.hunks
+            .iter()
+            .flat_map(|h| &h.lines)
+            .any(|l| l.text.contains("hi"))
+    );
+    send(Intent::OpenFile {
+        objective_id: objective_id.clone(),
+        basis: Basis::Working,
+        path,
+        side: crate::presentation::state::model::Side::New,
+        offset: 0,
+    });
+    wait_for(
+        updates,
+        "file page",
+        |u| matches!(u, StoreUpdate::FilePage(p) if p.eof && p.text.as_deref().is_some_and(|t| t.contains("hi"))),
+    );
+}
+
+/// Opens a terminal, when this host can sandbox one, and reads `hello.txt` and an echo back.
+fn echo_in_terminal(
+    send: &impl Fn(Intent),
+    updates: &Receiver<StoreUpdate>,
+    objective_id: &ObjectiveId,
+) {
+    send(Intent::OpenTerminal {
+        objective_id: objective_id.clone(),
+        cols: 80,
+        rows: 24,
+    });
+    let opened = wait_for(updates, "terminal opened or refused", |u| {
+        matches!(
+            u,
+            StoreUpdate::TerminalOpened { .. } | StoreUpdate::TerminalProblem { .. }
+        )
+    });
+    if let StoreUpdate::TerminalOpened { terminal_id, .. } = opened {
+        send(Intent::TerminalInput {
+            objective_id: objective_id.clone(),
+            terminal_id: terminal_id.clone(),
+            data: "cat hello.txt; echo T_$((2+2))\r".into(),
+        });
+        let mut seen = String::new();
+        while !seen.contains("T_4") {
+            if let StoreUpdate::TerminalOutput { data, .. } = wait_for(
+                updates,
+                "terminal output",
+                |u| matches!(u, StoreUpdate::TerminalOutput { terminal_id: t, .. } if *t == terminal_id),
+            ) {
+                seen.push_str(&data);
+            }
+        }
+        assert!(seen.contains("hi"), "{seen:?}");
+    } else {
+        eprintln!("note: terminal refused (no sandbox on this host): {opened:?}");
+    }
+}
+
+/// Stops the service, which exits, removes its socket and is not reconnected to.
+fn stop_and_stay_down(
+    send: &impl Fn(Intent),
+    updates: &Receiver<StoreUpdate>,
+    service: &mut Service,
+    runtime: &Path,
+) {
+    send(Intent::StopService {
+        reason: crate::presentation::controller::intents::StopReason::Exit,
+    });
+    wait_for(updates, "service stopped", |u| {
+        u == &StoreUpdate::ServiceStopped
+    });
+    wait_for(updates, "no reconnect after stop", |u| {
+        matches!(
+            u,
+            StoreUpdate::Connection(ConnectionState::Disconnected { .. })
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = service.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "laded kept running after service.stop"
+        );
+        thread::sleep(PROCESS_POLL);
+    };
+    assert!(status.success(), "{status:?}");
+    assert!(!runtime.join(CONTROL_SOCKET_NAME).exists());
+    let quiet_until = Instant::now() + QUIET_AFTER_STOP;
+    while let Ok(update) =
+        updates.recv_timeout(quiet_until.saturating_duration_since(Instant::now()))
+    {
+        assert!(
+            !matches!(
+                update,
+                StoreUpdate::Connection(ConnectionState::Reconnecting { .. })
+            ),
+            "reconnected after Exit"
+        );
+    }
+}
+
+#[test]
+fn real_service_workspace_objective_execution_and_change_set() {
+    let Some(laded) = laded() else {
+        return;
+    };
+    let dir = TempDir::new("live");
+    let repo = fixture_repo(&dir.0.join("repo"));
+    let runtime = dir.0.join("run");
+    let mut service = serve(&laded, &dir.0.join("state"), &runtime);
 
     let (tx, updates) = start(&runtime, Some(repo.clone()));
     let send = |intent| tx.send(Input::Intent(intent)).unwrap();
@@ -541,116 +702,10 @@ fn real_service_workspace_objective_execution_and_change_set() {
         "worktree changed",
         |u| matches!(u, StoreUpdate::WorktreeChanged { objective_id: o } if o == &objective_id),
     );
-    send(Intent::LoadChanges {
-        objective_id: objective_id.clone(),
-        basis: Basis::Working,
-    });
-    let StoreUpdate::Changes(list) = wait_for(
-        &updates,
-        "change set",
-        |u| matches!(u, StoreUpdate::Changes(l) if !l.files.is_empty()),
-    ) else {
-        unreachable!()
-    };
-    let path = RepoPath::utf8("hello.txt");
-    assert!(list.files.iter().any(|f| f.path == path), "{list:?}");
-    assert!(list.capture_id.is_some());
-    send(Intent::LoadDiff {
-        objective_id: objective_id.clone(),
-        basis: Basis::Working,
-        path: path.clone(),
-    });
-    let StoreUpdate::Diff(diff) = wait_for(&updates, "diff", |u| matches!(u, StoreUpdate::Diff(_)))
-    else {
-        unreachable!()
-    };
-    assert!(
-        diff.hunks
-            .iter()
-            .flat_map(|h| &h.lines)
-            .any(|l| l.text.contains("hi"))
-    );
-    send(Intent::OpenFile {
-        objective_id: objective_id.clone(),
-        basis: Basis::Working,
-        path,
-        side: crate::presentation::state::model::Side::New,
-        offset: 0,
-    });
-    wait_for(
-        &updates,
-        "file page",
-        |u| matches!(u, StoreUpdate::FilePage(p) if p.eof && p.text.as_deref().is_some_and(|t| t.contains("hi"))),
-    );
+    inspect_hello(&send, &updates, &objective_id);
 
-    send(Intent::OpenTerminal {
-        objective_id: objective_id.clone(),
-        cols: 80,
-        rows: 24,
-    });
-    let opened = wait_for(&updates, "terminal opened or refused", |u| {
-        matches!(
-            u,
-            StoreUpdate::TerminalOpened { .. } | StoreUpdate::TerminalProblem { .. }
-        )
-    });
-    if let StoreUpdate::TerminalOpened { terminal_id, .. } = opened {
-        send(Intent::TerminalInput {
-            objective_id: objective_id.clone(),
-            terminal_id: terminal_id.clone(),
-            data: "cat hello.txt; echo T_$((2+2))\r".into(),
-        });
-        let mut seen = String::new();
-        while !seen.contains("T_4") {
-            if let StoreUpdate::TerminalOutput { data, .. } = wait_for(
-                &updates,
-                "terminal output",
-                |u| matches!(u, StoreUpdate::TerminalOutput { terminal_id: t, .. } if *t == terminal_id),
-            ) {
-                seen.push_str(&data);
-            }
-        }
-        assert!(seen.contains("hi"), "{seen:?}");
-    } else {
-        eprintln!("note: terminal refused (no sandbox on this host): {opened:?}");
-    }
+    echo_in_terminal(&send, &updates, &objective_id);
 
-    send(Intent::StopService {
-        reason: crate::presentation::controller::intents::StopReason::Exit,
-    });
-    wait_for(&updates, "service stopped", |u| {
-        u == &StoreUpdate::ServiceStopped
-    });
-    wait_for(&updates, "no reconnect after stop", |u| {
-        matches!(
-            u,
-            StoreUpdate::Connection(ConnectionState::Disconnected { .. })
-        )
-    });
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let status = loop {
-        if let Some(status) = service.0.try_wait().unwrap() {
-            break status;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "laded kept running after service.stop"
-        );
-        thread::sleep(PROCESS_POLL);
-    };
-    assert!(status.success(), "{status:?}");
-    assert!(!runtime.join(CONTROL_SOCKET_NAME).exists());
-    let quiet_until = Instant::now() + QUIET_AFTER_STOP;
-    while let Ok(update) =
-        updates.recv_timeout(quiet_until.saturating_duration_since(Instant::now()))
-    {
-        assert!(
-            !matches!(
-                update,
-                StoreUpdate::Connection(ConnectionState::Reconnecting { .. })
-            ),
-            "reconnected after Exit"
-        );
-    }
+    stop_and_stay_down(&send, &updates, &mut service, &runtime);
     let _ = tx.send(Input::Shutdown);
 }

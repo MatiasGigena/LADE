@@ -46,6 +46,13 @@ fn main_id() -> ObjectiveId {
 }
 
 fn populate(app: &App) {
+    populate_changes(app);
+    populate_diff(app);
+    populate_activity(app);
+}
+
+/// A working Change Set of five files against the main Objective's target.
+fn populate_changes(app: &App) {
     let target = app
         .store
         .state()
@@ -81,6 +88,10 @@ fn populate(app: &App) {
         total_removed: 12,
         notices: vec![],
     }));
+}
+
+/// Selects `src/net/retry.ts` and shows its one-hunk diff.
+fn populate_diff(app: &App) {
     let path = RepoPath::utf8("src/net/retry.ts");
     app.controller.select_file(&path);
     let rows: [(DiffLineKind, &str); 14] = [
@@ -153,6 +164,10 @@ fn populate(app: &App) {
         }],
         truncated: false,
     }));
+}
+
+/// A short transcript: the request, the plan, a test run and the result.
+fn populate_activity(app: &App) {
     let item = |seq: u64, role, title: &str, text: &str, tool: Option<&str>| ActivityItem {
         item_id: ActivityItemId::new(format!("capture-{seq}")),
         seq,

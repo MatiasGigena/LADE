@@ -99,31 +99,36 @@ fn settings_offer_known_models_with_the_default_selected() {
     );
 }
 
+/// A catalogue with one restricted provider and the fixture provider's scripted model.
+fn fixture_catalog() -> ReplyData {
+    ReplyData::ModelsList(wire::ModelCatalog {
+        sdk_version: "1.5.0".into(),
+        providers: vec![wire::ProviderInfo {
+            provider: "openai-codex".into(),
+            name: "OpenAI Codex".into(),
+            auth: vec![wire::ProviderAuth::OauthLogin],
+            status: wire::ProviderStatus::Restricted,
+            models: Counter::new(8),
+            reason: Some("interactive OAuth login is restricted".into()),
+            variables: None,
+        }],
+        models: vec![wire::ModelInfo {
+            provider: "lade-fixture".into(),
+            id: "scripted".into(),
+            name: "Scripted".into(),
+            reasoning: false,
+            thinking_levels: vec![lade_protocol::types::ThinkingLevel::Off],
+        }],
+        truncated: false,
+        error: None,
+    })
+}
+
 #[test]
 fn agent_session_replies_and_events_reach_the_store() {
     let models = reply_effects(
         &Context::Models(Some("lade-fixture".into())),
-        &ReplyData::ModelsList(wire::ModelCatalog {
-            sdk_version: "1.5.0".into(),
-            providers: vec![wire::ProviderInfo {
-                provider: "openai-codex".into(),
-                name: "OpenAI Codex".into(),
-                auth: vec![wire::ProviderAuth::OauthLogin],
-                status: wire::ProviderStatus::Restricted,
-                models: Counter::new(8),
-                reason: Some("interactive OAuth login is restricted".into()),
-                variables: None,
-            }],
-            models: vec![wire::ModelInfo {
-                provider: "lade-fixture".into(),
-                id: "scripted".into(),
-                name: "Scripted".into(),
-                reasoning: false,
-                thinking_levels: vec![lade_protocol::types::ThinkingLevel::Off],
-            }],
-            truncated: false,
-            error: None,
-        }),
+        &fixture_catalog(),
     );
     assert!(matches!(
         models.updates.as_slice(),

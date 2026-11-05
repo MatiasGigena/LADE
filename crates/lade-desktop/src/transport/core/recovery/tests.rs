@@ -3,7 +3,9 @@ use lade_protocol::client::{
 };
 use lade_protocol::types::{Counter, Id};
 
+use crate::presentation::state::drafts::DraftEditor;
 use crate::presentation::state::model::DraftId;
+use crate::presentation::state::store::PresentationState;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
 use crate::transport::requests::tests::{epoch, input_summary, oid, wire_draft};
@@ -123,10 +125,48 @@ fn running_operation_is_rechecked_on_tick() {
     assert!(core.tick().frames.is_empty());
 }
 
+/// The state after newer pages arrived: `historical` is now submitted and stale, and the
+/// `message` input was received. Returns the state with the newer draft and input.
+fn newer_page_state(
+    historical: &wire::Draft,
+    message: &RequestFrame,
+) -> (PresentationState, wire::Draft, wire::InputSummary) {
+    let mut current = historical.clone();
+    current.state = wire::DraftState::Submitted;
+    current.stale = true;
+    current.input_id = Some(Id::from_random_bytes([77; 16]));
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    state.drafts.insert(
+        oid(),
+        vec![DraftEditor::from_durable(&convert::draft(&current))],
+    );
+    let mut input = input_summary(message.operation_id.as_ref().unwrap());
+    input.delivery = wire::DeliveryState::Received;
+    state.inputs.insert(oid(), vec![convert::input(&input)]);
+    (state, current, input)
+}
+
+/// Saves `draft`'s body as its first revision and returns the request frame.
+fn save_first_revision(core: &mut Core, draft: &wire::Draft) -> RequestFrame {
+    core.submit(Intent::SaveDraft {
+        objective_id: oid(),
+        draft_id: DraftId::new(draft.draft_id.as_str()),
+        expected_revision: 0,
+        reference: reference(),
+        body: draft.body.clone(),
+    })
+    .frames
+    .remove(0)
+}
+
+fn apply(state: &mut PresentationState, step: Step) {
+    for update in step.updates {
+        state.apply(update);
+    }
+}
+
 #[test]
 fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_inputs() {
-    use crate::presentation::state::drafts::DraftEditor;
-    use crate::presentation::state::store::PresentationState;
     let (mut core, _) = connected();
     core.submit(Intent::LoadObjective {
         objective_id: oid(),
@@ -139,16 +179,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
         .remove(0);
     core.on_reply(ok(&list, draft_list(vec![], false)));
     let historical = wire_draft(10);
-    let saved = core
-        .submit(Intent::SaveDraft {
-            objective_id: oid(),
-            draft_id: DraftId::new(historical.draft_id.as_str()),
-            expected_revision: 0,
-            reference: reference(),
-            body: historical.body.clone(),
-        })
-        .frames
-        .remove(0);
+    let saved = save_first_revision(&mut core, &historical);
     let message = core.submit(send_message()).frames.remove(0);
     core.submit(Intent::LoadInputs {
         objective_id: oid(),
@@ -165,18 +196,7 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
         .iter()
         .find(|f| matches!(f.request, Request::InputsList(_)))
         .unwrap();
-    let mut current = historical.clone();
-    current.state = wire::DraftState::Submitted;
-    current.stale = true;
-    current.input_id = Some(Id::from_random_bytes([77; 16]));
-    let mut state = PresentationState::new(ConnectionState::Connected);
-    state.drafts.insert(
-        oid(),
-        vec![DraftEditor::from_durable(&convert::draft(&current))],
-    );
-    let mut input = input_summary(message.operation_id.as_ref().unwrap());
-    input.delivery = wire::DeliveryState::Received;
-    state.inputs.insert(oid(), vec![convert::input(&input)]);
+    let (mut state, current, input) = newer_page_state(&historical, &message);
     let draft_next = core
         .on_reply(ok(draft_first, draft_list(vec![current], true)))
         .frames
@@ -195,49 +215,45 @@ fn recovered_historical_outcomes_do_not_override_newer_paginated_drafts_or_input
         reconnect.frames.iter().find(|f|
         matches!(&f.request, Request::OperationGet(q) if &q.operation_id == operation_id)).unwrap()
     };
-    let draft_recovered = core.on_reply(ok(
-        recover(saved.operation_id.as_ref().unwrap()),
-        ReplyData::OperationGet(OperationStatus {
-            state: OperationState::Completed,
-            outcome: Some(Outcome::Ok(Box::new(ReplyData::DraftSave(historical)))),
-        }),
-    ));
-    for update in draft_recovered.updates {
-        state.apply(update);
-    }
+    apply(
+        &mut state,
+        core.on_reply(ok(
+            recover(saved.operation_id.as_ref().unwrap()),
+            status(
+                OperationState::Completed,
+                Some(Outcome::Ok(Box::new(ReplyData::DraftSave(historical)))),
+            ),
+        )),
+    );
     assert_eq!(
         state.drafts[&oid()][0].state,
         crate::presentation::state::model::DraftState::Submitted,
         "a recovered acknowledgement is historical, not a current draft event"
     );
-    let input_recovered = core.on_reply(ok(
-        recover(message.operation_id.as_ref().unwrap()),
-        ReplyData::OperationGet(OperationStatus {
-            state: OperationState::Completed,
-            outcome: Some(Outcome::Ok(Box::new(ReplyData::MessageSend(
-                input_summary(message.operation_id.as_ref().unwrap()),
-            )))),
-        }),
-    ));
-    for update in input_recovered.updates {
-        state.apply(update);
-    }
+    apply(
+        &mut state,
+        core.on_reply(ok(
+            recover(message.operation_id.as_ref().unwrap()),
+            status(
+                OperationState::Completed,
+                Some(Outcome::Ok(Box::new(ReplyData::MessageSend(
+                    input_summary(message.operation_id.as_ref().unwrap()),
+                )))),
+            ),
+        )),
+    );
     assert_eq!(
         state.inputs[&oid()][0].delivery,
         crate::presentation::state::model::DeliveryState::Received
     );
-    for update in core
-        .on_reply(ok(&draft_next, draft_list(vec![wire_draft(11)], false)))
-        .updates
-    {
-        state.apply(update);
-    }
-    for update in core
-        .on_reply(ok(&input_next, input_list(&[78], None)))
-        .updates
-    {
-        state.apply(update);
-    }
+    apply(
+        &mut state,
+        core.on_reply(ok(&draft_next, draft_list(vec![wire_draft(11)], false))),
+    );
+    apply(
+        &mut state,
+        core.on_reply(ok(&input_next, input_list(&[78], None))),
+    );
     assert_eq!(
         state.drafts[&oid()][0].state,
         crate::presentation::state::model::DraftState::Submitted

@@ -193,6 +193,72 @@ fn verification(
     }
 }
 
+/// The main Objective's current Candidate 2, with `counts` files, additions and removals, and
+/// the historical Candidate 1.
+fn main_candidates(
+    now: Timestamp,
+    (files, added, removed): (u64, u64, u64),
+) -> Vec<CandidateSummary> {
+    vec![
+        CandidateSummary {
+            candidate_id: CandidateId::new(CANDIDATE_2),
+            ordinal: 2,
+            commit: commit("e1f2a3b4c5d6e7f80912a3b4c5d6e7f809123456"),
+            base_target_commit: target().commit,
+            status: CandidateStatus::Current,
+            files,
+            added,
+            removed,
+            created_at: minutes(now, 14),
+        },
+        CandidateSummary {
+            candidate_id: CandidateId::new(CANDIDATE_1),
+            ordinal: 1,
+            commit: commit("0aa1bb2cc3dd4ee5ff60718293a4b5c6d7e8f901"),
+            base_target_commit: target().commit,
+            status: CandidateStatus::Historical,
+            files: 3,
+            added: 31,
+            removed: 6,
+            created_at: minutes(now, 58),
+        },
+    ]
+}
+
+/// The main Objective's checks: one passed and one failed on Candidate 2, one interrupted on
+/// Candidate 1.
+fn main_verifications(now: Timestamp) -> Vec<VerificationSummary> {
+    vec![
+        verification(
+            "e0000001-0000-4000-8000-000000000001",
+            CANDIDATE_2,
+            &["git", "diff", "--check"],
+            (VerificationState::Passed, Some(0)),
+            (minutes(now, 13), 412),
+            "",
+            false,
+        ),
+        verification(
+            "e0000002-0000-4000-8000-000000000002",
+            CANDIDATE_2,
+            &["npm", "test", "--", "--runInBand"],
+            (VerificationState::Failed, Some(1)),
+            (minutes(now, 13), 48_300),
+            "  ● reports a timeout distinctly — “délai dépassé” is not a failure\n\n    expect(received).rejects.toBeInstanceOf(expected)\n\n    Expected constructor: TimeoutError\n    Received constructor: NetworkError\n\n      at Object.<anonymous> (tests/network/retry.test.ts:9:3)\n\nTest Suites: 1 failed, 3 passed, 4 total\nTests:       1 failed, 17 passed, 18 total",
+            true,
+        ),
+        verification(
+            "e0000003-0000-4000-8000-000000000003",
+            CANDIDATE_1,
+            &["npm", "test"],
+            (VerificationState::Interrupted, None),
+            (minutes(now, 57), 9_000),
+            "Interrupted: the candidate was returned for revision while the check ran.",
+            false,
+        ),
+    ]
+}
+
 fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetail {
     let (files, added, removed) = (6, 58, 14);
     ObjectiveDetail {
@@ -207,60 +273,9 @@ fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetai
         start_commit: commit("9a8b7c6d5e4f30211234567890abcdef12345678"),
         branch: "lade/7d0c2a3e".into(),
         session: Some(session(3)),
-        candidates: vec![
-            CandidateSummary {
-                candidate_id: CandidateId::new(CANDIDATE_2),
-                ordinal: 2,
-                commit: commit("e1f2a3b4c5d6e7f80912a3b4c5d6e7f809123456"),
-                base_target_commit: target().commit,
-                status: CandidateStatus::Current,
-                files,
-                added,
-                removed,
-                created_at: minutes(now, 14),
-            },
-            CandidateSummary {
-                candidate_id: CandidateId::new(CANDIDATE_1),
-                ordinal: 1,
-                commit: commit("0aa1bb2cc3dd4ee5ff60718293a4b5c6d7e8f901"),
-                base_target_commit: target().commit,
-                status: CandidateStatus::Historical,
-                files: 3,
-                added: 31,
-                removed: 6,
-                created_at: minutes(now, 58),
-            },
-        ],
+        candidates: main_candidates(now, (files, added, removed)),
         approval: None,
-        verifications: vec![
-            verification(
-                "e0000001-0000-4000-8000-000000000001",
-                CANDIDATE_2,
-                &["git", "diff", "--check"],
-                (VerificationState::Passed, Some(0)),
-                (minutes(now, 13), 412),
-                "",
-                false,
-            ),
-            verification(
-                "e0000002-0000-4000-8000-000000000002",
-                CANDIDATE_2,
-                &["npm", "test", "--", "--runInBand"],
-                (VerificationState::Failed, Some(1)),
-                (minutes(now, 13), 48_300),
-                "  ● reports a timeout distinctly — “délai dépassé” is not a failure\n\n    expect(received).rejects.toBeInstanceOf(expected)\n\n    Expected constructor: TimeoutError\n    Received constructor: NetworkError\n\n      at Object.<anonymous> (tests/network/retry.test.ts:9:3)\n\nTest Suites: 1 failed, 3 passed, 4 total\nTests:       1 failed, 17 passed, 18 total",
-                true,
-            ),
-            verification(
-                "e0000003-0000-4000-8000-000000000003",
-                CANDIDATE_1,
-                &["npm", "test"],
-                (VerificationState::Interrupted, None),
-                (minutes(now, 57), 9_000),
-                "Interrupted: the candidate was returned for revision while the check ran.",
-                false,
-            ),
-        ],
+        verifications: main_verifications(now),
         change_counts: ChangeCounts {
             files,
             added,
