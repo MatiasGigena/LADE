@@ -1,14 +1,14 @@
-import { newId } from "../schema.ts";
+import { MAX_ITEM_TEXT_BYTES, newId } from "../schema.ts";
 import type { AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { ActivityRole, Id, WorkerToService } from "../dto.ts";
 import type { ActivityItemBody, TurnState } from "./wire.ts";
 import { MAX_ERROR_MESSAGE } from "./wire.ts";
 
-export const MAX_ITEM_BYTES = 192 * 1024;
-
 const MAX_ENCODED_TEXT = 900 * 1024;
 
 const MAX_TITLE = 200;
+
+const MAX_TOOL_TARGET = 120;
 
 type SessionMessage = Extract<AgentSessionEvent, { type: "message_end" }>["message"];
 
@@ -20,7 +20,7 @@ interface Bounded { text: string; truncated: boolean; bytes: number }
 
 export function boundText(text: string): Bounded {
   const bytes = Buffer.from(text, "utf8");
-  let limit = MAX_ITEM_BYTES;
+  let limit = MAX_ITEM_TEXT_BYTES;
 
   for (;;) {
     let cut = Math.min(limit, bytes.length);
@@ -179,7 +179,7 @@ export class ActivityMapper {
     text = bounded.text;
     const size = Buffer.byteLength(text);
 
-    if (block.sent + size > MAX_ITEM_BYTES) { block.capped = true;
+    if (block.sent + size > MAX_ITEM_TEXT_BYTES) { block.capped = true;
 
  return; }
 
@@ -213,7 +213,7 @@ export class ActivityMapper {
 
   private toolStart(id: string, name: string, args: string, path: string | undefined, command: string | undefined): void {
     const target = path ?? command;
-    const tool: Tool = { itemId: newId(), name, title: target === undefined ? name : `${name} ${clip(String(target), 120)}`, args };
+    const tool: Tool = { itemId: newId(), name, title: target === undefined ? name : `${name} ${clip(String(target), MAX_TOOL_TARGET)}`, args };
     this.tools.set(id, tool);
     this.item(tool.itemId, "tool", tool.title, `arguments:\n${args}`, false, name);
   }

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { MAX_ITEM_BYTES } from "../src/worker/activity.ts";
+import { MAX_ITEM_TEXT_BYTES } from "../src/schema.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker } from "./worker-support.ts";
 import type { Sandbox } from "./worker-support.ts";
@@ -184,7 +184,7 @@ test("a fixture provider failure reports worker.error and the worker stays usabl
 test("a tool item over 192 KiB is truncated and flagged", () => withWorker(async (worker, box) => {
   await worker.start(box);
   const mark = worker.frames.length;
-  const size = 200 * 1024;
+  const size = MAX_ITEM_TEXT_BYTES + 8 * 1024;
   worker.send(deliverBody("prompt", `lade-fixture: write big.txt ${"x".repeat(size)}`));
   await worker.idle(mark);
   assert.equal(readFileSync(join(box.cwd, "big.txt"), "utf8").length, size, "the tool still writes the full content");
@@ -192,7 +192,7 @@ test("a tool item over 192 KiB is truncated and flagged", () => withWorker(async
   assert.ok(tool);
   assert.equal(tool.truncated, true);
   assert.match(text(tool.title), /truncated; \d+ bytes/);
-  assert.ok(Buffer.byteLength(text(tool.text)) <= MAX_ITEM_BYTES);
+  assert.ok(Buffer.byteLength(text(tool.text)) <= MAX_ITEM_TEXT_BYTES);
   const user = worker.items(mark).find(item => item.role === "user");
   assert.equal(record(user).truncated, true);
 }));

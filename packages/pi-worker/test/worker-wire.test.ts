@@ -3,14 +3,15 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import type { AssistantMessage } from "../src/worker/pi-ai.ts";
-import { ActivityMapper, boundText, MAX_ITEM_BYTES, safeMessage } from "../src/worker/activity.ts";
+import { ActivityMapper, boundText, safeMessage } from "../src/worker/activity.ts";
 import { StdioChannel } from "../src/worker/channel.ts";
 import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
 import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
 import type { ServiceToWorker, WorkerToService } from "../src/dto.ts";
+import { MAX_FRAME, MAX_STRING } from "../src/json.ts";
 import type { JsonObject } from "../src/json.ts";
-import { newId, parseId } from "../src/schema.ts";
+import { MAX_ITEM_TEXT_BYTES, newId, parseId } from "../src/schema.ts";
 import { decodeWorkerFrame } from "../src/worker/contract.ts";
 
 const ID = parseId("00000000-0000-4000-8000-000000000001");
@@ -51,18 +52,18 @@ test("LF framing survives byte fragmentation and poisons after an error", () => 
 test("outbound frames are bounded before they are written", () => {
   assert.match(encodeOutbound({ kind: "turn.state", state: "idle" }).toString(), /^\{"protocol":1,"bundle":"0\.2\.0","body":\{"kind":"turn.state","state":"idle"\}\}\n$/);
   assert.throws(() => encodeOutbound({ kind: "worker.error", code: "internal", message: "m".repeat(513) }), { code: "invalid_schema" });
-  assert.throws(() => encodeOutbound({ kind: "activity.delta", item_id: ID, append_text: "a".repeat(300 * 1024) }), { code: "limit_reached" });
+  assert.throws(() => encodeOutbound({ kind: "activity.delta", item_id: ID, append_text: "a".repeat(MAX_STRING + 1) }), { code: "limit_reached" });
 });
 
 test("item text is bounded by bytes, UTF-8 boundaries and the encoded frame size", () => {
-  const wide = boundText("é".repeat(MAX_ITEM_BYTES));
+  const wide = boundText("é".repeat(MAX_ITEM_TEXT_BYTES));
   assert.equal(wide.truncated, true);
-  assert.ok(Buffer.byteLength(wide.text) <= MAX_ITEM_BYTES);
+  assert.ok(Buffer.byteLength(wide.text) <= MAX_ITEM_TEXT_BYTES);
   assert.equal(wide.text.includes("�"), false);
 
-  const control = boundText("\u0001".repeat(MAX_ITEM_BYTES));
+  const control = boundText("\u0001".repeat(MAX_ITEM_TEXT_BYTES));
   assert.equal(control.truncated, true);
-  assert.ok(encodeOutbound({ kind: "activity.item", item_id: ID, role: "tool", title: "t", text: control.text, is_error: false, truncated: true }).length < 1024 * 1024);
+  assert.ok(encodeOutbound({ kind: "activity.item", item_id: ID, role: "tool", title: "t", text: control.text, is_error: false, truncated: true }).length < MAX_FRAME);
   assert.equal(boundText("\uD800").text, "�", "lone surrogates are normalised before JSON encoding");
   assert.equal(safeMessage(`401: key sk-${"a".repeat(40)}\nrest`), "401: key [redacted] rest");
 });
@@ -73,7 +74,7 @@ test("streamed text is normalized and bounded before frame encoding", () => {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   };
 
-  for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_BYTES)]) {
+  for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_TEXT_BYTES)]) {
     const sent: WorkerToService[] = [];
     const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
     assert.doesNotThrow(() => mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } }));
