@@ -1,3 +1,6 @@
+//! The window header: the LADE mark, the main view tabs, search and its results, the profile,
+//! the connection status and the compact menu.
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 

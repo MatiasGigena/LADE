@@ -1,3 +1,6 @@
+//! The [`Controller`]: what views call to change UI state or to send an [`Intent`](intents::Intent)
+//! about the selected Objective.
+
 use std::path::PathBuf;
 use std::rc::Rc;
 

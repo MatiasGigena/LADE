@@ -1,3 +1,6 @@
+//! The file viewer: a diff or a full file of the selected Change Set entry, with its version line
+//! and the selection that feedback drafts anchor to.
+
 use std::cell::{Cell, RefCell};
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;

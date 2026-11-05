@@ -1,3 +1,6 @@
+//! The protocol core of the transport, free of sockets and threads: it turns intents into request
+//! frames, applies replies and events, and recovers or replays work across reconnects.
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 

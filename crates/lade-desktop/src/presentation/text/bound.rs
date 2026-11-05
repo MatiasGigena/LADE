@@ -1,3 +1,5 @@
+//! Text length limits for edited fields, and the edit guard that keeps an entry within its limit.
+
 pub const TEXT_LIMIT: TextLimit = TextLimit::Bytes(lade_protocol::MAX_STRING);
 pub const OVERRIDE_REASON_LIMIT: TextLimit = TextLimit::Chars(2048);
 

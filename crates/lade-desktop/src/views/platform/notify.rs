@@ -1,3 +1,5 @@
+//! Desktop notifications through GIO, and the action that opens the Objective one names.
+
 use std::cell::OnceCell;
 
 use gtk::gio;

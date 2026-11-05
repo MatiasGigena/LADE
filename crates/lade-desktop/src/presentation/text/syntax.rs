@@ -1,3 +1,6 @@
+//! Whether a file is shown syntax-highlighted: only when its language is known and it is within
+//! the size limits.
+
 pub const HIGHLIGHT_MAX_BYTES: usize = 2 * 1024 * 1024;
 pub const HIGHLIGHT_MAX_LINES: usize = 40_000;
 

@@ -1,3 +1,6 @@
+//! Desktop attention: which Objectives newly need the user, and delivering that as desktop
+//! notifications while the window is not active.
+
 use std::collections::HashMap;
 
 use super::model::{Attention, ObjectiveId, ObjectiveSummary};

@@ -1,3 +1,6 @@
+//! How diff and file text is laid out for display, and mapping a selection in that layout back to
+//! byte ranges of the file version a feedback draft anchors to.
+
 use crate::presentation::state::model::{DiffLineKind, FileContent, FileDiff, Side};
 
 pub const CR_SYMBOL: char = '\u{240D}';

@@ -1,3 +1,6 @@
+//! The Activity region: the agent's transcript and controls, its setup card and settings, and the
+//! accepted-input ledger.
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 

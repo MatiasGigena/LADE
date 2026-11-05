@@ -1,3 +1,5 @@
+//! The contained terminal's client side: its bounds, screen model and key and paste encoding.
+
 use super::state::model::{Lifecycle, ObjectiveId, ObjectiveSummary};
 
 pub const SCROLLBACK_LINES: usize = 2000;

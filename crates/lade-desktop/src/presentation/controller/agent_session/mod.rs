@@ -1,3 +1,6 @@
+//! Controller commands for an Objective's Agent Session: starting and configuring the agent,
+//! session tools, profile resources and extension dialog answers.
+
 use std::path::PathBuf;
 
 use super::Controller;

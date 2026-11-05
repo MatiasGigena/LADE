@@ -1,3 +1,6 @@
+//! The service connection: finding and admitting to the control socket, starting `laded` when
+//! allowed, and the driver thread that reconnects and feeds the protocol core.
+
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 use std::net::Shutdown;

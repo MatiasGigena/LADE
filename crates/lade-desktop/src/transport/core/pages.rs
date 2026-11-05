@@ -1,3 +1,6 @@
+//! [`Pages`]: a paginated list being loaded, kept private until complete and current with
+//! changes received in between.
+
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 

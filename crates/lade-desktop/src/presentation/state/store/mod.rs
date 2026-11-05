@@ -1,3 +1,6 @@
+//! The presentation store: [`PresentationState`], the [`Change`]s it reports to views, and the
+//! [`Store`] that applies updates and notifies listeners.
+
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;

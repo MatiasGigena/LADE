@@ -1,3 +1,6 @@
+//! Shared GTK building blocks: labels, buttons, messages, disclosures and spacing, plus
+//! accessibility announcements.
+
 use gtk::glib;
 use gtk::prelude::*;
 use gtk4 as gtk;

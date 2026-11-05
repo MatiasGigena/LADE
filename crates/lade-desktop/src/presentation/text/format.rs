@@ -1,3 +1,6 @@
+//! Display wording for view-model values: labels for states and badges, times and sizes, and the
+//! Objective journey.
+
 use crate::presentation::state::model::{
     ActivityRole, ApprovalState, Attention, Basis, CandidateId, CandidateStatus, ChangeStatus,
     DeliveryMode, DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle,

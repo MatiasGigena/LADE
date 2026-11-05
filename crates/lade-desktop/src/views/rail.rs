@@ -1,3 +1,5 @@
+//! The Objectives rail: Objectives grouped by attention, and the archive of closed ones.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

@@ -1,3 +1,6 @@
+//! The terminal pane: the contained terminal of the selected Objective, its keyboard and paste
+//! input, and its open, refused and ended states.
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;

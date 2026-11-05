@@ -1,3 +1,6 @@
+//! Agent Session state as the window holds it: the model catalogue and choice, each Objective's
+//! reported session and tree, profile resources and open extension dialogs.
+
 use std::collections::{HashMap, HashSet};
 
 use super::model::{ModelRef, ObjectiveId};

@@ -1,3 +1,5 @@
+//! [`Intent`]: everything the window can ask the transport to do, and the sinks that receive them.
+
 use std::path::PathBuf;
 
 use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswer};

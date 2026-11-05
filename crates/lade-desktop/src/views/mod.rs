@@ -1,3 +1,6 @@
+//! The GTK window: [`App`] builds the regions, routes store changes to them and owns the
+//! window-wide state; each region and dialog lives in its own module.
+
 mod activity;
 mod dialogs;
 mod header;

@@ -1,3 +1,6 @@
+//! Agent Session controls: the model picker, session status and tree, profile resources, and
+//! the host for extension dialogs.
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;

@@ -1,3 +1,6 @@
+//! The transport: the connection thread to `laded`, request mapping and conversion between the
+//! wire and the presentation model.
+
 pub mod agent_session;
 pub mod bridge;
 pub mod connection;

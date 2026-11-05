@@ -1,3 +1,6 @@
+//! The opt-in intent trace: with `LADE_DESKTOP_TRACE` set, each intent the window sends is
+//! appended to that file for performance reports.
+
 use std::cell::{Cell, RefCell};
 use std::fs::{File, OpenOptions};
 use std::io::Write;

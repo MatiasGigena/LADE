@@ -1,3 +1,6 @@
+//! Responsive layout rules: compact and wide classes by window width, region order for focus
+//! moves, and the wide layout's pane sizes.
+
 pub const COMPACT_WIDTH: i32 = 1100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

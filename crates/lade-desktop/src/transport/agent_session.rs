@@ -1,3 +1,5 @@
+//! Conversion between the wire's Agent Session types and the presentation's.
+
 use lade_protocol::client as wire;
 use lade_protocol::types as wt;
 

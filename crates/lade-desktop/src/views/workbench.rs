@@ -1,3 +1,6 @@
+//! The Workbench region: the selected Objective's journey and status, its Change Set and the
+//! empty states shown before there is one.
+
 use std::cell::{Cell, RefCell};
 use std::fmt::Write as _;
 use std::rc::Rc;

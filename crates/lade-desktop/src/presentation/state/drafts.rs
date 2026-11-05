@@ -1,3 +1,6 @@
+//! Feedback draft editing: each draft's text, its save scheduling and conflicts, and the status
+//! shown beside it.
+
 use super::model::{
     Draft, DraftId, DraftState, ObjectiveId, Reference, Refusal, ReportCode, SessionId,
 };

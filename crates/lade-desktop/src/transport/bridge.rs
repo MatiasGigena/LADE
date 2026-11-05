@@ -1,3 +1,6 @@
+//! Hands transport updates to the GTK main thread through a bounded queue drained by idle
+//! callbacks.
+
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};

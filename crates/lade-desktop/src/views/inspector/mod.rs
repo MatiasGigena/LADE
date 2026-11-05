@@ -1,3 +1,5 @@
+//! The inspector region: the Overview, Evidence and Feedback tabs of the selected Objective.
+
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;

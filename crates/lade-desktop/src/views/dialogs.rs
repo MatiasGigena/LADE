@@ -1,3 +1,6 @@
+//! The window's modal dialogs: confirmations, new Objective and intent forms, approval and
+//! clean-up choices, feedback submission, opening a workspace and the help dialogs.
+
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
