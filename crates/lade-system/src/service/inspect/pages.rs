@@ -16,8 +16,7 @@ use crate::adapters::git::{self, GrepQuery, LineKind, ObjectKind, Repository};
 use crate::storage::CaptureRow;
 
 use crate::service::convert::{
-    adapter_git, durability, git_rejection, invalid, not_found, preview, repo_path, wire_id,
-    wire_path,
+    durability, git_rejection, invalid, not_found, preview, repo_path, wire_id, wire_path,
 };
 use crate::service::jobs::{self, FileBytes, LargeBlobs};
 
@@ -293,19 +292,14 @@ pub(super) fn read_diff(
 ) -> Result<ReplyData, Rejection> {
     let path = repo_path(&query.path)?;
     let files = repo
-        .diff_numstat(&adapter_git(&resolved.old), &adapter_git(&resolved.new))
+        .diff_numstat(&resolved.old, &resolved.new)
         .map_err(git_rejection)?;
     let old_path = files
         .iter()
         .find(|f| f.path == path)
         .and_then(|f| f.old_path.clone());
     let diff = repo
-        .diff_hunks(
-            &adapter_git(&resolved.old),
-            &adapter_git(&resolved.new),
-            &path,
-            old_path.as_ref(),
-        )
+        .diff_hunks(&resolved.old, &resolved.new, &path, old_path.as_ref())
         .map_err(git_rejection)?;
     let side_digest = |tree: &GitId, p: &git::RepoPath| -> Result<Option<Digest>, Rejection> {
         match jobs::read_whole(repo, tree, p) {
@@ -380,9 +374,7 @@ pub(super) fn search_tree(
     let (results, truncated) = match query.scope {
         SearchScope::Files => {
             let needle = query.query.as_bytes().to_ascii_lowercase();
-            let entries = repo
-                .ls_tree(&adapter_git(tree), None, true)
-                .map_err(git_rejection)?;
+            let entries = repo.ls_tree(tree, None, true).map_err(git_rejection)?;
             let mut matched: Vec<SearchResult> = entries
                 .iter()
                 .filter(|e| e.kind == ObjectKind::Blob)
@@ -415,7 +407,7 @@ pub(super) fn search_tree(
             }
             let found = repo
                 .grep(
-                    &adapter_git(tree),
+                    tree,
                     &GrepQuery {
                         text: query.query.clone(),
                         ignore_case: true,

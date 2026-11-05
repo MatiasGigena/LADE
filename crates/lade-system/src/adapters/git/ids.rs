@@ -1,103 +1,41 @@
-//! Git's value types as the adapter validates them: object formats and ids, repository
-//! paths and the Git version.
+//! Git's value types as the adapter validates them: object ids (the domain's [`GitId`]),
+//! repository paths and the Git version.
 
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::unix::ffi::OsStrExt;
 
+use lade_core::domain::ids::{GitAlgorithm, GitId};
+
 use super::{GitError, Result};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ObjectFormat {
-    Sha1,
-    Sha256,
+/// The id of the empty tree in `algorithm`'s object format.
+#[must_use]
+#[expect(
+    clippy::expect_used,
+    reason = "both literals are full, non-zero lowercase object ids of their algorithm"
+)]
+pub fn empty_tree(algorithm: GitAlgorithm) -> GitId {
+    let hex = match algorithm {
+        GitAlgorithm::Sha1 => "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        GitAlgorithm::Sha256 => "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
+    };
+    GitId::new(algorithm, hex).expect("the empty tree id is a full object id")
 }
 
-impl ObjectFormat {
-    #[must_use]
-    pub fn hex_len(self) -> usize {
-        match self {
-            Self::Sha1 => 40,
-            Self::Sha256 => 64,
-        }
-    }
-
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Sha1 => "sha1",
-            Self::Sha256 => "sha256",
-        }
-    }
-
-    #[must_use]
-    pub fn empty_tree(self) -> GitId {
-        let hex = match self {
-            Self::Sha1 => "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-            Self::Sha256 => "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321",
-        };
-        GitId {
-            format: self,
-            hex: hex.to_owned(),
-        }
-    }
-
-    pub(super) fn zero(self) -> String {
-        "0".repeat(self.hex_len())
-    }
+/// The all-zero id Git uses for "no object" in `algorithm`'s object format.
+pub(super) fn zero(algorithm: GitAlgorithm) -> String {
+    "0".repeat(algorithm.hex_len())
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct GitId {
-    format: ObjectFormat,
-    hex: String,
-}
-
-impl GitId {
-    /// Parses a full lowercase object id of `format`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GitError::InvalidId`] when `hex` is not exactly as long as `format`'s ids or holds
-    /// anything but lowercase hex digits.
-    pub fn parse(format: ObjectFormat, hex: &str) -> Result<Self> {
-        let valid = hex.len() == format.hex_len()
-            && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-        if valid {
-            Ok(Self {
-                format,
-                hex: hex.to_owned(),
-            })
-        } else {
-            Err(GitError::InvalidId)
-        }
-    }
-
-    #[must_use]
-    pub fn format(&self) -> ObjectFormat {
-        self.format
-    }
-
-    #[must_use]
-    pub fn hex(&self) -> &str {
-        &self.hex
-    }
-
-    pub(super) fn is_zero(&self) -> bool {
-        self.hex.bytes().all(|b| b == b'0')
-    }
-}
-
-impl fmt::Display for GitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.hex)
-    }
-}
-
-impl fmt::Debug for GitId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.format.name(), self.hex)
-    }
+/// Parses a full, non-zero lowercase object id of `algorithm`.
+///
+/// # Errors
+///
+/// Returns [`GitError::InvalidId`] when `hex` is not exactly as long as `algorithm`'s ids, holds
+/// anything but lowercase hex digits, or is all zeros.
+pub fn parse_id(algorithm: GitAlgorithm, hex: &str) -> Result<GitId> {
+    GitId::new(algorithm, hex).map_err(|_| GitError::InvalidId)
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]

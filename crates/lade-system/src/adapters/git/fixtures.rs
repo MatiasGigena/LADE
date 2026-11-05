@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::{GitId, RepoPath, Repository, Worktree};
+use super::{GitId, RepoPath, Repository, Worktree, parse_id};
 use crate::adapters_support::git;
 
 pub(super) fn path(bytes: &[u8]) -> RepoPath {
@@ -10,7 +10,7 @@ pub(super) fn path(bytes: &[u8]) -> RepoPath {
 }
 
 pub(super) fn id(repo: &Repository, hex: &str) -> GitId {
-    GitId::parse(repo.object_format(), hex).expect("valid id")
+    parse_id(repo.object_format(), hex).expect("valid id")
 }
 
 pub(super) fn head(repo: &Repository, dir: &Path) -> GitId {

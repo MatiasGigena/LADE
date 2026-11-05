@@ -14,9 +14,7 @@ use lade_protocol::types::WirePath;
 use crate::adapters::artifacts::ArtifactStore;
 use crate::adapters::git::{self, ChangedFile, CommitSpec, MergeOutcome, Repository};
 
-use crate::service::convert::{
-    adapter_git, conflict, core_git, domain_rejection, durability, git_rejection,
-};
+use crate::service::convert::{conflict, domain_rejection, durability, git_rejection};
 use crate::service::projection::actions::NO_CHANGES_TO_FREEZE;
 
 use super::read::{counts, reference_stale, target_commit};
@@ -28,7 +26,7 @@ pub fn manifest(target: &GitId, tree: &GitId, files: &[ChangedFile]) -> Vec<u8> 
         tree.hex()
     );
     for file in files {
-        let id = |id: &Option<git::GitId>| {
+        let id = |id: &Option<GitId>| {
             id.as_ref()
                 .map_or_else(|| "-".to_string(), |i| i.hex().to_string())
         };
@@ -91,20 +89,17 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
     let captured = repo
         .capture_working_tree(&worktree, &input.scratch)
         .map_err(git_rejection)?;
-    let tree = core_git(&captured.tree);
+    let tree = captured.tree.clone();
     let target = target_commit(repo, &input.target_branch)?;
     let files = repo
-        .diff_numstat(&adapter_git(&target), &captured.tree)
+        .diff_numstat(&target, &captured.tree)
         .map_err(git_rejection)?;
     let filtered = filtered_paths(repo, &captured.tree, &files)?;
     let (capture_id, reused) = match &input.latest {
         Some(latest) if latest.tree == tree && latest.target == target => (latest.id, true),
         _ => {
-            repo.retain(
-                &format!("capture-{}", input.capture_id),
-                &adapter_git(&tree),
-            )
-            .map_err(git_rejection)?;
+            repo.retain(&format!("capture-{}", input.capture_id), &tree)
+                .map_err(git_rejection)?;
             crate::fault::point("capture.retained");
             (input.capture_id, false)
         }
@@ -128,7 +123,7 @@ pub fn capture(input: &CaptureInput) -> Result<CaptureOut, Rejection> {
 
 pub fn filtered_paths(
     repo: &Repository,
-    tree: &git::GitId,
+    tree: &GitId,
     files: &[ChangedFile],
 ) -> Result<Vec<git::RepoPath>, Rejection> {
     let paths: Vec<&git::RepoPath> = files.iter().map(|f| &f.path).collect();
@@ -168,7 +163,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let commit = repo
         .commit_tree(&CommitSpec {
             tree: captured.clone(),
-            parents: vec![adapter_git(&input.start_commit)],
+            parents: vec![input.start_commit.clone()],
             message: input.message.clone(),
             timestamp: None,
         })
@@ -176,10 +171,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     let tree = if input.start_commit == target {
         captured.clone()
     } else {
-        match repo
-            .merge_tree(&adapter_git(&target), &commit)
-            .map_err(git_rejection)?
-        {
+        match repo.merge_tree(&target, &commit).map_err(git_rejection)? {
             MergeOutcome::Clean { tree } => tree,
             MergeOutcome::Conflict { .. } => {
                 return Err(conflict(
@@ -188,9 +180,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
             }
         }
     };
-    let files = repo
-        .diff_numstat(&adapter_git(&target), &tree)
-        .map_err(git_rejection)?;
+    let files = repo.diff_numstat(&target, &tree).map_err(git_rejection)?;
     if files.is_empty() {
         return Err(domain_rejection(lade_core::DomainError::InvalidLifecycle(
             NO_CHANGES_TO_FREEZE,
@@ -198,7 +188,7 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
     }
     let digest = input
         .artifacts
-        .put(&manifest(&target, &core_git(&tree), &files))
+        .put(&manifest(&target, &tree, &files))
         .map_err(|_| durability("manifest artifact could not be stored"))?;
     let branch_ref = format!("refs/heads/{}", input.git_branch);
     let old = repo.resolve_ref(&branch_ref).map_err(git_rejection)?;
@@ -222,8 +212,8 @@ pub fn freeze(input: &FreezeInput) -> Result<FreezeOut, Rejection> {
         .map_err(git_rejection)?
         .tree;
     Ok(FreezeOut {
-        commit: core_git(&commit),
-        tree: core_git(&tree),
+        commit,
+        tree,
         target,
         counts: counts(&files),
         manifest_digest: digest.to_hex(),
@@ -256,14 +246,12 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
     let repo = &input.repo;
     let target = target_commit(repo, &input.target_branch)?;
     match repo
-        .merge_tree(&adapter_git(&target), &adapter_git(&input.candidate_commit))
+        .merge_tree(&target, &input.candidate_commit)
         .map_err(git_rejection)?
     {
         MergeOutcome::Conflict { .. } => Ok(RefreshOut::Conflict { target }),
         MergeOutcome::Clean { tree } => {
-            let files = repo
-                .diff_numstat(&adapter_git(&target), &tree)
-                .map_err(git_rejection)?;
+            let files = repo.diff_numstat(&target, &tree).map_err(git_rejection)?;
             if files.is_empty() {
                 return Err(conflict(
                     "the moved target already contains this change set; complete the objective instead",
@@ -271,12 +259,12 @@ pub fn refresh(input: &RefreshInput) -> Result<RefreshOut, Rejection> {
             }
             let digest = input
                 .artifacts
-                .put(&manifest(&target, &core_git(&tree), &files))
+                .put(&manifest(&target, &tree, &files))
                 .map_err(|_| durability("manifest artifact could not be stored"))?;
             repo.retain(&input.retain_ref, &tree)
                 .map_err(git_rejection)?;
             Ok(RefreshOut::Rebuilt {
-                tree: core_git(&tree),
+                tree: tree.clone(),
                 target,
                 counts: counts(&files),
                 manifest_digest: digest.to_hex(),

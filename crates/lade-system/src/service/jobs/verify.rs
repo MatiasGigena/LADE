@@ -18,8 +18,6 @@ use crate::adapters::sandbox::{
 };
 use crate::supervision::sweep::place_sandbox;
 
-use crate::service::convert::adapter_git;
-
 pub fn disk_usage(roots: &[PathBuf]) -> u64 {
     let mut total = 0u64;
     let mut pending: Vec<PathBuf> = roots.to_vec();
@@ -96,8 +94,8 @@ pub fn verify(input: &VerifyInput) -> VerifyOut {
     };
     let repo = &input.repo;
     let commit = match repo.commit_tree(&CommitSpec {
-        tree: adapter_git(&input.tree),
-        parents: vec![adapter_git(&input.base_target)],
+        tree: input.tree.clone(),
+        parents: vec![input.base_target.clone()],
         message: "LADE verification copy".into(),
         timestamp: Some(0),
     }) {

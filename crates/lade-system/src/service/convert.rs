@@ -17,7 +17,7 @@ use lade_protocol::client::{
 use lade_protocol::types::{self as wire_types, Counter, DeliveryMode, Id};
 
 use super::state::ObjState;
-use crate::adapters::git::{self, GitError, ObjectFormat};
+use crate::adapters::git::{self, GitError};
 use crate::support::wire_ts;
 
 #[must_use]
@@ -182,51 +182,6 @@ pub fn git_rejection(error: GitError) -> Rejection {
             &format!("git operation failed: {}", other.code()),
         ),
     }
-}
-
-#[must_use]
-pub fn core_algorithm(format: ObjectFormat) -> GitAlgorithm {
-    match format {
-        ObjectFormat::Sha1 => GitAlgorithm::Sha1,
-        ObjectFormat::Sha256 => GitAlgorithm::Sha256,
-    }
-}
-
-#[must_use]
-pub fn adapter_format(algorithm: GitAlgorithm) -> ObjectFormat {
-    match algorithm {
-        GitAlgorithm::Sha1 => ObjectFormat::Sha1,
-        GitAlgorithm::Sha256 => ObjectFormat::Sha256,
-    }
-}
-
-/// The domain form of an object id read from Git.
-///
-/// # Panics
-///
-/// Never in practice: the Git adapter only yields full, non-zero lowercase object ids, the
-/// same rule the domain id enforces.
-#[must_use]
-#[expect(
-    clippy::expect_used,
-    reason = "lade-core offers only a validating constructor for GitId; adapter ids satisfy it"
-)]
-pub fn core_git(id: &git::GitId) -> core_ids::GitId {
-    core_ids::GitId::new(core_algorithm(id.format()), id.hex()).expect("adapter ids are full ids")
-}
-
-/// The Git adapter form of a domain object id.
-///
-/// # Panics
-///
-/// Never in practice: domain ids are full lowercase object ids, which the adapter accepts.
-#[must_use]
-#[expect(
-    clippy::expect_used,
-    reason = "domain GitIds are full object ids, which the adapter's parser always accepts"
-)]
-pub fn adapter_git(id: &core_ids::GitId) -> git::GitId {
-    git::GitId::parse(adapter_format(id.algorithm()), id.hex()).expect("domain ids are full ids")
 }
 
 /// The wire form of a domain object id.

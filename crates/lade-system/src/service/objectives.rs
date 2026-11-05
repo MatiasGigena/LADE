@@ -109,14 +109,12 @@ impl Service {
             Start::Target => target_commit,
             Start::Commit { commit } => {
                 let requested = from_wire_git(commit)?;
-                let resolved = ws
-                    .repo
+                ws.repo
                     .resolve_commit(requested.hex())
-                    .map_err(git_rejection)?;
-                super::convert::core_git(&resolved)
+                    .map_err(git_rejection)?
             }
         };
-        if start_commit.algorithm() != super::convert::core_algorithm(ws.repo.object_format()) {
+        if start_commit.algorithm() != ws.repo.object_format() {
             return Err(invalid(
                 "start commit object format differs from the repository",
             ));

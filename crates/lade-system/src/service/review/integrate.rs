@@ -10,9 +10,7 @@ use lade_core::domain::review::{IntegrationPlan, InvalidationReason};
 use lade_protocol::client::{Rejection, ReplyData, ReviewIntegrateCommand};
 
 use crate::adapters::git::{GitError, Repository, SquashOutcome, SquashRequest};
-use crate::service::convert::{
-    adapter_git, core_git, domain_rejection, git_rejection, not_found, parse_uuid,
-};
+use crate::service::convert::{domain_rejection, git_rejection, not_found, parse_uuid};
 use crate::service::state::ObjState;
 use crate::service::{Completed, Flow, ReqCtx, Service};
 use crate::storage::{self, JournalRow, JournalState, OperationState};
@@ -161,8 +159,8 @@ impl Service {
     ) {
         let request = SquashRequest {
             target_branch: journal.target_branch,
-            expected_target: adapter_git(&plan.expected_target),
-            candidate_tree: adapter_git(&plan.candidate_tree),
+            expected_target: plan.expected_target.clone(),
+            candidate_tree: plan.candidate_tree.clone(),
             message: journal.message,
             timestamp: Some(journal.commit_time),
         };
@@ -207,7 +205,6 @@ impl Service {
         squash: &SquashOutcome,
     ) -> Result<ReplyData, Rejection> {
         crate::fault::point("integrate.applied");
-        let commit = core_git(&squash.commit);
         let mut st = self.obj(oid)?.clone();
         st.review
             .complete_integration(&mut st.row.objective, plan, ts_now())
@@ -216,7 +213,14 @@ impl Service {
         let data = ReplyData::ReviewIntegrate(Box::new(self.fresh_detail(&st)));
         let now = now_ms();
         self.commit_obj_with(Some(ctx), Some(&data), st, |tx| {
-            storage::update_journal(tx, journal_id, JournalState::Done, Some(&commit), None, now)
+            storage::update_journal(
+                tx,
+                journal_id,
+                JournalState::Done,
+                Some(&squash.commit),
+                None,
+                now,
+            )
         })?;
         Ok(data)
     }

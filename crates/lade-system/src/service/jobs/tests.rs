@@ -11,9 +11,8 @@ use lade_protocol::client::ErrorCode;
 use super::pool::Pool;
 use super::verify::{resolve_program, tail_text};
 use super::*;
-use crate::adapters::git::{self, ChangeStatus, ChangedFile, RepoPath, Repository};
+use crate::adapters::git::{ChangeStatus, ChangedFile, RepoPath, Repository};
 use crate::adapters_support::{TempDir, commit_all, git as run_git, init_repo};
-use crate::service::convert::core_git;
 
 fn repo(root: &TempDir) -> (PathBuf, Repository) {
     let path = init_repo(root.path(), "sha1");
@@ -97,7 +96,7 @@ fn the_manifest_names_the_target_tree_and_every_file_exactly() {
     let mut renamed = changed(b"new \xff", 1, 2);
     renamed.old_path = Some(RepoPath::new(b"old".to_vec()).expect("old"));
     renamed.status = ChangeStatus::Renamed { similarity: 90 };
-    renamed.new_id = Some(git::GitId::parse(git::ObjectFormat::Sha1, &"c".repeat(40)).expect("id"));
+    renamed.new_id = Some(GitId::new(GitAlgorithm::Sha1, &"c".repeat(40)).expect("id"));
     let files = [changed(b"plain.rs", 5, 0), renamed];
     let manifest =
         String::from_utf8(super::candidate::manifest(&target, &tree, &files)).expect("ascii");
@@ -274,12 +273,9 @@ fn deleting_refs_skips_the_ones_already_gone() {
             .is_none()
     );
     assert_eq!(
-        core_git(
-            &repo
-                .resolve_ref("refs/heads/main")
-                .expect("main")
-                .expect("main")
-        ),
+        repo.resolve_ref("refs/heads/main")
+            .expect("main")
+            .expect("main"),
         head(&repo)
     );
 }

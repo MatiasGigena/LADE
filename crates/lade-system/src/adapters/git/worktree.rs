@@ -48,7 +48,7 @@ impl Repository {
     /// `git worktree add` fails (for example because the branch exists).
     pub fn worktree_add(&self, branch: &str, start: &GitId, path: &Path) -> Result<Worktree> {
         validate_branch_name(branch)?;
-        if start.format() != self.object_format() {
+        if start.algorithm() != self.object_format() {
             return Err(GitError::InvalidId);
         }
         if !path.is_absolute() {

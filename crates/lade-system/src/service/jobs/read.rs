@@ -15,7 +15,7 @@ use sha2::{Digest as _, Sha256};
 use crate::adapters::artifacts::{ArtifactDigest, ArtifactStore};
 use crate::adapters::git::{self, ChangedFile, GitError, Repository};
 
-use crate::service::convert::{adapter_git, core_git, durability, git_rejection, not_found};
+use crate::service::convert::{durability, git_rejection, not_found};
 use crate::support::hex;
 
 pub const MAX_WHOLE_FILE: u64 = 64 << 20;
@@ -29,7 +29,6 @@ pub fn open_repository(path: &Path) -> Result<Repository, GitError> {
 pub fn target_commit(repo: &Repository, branch: &str) -> Result<GitId, Rejection> {
     repo.resolve_ref(&format!("refs/heads/{branch}"))
         .map_err(git_rejection)?
-        .map(|id| core_git(&id))
         .ok_or_else(|| not_found("integration target branch"))
 }
 
@@ -46,8 +45,7 @@ pub fn read_whole(
     tree: &GitId,
     path: &git::RepoPath,
 ) -> Result<Option<Vec<u8>>, Rejection> {
-    let tree = adapter_git(tree);
-    let Some(entry) = repo.tree_entry(&tree, path).map_err(git_rejection)? else {
+    let Some(entry) = repo.tree_entry(tree, path).map_err(git_rejection)? else {
         return Ok(None);
     };
     if entry.kind != git::ObjectKind::Blob {
@@ -80,7 +78,7 @@ fn unsupported(detail: &str) -> Rejection {
 
 pub enum FileBytes {
     Whole(Vec<u8>),
-    Large { blob: git::GitId },
+    Large { blob: GitId },
 }
 
 pub fn read_file_bytes(
@@ -88,10 +86,7 @@ pub fn read_file_bytes(
     tree: &GitId,
     path: &git::RepoPath,
 ) -> Result<Option<FileBytes>, Rejection> {
-    let Some(entry) = repo
-        .tree_entry(&adapter_git(tree), path)
-        .map_err(git_rejection)?
-    else {
+    let Some(entry) = repo.tree_entry(tree, path).map_err(git_rejection)? else {
         return Ok(None);
     };
     match (entry.kind, entry.size) {
@@ -106,14 +101,14 @@ pub fn read_file_bytes(
 }
 
 #[derive(Default)]
-pub struct LargeBlobs(Mutex<VecDeque<(git::GitId, ArtifactDigest)>>);
+pub struct LargeBlobs(Mutex<VecDeque<(GitId, ArtifactDigest)>>);
 
 impl LargeBlobs {
     pub fn retain(
         &self,
         repo: &Repository,
         artifacts: &ArtifactStore,
-        id: &git::GitId,
+        id: &GitId,
     ) -> Result<ArtifactDigest, Rejection> {
         let remembered = self
             .0
@@ -173,7 +168,7 @@ pub fn reference_stale(repo: &Repository, old: &GitId, new: &GitId, reference: &
             let Ok(len) = usize::try_from(range.byte_len()) else {
                 return true;
             };
-            repo.read_blob(&adapter_git(tree), &path, range.start(), len)
+            repo.read_blob(tree, &path, range.start(), len)
                 .map_or(true, |page| {
                     page.offset != range.start()
                         || page.data != reference.selected_text().as_bytes()

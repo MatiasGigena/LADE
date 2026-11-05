@@ -14,7 +14,6 @@ use crate::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerLauncher,
 };
 
-use crate::service::convert::{adapter_git, core_git};
 use crate::support::fs::ensure_private_dir;
 
 pub struct LaunchInput {
@@ -142,7 +141,7 @@ fn provision(repo: &Repository, wanted: &Provision, path: &Path) -> Result<Strin
             Err(e) => return Err(LaunchFailure::Provision(e.code())),
         }
     }
-    repo.worktree_add(&branch, &adapter_git(start), path)
+    repo.worktree_add(&branch, start, path)
         .map_err(|e| LaunchFailure::Provision(e.code()))?;
     Ok(branch)
 }
@@ -167,7 +166,7 @@ fn adopt_provisioned(repo: &Repository, base: &str, start: &GitId, path: &Path) 
         .resolve_ref(&format!("refs/heads/{branch}"))
         .ok()
         .flatten()
-        .is_some_and(|id| core_git(&id) == *start);
+        .is_some_and(|id| id == *start);
     (ours && at_start).then(|| {
         eprintln!("laded: adopted an unrecorded provisioned worktree");
         branch

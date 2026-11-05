@@ -14,9 +14,7 @@ use crate::adapters::git::Repository;
 use crate::storage::{self, CaptureRow};
 
 use super::capture::CapturePurpose;
-use super::convert::{
-    adapter_git, git_rejection, not_found, parse_uuid, preview, wire_git, wire_id,
-};
+use super::convert::{git_rejection, not_found, parse_uuid, preview, wire_git, wire_id};
 use super::execution::wire_activity;
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
@@ -219,11 +217,10 @@ impl Service {
             &basis,
             Request::ChangesList(query),
             |repo, _, resolved| {
-                let new = adapter_git(&resolved.new);
                 let files = repo
-                    .diff_numstat(&adapter_git(&resolved.old), &new)
+                    .diff_numstat(&resolved.old, &resolved.new)
                     .map_err(git_rejection)?;
-                let filtered = jobs::filtered_paths(&repo, &new, &files)?;
+                let filtered = jobs::filtered_paths(&repo, &resolved.new, &files)?;
                 let notices = content_notices(&[], &filtered);
                 Ok(ReplyData::ChangesList(change_list(
                     &resolved, &files, &filtered, notices,

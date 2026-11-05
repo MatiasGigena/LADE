@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use command::GitCommand;
+use lade_core::domain::ids::{GitAlgorithm, GitId};
 
 pub use capture::{MAX_SKIPPED_NESTED, WorkingCapture, user_excludes_file};
 pub use command::{Diagnostics, LADE_IDENTITY_EMAIL, LADE_IDENTITY_NAME, STDERR_LIMIT};
@@ -26,7 +27,7 @@ pub use diff::{
     MAX_DIFF_LINES,
 };
 pub use error::{GitError, TargetBusyReason};
-pub use ids::{GitId, GitVersion, ObjectFormat, RepoPath};
+pub use ids::{GitVersion, RepoPath, empty_tree, parse_id};
 pub use integrate::{CheckoutInfo, MergeOutcome, SquashOutcome, SquashRequest, TargetCheckout};
 pub use refs::{
     Branch, CommitSpec, escape_branch_name, unescape_branch_name, validate_branch_name,
@@ -60,7 +61,7 @@ pub struct Repository {
     work_tree: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
-    format: ObjectFormat,
+    format: GitAlgorithm,
     version: GitVersion,
     excludes_file: Option<PathBuf>,
 }
@@ -128,8 +129,8 @@ impl Repository {
             return Err(GitError::NotTopLevel);
         }
         let format = match format {
-            b"sha1" => ObjectFormat::Sha1,
-            b"sha256" => ObjectFormat::Sha256,
+            b"sha1" => GitAlgorithm::Sha1,
+            b"sha256" => GitAlgorithm::Sha256,
             _ => return Err(GitError::UnsupportedObjectFormat),
         };
         let canonical = |p: PathBuf| {
@@ -164,7 +165,7 @@ impl Repository {
     }
 
     #[must_use]
-    pub fn object_format(&self) -> ObjectFormat {
+    pub fn object_format(&self) -> GitAlgorithm {
         self.format
     }
 
@@ -184,14 +185,14 @@ impl Repository {
             op,
             what: "object id",
         })?;
-        GitId::parse(self.format, text).map_err(|_| GitError::Parse {
+        parse_id(self.format, text).map_err(|_| GitError::Parse {
             op,
             what: "object id",
         })
     }
 
     fn check_id(&self, id: &GitId) -> Result<()> {
-        if id.format() == self.format {
+        if id.algorithm() == self.format {
             Ok(())
         } else {
             Err(GitError::InvalidId)

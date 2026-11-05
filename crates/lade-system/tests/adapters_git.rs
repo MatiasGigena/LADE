@@ -7,9 +7,10 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::Path;
 
 use adapters_support::{TempDir, commit_all, git, git_os, init_repo, status};
+use lade_core::domain::ids::{GitAlgorithm, GitId};
 use lade_system::adapters::git::{
-    ChangeStatus, CommitSpec, GitError, GitId, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
-    ObjectFormat, RepoPath, Repository, SquashRequest, Worktree, escape_branch_name,
+    ChangeStatus, CommitSpec, GitError, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
+    RepoPath, Repository, SquashRequest, Worktree, empty_tree, escape_branch_name, parse_id,
     unescape_branch_name, validate_branch_name, validate_refname,
 };
 
@@ -18,7 +19,7 @@ fn path(bytes: &[u8]) -> RepoPath {
 }
 
 fn id(repo: &Repository, hex: &str) -> GitId {
-    GitId::parse(repo.object_format(), hex).expect("valid id")
+    parse_id(repo.object_format(), hex).expect("valid id")
 }
 
 fn head(repo: &Repository, dir: &Path) -> GitId {
@@ -36,7 +37,7 @@ fn open_validates_top_level_non_bare_and_format() {
     let tmp = TempDir::new("open");
     let repo_dir = init_repo(tmp.path(), "sha1");
     let repo = Repository::open(&repo_dir).expect("open");
-    assert_eq!(repo.object_format(), ObjectFormat::Sha1);
+    assert_eq!(repo.object_format(), GitAlgorithm::Sha1);
     assert_eq!(repo.work_tree(), repo_dir.as_path());
     assert_eq!(repo.head_branch().unwrap().as_deref(), Some("main"));
     let branches = repo.list_branches().unwrap();
@@ -70,7 +71,7 @@ fn open_validates_top_level_non_bare_and_format() {
 
     let sha256 = TempDir::new("open256");
     let repo256 = Repository::open(&init_repo(sha256.path(), "sha256")).expect("open sha256");
-    assert_eq!(repo256.object_format(), ObjectFormat::Sha256);
+    assert_eq!(repo256.object_format(), GitAlgorithm::Sha256);
     let main = repo256.resolve_commit("refs/heads/main").unwrap();
     assert_eq!(main.hex().len(), 64);
     assert_eq!(repo256.resolve_ref("refs/heads/missing").unwrap(), None);
@@ -131,7 +132,7 @@ fn capture_case(format: &str) {
         0,
         "temp index left"
     );
-    assert_eq!(tree.format(), repo.object_format());
+    assert_eq!(tree.algorithm(), repo.object_format());
 
     let base = repo.resolve_commit("refs/heads/main").unwrap();
     let changes = repo.diff_numstat(&base, &tree).unwrap();
@@ -219,7 +220,7 @@ fn commit_tree_and_compare_and_swap_refs() {
     ));
     repo.delete_ref_cas(refname, &main).unwrap();
     assert_eq!(repo.resolve_ref(refname).unwrap(), None);
-    let other_format = ObjectFormat::Sha256.empty_tree();
+    let other_format = empty_tree(GitAlgorithm::Sha256);
     assert!(matches!(
         repo.update_ref_cas(refname, &other_format, None),
         Err(GitError::InvalidId)

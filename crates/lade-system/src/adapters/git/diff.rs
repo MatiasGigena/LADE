@@ -112,8 +112,10 @@ impl Repository {
             };
             let mode = |m: &str| u32::from_str_radix(m, 8).map_err(|_| bad("mode"));
             let id = |h: &str| -> Result<Option<GitId>> {
-                let id = self.parse_id("diff-tree", h.as_bytes())?;
-                Ok((!id.is_zero()).then_some(id))
+                if h.len() == self.format.hex_len() && h.bytes().all(|b| b == b'0') {
+                    return Ok(None);
+                }
+                self.parse_id("diff-tree", h.as_bytes()).map(Some)
             };
             let score = || status[1..].parse::<u8>().map_err(|_| bad("score"));
             let status = match status.as_bytes().first() {

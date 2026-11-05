@@ -9,7 +9,7 @@ use lade_protocol::client::Rejection;
 
 use crate::adapters::git::{GitError, Repository};
 
-use crate::service::convert::{adapter_git, conflict, git_rejection};
+use crate::service::convert::{conflict, git_rejection};
 
 use super::read::target_commit;
 
@@ -28,11 +28,9 @@ pub fn change_set_empty(
                 .map_err(git_rejection)?
                 .tree
         }
-        None => adapter_git(start_commit),
+        None => start_commit.clone(),
     };
-    let files = repo
-        .diff_numstat(&adapter_git(&target), &tree)
-        .map_err(git_rejection)?;
+    let files = repo.diff_numstat(&target, &tree).map_err(git_rejection)?;
     Ok(files.is_empty())
 }
 

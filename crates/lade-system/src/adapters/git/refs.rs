@@ -4,9 +4,10 @@
 use std::fmt::Write as _;
 
 use super::command::GitOutput;
+use super::ids::zero;
 use super::{
     GitError, GitId, LADE_IDENTITY_EMAIL, LADE_IDENTITY_NAME, RETENTION_PREFIX, Repository, Result,
-    lines,
+    lines, parse_id,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,7 +124,7 @@ impl Repository {
     /// Returns [`GitError::InvalidRefName`] when `rev` is neither an id nor a valid ref name,
     /// [`GitError::NotFound`] when it names no commit, or a command error when `git` cannot run.
     pub fn resolve_commit(&self, rev: &str) -> Result<GitId> {
-        if GitId::parse(self.format, rev).is_err() {
+        if parse_id(self.format, rev).is_err() {
             validate_refname(rev)?;
         }
         let out = self
@@ -192,7 +193,7 @@ impl Repository {
                 self.check_id(id)?;
                 id.hex().to_owned()
             }
-            None => self.format.zero(),
+            None => zero(self.format),
         };
         let out = self
             .git("update-ref")

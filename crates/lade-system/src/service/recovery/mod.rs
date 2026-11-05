@@ -3,15 +3,14 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use lade_core::domain::ids::{ObjectiveId, Timestamp};
+use lade_core::domain::ids::{GitId, ObjectiveId, Timestamp};
 use lade_core::domain::recovery::recover_after_restart;
 use lade_core::domain::review::IntegrationPlan;
 use lade_protocol::client::{ErrorCode, Outcome, Rejection, SafeAction, Settings};
 
-use crate::adapters::git::{self, CommitSpec};
+use crate::adapters::git::CommitSpec;
 use crate::storage::{self, JournalRow, JournalState, OperationKey, OperationState};
 
-use super::convert::{adapter_git, core_git};
 use super::state::{ObjState, WsState};
 use super::{Service, StartError};
 use crate::support::now_ms;
@@ -179,8 +178,8 @@ impl Service {
             .resolve_ref(&format!("refs/heads/{}", row.target_branch))
             .and_then(|current| {
                 let expected = ws.repo.commit_tree(&CommitSpec {
-                    tree: adapter_git(&row.candidate_tree),
-                    parents: vec![adapter_git(&row.expected_target)],
+                    tree: row.candidate_tree.clone(),
+                    parents: vec![row.expected_target.clone()],
                     message: row.message.clone(),
                     timestamp: Some(row.commit_time),
                 })?;
@@ -230,7 +229,7 @@ impl Service {
         &mut self,
         row: &JournalRow,
         mut st: ObjState,
-        commit: &git::GitId,
+        commit: &GitId,
     ) -> Result<(), StartError> {
         let now = now_ms();
         let candidate = st.review.candidate(row.candidate_id).cloned();
@@ -265,7 +264,7 @@ impl Service {
             &tx,
             row.id,
             JournalState::ReconciledDone,
-            Some(&core_git(commit)),
+            Some(commit),
             Some("integration found completed after restart"),
             now,
         )?;
@@ -281,11 +280,9 @@ impl Service {
         let Some(ws) = self.workspaces.get(&workspace) else {
             return Ok(());
         };
-        let finished = ws.repo.finish_integration_checkout(
-            &row.target_branch,
-            &adapter_git(&row.expected_target),
-            commit,
-        );
+        let finished =
+            ws.repo
+                .finish_integration_checkout(&row.target_branch, &row.expected_target, commit);
         if let Err(e) = finished {
             eprintln!(
                 "laded: integrated target checkout not updated objective={} code={}",
