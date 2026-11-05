@@ -31,7 +31,12 @@ fn connected(width: i32, height: i32) -> (Rc<App>, Rc<RecordingSink>) {
     }
     state.connection = ConnectionState::Connected;
     let sink = Rc::new(RecordingSink::default());
-    let app = App::new(&application, Store::new(state), sink.clone());
+    let app = App::new(
+        &application,
+        Store::new(state),
+        sink.clone(),
+        Environment::default(),
+    );
     app.window.set_default_size(width, height);
     app.present();
     app.controller

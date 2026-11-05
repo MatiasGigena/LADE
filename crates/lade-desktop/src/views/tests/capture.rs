@@ -33,6 +33,7 @@ fn app(width: i32, height: i32) -> Rc<App> {
         &application,
         Store::new(state),
         Rc::new(RecordingSink::default()),
+        Environment::default(),
     );
     app.window.set_default_size(width, height);
     app.present();

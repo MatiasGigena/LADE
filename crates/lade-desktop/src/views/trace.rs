@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gtk::glib;
@@ -13,21 +13,27 @@ use crate::presentation::controller::intents::{Intent, IntentSink};
 
 pub const TRACE_ENV: &str = "LADE_DESKTOP_TRACE";
 
+/// The absolute trace path from the environment, read once by `main`.
+pub fn path_from_env(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    env(TRACE_ENV)
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
 pub struct Trace {
     file: RefCell<File>,
     paint_pending: Cell<bool>,
 }
 
 impl Trace {
-    pub fn from_env() -> Option<Rc<Self>> {
-        let path = std::env::var_os(TRACE_ENV)
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())?;
+    /// Opens the trace file at `path` for appending; `None` when tracing is off or the file is unusable.
+    pub fn open(path: Option<&Path>) -> Option<Rc<Self>> {
+        let path = path?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .mode(0o600)
-            .open(&path)
+            .open(path)
             .map_err(|e| eprintln!("lade-desktop: trace file unavailable: {}", e.kind()))
             .ok()?;
         Some(Rc::new(Self {

@@ -35,6 +35,7 @@ pub(super) fn app(width: i32, height: i32) -> Rc<App> {
         &application,
         Store::new(state),
         Rc::new(RecordingSink::default()),
+        Environment::default(),
     );
     app.window.set_default_size(width, height);
     app.present();
@@ -138,6 +139,7 @@ fn discarding_unsaved_feedback_closes_its_confirmation_without_reentrant_borrows
             &application,
             Store::new(state),
             Rc::new(RecordingSink::default()),
+            Environment::default(),
         );
         app.controller.edit_draft(
             &DraftId::new(test_fixture::SAVED_DRAFT),

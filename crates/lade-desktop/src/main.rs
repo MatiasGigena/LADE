@@ -119,6 +119,7 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
+    let env = views::Environment::from_process();
     gtk4::disable_setlocale();
     let app = Application::builder()
         .application_id("dev.lade.Desktop")
@@ -153,7 +154,7 @@ fn main() -> glib::ExitCode {
         let store = Store::new(PresentationState::new(ConnectionState::Connecting));
         let updates = transport::bridge::connect(&store, 1024);
         let transport = Rc::new(Transport::new());
-        let window = views::App::new(app, store, transport.clone());
+        let window = views::App::new(app, store, transport.clone(), env.clone());
         window.set_notifier(Rc::new(views::notify::DesktopNotifier::new(app)));
         if transport.start(config.clone(), updates).is_err() {
             eprintln!("lade-desktop: could not start the transport thread");

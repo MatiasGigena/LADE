@@ -91,13 +91,33 @@ pub struct App {
     trace: Option<Rc<trace::Trace>>,
 }
 
+/// Process settings the window needs, read from the environment once by `main`.
+#[derive(Clone, Debug, Default)]
+pub struct Environment {
+    /// Where the user's keybinding overrides live; `None` keeps the defaults only.
+    pub keys_path: Option<PathBuf>,
+    /// Where to append the interaction trace, when tracing is on.
+    pub trace_path: Option<PathBuf>,
+}
+
+impl Environment {
+    pub fn from_process() -> Self {
+        let env = |name: &str| std::env::var(name).ok();
+        Self {
+            keys_path: keys::config_path(env),
+            trace_path: trace::path_from_env(env),
+        }
+    }
+}
+
 impl App {
     pub fn new(
         application: &gtk::Application,
         store: Rc<Store>,
         sink: Rc<dyn IntentSink>,
+        environment: Environment,
     ) -> Rc<Self> {
-        let trace = trace::Trace::from_env();
+        let trace = trace::Trace::open(environment.trace_path.as_deref());
         let sink: Rc<dyn IntentSink> = match &trace {
             Some(trace) => Rc::new(trace::TracingSink {
                 inner: sink,
@@ -237,7 +257,7 @@ impl App {
             scheduling: Cell::new(false),
             updating_layout: Cell::new(false),
             shortcuts: RefCell::new(Vec::new()),
-            keys_path: keys::config_path(|name| std::env::var(name).ok()),
+            keys_path: environment.keys_path,
             close_pending: Cell::new(None),
             close_confirmed: Cell::new(false),
             close_timer: RefCell::new(None),
