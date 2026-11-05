@@ -188,3 +188,15 @@ test("the installed SDK is the pinned narrow-fork distribution and resolves exac
     else assert.ok(nameOf(path).startsWith("@earendil-works/pi-") && installed.version === manifest.version, `${path}: only pi's lockstep packages lack upstream integrity`);
   }
 });
+
+test("every entry script imports stdio.ts before any other module", () => {
+  // stdio.ts moves console and stdout output to stderr when it is evaluated; an import above it
+  // (an SDK module above all) could write to the protocol stdout first.
+  const source = dirname(WORKER);
+
+  for (const entry of ["worker.ts", "catalog.ts"]) {
+    const first = readFileSync(join(source, entry), "utf8").split("\n").find(line => /^import\b/.test(line));
+
+    assert.match(first ?? "", /^import (?:\{[^}]*\} from |)"\.\/worker\/stdio\.ts";$/, `${entry}: ${first ?? "no import"}`);
+  }
+});

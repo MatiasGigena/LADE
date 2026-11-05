@@ -22,8 +22,8 @@ export class InboundError extends Error {
   constructor(code: WireCode) { super(`rejected inbound frame (${code})`); this.code = code; }
 }
 
-/** Runs one decoder step, reporting its rejection as an `InboundError`. */
-function decoded(step: () => void): void {
+/** Runs one decoder step; a `WireError` it throws becomes an `InboundError`, a protocol violation of the service's frame. */
+function asInbound(step: () => void): void {
   try {
     step();
   } catch (error) {
@@ -95,11 +95,11 @@ export class StdioChannel {
     const frames: ServiceToWorker[] = [];
 
     for await (const chunk of this.input) {
-      decoded(() => decoder.push(Buffer.from(chunk), frame => { frames.push(frame); }));
+      asInbound(() => decoder.push(Buffer.from(chunk), frame => { frames.push(frame); }));
 
       for (let frame = frames.shift(); frame !== undefined; frame = frames.shift()) yield frame;
     }
 
-    decoded(() => decoder.finish());
+    asInbound(() => decoder.finish());
   }
 }

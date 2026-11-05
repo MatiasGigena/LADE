@@ -1,5 +1,5 @@
 // Must stay the first import: stdio.ts redirects console and stdout to stderr before every other module (above all the SDK)
-// is evaluated, so that only protocol frames reach stdout.
+// is evaluated, so that only protocol frames reach stdout. test/worker-deps.test.ts checks the order.
 import { writeFrame } from "./worker/stdio.ts";
 import type { ServiceToWorker, WorkerErrorCode, WorkerToService } from "./dto.ts";
 import { ActivityMapper } from "./worker/activity.ts";

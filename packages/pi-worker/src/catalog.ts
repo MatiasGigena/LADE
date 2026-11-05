@@ -1,3 +1,4 @@
+// Must stay the first import, as in worker.ts: stdio.ts keeps every other module's output off stdout.
 import "./worker/stdio.ts";
 import { writeFileSync } from "node:fs";
 import { getSupportedThinkingLevels } from "./worker/pi-ai.ts";
