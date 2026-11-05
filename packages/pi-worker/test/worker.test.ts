@@ -40,7 +40,7 @@ test("a write directive runs the real write tool in cwd and streams activity", (
   const mark = worker.frames.length;
   const inputId = randomUUID();
   worker.send(deliverBody("prompt", "Please create the file.\nlade-fixture: write notes/hello.txt Hello\\nWorld", inputId));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
 
   assert.equal(readFileSync(join(box.cwd, "notes", "hello.txt"), "utf8"), "Hello\nWorld");
   const kinds = worker.frames.slice(mark).map(frame => frame.kind);
@@ -79,7 +79,7 @@ test("steer and follow-up during a running turn are received and delivered in or
   worker.send(deliverBody("follow_up", "later please", follow));
   worker.send(deliverBody("steer", "change course", steer));
   await worker.waitFor(frame => frame.kind === "input.received" && frame.input_id === steer, mark);
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
 
   const received = worker.kinds("input.received").map(frame => frame.input_id);
   assert.ok(received.includes(steer) && received.includes(follow));
@@ -94,7 +94,7 @@ test("a prompt while streaming is queued as a follow-up", () => withWorker(async
   worker.send(deliverBody("prompt", "one\nlade-fixture: delay 100"));
   await worker.waitFor(frame => frame.kind === "turn.state" && frame.state === "running", mark);
   worker.send(deliverBody("prompt", "two"));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   assert.deepEqual(userTexts(worker, mark), ["one\nlade-fixture: delay 100", "two"]);
   assert.equal(worker.kinds("worker.error").length, 0);
 }));
@@ -106,7 +106,7 @@ test("session.abort clears queued input, stops the run and keeps the worker usab
   await worker.waitFor(frame => frame.kind === "turn.state" && frame.state === "running", mark);
   worker.send(deliverBody("follow_up", "queued follow-up"));
   worker.send({ kind: "session.abort" });
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
 
   const items = worker.items(mark);
   assert.ok(items.some(item => item.role === "system" && item.title === "Queue cleared"));
@@ -116,7 +116,7 @@ test("session.abort clears queued input, stops the run and keeps the worker usab
 
   const next = worker.frames.length;
   worker.send(deliverBody("prompt", "again"));
-  await worker.idle(next);
+  await worker.waitForIdle(next);
   assert.ok(worker.items(next).some(item => item.role === "assistant" && text(item.text).includes("scripted reply")));
   assert.equal(await worker.shutdown(), 0);
 }));
@@ -128,7 +128,7 @@ test("resume reopens the same pi session with its history", async () => {
     const first = new Worker(box);
     const ready = await first.start(box);
     first.send(deliverBody("prompt", "remember this"));
-    await first.idle(0);
+    await first.waitForIdle(0);
     assert.equal(await first.shutdown(), 0);
     assert.ok(existsSync(text(ready.session_file)), "the session file is flushed after the assistant reply");
 
@@ -138,7 +138,7 @@ test("resume reopens the same pi session with its history", async () => {
     assert.equal(resumed.session_file, ready.session_file);
     const mark = second.frames.length;
     second.send(deliverBody("prompt", "and now?"));
-    await second.idle(mark);
+    await second.waitForIdle(mark);
     assert.ok(second.items(mark).some(item => item.role === "assistant" && text(item.text).includes("holds 2 user message(s)")));
     assert.equal(await second.shutdown(), 0);
   } finally {
@@ -168,7 +168,7 @@ test("a fixture provider failure reports worker.error and the worker stays usabl
   await worker.start(box);
   const mark = worker.frames.length;
   worker.send(deliverBody("prompt", "lade-fixture: fail"));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   const error = worker.kinds("worker.error").at(-1);
   assert.equal(error?.code, "provider_failed");
   assert.match(text(error?.message), /scripted provider failure/);
@@ -176,7 +176,7 @@ test("a fixture provider failure reports worker.error and the worker stays usabl
 
   const next = worker.frames.length;
   worker.send(deliverBody("prompt", "recover"));
-  await worker.idle(next);
+  await worker.waitForIdle(next);
   assert.ok(worker.items(next).some(item => item.role === "assistant" && text(item.text).includes("scripted reply")));
   assert.equal(await worker.shutdown(), 0);
 }));
@@ -186,7 +186,7 @@ test("a tool item over 192 KiB is truncated and flagged", () => withWorker(async
   const mark = worker.frames.length;
   const size = MAX_ITEM_TEXT_BYTES + 8 * 1024;
   worker.send(deliverBody("prompt", `lade-fixture: write big.txt ${"x".repeat(size)}`));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   assert.equal(readFileSync(join(box.cwd, "big.txt"), "utf8").length, size, "the tool still writes the full content");
   const tool = worker.items(mark).find(item => item.role === "tool");
   assert.ok(tool);

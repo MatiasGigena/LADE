@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Body, Scope } from "../../src/dto.ts";
 import { WireError } from "../../src/json.ts";
-import { MAX_CHUNK, MAX_TRANSFER, MAX_TRANSFERS } from "./protocol.ts";
+import { MAX_CHUNK } from "../../src/schema.ts";
+
+/** The client reassembly limits: the largest logical transfer and the transfers open at once. */
+export const MAX_TRANSFER = 8 * 1024 * 1024;
+
+export const MAX_TRANSFERS = 2;
 
 interface Transfer { total: number; digest: string; next: bigint; size: number; bytes: Buffer }
 

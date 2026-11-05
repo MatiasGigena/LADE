@@ -1,6 +1,8 @@
 import type { Envelope, WorkerBody, WorkerEnvelope } from "../../src/dto.ts";
 import { MAX_FRAME, WireError } from "../../src/json.ts";
-import { BUNDLE, decode, decodeWorkerFrame, validate, validateWorker, VERSION } from "./protocol.ts";
+import { BUNDLE, VERSION } from "../../src/schema.ts";
+import { decodeWorkerFrame, validateWorker } from "../../src/worker/contract.ts";
+import { decode, validate } from "./protocol.ts";
 import { LineDecoder } from "../../src/worker/wire.ts";
 
 export type Framing = "client" | "worker";
@@ -71,7 +73,7 @@ export function decoder<Frame>(framing: Framing, decodeBody: (bytes: Uint8Array)
   return framing === "worker" ? new LineDecoder(decodeBody) : new LengthDecoder(decodeBody);
 }
 
-function framed(body: Buffer, framing: Framing): Buffer {
+export function framed(body: Buffer, framing: Framing): Buffer {
   if (framing === "worker") return Buffer.concat([body, Buffer.from("\n")]);
   const header = Buffer.alloc(4); header.writeUInt32BE(body.length);
 

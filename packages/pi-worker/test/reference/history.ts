@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { Body, Id, Reply } from "../../src/dto.ts";
 import { compareCodeUnits, WireError } from "../../src/json.ts";
 import type { JsonValue } from "../../src/json.ts";
-import { isRecord } from "./protocol.ts";
+import { isRecord } from "../../src/schema.ts";
 
 function canonical(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(canonical);

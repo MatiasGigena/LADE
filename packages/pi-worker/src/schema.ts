@@ -9,10 +9,6 @@ export const BUNDLE = "0.2.0";
 
 export const MAX_CHUNK = 64 * 1024;
 
-export const MAX_TRANSFER = 8 * 1024 * 1024;
-
-export const MAX_TRANSFERS = 2;
-
 export const MAX_ITEM_TEXT_BYTES = 192 * 1024;
 
 const MAX_PATH_BYTES = 4096;

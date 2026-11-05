@@ -22,6 +22,15 @@ function frame(body: JsonObject, bundle = "0.2.0"): Buffer {
   return Buffer.from(JSON.stringify({ protocol: 1, bundle, body }));
 }
 
+/** A frame writer that records each frame and reports a full pipe while `full()` holds. */
+function recording(written: string[], full: () => boolean): (frame: Buffer) => boolean {
+  return frame => {
+    written.push(frame.toString());
+
+    return !full();
+  };
+}
+
 test("inbound bodies are closed and exactly typed", () => {
   assert.deepEqual({ ...parseInbound(frame({ kind: "input.deliver", input_id: ID, mode: "steer", text: "x" })) }, { kind: "input.deliver", input_id: ID, mode: "steer", text: "x" });
   assert.deepEqual({ ...parseInbound(frame({ kind: "session.abort" })) }, { kind: "session.abort" });
@@ -104,9 +113,7 @@ test("delta coalescing keeps control-heavy text within the frame bound", async (
   const written: string[] = [];
   let full = true;
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return !full; }, drains);
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => full), drains);
 
   const running = channel.send({ kind: "turn.state", state: "running" });
   const first = channel.send({ kind: "activity.delta", item_id: ID, append_text: "\u0001".repeat(60 * 1024) });
@@ -150,9 +157,7 @@ test("outbound writes wait for drain and coalesce deltas", async () => {
   const written: string[] = [];
   let full = true;
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return !full; }, drains);
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => full), drains);
 
   void channel.send({ kind: "turn.state", state: "running" });
   void channel.send({ kind: "activity.delta", item_id: ID, append_text: "a" });
@@ -169,9 +174,7 @@ test("outbound writes wait for drain and coalesce deltas", async () => {
 test("frames queued while a drain settles are still written", async () => {
   const written: string[] = [];
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return true; }, new EventEmitter());
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => false), new EventEmitter());
 
   void channel.send({ kind: "turn.state", state: "running" });
   void channel.send({ kind: "turn.state", state: "idle" });

@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
 import { boundedJson, MAX_ENTRIES, MAX_NODES, WireError } from "../src/json.ts";
 import type { WireCode } from "../src/json.ts";
-import { BUNDLE, decode, decodeWorkerFrame } from "./reference/protocol.ts";
-import { decoder, encode, encodeWorker } from "./reference/framing.ts";
+import { BUNDLE } from "../src/schema.ts";
+import { decodeWorkerFrame } from "../src/worker/contract.ts";
+import { decode } from "./reference/protocol.ts";
+import { decoder, encode, encodeWorker, framed } from "./reference/framing.ts";
 import type { Framing } from "./reference/framing.ts";
 import { Reassembler } from "./reference/chunks.ts";
 import { RequestHistory } from "./reference/history.ts";
@@ -44,13 +46,6 @@ export function source(s: Source): Buffer {
 
   if (s.padding !== undefined) return Buffer.from("{}" + " ".repeat(s.padding - 2));
   throw new Error("unknown fixture recipe");
-}
-
-function framed(bytes: Buffer, framing: Framing): Buffer {
-  if (framing === "worker") return Buffer.concat([bytes, Buffer.from("\n")]);
-  const head = Buffer.alloc(4); head.writeUInt32BE(bytes.length);
-
-  return Buffer.concat([head, bytes]);
 }
 
 type Outcome = WireCode | "ok";

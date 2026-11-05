@@ -130,7 +130,7 @@ export class Worker {
     }
   }
 
-  idle(from: number): Promise<JsonObject> {
+  waitForIdle(from: number): Promise<JsonObject> {
     return this.waitFor(frame => frame.kind === "turn.state" && frame.state === "idle", from);
   }
 
