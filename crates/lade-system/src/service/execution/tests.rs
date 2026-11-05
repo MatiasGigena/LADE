@@ -294,15 +294,13 @@ fn activity_items_are_bounded_and_deltas_append_until_the_item_is_full() {
         })
     };
     harness.worker_event(oid, delta(" world"));
-    harness
-        .service
-        .activity_delta(other, item.as_str(), " ignored");
+    harness.service.activity_delta(other, &item, " ignored");
     assert_eq!(
-        harness.service.live_text(item.as_str()),
+        harness.service.live_text(&item),
         Some(("hello world", false))
     );
     harness.worker_event(oid, delta(&"x".repeat(MAX_ITEM_TEXT_BYTES)));
-    let (text, truncated) = harness.service.live_text(item.as_str()).expect("live");
+    let (text, truncated) = harness.service.live_text(&item).expect("live");
     assert_eq!(text.len(), MAX_ITEM_TEXT_BYTES);
     assert!(truncated);
 
@@ -326,7 +324,7 @@ fn activity_items_are_bounded_and_deltas_append_until_the_item_is_full() {
     assert_eq!(appended.items[0].title.chars().count(), 1024);
 
     harness.service.flush_activity();
-    let (owner, row) = storage::load_activity_item(harness.service.store.conn(), item.as_str())
+    let (owner, row) = storage::load_activity_item(harness.service.store.conn(), &item)
         .expect("load")
         .expect("stored");
     assert_eq!(owner, oid);
@@ -353,10 +351,7 @@ fn an_item_id_belongs_to_the_objective_that_reported_it_first() {
     harness.worker_event(first, item("mine"));
     harness.worker_event(second, item("stolen"));
     let id = Id::from_random_bytes([8; 16]);
-    assert_eq!(
-        harness.service.live_text(id.as_str()),
-        Some(("mine", false))
-    );
+    assert_eq!(harness.service.live_text(&id), Some(("mine", false)));
 }
 
 #[test]

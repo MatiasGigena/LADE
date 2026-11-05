@@ -23,7 +23,7 @@ use lade_core::domain::review::{
     Provenance, Review, Verification, VerificationOutcome,
 };
 use lade_protocol::client::{self as wire, ErrorCode, Outcome, Rejection, RequestName, SafeAction};
-use lade_protocol::types::Id;
+use lade_protocol::types::{ActivityRole, Id};
 use rusqlite::{Connection, params};
 use serde_json::json;
 
@@ -311,12 +311,16 @@ fn sessions_record_their_pi_file_and_advance_only_the_generation() {
     );
 }
 
-fn activity(item: &str, seq: u64) -> ActivityRow {
+fn item(n: u8) -> Id {
+    Id::from_random_bytes([n; 16])
+}
+
+fn activity(item: &Id, seq: u64) -> ActivityRow {
     ActivityRow {
-        item_id: item.into(),
+        item_id: item.clone(),
         seq,
         at: i64::try_from(seq).expect("at"),
-        role: "assistant".into(),
+        role: ActivityRole::Assistant,
         title: "t".into(),
         text: format!("text {seq}"),
         tool_name: None,
@@ -330,7 +334,12 @@ fn activity_pages_run_backwards_from_a_cursor_and_report_older_items() {
     let conn = memory();
     let objective = objective(&conn, 1);
     for seq in 1..=5 {
-        upsert_activity(&conn, objective, &activity(&format!("i{seq}"), seq)).expect("upsert");
+        upsert_activity(
+            &conn,
+            objective,
+            &activity(&item(u8::try_from(seq).expect("seq")), seq),
+        )
+        .expect("upsert");
     }
     let seqs = |page: &[ActivityRow]| page.iter().map(|a| a.seq).collect::<Vec<_>>();
     let (page, more) = activity_page(&conn, objective, None, 2).expect("latest");
@@ -348,33 +357,40 @@ fn activity_upserts_replace_the_text_but_keep_the_sequence() {
     let conn = memory();
     let objective = objective(&conn, 1);
     let other = self::objective(&conn, 2);
-    upsert_activity(&conn, objective, &activity("a", 1)).expect("insert");
-    let mut updated = activity("a", 1);
+    upsert_activity(&conn, objective, &activity(&item(1), 1)).expect("insert");
+    let mut updated = activity(&item(1), 1);
     updated.text = "final".into();
     updated.tool_name = Some("bash".into());
     updated.is_error = true;
     updated.truncated = true;
     upsert_activity(&conn, objective, &updated).expect("update");
-    let (owner, item) = load_activity_item(&conn, "a")
+    let (owner, stored) = load_activity_item(&conn, &item(1))
         .expect("load")
         .expect("found");
     assert_eq!(owner, objective);
-    assert_eq!(item.text, "final");
-    assert_eq!(item.tool_name.as_deref(), Some("bash"));
-    assert!(item.is_error && item.truncated);
+    assert_eq!(stored.text, "final");
+    assert_eq!(stored.role, ActivityRole::Assistant);
+    assert_eq!(stored.tool_name.as_deref(), Some("bash"));
+    assert!(stored.is_error && stored.truncated);
     assert!(
-        load_activity_item(&conn, "missing")
+        load_activity_item(&conn, &item(99))
             .expect("load")
             .is_none()
     );
     assert!(
-        upsert_activity(&conn, objective, &activity("b", 1)).is_err(),
+        upsert_activity(&conn, objective, &activity(&item(2), 1)).is_err(),
         "a sequence number is unique per Objective"
     );
-    upsert_activity(&conn, other, &activity("c", 9)).expect("other objective");
+    upsert_activity(&conn, other, &activity(&item(3), 9)).expect("other objective");
     let mut max = max_activity_seq(&conn).expect("max");
     max.sort_by_key(|(_, seq)| *seq);
     assert_eq!(max, [(objective, 1), (other, 9)]);
+    conn.execute("UPDATE activity SET role = 'narrator'", [])
+        .expect("corrupt the role");
+    assert!(
+        load_activity_item(&conn, &item(1)).is_err(),
+        "an unknown stored role is reported, not read as a system item"
+    );
 }
 
 fn capture(n: u8, objective: ObjectiveId, created_at: i64) -> CaptureRow {

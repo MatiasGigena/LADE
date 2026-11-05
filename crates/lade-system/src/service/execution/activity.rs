@@ -19,15 +19,15 @@ const LIVE_ITEM_RETENTION: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub(crate) struct LiveActivity {
-    items: HashMap<String, LiveItem>,
-    deltas: Vec<(ObjectiveId, String, String)>,
+    items: HashMap<Id, LiveItem>,
+    deltas: Vec<(ObjectiveId, Id, String)>,
 }
 
 /// One activity item as a worker (or the service itself) reported it, before it is bounded
 /// and stored.
 #[derive(Clone, Copy)]
 pub(super) struct ActivityUpdate<'a> {
-    pub item_id: &'a str,
+    pub item_id: &'a Id,
     pub role: ActivityRole,
     pub title: &'a str,
     pub text: &'a str,
@@ -43,38 +43,18 @@ struct LiveItem {
     touched: Instant,
 }
 
-fn role_code(role: ActivityRole) -> &'static str {
-    match role {
-        ActivityRole::User => "user",
-        ActivityRole::Assistant => "assistant",
-        ActivityRole::Thinking => "thinking",
-        ActivityRole::Tool => "tool",
-        ActivityRole::System => "system",
-    }
-}
-
-fn parse_role(code: &str) -> ActivityRole {
-    match code {
-        "user" => ActivityRole::User,
-        "assistant" => ActivityRole::Assistant,
-        "thinking" => ActivityRole::Thinking,
-        "tool" => ActivityRole::Tool,
-        _ => ActivityRole::System,
-    }
-}
-
-pub(crate) fn wire_activity(row: &ActivityRow) -> Option<ActivityItem> {
-    Some(ActivityItem {
-        item_id: Id::parse(row.item_id.clone()).ok()?,
+pub(crate) fn wire_activity(row: &ActivityRow) -> ActivityItem {
+    ActivityItem {
+        item_id: row.item_id.clone(),
         seq: Counter::new(row.seq),
         at: wire_ts(row.at),
-        role: parse_role(&row.role),
+        role: row.role,
         title: preview(&row.title, 1024),
         text: row.text.clone(),
         is_error: row.is_error,
         truncated: row.truncated,
         tool_name: row.tool_name.as_ref().map(|t| preview(t, 256)),
-    })
+    }
 }
 
 impl Service {
@@ -108,10 +88,10 @@ impl Service {
         };
         let (bounded, cut) = truncate_utf8(text, MAX_ITEM_TEXT_BYTES);
         let row = ActivityRow {
-            item_id: item_id.to_string(),
+            item_id: item_id.clone(),
             seq,
             at,
-            role: role_code(role).to_string(),
+            role,
             title: preview(title, 1024),
             text: bounded.to_string(),
             tool_name: tool_name.map(|t| preview(t, 256)),
@@ -122,9 +102,9 @@ impl Service {
             eprintln!("laded: could not record activity objective={oid}");
         }
         self.live.deltas.retain(|(_, id, _)| id != item_id);
-        let wire = wire_activity(&row);
+        let item = wire_activity(&row);
         self.live.items.insert(
-            item_id.to_string(),
+            item_id.clone(),
             LiveItem {
                 objective: oid,
                 row,
@@ -132,15 +112,13 @@ impl Service {
                 touched: Instant::now(),
             },
         );
-        if let Some(item) = wire {
-            self.emit(Event::ActivityAppended(ActivityAppended {
-                objective_id: wire_id(oid.uuid()),
-                items: vec![item],
-            }));
-        }
+        self.emit(Event::ActivityAppended(ActivityAppended {
+            objective_id: wire_id(oid.uuid()),
+            items: vec![item],
+        }));
     }
 
-    pub(super) fn activity_delta(&mut self, oid: ObjectiveId, item_id: &str, append: &str) {
+    pub(super) fn activity_delta(&mut self, oid: ObjectiveId, item_id: &Id, append: &str) {
         let Some(live) = self.live.items.get_mut(item_id) else {
             return;
         };
@@ -161,7 +139,7 @@ impl Service {
             _ => self
                 .live
                 .deltas
-                .push((oid, item_id.to_string(), accepted.to_string())),
+                .push((oid, item_id.clone(), accepted.to_string())),
         }
     }
 
@@ -172,7 +150,7 @@ impl Service {
         text: &str,
         is_error: bool,
     ) {
-        let id = new_uuid().to_string();
+        let id = wire_id(new_uuid());
         self.activity_item(
             oid,
             &ActivityUpdate {
@@ -189,12 +167,9 @@ impl Service {
 
     pub(crate) fn flush_deltas(&mut self) {
         for (oid, item_id, text) in std::mem::take(&mut self.live.deltas) {
-            let Ok(item) = Id::parse(item_id) else {
-                continue;
-            };
             self.emit(Event::ActivityDelta(ActivityDelta {
                 objective_id: wire_id(oid.uuid()),
-                item_id: item,
+                item_id,
                 append_text: text,
             }));
         }
@@ -211,7 +186,7 @@ impl Service {
             .retain(|_, l| l.dirty || l.touched.elapsed() < LIVE_ITEM_RETENTION);
     }
 
-    pub(crate) fn live_text(&self, item_id: &str) -> Option<(&str, bool)> {
+    pub(crate) fn live_text(&self, item_id: &Id) -> Option<(&str, bool)> {
         self.live
             .items
             .get(item_id)

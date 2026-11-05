@@ -76,7 +76,7 @@ impl Service {
             } => self.activity_item(
                 oid,
                 &ActivityUpdate {
-                    item_id: item_id.as_str(),
+                    item_id: &item_id,
                     role,
                     title: &title,
                     text: &text,
@@ -89,7 +89,7 @@ impl Service {
                 item_id,
                 append_text,
             } => {
-                self.activity_delta(oid, item_id.as_str(), &append_text);
+                self.activity_delta(oid, &item_id, &append_text);
             }
             WorkerBody::TurnState { state } => {
                 self.turn_changed(oid, generation, state == TurnState::Running);

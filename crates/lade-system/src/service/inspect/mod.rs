@@ -380,9 +380,7 @@ impl Service {
                 row.text = text.to_string();
                 row.truncated = truncated;
             }
-            let Some(item) = wire_activity(&row) else {
-                continue;
-            };
+            let item = wire_activity(&row);
             let cost = json_len(&item).saturating_add(1);
             if cost > budget {
                 if items.is_empty() {

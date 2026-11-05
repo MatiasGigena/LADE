@@ -7,6 +7,7 @@ use lade_protocol::client::{
     ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, Outcome, ReplyData, Request,
     RequestFrame, ReviewVerifyCommand, Settings, SettingsUpdateCommand, Start, UpdateIntentCommand,
 };
+use lade_protocol::types::ActivityRole;
 use lade_protocol::{Framing, MAX_FRAME, encode};
 use lade_system::storage::{self, WorkspaceRow};
 use service_support::*;
@@ -532,7 +533,7 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
         let item_id = new_id();
         let body = lade_protocol::worker::WorkerBody::ActivityItem {
             item_id: item_id.clone(),
-            role: lade_protocol::types::ActivityRole::Tool,
+            role: ActivityRole::Tool,
             title: "Tool output".into(),
             text: "x".repeat(3600),
             is_error: false,
@@ -548,10 +549,10 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
             &tx,
             oid,
             &storage::ActivityRow {
-                item_id: item_id.as_str().into(),
+                item_id: item_id.clone(),
                 seq,
                 at: 1700000000000,
-                role: "tool".into(),
+                role: ActivityRole::Tool,
                 title: "Tool output".into(),
                 text: "x".repeat(3600),
                 tool_name: Some("\u{1}".repeat(256)),
@@ -626,7 +627,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
         if fits {
             let body = lade_protocol::worker::WorkerBody::ActivityItem {
                 item_id: item_id.clone(),
-                role: lade_protocol::types::ActivityRole::Assistant,
+                role: ActivityRole::Assistant,
                 title: "Assistant".into(),
                 text: text.clone(),
                 is_error: false,
@@ -656,10 +657,10 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
             store.conn(),
             ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap()),
             &storage::ActivityRow {
-                item_id: item_id.as_str().into(),
+                item_id: item_id.clone(),
                 seq: 1,
                 at: 1700000000000,
-                role: "assistant".into(),
+                role: ActivityRole::Assistant,
                 title: "Assistant".into(),
                 text: text.clone(),
                 tool_name: None,
