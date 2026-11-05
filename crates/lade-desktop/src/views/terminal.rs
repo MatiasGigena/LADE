@@ -560,10 +560,12 @@ impl TerminalPane {
                 None => "Terminal output".to_owned(),
             },
         );
-        let (text, cursor) = session
-            .as_ref()
-            .map(|s| s.screen.render())
-            .unwrap_or_default();
+        self.show_screen(session.as_ref(), open);
+    }
+
+    /// Shows the session's screen and, while it is open, keeps its cursor in view.
+    fn show_screen(&self, session: Option<&TerminalSession>, open: bool) {
+        let (text, cursor) = session.map(|s| s.screen.render()).unwrap_or_default();
         self.set_text(&text);
         if open {
             let buffer = self.view.buffer();

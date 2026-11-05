@@ -32,6 +32,85 @@ fn mode_at(position: u32) -> DeliveryMode {
         .unwrap_or(DeliveryMode::Prompt)
 }
 
+/// The agent area: the setup shown before the agent starts and the settings shown after, as the
+/// area, the setup, its body and resources, the settings disclosure and its panel.
+fn agent_area() -> (gtk::Box, gtk::Box, gtk::Box, gtk::Box, gtk::Box, gtk::Box) {
+    let agent_area = vbox(space::SECTION);
+    let setup = vbox(space::SECTION);
+    setup.add_css_class("agent-setup");
+    let setup_body = vbox(space::GROUP);
+    setup.append(&setup_body);
+    let setup_resources = vbox(0);
+    setup.append(&widgets::disclosure(
+        session::RESOURCES_TITLE,
+        false,
+        &setup_resources,
+        |_| {},
+    ));
+    agent_area.append(&setup);
+    let agent_panel = vbox(space::PAGE);
+    agent_panel.add_css_class("agent-panel");
+    set_accessible_label(&agent_panel, AGENT_SETTINGS_TITLE);
+    let settings = widgets::disclosure(AGENT_SETTINGS_TITLE, false, &agent_panel, |_| {});
+    agent_area.append(&settings);
+    (
+        agent_area,
+        setup,
+        setup_body,
+        setup_resources,
+        settings,
+        agent_panel,
+    )
+}
+
+/// The Activity heading: its title and status beside the execution controls.
+fn heading() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Box) {
+    let head = hbox(space::SECTION);
+    let titles = vbox(space::TIGHT);
+    titles.set_hexpand(true);
+    let title = widgets::heading("Activity", "objective-heading");
+    set_focus_key(&title, "activity:title");
+    title.set_focusable(true);
+    titles.append(&title);
+    let status = label("", &["secondary"]);
+    titles.append(&status);
+    head.append(&titles);
+    let controls = hbox(space::ITEM);
+    controls.set_hexpand(false);
+    controls.set_valign(gtk::Align::Start);
+    head.append(&controls);
+    (head, title, status, controls)
+}
+
+/// The Agent Session transcript and the scroller around it.
+fn transcript() -> (gtk::ListBox, gtk::ScrolledWindow) {
+    let list = gtk::ListBox::new();
+    list.add_css_class("transcript");
+    list.set_selection_mode(gtk::SelectionMode::None);
+    set_accessible_label(&list, "Agent Session transcript");
+    let scroll = widgets::region_scroll(&list);
+    scroll.set_vexpand(true);
+    scroll.set_min_content_height(160);
+    (list, scroll)
+}
+
+/// The row under the composer: the delivery mode, its explanation and the send area.
+fn delivery_row() -> (gtk::Box, gtk::DropDown, gtk::Label, gtk::Box) {
+    let row = hbox(space::GROUP);
+    let mode = widgets::dropdown(&MODES.map(format::mode_label));
+    mode.set_hexpand(false);
+    set_accessible_label(&mode, "Delivery mode");
+    mode.set_valign(gtk::Align::Center);
+    row.append(&mode);
+    let explain = label("", &["meta"]);
+    explain.set_hexpand(true);
+    row.append(&explain);
+    let send_area = hbox(0);
+    send_area.set_valign(gtk::Align::Center);
+    row.append(&send_area);
+    (row, mode, explain, send_area)
+}
+
 fn fit(container: &gtk::Box) {
     container.set_visible(container.first_child().is_some());
 }
@@ -88,20 +167,7 @@ impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = vbox(space::SECTION);
         root.add_css_class("activity");
-        let head = hbox(space::SECTION);
-        let titles = vbox(space::TIGHT);
-        titles.set_hexpand(true);
-        let title = widgets::heading("Activity", "objective-heading");
-        set_focus_key(&title, "activity:title");
-        title.set_focusable(true);
-        titles.append(&title);
-        let status = label("", &["secondary"]);
-        titles.append(&status);
-        head.append(&titles);
-        let controls = hbox(space::ITEM);
-        controls.set_hexpand(false);
-        controls.set_valign(gtk::Align::Start);
-        head.append(&controls);
+        let (head, title, status, controls) = heading();
         root.append(&head);
         let state_message = vbox(0);
         root.append(&state_message);
@@ -110,24 +176,7 @@ impl Activity {
         let control_refusal = vbox(space::TIGHT);
         root.append(&control_refusal);
 
-        let agent_area = vbox(space::SECTION);
-        let setup = vbox(space::SECTION);
-        setup.add_css_class("agent-setup");
-        let setup_body = vbox(space::GROUP);
-        setup.append(&setup_body);
-        let setup_resources = vbox(0);
-        setup.append(&widgets::disclosure(
-            session::RESOURCES_TITLE,
-            false,
-            &setup_resources,
-            |_| {},
-        ));
-        agent_area.append(&setup);
-        let agent_panel = vbox(space::PAGE);
-        agent_panel.add_css_class("agent-panel");
-        set_accessible_label(&agent_panel, AGENT_SETTINGS_TITLE);
-        let settings = widgets::disclosure(AGENT_SETTINGS_TITLE, false, &agent_panel, |_| {});
-        agent_area.append(&settings);
+        let (agent_area, setup, setup_body, setup_resources, settings, agent_panel) = agent_area();
         root.append(&agent_area);
 
         let inputs_alert = vbox(space::TIGHT);
@@ -140,13 +189,7 @@ impl Activity {
         let earlier = widgets::button("Load earlier activity", &["quiet"]);
         earlier.set_halign(gtk::Align::Start);
         root.append(&earlier);
-        let list = gtk::ListBox::new();
-        list.add_css_class("transcript");
-        list.set_selection_mode(gtk::SelectionMode::None);
-        set_accessible_label(&list, "Agent Session transcript");
-        let scroll = widgets::region_scroll(&list);
-        scroll.set_vexpand(true);
-        scroll.set_min_content_height(160);
+        let (list, scroll) = transcript();
         root.append(&scroll);
         let empty = vbox(0);
         root.append(&empty);
@@ -164,18 +207,7 @@ impl Activity {
             64,
             160,
         )));
-        let row = hbox(space::GROUP);
-        let mode = widgets::dropdown(&MODES.map(format::mode_label));
-        mode.set_hexpand(false);
-        set_accessible_label(&mode, "Delivery mode");
-        mode.set_valign(gtk::Align::Center);
-        row.append(&mode);
-        let explain = label("", &["meta"]);
-        explain.set_hexpand(true);
-        row.append(&explain);
-        let send_area = hbox(0);
-        send_area.set_valign(gtk::Align::Center);
-        row.append(&send_area);
+        let (row, mode, explain, send_area) = delivery_row();
         composer_box.append(&row);
         let composer_error = vbox(0);
         composer_error.set_visible(false);
@@ -223,12 +255,27 @@ impl Activity {
             auto_scrolling: Cell::new(false),
             scroll_pending: Cell::new(false),
         });
+        activity.connect_composer(explain);
+        activity.connect_follow();
+        let controller = controller.clone();
+        activity
+            .earlier
+            .connect_clicked(move |_| controller.load_older_activity());
+        activity.render_state();
+        activity.render_items();
+        activity.render_agent();
+        activity.render_inputs();
+        activity
+    }
+
+    /// Keeps the delivery mode's explanation current and stores the composer as it changes.
+    fn connect_composer(self: &Rc<Self>, explain: gtk::Label) {
         let set_explain = move |d: &gtk::DropDown| {
             explain.set_text(format::mode_explanation(mode_at(d.selected())));
         };
-        set_explain(&activity.mode);
-        let this = Rc::downgrade(&activity);
-        activity.mode.connect_selected_notify(move |d| {
+        set_explain(&self.mode);
+        let this = Rc::downgrade(self);
+        self.mode.connect_selected_notify(move |d| {
             set_explain(d);
             if let Some(this) = this.upgrade()
                 && !this.updating.get()
@@ -236,14 +283,18 @@ impl Activity {
                 this.store_composer();
             }
         });
-        let this = Rc::downgrade(&activity);
-        activity.composer_input.connect_commit(move |_| {
+        let this = Rc::downgrade(self);
+        self.composer_input.connect_commit(move |_| {
             if let Some(this) = this.upgrade() {
                 this.store_composer();
             }
         });
-        let adjustment = activity.scroll.vadjustment();
-        let this = Rc::downgrade(&activity);
+    }
+
+    /// Follows the transcript's tail while the reader is at the bottom of it.
+    fn connect_follow(self: &Rc<Self>) {
+        let adjustment = self.scroll.vadjustment();
+        let this = Rc::downgrade(self);
         adjustment.connect_value_changed(move |adj| {
             if let Some(this) = this.upgrade()
                 && !this.auto_scrolling.get()
@@ -253,7 +304,7 @@ impl Activity {
             }
         });
         let follow_tail = {
-            let this = Rc::downgrade(&activity);
+            let this = Rc::downgrade(self);
             move |_: &gtk::Adjustment| {
                 let Some(this) = this.upgrade() else { return };
                 if !this.follow.get() || this.scroll_pending.replace(true) {
@@ -273,15 +324,6 @@ impl Activity {
         };
         adjustment.connect_upper_notify(follow_tail.clone());
         adjustment.connect_page_size_notify(follow_tail);
-        let controller = controller.clone();
-        activity
-            .earlier
-            .connect_clicked(move |_| controller.load_older_activity());
-        activity.render_state();
-        activity.render_items();
-        activity.render_agent();
-        activity.render_inputs();
-        activity
     }
 
     fn composer_text(&self) -> String {

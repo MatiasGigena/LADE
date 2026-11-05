@@ -13,7 +13,9 @@ use super::widgets::{
 };
 use crate::presentation::controller::Controller;
 use crate::presentation::panel;
-use crate::presentation::state::model::{Basis, ChangedFile, Load, ObjectiveId, RepoPath};
+use crate::presentation::state::model::{
+    Basis, ChangeList, ChangedFile, Load, ObjectiveDetail, ObjectiveId, RepoPath,
+};
 use crate::presentation::state::store::{Change, PresentationState};
 use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
 
@@ -524,55 +526,7 @@ impl Workbench {
             self.change_heading.append(&summary);
         }
 
-        let status = match &ui.basis {
-            Basis::Candidate { candidate_id } => detail
-                .as_ref()
-                .and_then(|d| {
-                    d.candidates
-                        .iter()
-                        .find(|c| &c.candidate_id == candidate_id)
-                })
-                .map(|c| c.status),
-            _ => None,
-        };
-        let (short, full) =
-            format::version_line(&ui.basis, &list.basis_label, status, &list.target);
-        let version_label = label(&short, &["meta", "version-label"]);
-        version_label.set_hexpand(true);
-        version_label.set_tooltip_text(Some(&full));
-        set_accessible_label(&version_label, &format!("Inspected version: {full}"));
-        self.version.append(&version_label);
-        if matches!(ui.basis, Basis::Since { .. }) {
-            self.version.append(&label(
-                "The revision delta may include target refresh effects; it does not attribute lines to feedback.",
-                &["meta"],
-            ));
-        }
-        if working_updated && ui.basis == Basis::Working {
-            let row = hbox(space::GROUP);
-            let message = inline_message(
-                MessageKind::Warning,
-                "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
-                None,
-            );
-            message.set_hexpand(true);
-            row.append(&message);
-            let refresh = widgets::button("Refresh", &[]);
-            refresh.set_valign(gtk::Align::Center);
-            let controller = self.controller.clone();
-            refresh.connect_clicked(move |_| controller.refresh_changes());
-            row.append(&refresh);
-            self.version.append(&row);
-        }
-
-        for notice in &list.notices {
-            let text = match &notice.path {
-                Some(path) => format!("{}: {}", path.display, notice.message),
-                None => notice.message.clone(),
-            };
-            self.version
-                .append(&inline_message(MessageKind::Warning, &text, None));
-        }
+        self.render_version(&list, &ui.basis, detail.as_ref(), working_updated);
         if list.files.is_empty() {
             // One empty state in place of the file list and the viewer (no toolbar, no frame).
             let (title, body) = match ui.basis {
@@ -599,6 +553,63 @@ impl Workbench {
         }
         self.updating.set(false);
         self.sync_file_selection();
+    }
+
+    /// The inspected version line, the notes on it and the Change Set's notices.
+    fn render_version(
+        &self,
+        list: &ChangeList,
+        basis: &Basis,
+        detail: Option<&ObjectiveDetail>,
+        working_updated: bool,
+    ) {
+        let status = match basis {
+            Basis::Candidate { candidate_id } => detail
+                .and_then(|d| {
+                    d.candidates
+                        .iter()
+                        .find(|c| &c.candidate_id == candidate_id)
+                })
+                .map(|c| c.status),
+            _ => None,
+        };
+        let (short, full) = format::version_line(basis, &list.basis_label, status, &list.target);
+        let version_label = label(&short, &["meta", "version-label"]);
+        version_label.set_hexpand(true);
+        version_label.set_tooltip_text(Some(&full));
+        set_accessible_label(&version_label, &format!("Inspected version: {full}"));
+        self.version.append(&version_label);
+        if matches!(basis, Basis::Since { .. }) {
+            self.version.append(&label(
+                "The revision delta may include target refresh effects; it does not attribute lines to feedback.",
+                &["meta"],
+            ));
+        }
+        if working_updated && *basis == Basis::Working {
+            let row = hbox(space::GROUP);
+            let message = inline_message(
+                MessageKind::Warning,
+                "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
+                None,
+            );
+            message.set_hexpand(true);
+            row.append(&message);
+            let refresh = widgets::button("Refresh", &[]);
+            refresh.set_valign(gtk::Align::Center);
+            let controller = self.controller.clone();
+            refresh.connect_clicked(move |_| controller.refresh_changes());
+            row.append(&refresh);
+            self.version.append(&row);
+        }
+
+        for notice in &list.notices {
+            let text = match &notice.path {
+                Some(path) => format!("{}: {}", path.display, notice.message),
+                None => notice.message.clone(),
+            };
+            self.version
+                .append(&inline_message(MessageKind::Warning, &text, None));
+        }
     }
 
     fn sync_file_selection(&self) {

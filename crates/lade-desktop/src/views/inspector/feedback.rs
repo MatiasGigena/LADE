@@ -186,23 +186,7 @@ impl Inspector {
                 ));
             }
         }
-        w.status.set_text(&status.label());
-        let details = match &status {
-            SaveStatus::Failed { details, .. } if !details.is_empty() => Some(details.as_str()),
-            _ => None,
-        };
-        w.status.set_tooltip_text(details);
-        set_accessible_description(&w.status, details.unwrap_or(""));
-        for class in ["save-failed", "save-warning", "save-ok"] {
-            w.status.remove_css_class(class);
-        }
-        w.status.add_css_class(match status {
-            SaveStatus::Failed { .. } => "save-failed",
-            SaveStatus::Disconnected | SaveStatus::Conflict { .. } => "save-warning",
-            SaveStatus::Saved { .. } => "save-ok",
-            _ => "save-neutral",
-        });
-        set_accessible_label(&w.status, &format!("Draft save state: {}", status.label()));
+        show_save_status(&w.status, &status);
         widgets::clear(&w.actions);
         let id = draft_id.clone();
         match status {
@@ -385,4 +369,28 @@ impl Inspector {
             gtk::glib::ControlFlow::Break
         });
     }
+}
+
+/// Shows `status` on a draft's save-state label: its text, its details and its style.
+fn show_save_status(status_label: &gtk::Label, status: &SaveStatus) {
+    status_label.set_text(&status.label());
+    let details = match status {
+        SaveStatus::Failed { details, .. } if !details.is_empty() => Some(details.as_str()),
+        _ => None,
+    };
+    status_label.set_tooltip_text(details);
+    set_accessible_description(status_label, details.unwrap_or(""));
+    for class in ["save-failed", "save-warning", "save-ok"] {
+        status_label.remove_css_class(class);
+    }
+    status_label.add_css_class(match status {
+        SaveStatus::Failed { .. } => "save-failed",
+        SaveStatus::Disconnected | SaveStatus::Conflict { .. } => "save-warning",
+        SaveStatus::Saved { .. } => "save-ok",
+        _ => "save-neutral",
+    });
+    set_accessible_label(
+        status_label,
+        &format!("Draft save state: {}", status.label()),
+    );
 }

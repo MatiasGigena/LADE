@@ -13,13 +13,14 @@ use crate::presentation::state::model::{
 use crate::transport::requests::tests::*;
 use crate::transport::requests::*;
 
-fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
+/// Intents that open the workspace, load views, search and create Objectives.
+fn workspace_and_load_intents() -> Vec<(Intent, Option<RequestName>)> {
     use Intent as I;
     use RequestName as N;
     let candidate = || Basis::Candidate {
         candidate_id: CandidateId::new(C),
     };
-    let all = vec![
+    vec![
         (I::RetryConnection, None),
         (
             I::OpenWorkspace {
@@ -104,6 +105,14 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::ObjectiveCreate),
         ),
+    ]
+}
+
+/// Intents that change an Objective's intent or run its agent.
+fn objective_intents() -> Vec<(Intent, Option<RequestName>)> {
+    use Intent as I;
+    use RequestName as N;
+    vec![
         (
             I::UpdateObjective {
                 objective_id: oid(),
@@ -144,6 +153,14 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::MessageSend),
         ),
+    ]
+}
+
+/// Intents on drafts, feedback, the review and closing.
+fn review_intents() -> Vec<(Intent, Option<RequestName>)> {
+    use Intent as I;
+    use RequestName as N;
+    vec![
         (
             I::SaveDraft {
                 objective_id: oid(),
@@ -238,6 +255,14 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::ObjectiveCleanup),
         ),
+    ]
+}
+
+/// Intents on settings, models, the pi session, profile resources and dialogs.
+fn session_intents() -> Vec<(Intent, Option<RequestName>)> {
+    use Intent as I;
+    use RequestName as N;
+    vec![
         (
             I::UpdateSettings {
                 default_model: ModelRef::new("anthropic", "claude-sonnet-5"),
@@ -328,6 +353,14 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::UiRespond),
         ),
+    ]
+}
+
+/// Intents on terminals, the service and Git history.
+fn terminal_and_service_intents() -> Vec<(Intent, Option<RequestName>)> {
+    use Intent as I;
+    use RequestName as N;
+    vec![
         (
             I::OpenTerminal {
                 objective_id: oid(),
@@ -372,7 +405,19 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
             },
             Some(N::ObjectiveDeleteHistory),
         ),
-    ];
+    ]
+}
+
+fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
+    use Intent as I;
+    let all: Vec<_> = [
+        workspace_and_load_intents(),
+        objective_intents(),
+        review_intents(),
+        session_intents(),
+        terminal_and_service_intents(),
+    ]
+    .concat();
     for (intent, _) in &all {
         match intent {
             I::RetryConnection

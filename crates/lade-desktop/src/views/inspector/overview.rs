@@ -31,8 +31,14 @@ impl Inspector {
             }
             return;
         };
-        let summary = &detail.summary;
+        let next = self.render_next_area(&detail);
+        self.render_more_actions(&detail, next.as_ref());
+        self.render_intent(&detail);
+        self.render_details(&detail);
+    }
 
+    /// The next step for the Objective, with the errors, refusals and notes that bear on it.
+    fn render_next_area(self: &Rc<Self>, detail: &ObjectiveDetail) -> Option<PanelAction> {
         let next_area = vbox(space::ITEM);
         next_area.add_css_class("next-action");
         if let Some(approval) = &detail.approval {
@@ -40,7 +46,7 @@ impl Inspector {
         }
         let blocker =
             panel::start_blocker(self.controller.store.state().agent_session.catalog.as_ref());
-        let pointer = panel::agent_pointer(&detail, blocker.as_deref());
+        let pointer = panel::agent_pointer(detail, blocker.as_deref());
         if let Some(pointer) = &pointer {
             let row = vbox(space::TIGHT);
             row.append(&label(pointer, &["meta"]));
@@ -53,10 +59,10 @@ impl Inspector {
             row.append(&open);
             next_area.append(&row);
         }
-        let next = panel::next_action(&detail);
+        let next = panel::next_action(detail);
         match &next {
-            Some(next) => next_area.append(&self.action_widget(&detail, next, true)),
-            None if !summary.lifecycle.is_archived() && pointer.is_none() => {
+            Some(next) => next_area.append(&self.action_widget(detail, next, true)),
+            None if !detail.summary.lifecycle.is_archived() && pointer.is_none() => {
                 next_area.append(&label("No step is available right now.", &["meta"]));
             }
             None => {}
@@ -65,29 +71,33 @@ impl Inspector {
             next_area.append(&inline_message(MessageKind::Error, error, None));
         }
         for surface in [ActionSurface::Review, ActionSurface::Closing] {
-            if let Some(refusal) = self.refusal(&summary.objective_id, surface) {
+            if let Some(refusal) = self.refusal(&detail.summary.objective_id, surface) {
                 next_area.append(&refusal);
             }
         }
-        if let Some(note) = self.command_note(&summary.objective_id) {
+        if let Some(note) = self.command_note(&detail.summary.objective_id) {
             next_area.append(&note);
         }
         if next_area.first_child().is_some() {
             self.overview.append(&next_area);
         }
+        next
+    }
 
-        let (regular, destructive) = panel::more_actions(&detail, next.as_ref());
+    /// The other actions, regular then destructive, in the More actions disclosure.
+    fn render_more_actions(self: &Rc<Self>, detail: &ObjectiveDetail, next: Option<&PanelAction>) {
+        let (regular, destructive) = panel::more_actions(detail, next);
         if !regular.is_empty() || !destructive.is_empty() || detail.history_deleted {
             let list = vbox(space::TIGHT);
             for action in &regular {
-                list.append(&self.action_widget(&detail, action, false));
+                list.append(&self.action_widget(detail, action, false));
             }
             if !destructive.is_empty() || detail.history_deleted {
                 if !regular.is_empty() {
                     list.append(&group_separator());
                 }
                 for action in &destructive {
-                    list.append(&self.action_widget(&detail, action, false));
+                    list.append(&self.action_widget(detail, action, false));
                 }
                 if detail.history_deleted {
                     list.append(&label(
@@ -108,7 +118,10 @@ impl Inspector {
                 },
             ));
         }
+    }
 
+    /// The Objective's intent and the command that edits it.
+    fn render_intent(self: &Rc<Self>, detail: &ObjectiveDetail) {
         let intent = section("Intent");
         for (key, value) in [
             ("Outcome", &detail.intent.outcome),
@@ -138,13 +151,16 @@ impl Inspector {
                 }
             },
         ));
-        if let Some(refusal) = self.refusal(&summary.objective_id, ActionSurface::Intent) {
+        if let Some(refusal) = self.refusal(&detail.summary.objective_id, ActionSurface::Intent) {
             intent.append(&refusal);
         }
         self.overview.append(&intent);
+    }
 
+    /// The Objective's details rows in their disclosure.
+    fn render_details(self: &Rc<Self>, detail: &ObjectiveDetail) {
         let rows = vbox(space::ITEM);
-        for row in panel::details_rows(&detail, Timestamp(widgets::now_ms())) {
+        for row in panel::details_rows(detail, Timestamp(widgets::now_ms())) {
             let value = if row.mono {
                 widgets::line_label(&row.value, &["mono"], gtk::pango::EllipsizeMode::Middle)
             } else {

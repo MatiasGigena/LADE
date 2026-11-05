@@ -531,17 +531,9 @@ pub fn costs_and_data(opener: &impl IsA<gtk::Widget>) {
     close.grab_focus();
 }
 
-pub fn shortcuts(
-    opener: &impl IsA<gtk::Widget>,
-    controller: &Rc<Controller>,
-    path: Option<PathBuf>,
-) {
-    let keymap = controller.store.state().ui.keymap.clone();
-    let dialog = Dialog::new(opener, "Keyboard shortcuts", 620);
-    dialog.body.append(&label(
-        "Each action keeps its default or takes a function key F1–F35, optionally with Shift, Control or Alt (GTK syntax, for example <Control>F8). Other combinations stay with text fields for typing, editing, selection, clipboard and undo. Tab and Shift+Tab move within a region; arrows, Home/End and Enter work in lists.",
-        &["secondary"],
-    ));
+/// One row per keybinding: its description beside an entry for its shortcut, or its fixed
+/// shortcut and the reason it is fixed. Returns the grid and the entries by action.
+fn shortcut_grid(keymap: &Keymap) -> (gtk::Grid, Vec<(AppAction, gtk::Entry)>) {
     let grid = gtk::Grid::new();
     grid.set_row_spacing(space::ITEM.unsigned_abs());
     grid.set_column_spacing(space::SECTION.unsigned_abs());
@@ -576,6 +568,21 @@ pub fn shortcuts(
             entries.push((binding.action, entry));
         }
     }
+    (grid, entries)
+}
+
+pub fn shortcuts(
+    opener: &impl IsA<gtk::Widget>,
+    controller: &Rc<Controller>,
+    path: Option<PathBuf>,
+) {
+    let keymap = controller.store.state().ui.keymap.clone();
+    let dialog = Dialog::new(opener, "Keyboard shortcuts", 620);
+    dialog.body.append(&label(
+        "Each action keeps its default or takes a function key F1–F35, optionally with Shift, Control or Alt (GTK syntax, for example <Control>F8). Other combinations stay with text fields for typing, editing, selection, clipboard and undo. Tab and Shift+Tab move within a region; arrows, Home/End and Enter work in lists.",
+        &["secondary"],
+    ));
+    let (grid, entries) = shortcut_grid(&keymap);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)

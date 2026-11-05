@@ -124,6 +124,55 @@ fn sign_renderer(lines: &Rc<RefCell<Vec<ViewLine>>>) -> sourceview5::GutterRende
     renderer
 }
 
+/// The read-only code buffer, with the added, deleted and separator line tags.
+fn code_buffer() -> sourceview5::Buffer {
+    let buffer = sourceview5::Buffer::new(None);
+    buffer.set_highlight_syntax(false);
+    buffer.set_highlight_matching_brackets(false);
+    buffer.set_style_scheme(code_scheme().as_ref());
+    let table = buffer.tag_table();
+    for (name, fill) in [("add", "add_fill"), ("del", "del_fill")] {
+        table.add(
+            &gtk::TextTag::builder()
+                .name(name)
+                .paragraph_background(token(fill))
+                .build(),
+        );
+    }
+    table.add(
+        &gtk::TextTag::builder()
+            .name("sep")
+            .foreground(token("ink_metadata"))
+            .build(),
+    );
+    buffer.connect_highlight_updated(|buffer, _, _| {
+        let table = buffer.tag_table();
+        if let Some(sep) = table.lookup("sep")
+            && sep.priority() < table.size() - 1
+        {
+            sep.set_priority(table.size() - 1);
+        }
+    });
+    buffer
+}
+
+/// The monospace, read-only view over `buffer`.
+fn code_view(buffer: &sourceview5::Buffer) -> sourceview5::View {
+    let view = sourceview5::View::with_buffer(buffer);
+    view.set_editable(false);
+    view.set_cursor_visible(true);
+    view.set_monospace(true);
+    view.set_show_line_numbers(false);
+    view.set_highlight_current_line(false);
+    view.set_tab_width(4);
+    view.set_pixels_above_lines(3);
+    view.set_pixels_below_lines(3);
+    view.set_left_margin(8);
+    view.set_wrap_mode(gtk::WrapMode::None);
+    view.add_css_class("code-view");
+    view
+}
+
 impl Viewer {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = vbox(0);
@@ -155,45 +204,8 @@ impl Viewer {
         toolbar.append(&add_feedback);
         root.append(&toolbar);
 
-        let buffer = sourceview5::Buffer::new(None);
-        buffer.set_highlight_syntax(false);
-        buffer.set_highlight_matching_brackets(false);
-        buffer.set_style_scheme(code_scheme().as_ref());
-        let table = buffer.tag_table();
-        for (name, fill) in [("add", "add_fill"), ("del", "del_fill")] {
-            table.add(
-                &gtk::TextTag::builder()
-                    .name(name)
-                    .paragraph_background(token(fill))
-                    .build(),
-            );
-        }
-        table.add(
-            &gtk::TextTag::builder()
-                .name("sep")
-                .foreground(token("ink_metadata"))
-                .build(),
-        );
-        buffer.connect_highlight_updated(|buffer, _, _| {
-            let table = buffer.tag_table();
-            if let Some(sep) = table.lookup("sep")
-                && sep.priority() < table.size() - 1
-            {
-                sep.set_priority(table.size() - 1);
-            }
-        });
-        let view = sourceview5::View::with_buffer(&buffer);
-        view.set_editable(false);
-        view.set_cursor_visible(true);
-        view.set_monospace(true);
-        view.set_show_line_numbers(false);
-        view.set_highlight_current_line(false);
-        view.set_tab_width(4);
-        view.set_pixels_above_lines(3);
-        view.set_pixels_below_lines(3);
-        view.set_left_margin(8);
-        view.set_wrap_mode(gtk::WrapMode::None);
-        view.add_css_class("code-view");
+        let buffer = code_buffer();
+        let view = code_view(&buffer);
         let lines: Rc<RefCell<Vec<ViewLine>>> = Rc::new(RefCell::new(Vec::new()));
         let gutter = sourceview5::prelude::ViewExt::gutter(&view, gtk::TextWindowType::Left);
         let old_numbers = number_renderer(&lines, Side::Old);

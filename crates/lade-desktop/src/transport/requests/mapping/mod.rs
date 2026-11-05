@@ -32,14 +32,65 @@ fn wire_path(path: &Path) -> Result<WirePath, Invalid> {
 
 /// The request for `intent`, or `Ok(None)` when the intent is handled without one.
 pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
-    use ActionSurface as S;
     use Intent as I;
-    let label = intent.label();
-    let command = |objective_id: &ObjectiveId, surface| {
-        Context::command(label, Some(objective_id), Some(surface))
-    };
     let mapped = match intent {
         I::RetryConnection => return Ok(None),
+        I::OpenWorkspace { .. }
+        | I::Search { .. }
+        | I::CreateObjective { .. }
+        | I::UpdateSettings { .. }
+        | I::StopService { .. }
+        | I::LoadModels { .. }
+        | I::LoadResources
+        | I::DecideResource { .. }
+        | I::ImportProfile { .. } => workspace_request(intent)?,
+        I::LoadObjective { .. }
+        | I::LoadActivity { .. }
+        | I::LoadChanges { .. }
+        | I::LoadDiff { .. }
+        | I::OpenFile { .. }
+        | I::LoadDrafts { .. }
+        | I::LoadInputs { .. } => load_request(intent)?,
+        I::UpdateObjective { .. }
+        | I::StartExecution { .. }
+        | I::Cancel { .. }
+        | I::Resume { .. }
+        | I::SendMessage { .. }
+        | I::Complete { .. }
+        | I::Discard { .. }
+        | I::Cleanup { .. }
+        | I::DeleteHistory { .. } => objective_request(intent)?,
+        I::SaveDraft { .. } | I::DeleteDraft { .. } | I::SubmitFeedback { .. } => {
+            feedback_request(intent)?
+        }
+        I::Freeze { .. }
+        | I::ReturnForRevision { .. }
+        | I::Verify { .. }
+        | I::Approve { .. }
+        | I::Refresh { .. }
+        | I::Integrate { .. } => review_request(intent)?,
+        I::OpenTerminal { .. }
+        | I::TerminalInput { .. }
+        | I::ResizeTerminal { .. }
+        | I::CloseTerminal { .. } => terminal_request(intent)?,
+        I::LoadSessionTree { .. }
+        | I::NavigateSession { .. }
+        | I::ForkSession { .. }
+        | I::ImportSession { .. }
+        | I::ExportSession { .. }
+        | I::CompactSession { .. }
+        | I::ReloadSession { .. }
+        | I::ConfigureSession { .. }
+        | I::RespondDialog { .. } => session_request(intent)?,
+    };
+    Ok(Some(mapped))
+}
+
+/// A request about the workspace, the service and its settings, models or profile resources.
+fn workspace_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use Intent as I;
+    let label = intent.label();
+    Ok(match intent {
         I::OpenWorkspace { path } => (
             Request::WorkspaceOpen(wire::WorkspaceOpenCommand {
                 path: WirePath::from_os_str(path.as_os_str()).map_err(|_| {
@@ -109,6 +160,41 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::Stop,
         ),
+        I::LoadModels { provider } => (
+            Request::ModelsList(wire::ModelsListQuery {
+                provider: provider.clone(),
+            }),
+            Context::Models(provider.clone()),
+        ),
+        I::LoadResources => (Request::ResourcesList(wire::Empty {}), Context::Resources),
+        I::DecideResource {
+            name,
+            sha256,
+            approve,
+        } => (
+            Request::ResourceDecide(wire::ResourceDecideCommand {
+                name: bounded_text(name, "the extension name")?,
+                sha256: Digest::parse(sha256.clone())
+                    .map_err(|_| Invalid("the extension hash is not a sha256 digest".into()))?,
+                approve: *approve,
+            }),
+            Context::command(label, None, None),
+        ),
+        I::ImportProfile { source } => (
+            Request::ProfileImport(wire::ProfileImportCommand {
+                source: wire_path(source)?,
+            }),
+            Context::command(label, None, None),
+        ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A query that loads one view of an Objective.
+fn load_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use Intent as I;
+    let label = intent.label();
+    Ok(match intent {
         I::LoadObjective { objective_id } => (
             Request::ObjectiveGet(selector(objective_id)?),
             Context::Objective(objective_id.clone()),
@@ -171,6 +257,19 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             inputs_page(objective_id, None)?,
             Context::Inputs(objective_id.clone()),
         ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A command on an Objective's intent, its agent's execution or its closing.
+fn objective_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use ActionSurface as S;
+    use Intent as I;
+    let label = intent.label();
+    let command = |objective_id: &ObjectiveId, surface| {
+        Context::command(label, Some(objective_id), Some(surface))
+    };
+    Ok(match intent {
         I::UpdateObjective {
             objective_id,
             expected_intent_revision,
@@ -244,6 +343,16 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             command(objective_id, S::Closing),
         ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A command on review drafts and the feedback they make up.
+fn feedback_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use ActionSurface as S;
+    use Intent as I;
+    let label = intent.label();
+    Ok(match intent {
         I::SaveDraft {
             objective_id,
             draft_id,
@@ -308,6 +417,19 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
                 surface: Some(S::Feedback),
             },
         ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A command on an Objective's candidate: freezing, returning, checking, approving and integrating it.
+fn review_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use ActionSurface as S;
+    use Intent as I;
+    let label = intent.label();
+    let command = |objective_id: &ObjectiveId, surface| {
+        Context::command(label, Some(objective_id), Some(surface))
+    };
+    Ok(match intent {
         I::Freeze { objective_id } => (
             Request::ReviewFreeze(selector(objective_id)?),
             command(objective_id, S::Review),
@@ -362,6 +484,15 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             command(objective_id, S::Review),
         ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A command on an Objective's terminal.
+fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use Intent as I;
+    let label = intent.label();
+    Ok(match intent {
         I::OpenTerminal {
             objective_id,
             cols,
@@ -407,12 +538,19 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             Context::Terminal(objective_id.clone(), label),
         ),
-        I::LoadModels { provider } => (
-            Request::ModelsList(wire::ModelsListQuery {
-                provider: provider.clone(),
-            }),
-            Context::Models(provider.clone()),
-        ),
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// A command on an Objective's pi session or one of its dialogs.
+fn session_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use ActionSurface as S;
+    use Intent as I;
+    let label = intent.label();
+    let command = |objective_id: &ObjectiveId, surface| {
+        Context::command(label, Some(objective_id), Some(surface))
+    };
+    Ok(match intent {
         I::LoadSessionTree { objective_id } => (
             Request::SessionTree(selector(objective_id)?),
             Context::Tree(objective_id.clone()),
@@ -476,26 +614,6 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             command(objective_id, S::Session),
         ),
-        I::LoadResources => (Request::ResourcesList(wire::Empty {}), Context::Resources),
-        I::DecideResource {
-            name,
-            sha256,
-            approve,
-        } => (
-            Request::ResourceDecide(wire::ResourceDecideCommand {
-                name: bounded_text(name, "the extension name")?,
-                sha256: Digest::parse(sha256.clone())
-                    .map_err(|_| Invalid("the extension hash is not a sha256 digest".into()))?,
-                approve: *approve,
-            }),
-            Context::command(label, None, None),
-        ),
-        I::ImportProfile { source } => (
-            Request::ProfileImport(wire::ProfileImportCommand {
-                source: wire_path(source)?,
-            }),
-            Context::command(label, None, None),
-        ),
         I::RespondDialog {
             objective_id,
             ui_id,
@@ -510,8 +628,14 @@ pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
             }),
             command(objective_id, S::Dialog),
         ),
-    };
-    Ok(Some(mapped))
+
+        _ => return Err(misrouted(label)),
+    })
+}
+
+/// The error for an intent routed to the wrong family above, which `request`'s match rules out.
+fn misrouted(label: &str) -> Invalid {
+    Invalid(format!("{label} has no request in this family"))
 }
 
 #[cfg(test)]

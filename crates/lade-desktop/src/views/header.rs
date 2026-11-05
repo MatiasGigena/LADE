@@ -161,6 +161,136 @@ fn menu_item(text: &str, destructive: bool) -> (gtk::Button, gtk::Label) {
     (button, accel)
 }
 
+/// The LADE mark and wordmark.
+fn brand() -> gtk::Box {
+    let brand = hbox(space::ITEM);
+    brand.add_css_class("brand");
+    let mark = gtk::DrawingArea::new();
+    mark.set_content_width(26);
+    mark.set_content_height(23);
+    mark.set_valign(gtk::Align::Center);
+    draw_mark(&mark);
+    set_accessible_label(&mark, "LADE mark");
+    brand.append(&mark);
+    let wordmark = gtk::Label::new(Some("LADE"));
+    wordmark.add_css_class("wordmark");
+    brand.append(&wordmark);
+    brand
+}
+
+/// The main view tabs, as the tab strip and its Workbench, Activity and Terminal tabs.
+fn nav_tabs() -> (
+    gtk::Box,
+    gtk::ToggleButton,
+    gtk::ToggleButton,
+    gtk::ToggleButton,
+) {
+    let nav = hbox(0);
+    nav.add_css_class("nav");
+    nav.add_css_class("segmented");
+    nav.set_valign(gtk::Align::Center);
+    nav.set_margin_start(space::PAGE);
+    let workbench_tab = gtk::ToggleButton::with_label("Workbench");
+    let activity_tab = gtk::ToggleButton::with_label("Activity");
+    activity_tab.set_group(Some(&workbench_tab));
+    let terminal_tab = gtk::ToggleButton::with_label("Terminal");
+    terminal_tab.set_group(Some(&workbench_tab));
+    for tab in [&workbench_tab, &activity_tab, &terminal_tab] {
+        tab.add_css_class("nav-tab");
+        nav.append(tab);
+    }
+    workbench_tab.set_active(true);
+    (nav, workbench_tab, activity_tab, terminal_tab)
+}
+
+/// The search results popover under `search`, as the popover, its heading, its status line and
+/// the results list.
+fn results_popover(search: &gtk::Box) -> (gtk::Popover, gtk::Label, gtk::Label, gtk::ListBox) {
+    let popover = gtk::Popover::new();
+    popover.add_css_class("search-results");
+    popover.set_parent(search);
+    popover.set_position(gtk::PositionType::Bottom);
+    popover.set_has_arrow(false);
+    let popover_box = vbox(space::ITEM);
+    popover_box.set_size_request(380, -1);
+    let popover_heading = widgets::heading("", "popover-heading");
+    popover_box.append(&popover_heading);
+    let popover_status = label("", &["meta"]);
+    popover_box.append(&popover_status);
+    let results = gtk::ListBox::new();
+    results.add_css_class("plain-list");
+    results.set_selection_mode(gtk::SelectionMode::None);
+    set_accessible_label(&results, "Search results");
+    let results_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .propagate_natural_height(true)
+        .max_content_height(420)
+        .child(&results)
+        .build();
+    popover_box.append(&results_scroll);
+    popover.set_child(Some(&popover_box));
+    (popover, popover_heading, popover_status, results)
+}
+
+/// The user's placeholder avatar and name, as the profile box and the name label.
+fn profile() -> (gtk::Box, gtk::Label) {
+    let profile = hbox(space::ITEM);
+    profile.add_css_class("profile");
+    profile.set_valign(gtk::Align::Center);
+    let real_name = gtk::glib::real_name().to_string_lossy().into_owned();
+    let display_name = if real_name.trim().is_empty() || real_name == "Unknown" {
+        gtk::glib::user_name().to_string_lossy().into_owned()
+    } else {
+        real_name
+    };
+    let initials: String = display_name
+        .split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect();
+    let avatar = gtk::Label::new(Some(&initials));
+    avatar.add_css_class("avatar");
+    avatar.set_valign(gtk::Align::Center);
+    let avatar_label = format!("Placeholder avatar for {display_name}");
+    avatar.set_tooltip_text(Some(&avatar_label));
+    set_accessible_label(&avatar, &avatar_label);
+    profile.append(&avatar);
+    let name = gtk::Label::new(Some(&display_name));
+    name.add_css_class("profile-name");
+    name.set_valign(gtk::Align::Center);
+    profile.append(&name);
+    (profile, name)
+}
+
+/// The connection status line.
+fn connection_status() -> gtk::Label {
+    let status = label("", &["connection", "meta"]);
+    status.set_wrap(false);
+    status.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    status.set_width_chars(14);
+    status.set_valign(gtk::Align::Center);
+    status
+}
+
+/// The compact header's menu, as its button and its Keyboard shortcuts and Exit items.
+fn header_menu() -> (
+    gtk::MenuButton,
+    (gtk::Button, gtk::Label),
+    (gtk::Button, gtk::Label),
+) {
+    let menu = gtk::Popover::new();
+    menu.add_css_class("header-menu");
+    let menu_box = vbox(0);
+    let menu_shortcuts = menu_item("Keyboard shortcuts", false);
+    let menu_exit = menu_item("Exit LADE…", true);
+    menu_box.append(&menu_shortcuts.0);
+    menu_box.append(&menu_exit.0);
+    menu.set_child(Some(&menu_box));
+    let menu_button = icon_menu_button("open-menu-symbolic", "Keyboard shortcuts and Exit", &menu);
+    (menu_button, menu_shortcuts, menu_exit)
+}
+
 impl Header {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = vbox(0);
@@ -170,46 +300,17 @@ impl Header {
         row.set_height_request(56);
         root.append(&row);
 
-        let brand = hbox(space::ITEM);
-        brand.add_css_class("brand");
-        let mark = gtk::DrawingArea::new();
-        mark.set_content_width(26);
-        mark.set_content_height(23);
-        mark.set_valign(gtk::Align::Center);
-        draw_mark(&mark);
-        set_accessible_label(&mark, "LADE mark");
-        brand.append(&mark);
-        let wordmark = gtk::Label::new(Some("LADE"));
-        wordmark.add_css_class("wordmark");
-        brand.append(&wordmark);
+        let brand = brand();
         row.append(&brand);
 
-        let nav = hbox(0);
-        nav.add_css_class("nav");
-        nav.add_css_class("segmented");
-        nav.set_valign(gtk::Align::Center);
-        nav.set_margin_start(space::PAGE);
-        let workbench_tab = gtk::ToggleButton::with_label("Workbench");
-        let activity_tab = gtk::ToggleButton::with_label("Activity");
-        activity_tab.set_group(Some(&workbench_tab));
-        let terminal_tab = gtk::ToggleButton::with_label("Terminal");
-        terminal_tab.set_group(Some(&workbench_tab));
-        for tab in [&workbench_tab, &activity_tab, &terminal_tab] {
-            tab.add_css_class("nav-tab");
-            nav.append(tab);
-        }
-        workbench_tab.set_active(true);
+        let (nav, workbench_tab, activity_tab, terminal_tab) = nav_tabs();
         row.append(&nav);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
         row.append(&spacer);
 
-        let status = label("", &["connection", "meta"]);
-        status.set_wrap(false);
-        status.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        status.set_width_chars(14);
-        status.set_valign(gtk::Align::Center);
+        let status = connection_status();
         row.append(&status);
 
         let search = hbox(0);
@@ -240,73 +341,17 @@ impl Header {
         let search_button = icon_menu_button("system-search-symbolic", "Search", &search_popover);
         row.append(&search_button);
 
-        let popover = gtk::Popover::new();
-        popover.add_css_class("search-results");
-        popover.set_parent(&search);
-        popover.set_position(gtk::PositionType::Bottom);
-        popover.set_has_arrow(false);
-        let popover_box = vbox(space::ITEM);
-        popover_box.set_size_request(380, -1);
-        let popover_heading = widgets::heading("", "popover-heading");
-        popover_box.append(&popover_heading);
-        let popover_status = label("", &["meta"]);
-        popover_box.append(&popover_status);
-        let results = gtk::ListBox::new();
-        results.add_css_class("plain-list");
-        results.set_selection_mode(gtk::SelectionMode::None);
-        set_accessible_label(&results, "Search results");
-        let results_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .propagate_natural_height(true)
-            .max_content_height(420)
-            .child(&results)
-            .build();
-        popover_box.append(&results_scroll);
-        popover.set_child(Some(&popover_box));
+        let (popover, popover_heading, popover_status, results) = results_popover(&search);
 
         let shortcuts_button = icon_button("input-keyboard-symbolic", "Keyboard shortcuts");
         row.append(&shortcuts_button);
         let exit_button = icon_button("system-shutdown-symbolic", "Exit LADE and stop its agents");
         row.append(&exit_button);
 
-        let menu = gtk::Popover::new();
-        menu.add_css_class("header-menu");
-        let menu_box = vbox(0);
-        let menu_shortcuts = menu_item("Keyboard shortcuts", false);
-        let menu_exit = menu_item("Exit LADE…", true);
-        menu_box.append(&menu_shortcuts.0);
-        menu_box.append(&menu_exit.0);
-        menu.set_child(Some(&menu_box));
-        let menu_button =
-            icon_menu_button("open-menu-symbolic", "Keyboard shortcuts and Exit", &menu);
+        let (menu_button, menu_shortcuts, menu_exit) = header_menu();
         row.append(&menu_button);
 
-        let profile = hbox(space::ITEM);
-        profile.add_css_class("profile");
-        profile.set_valign(gtk::Align::Center);
-        let real_name = gtk::glib::real_name().to_string_lossy().into_owned();
-        let display_name = if real_name.trim().is_empty() || real_name == "Unknown" {
-            gtk::glib::user_name().to_string_lossy().into_owned()
-        } else {
-            real_name
-        };
-        let initials: String = display_name
-            .split_whitespace()
-            .take(2)
-            .filter_map(|word| word.chars().next())
-            .flat_map(char::to_uppercase)
-            .collect();
-        let avatar = gtk::Label::new(Some(&initials));
-        avatar.add_css_class("avatar");
-        avatar.set_valign(gtk::Align::Center);
-        let avatar_label = format!("Placeholder avatar for {display_name}");
-        avatar.set_tooltip_text(Some(&avatar_label));
-        set_accessible_label(&avatar, &avatar_label);
-        profile.append(&avatar);
-        let name = gtk::Label::new(Some(&display_name));
-        name.add_css_class("profile-name");
-        name.set_valign(gtk::Align::Center);
-        profile.append(&name);
+        let (profile, name) = profile();
         row.append(&profile);
 
         let viewport = gtk::ScrolledWindow::builder()
