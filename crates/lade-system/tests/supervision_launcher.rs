@@ -232,7 +232,7 @@ fn real_worker_writes_file_with_fixture_model_and_terminates_cleanly() {
     for event in &seen {
         match event {
             WorkerEvent::Body(WorkerBody::Received { input_id: got }) => {
-                received = *got == input_id
+                received = *got == input_id;
             }
             WorkerEvent::Body(WorkerBody::TurnState {
                 state: TurnState::Running,
@@ -340,7 +340,7 @@ fn gateway_socket_names_are_short() {
     );
 }
 
-const PROBE: &str = r#"
+const PROBE: &str = r"
 const fs = require('node:fs');
 const net = require('node:net');
 const crypto = require('node:crypto');
@@ -401,7 +401,7 @@ async function start() {
   };
   out({ kind: 'activity.item', item_id: crypto.randomUUID(), role: 'system', title: 'probe', text: JSON.stringify(report), is_error: false, truncated: false });
 }
-"#;
+";
 
 fn echo_server() -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -496,13 +496,13 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     );
 }
 
-const VIOLATOR: &str = r#"
+const VIOLATOR: &str = r"
 process.stdin.once('data', () => {
   process.stdout.write(JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.ready', pi_session_id: 'p', session_file: '/p' } }) + '\n');
   process.stdout.write(__FRAME__ + '\n');
   setInterval(() => {}, 1000);
 });
-"#;
+";
 
 fn violation(frame: &str) -> (Vec<WorkerEvent>, Vec<u32>, Fixture) {
     let node = prerequisites().expect("checked by caller");
@@ -529,7 +529,7 @@ fn service_body_from_worker_is_a_violation_and_kills_the_sandbox() {
         return;
     }
     let frame =
-        r#"JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.shutdown' } })"#;
+        r"JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.shutdown' } })";
     let (seen, pids, fx) = violation(frame);
     assert!(
         matches!(seen[0], WorkerEvent::Body(WorkerBody::Ready { .. })),

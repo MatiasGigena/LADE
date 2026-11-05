@@ -227,7 +227,7 @@ fn serde_json_frame(request_id: &lade_protocol::types::Id) -> Vec<u8> {
         request_id,
         new_id()
     );
-    let mut frame = (body.len() as u32).to_be_bytes().to_vec();
+    let mut frame = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
     frame.extend_from_slice(body.as_bytes());
     frame
 }

@@ -341,7 +341,7 @@ fn flood_output_is_bounded_and_rate_limited() {
     let ceiling = (elapsed + 0.5) * 10.0 * f64::from(64u32 << 10) + f64::from(1u32 << 20);
     assert!(total > 64 << 10, "the flood made progress: {total}");
     assert!(
-        (total as f64) <= ceiling,
+        f64::from(u32::try_from(total).unwrap()) <= ceiling,
         "rate is bounded: {total} bytes in {elapsed:.1}s"
     );
     match client.call(Request::TerminalClose(TerminalSelector {
@@ -354,7 +354,10 @@ fn flood_output_is_bounded_and_rate_limited() {
         closed(&mut client, &term.terminal_id),
         TerminalCloseReason::Closed
     );
-    assert!(detail(&mut client, &objective).execution.state == ExecutionState::Idle);
+    assert_eq!(
+        detail(&mut client, &objective).execution.state,
+        ExecutionState::Idle
+    );
 }
 
 #[test]

@@ -521,7 +521,7 @@ fn storage_pressure_warns_then_refuses_new_writers_and_keeps_history() {
             assert_eq!(
                 input.delivery,
                 lade_protocol::client::DeliveryState::Blocked
-            )
+            );
         }
         other => panic!("message.send: {other:?}"),
     }

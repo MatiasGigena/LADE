@@ -262,9 +262,9 @@ fn seed_objectives(env: &Env, count: usize, outcome: &str) {
     tx.commit().unwrap();
 }
 
-fn dense_settings(commands: usize, args: usize) -> Settings {
+fn dense_settings(commands: usize, words: usize) -> Settings {
     let mut argv = vec!["true".to_string()];
-    argv.extend(std::iter::repeat_n("a".into(), args - 1));
+    argv.extend(std::iter::repeat_n("a".into(), words - 1));
     Settings {
         verification_commands: vec![argv; commands],
         default_model: None,
@@ -559,7 +559,7 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
             &storage::ActivityRow {
                 item_id: item_id.clone(),
                 seq,
-                at: 1700000000000,
+                at: 1_700_000_000_000,
                 role: ActivityRole::Tool,
                 title: "Tool output".into(),
                 text: "x".repeat(3600),
@@ -667,7 +667,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
             &storage::ActivityRow {
                 item_id: item_id.clone(),
                 seq: 1,
-                at: 1700000000000,
+                at: 1_700_000_000_000,
                 role: ActivityRole::Assistant,
                 title: "Assistant".into(),
                 text: text.clone(),

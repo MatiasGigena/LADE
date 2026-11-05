@@ -53,9 +53,11 @@ fn serve(state: &Path, run_dir: &Path, home: &Path) -> Child {
         .expect("spawn laded");
     let deadline = Instant::now() + Duration::from_secs(20);
     while !run_dir.join("control.sock").exists() {
-        if Instant::now() > deadline || child.try_wait().is_ok_and(|s| s.is_some()) {
-            panic!("laded did not listen: {}", stop(child));
-        }
+        assert!(
+            Instant::now() <= deadline && !child.try_wait().is_ok_and(|s| s.is_some()),
+            "laded did not listen: {}",
+            stop(child)
+        );
         thread::sleep(Duration::from_millis(50));
     }
     child

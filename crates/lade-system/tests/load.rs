@@ -10,6 +10,7 @@ mod service_support;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,8 +36,7 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 fn out_dir() -> PathBuf {
     let dir = std::env::var_os("LADE_LOAD_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("lade-load"));
+        .map_or_else(|| std::env::temp_dir().join("lade-load"), PathBuf::from);
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -52,7 +52,7 @@ fn reference_file() -> String {
     for n in 0..REF_LINES {
         let mut line = format!("{n:06} reference line — größe ");
         while line.len() < width {
-            line.push(char::from(b'a' + (line.len() % 26) as u8));
+            line.push(char::from(b'a' + u8::try_from(line.len() % 26).unwrap()));
         }
         line.truncate(width);
         out.push_str(&line);
@@ -133,6 +133,37 @@ fn pss_kib(pid: u32) -> u64 {
         .unwrap_or(0)
 }
 
+/// Pushes `pid` and its descendants into `out` under `group`; a worker's `node` moves the processes
+/// below it into the jobs group.
+fn walk(
+    pid: u32,
+    group: usize,
+    procs: &HashMap<u32, Proc>,
+    children: &HashMap<u32, Vec<u32>>,
+    out: &mut Vec<(u32, usize)>,
+) {
+    out.push((pid, group));
+    for child in children.get(&pid).into_iter().flatten() {
+        let below_node = group == 2 && procs.get(&pid).is_some_and(|p| p.comm == "node");
+        walk(
+            child.to_owned(),
+            if below_node { 3 } else { group },
+            procs,
+            children,
+            out,
+        );
+    }
+}
+/// Whether `pid` or any of its descendants is a `node` process.
+fn has_node(pid: u32, procs: &HashMap<u32, Proc>, children: &HashMap<u32, Vec<u32>>) -> bool {
+    procs.get(&pid).is_some_and(|p| p.comm == "node")
+        || children
+            .get(&pid)
+            .into_iter()
+            .flatten()
+            .any(|c| has_node(*c, procs, children))
+}
+
 fn classify(service: u32, client: Option<u32>) -> Vec<(u32, usize, Proc)> {
     let mut procs: HashMap<u32, Proc> = HashMap::new();
     for entry in fs::read_dir("/proc").unwrap().flatten() {
@@ -147,33 +178,6 @@ fn classify(service: u32, client: Option<u32>) -> Vec<(u32, usize, Proc)> {
         children.entry(p.ppid).or_default().push(*pid);
     }
     let mut out = Vec::new();
-    fn walk(
-        pid: u32,
-        group: usize,
-        procs: &HashMap<u32, Proc>,
-        children: &HashMap<u32, Vec<u32>>,
-        out: &mut Vec<(u32, usize)>,
-    ) {
-        out.push((pid, group));
-        for child in children.get(&pid).into_iter().flatten() {
-            let below_node = group == 2 && procs.get(&pid).is_some_and(|p| p.comm == "node");
-            walk(
-                child.to_owned(),
-                if below_node { 3 } else { group },
-                procs,
-                children,
-                out,
-            );
-        }
-    }
-    fn has_node(pid: u32, procs: &HashMap<u32, Proc>, children: &HashMap<u32, Vec<u32>>) -> bool {
-        procs.get(&pid).is_some_and(|p| p.comm == "node")
-            || children
-                .get(&pid)
-                .into_iter()
-                .flatten()
-                .any(|c| has_node(*c, procs, children))
-    }
     let mut groups = Vec::new();
     if procs.contains_key(&service) {
         groups.push((service, 1));
@@ -247,7 +251,7 @@ impl Sampler {
                     let key = (*pid, proc_.start);
                     let before = last.get(&key).copied().unwrap_or(proc_.ticks);
                     cpu[*group] +=
-                        (proc_.ticks.saturating_sub(before)) as f64 / CLK_TCK / elapsed * 100.0;
+                        float(proc_.ticks.saturating_sub(before)) / CLK_TCK / elapsed * 100.0;
                     seen.insert(key, proc_.ticks);
                 }
                 last = seen;
@@ -296,13 +300,14 @@ impl Dist {
         self.ms.push(d.as_secs_f64() * 1000.0);
     }
 
-    fn pct(&self, p: f64) -> f64 {
+    /// The nearest-rank `p`th percentile.
+    fn pct(&self, p: usize) -> f64 {
         if self.ms.is_empty() {
             return f64::NAN;
         }
         let mut sorted = self.ms.clone();
         sorted.sort_by(f64::total_cmp);
-        let rank = ((p / 100.0) * sorted.len() as f64).ceil().max(1.0) as usize;
+        let rank = (p * sorted.len()).div_ceil(100).max(1);
         sorted[rank.min(sorted.len()) - 1]
     }
 
@@ -314,15 +319,24 @@ impl Dist {
         format!(
             "| {name} | {} | {:.1} | {:.1} | {:.1} |\n",
             self.ms.len(),
-            self.pct(50.0),
-            self.pct(95.0),
+            self.pct(50),
+            self.pct(95),
             self.max()
         )
     }
 }
 
+/// `n` as a float for the report's statistics.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "counts, clock ticks and KiB measured here stay far below 2^52, where f64 is exact"
+)]
+fn float(n: u64) -> f64 {
+    n as f64
+}
+
 fn mib(kib: u64) -> f64 {
-    kib as f64 / 1024.0
+    float(kib) / 1024.0
 }
 
 fn phase_stats(samples: &[Sample], phase: &str) -> String {
@@ -335,7 +349,7 @@ fn phase_stats(samples: &[Sample], phase: &str) -> String {
         v.sort_unstable();
         (mib(v[v.len() / 2]), mib(*v.last().unwrap()))
     };
-    let cpu = |i: usize| rows.iter().map(|s| s.cpu[i]).sum::<f64>() / rows.len() as f64;
+    let cpu = |i: usize| rows.iter().map(|s| s.cpu[i]).sum::<f64>() / float(rows.len() as u64);
     let (cm, cx) = col(&|g| g.client);
     let (sm, sx) = col(&|g| g.service);
     let (wm, wx) = col(&|g| g.worker);
@@ -382,8 +396,7 @@ fn write_timeline(path: &Path, samples: &[Sample]) {
 
 fn laded_binary() -> PathBuf {
     std::env::var_os("LADE_LOAD_LADED")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_laded")))
+        .map_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_laded")), PathBuf::from)
 }
 
 struct Laded {
@@ -633,12 +646,64 @@ fn ensure_running(client: &mut Client, objective: &Id) {
     }
 }
 
+#[derive(Default)]
 struct RunResult {
     input: Dist,
     open_file: Dist,
     open_diff: Dist,
     accept: Dist,
     diff_truncated: bool,
+}
+
+impl RunResult {
+    /// Adds `other`'s measurements to these.
+    fn absorb(&mut self, other: &Self) {
+        self.input.ms.extend(&other.input.ms);
+        self.open_file.ms.extend(&other.open_file.ms);
+        self.open_diff.ms.extend(&other.open_diff.ms);
+        self.accept.ms.extend(&other.accept.ms);
+        self.diff_truncated |= other.diff_truncated;
+    }
+
+    /// One report row per measure, each labelled `label` in the run column.
+    fn rows(&self, label: &str, report: &mut String) {
+        for (name, dist) in [
+            ("input: draft.save → durable ack", &self.input),
+            ("open: file.read first page", &self.open_file),
+            ("open: diff.get", &self.open_diff),
+            ("message.send → accepted", &self.accept),
+        ] {
+            let _ = write!(report, "| {label} {}", &dist.row(name)[2..]);
+        }
+    }
+}
+
+/// A reference to the probe Objective's first six characters of `ref.txt` in its working capture.
+fn probe_reference(client: &mut Client, probe: &Id) -> Reference {
+    let content = file_read(client, probe, "ref.txt");
+    let capture = match client.call(Request::ChangesList(
+        lade_protocol::client::ChangesListQuery {
+            objective_id: probe.clone(),
+            basis: Basis::Working,
+        },
+    )) {
+        Ok(ReplyData::ChangesList(list)) => list.capture_id.unwrap(),
+        other => panic!("changes.list: {other:?}"),
+    };
+    let text = content.text.clone().unwrap();
+    let selected: String = text.chars().take(6).collect();
+    Reference {
+        artifact_digest: content.artifact_digest.clone(),
+        path: WirePath::from_bytes(b"ref.txt".to_vec()).unwrap(),
+        version: ReferenceVersion::Working {
+            capture_id: capture,
+        },
+        side: Side::New,
+        byte_start: Counter::new(0),
+        byte_end: Counter::new(selected.len() as u64),
+        selected_text: selected,
+        line_hint: Some(Counter::new(1)),
+    }
 }
 
 fn nominal_run(
@@ -659,30 +724,7 @@ fn nominal_run(
     sampler.phase(&format!("idle-{workers}w-run{run}"));
     thread::sleep(Duration::from_secs(idle_secs));
 
-    let content = file_read(&mut client, &world.probe, "ref.txt");
-    let capture = match client.call(Request::ChangesList(
-        lade_protocol::client::ChangesListQuery {
-            objective_id: world.probe.clone(),
-            basis: Basis::Working,
-        },
-    )) {
-        Ok(ReplyData::ChangesList(list)) => list.capture_id.unwrap(),
-        other => panic!("changes.list: {other:?}"),
-    };
-    let text = content.text.clone().unwrap();
-    let selected: String = text.chars().take(6).collect();
-    let reference = Reference {
-        artifact_digest: content.artifact_digest.clone(),
-        path: WirePath::from_bytes(b"ref.txt".to_vec()).unwrap(),
-        version: ReferenceVersion::Working {
-            capture_id: capture,
-        },
-        side: Side::New,
-        byte_start: Counter::new(0),
-        byte_end: Counter::new(selected.len() as u64),
-        selected_text: selected,
-        line_hint: Some(Counter::new(1)),
-    };
+    let reference = probe_reference(&mut client, &world.probe);
 
     let streaming: Vec<Id> = world.objectives[..workers].to_vec();
     sampler.phase("starting");
@@ -705,13 +747,7 @@ fn nominal_run(
     for objective in &streaming {
         streams.kick(&mut client, objective);
     }
-    let mut result = RunResult {
-        input: Dist::default(),
-        open_file: Dist::default(),
-        open_diff: Dist::default(),
-        accept: Dist::default(),
-        diff_truncated: false,
-    };
+    let mut result = RunResult::default();
     let draft = new_id();
     let mut revision = 0u64;
     let begin = Instant::now();
@@ -720,10 +756,10 @@ fn nominal_run(
     let mut done = 0u64;
     while begin.elapsed() < total {
         streams.pump(&mut client);
-        let due = total.mul_f64(done as f64 / actions as f64);
+        let due = total.mul_f64(float(done) / float(actions));
         if done < actions && begin.elapsed() >= due {
             if done % 6 == 5
-                && result.open_file.ms.len() + result.open_diff.ms.len() < opens as usize
+                && ((result.open_file.ms.len() + result.open_diff.ms.len()) as u64) < opens
             {
                 let started = Instant::now();
                 if result.open_file.ms.len() <= result.open_diff.ms.len() {
@@ -733,7 +769,7 @@ fn nominal_run(
                     result.diff_truncated |= diff_get(&mut client, &world.probe);
                     result.open_diff.push(started.elapsed());
                 }
-            } else if result.input.ms.len() < inputs as usize {
+            } else if (result.input.ms.len() as u64) < inputs {
                 let started = Instant::now();
                 let saved = client.call(Request::DraftSave(DraftSaveCommand {
                     draft_id: draft.clone(),
@@ -795,7 +831,7 @@ fn versions() -> String {
         run(laded_binary().to_str().unwrap(), &["--version"]),
         laded_binary().display(),
         run("uname", &["-srm"]),
-        thread::available_parallelism().map_or(0, |n| n.get()),
+        thread::available_parallelism().map_or(0, NonZero::get),
         run("node", &["--version"]),
         run("git", &["--version"]),
         run("bwrap", &["--version"]),
@@ -917,17 +953,17 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
     thread::sleep(Duration::from_secs(env_u64("LADE_LOAD_IDLE_SECS", 60)));
     sampler.set_client(None);
     kill_client(child);
-    let samples = sampler.finish();
+    let recorded = sampler.finish();
     let _ = write!(
         report,
         "\n## GTK client (Xvfb, development host)\n\nWarm launches: process start → main window mapped (`xdotool search --onlyvisible`). This is a **proxy**: it does not prove a usable, presented workbench.\n\n| Measure | n | p50 ms | p95 ms | max ms |\n| --- | --- | --- | --- | --- |\n{}\n{PHASE_HEADER}{}{}",
         mapped.row(&format!(
             "client window mapped ({unmapped} launches not mapped within 30 s)"
         )),
-        phase_stats(&samples, "client-idle"),
-        phase_stats(&samples, "client-stream-4w"),
+        phase_stats(&recorded, "client-idle"),
+        phase_stats(&recorded, "client-stream-4w"),
     );
-    samples_out.extend(samples);
+    samples_out.extend(recorded);
     laded.stop(None);
 }
 
@@ -935,7 +971,7 @@ fn client_phases(world: &World, report: &mut String, samples_out: &mut Vec<Sampl
 #[ignore = "long-running load procedure; run scripts/load"]
 fn canonical_load() {
     let out = out_dir();
-    let runs = env_u64("LADE_LOAD_RUNS", 5) as usize;
+    let runs = usize::try_from(env_u64("LADE_LOAD_RUNS", 5)).unwrap();
     let world = build_world("load");
     let mut report = format!(
         "# IMP-013 load procedure (development host, not Mint)\n\n{}\n- workload: {OBJECTIVES} Objective records; reference file {REF_LINES} lines / {REF_BYTES} bytes; diff {} lines; streams: fixture `echo` turns (4 deltas each) and `write` turns, ≈20 stream updates/s in total\n- per run: {} s idle, {} s load, {} draft saves (input → durable ack), {} opens (file.read first 256 KiB page / diff.get), fresh `laded` per run\n\n",
@@ -951,38 +987,14 @@ fn canonical_load() {
     for workers in [1usize, 4] {
         let _ = writeln!(report, "## {workers} active worker(s)\n");
         report.push_str("| Run | Measure | n | p50 ms | p95 ms | max ms |\n| --- | --- | --- | --- | --- | --- |\n");
-        let mut all = RunResult {
-            input: Dist::default(),
-            open_file: Dist::default(),
-            open_diff: Dist::default(),
-            accept: Dist::default(),
-            diff_truncated: false,
-        };
+        let mut all = RunResult::default();
         for run in 1..=runs {
             eprintln!("load: {workers} worker(s), run {run}/{runs}");
             let result = nominal_run(&world, workers, run, &mut samples, &mut launch);
-            for (name, dist) in [
-                ("input: draft.save → durable ack", &result.input),
-                ("open: file.read first page", &result.open_file),
-                ("open: diff.get", &result.open_diff),
-                ("message.send → accepted", &result.accept),
-            ] {
-                report.push_str(&format!("| {run} {}", &dist.row(name)[2..]));
-            }
-            all.input.ms.extend(&result.input.ms);
-            all.open_file.ms.extend(&result.open_file.ms);
-            all.open_diff.ms.extend(&result.open_diff.ms);
-            all.accept.ms.extend(&result.accept.ms);
-            all.diff_truncated |= result.diff_truncated;
+            result.rows(&run.to_string(), &mut report);
+            all.absorb(&result);
         }
-        for (name, dist) in [
-            ("input: draft.save → durable ack", &all.input),
-            ("open: file.read first page", &all.open_file),
-            ("open: diff.get", &all.open_diff),
-            ("message.send → accepted", &all.accept),
-        ] {
-            report.push_str(&format!("| all {}", &dist.row(name)[2..]));
-        }
+        all.rows("all", &mut report);
         let _ = write!(
             report,
             "\ndiff.get truncated the 4,000-line diff: {} (the service bound is 1,800 lines / 640 KiB, labelled `truncated`).\n\n{PHASE_HEADER}",
@@ -999,7 +1011,7 @@ fn canonical_load() {
         report.push('\n');
     }
     let launches = env_u64("LADE_LOAD_LAUNCHES", 20);
-    for _ in launch.ms.len()..(launch.ms.len() + launches as usize) {
+    for _ in 0..launches {
         let (laded, ready) = Laded::start(&world.env);
         launch.push(ready);
         laded.stop(None);
@@ -1067,25 +1079,12 @@ fn soak() {
             "warmup-views"
         });
         streams.objectives.clear();
-        let views_begin = Instant::now();
-        while views_begin.elapsed() < Duration::from_secs(cycle / 3) {
-            let objective = &world.objectives[views % OBJECTIVES];
-            views += 1;
-            let _ = detail(&mut client, objective);
-            let _ = client.call(Request::ActivityPage(
-                lade_protocol::client::ActivityPageQuery {
-                    objective_id: objective.clone(),
-                    limit: lade_protocol::types::PageLimit::parse("50").unwrap(),
-                    before: None,
-                },
-            ));
-            if views.is_multiple_of(5) {
-                file_read(&mut client, &world.probe, "ref.txt");
-                diff_get(&mut client, &world.probe);
-            }
-            client.events.clear();
-            thread::sleep(Duration::from_millis(200));
-        }
+        switch_views(
+            &mut client,
+            &world,
+            &mut views,
+            Duration::from_secs(cycle / 3),
+        );
         streams.objectives = streaming.clone();
         thread::sleep(Duration::from_secs(6));
         if let Some(last) = sampler.samples.lock().unwrap().last() {
@@ -1102,11 +1101,11 @@ fn soak() {
         }));
     }
     stop_service(laded, client);
-    let samples = sampler.finish();
-    write_timeline(&out.join("soak-timeline.csv"), &samples);
+    let recorded = sampler.finish();
+    write_timeline(&out.join("soak-timeline.csv"), &recorded);
     let after: Vec<&(f64, Groups)> = quiescent
         .iter()
-        .filter(|(t, _)| *t >= warmup as f64)
+        .filter(|(t, _)| *t >= float(warmup))
         .collect();
     let mut report = format!(
         "# IMP-013 soak (development host, not Mint)\n\n{}\n- warmup {warmup} s, soak {soak} s, cycles of {cycle} s: 2/3 four agents streaming (fixture echo/write turns), 1/3 view switching across the 32 Objectives (detail, activity page, file/diff opens), then a quiescent sample\n- turns sent: {}\n\n| Quiescent point | t s | Service MiB | Workers MiB | Jobs MiB | All-owned MiB |\n| --- | --- | --- | --- | --- | --- |\n",
@@ -1123,9 +1122,43 @@ fn soak() {
             mib(g.total())
         );
     }
+    quiescent_trend(&mut report, &after);
+    report.push_str(PHASE_HEADER);
+    report.push_str(&phase_stats(&recorded, "soak-stream"));
+    report.push_str(&phase_stats(&recorded, "soak-views"));
+    fs::write(out.join("soak.md"), &report).unwrap();
+    eprintln!("{report}");
+}
+
+/// Switches across the Objectives' views for `budget`: detail, activity page and, every fifth
+/// view, the probe's file and diff.
+fn switch_views(client: &mut Client, world: &World, views: &mut usize, budget: Duration) {
+    let begin = Instant::now();
+    while begin.elapsed() < budget {
+        let objective = &world.objectives[*views % OBJECTIVES];
+        *views += 1;
+        let _ = detail(client, objective);
+        let _ = client.call(Request::ActivityPage(
+            lade_protocol::client::ActivityPageQuery {
+                objective_id: objective.clone(),
+                limit: lade_protocol::types::PageLimit::parse("50").unwrap(),
+                before: None,
+            },
+        ));
+        if views.is_multiple_of(5) {
+            file_read(client, &world.probe, "ref.txt");
+            diff_get(client, &world.probe);
+        }
+        client.events.clear();
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// The change between the first and last post-warmup quiescent samples, and the trend across them.
+fn quiescent_trend(report: &mut String, after: &[&(f64, Groups)]) {
     if let (Some(first), Some(last)) = (after.first(), after.last()) {
-        let change = |a: u64, b: u64| (b as f64 - a as f64) / a.max(1) as f64 * 100.0;
-        let n = after.len() as f64;
+        let change = |a: u64, b: u64| (float(b) - float(a)) / float(a.max(1)) * 100.0;
+        let n = float(after.len() as u64);
         let mean_t = after.iter().map(|(t, _)| *t).sum::<f64>() / n;
         let mean_m = after.iter().map(|(_, g)| mib(g.total())).sum::<f64>() / n;
         let cov: f64 = after
@@ -1145,9 +1178,4 @@ fn soak() {
             after.len()
         );
     }
-    report.push_str(PHASE_HEADER);
-    report.push_str(&phase_stats(&samples, "soak-stream"));
-    report.push_str(&phase_stats(&samples, "soak-views"));
-    fs::write(out.join("soak.md"), &report).unwrap();
-    eprintln!("{report}");
 }

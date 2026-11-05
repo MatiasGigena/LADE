@@ -8,6 +8,7 @@
 mod adapters_support;
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -165,14 +166,14 @@ fn capture_case(format: &str) {
     assert_eq!(find(b"staged.txt").status, ChangeStatus::Added);
     assert!(find(b"blob.bin").binary);
     assert_eq!(find(b"caf\xe9-\xff.txt").status, ChangeStatus::Added);
-    assert_eq!(find(b"link").new_mode, 0o120000);
+    assert_eq!(find(b"link").new_mode, 0o120_000);
     let tool = find(b"tool.sh");
-    assert_eq!((tool.old_mode, tool.new_mode), (0o100644, 0o100755));
+    assert_eq!((tool.old_mode, tool.new_mode), (0o100_644, 0o100_755));
     assert!(changes.iter().all(|c| c.path.as_bytes() != b"ignored.log"));
 
     let link = repo.read_blob(&tree, &path(b"link"), 0, 1024).unwrap();
     assert_eq!(link.data, b"modify.txt");
-    assert_eq!(link.mode, 0o120000);
+    assert_eq!(link.mode, 0o120_000);
     let odd_blob = repo
         .read_blob(&tree, &path(b"caf\xe9-\xff.txt"), 0, 1024)
         .unwrap();
@@ -295,9 +296,10 @@ fn numstat_hunks_and_byte_offsets() {
     fs::write(repo_dir.join("utf8.txt"), "añb\n変更\nçdé\n日本語\nend!").unwrap();
     fs::remove_file(repo_dir.join("gone.txt")).unwrap();
     fs::write(repo_dir.join("new.txt"), "n1\nn2").unwrap();
-    let huge: String = (0..MAX_DIFF_LINES + 500)
-        .map(|i| format!("line {i}\n"))
-        .collect();
+    let huge = (0..MAX_DIFF_LINES + 500).fold(String::new(), |mut huge, i| {
+        let _ = writeln!(huge, "line {i}");
+        huge
+    });
     fs::write(repo_dir.join("huge.txt"), &huge).unwrap();
     let new_hex = commit_all(&repo_dir, "change");
     let repo = Repository::open(&repo_dir).unwrap();
@@ -325,17 +327,13 @@ fn numstat_hunks_and_byte_offsets() {
             .unwrap_or_default();
         for line in diff.hunks.iter().flat_map(|h| &h.lines) {
             if let Some(start) = line.new_byte_start {
-                assert!(
-                    new_blob[start as usize..].starts_with(&line.text),
-                    "{file} new"
-                );
-                assert!(start == 0 || new_blob[start as usize - 1] == b'\n');
+                let start = usize::try_from(start).unwrap();
+                assert!(new_blob[start..].starts_with(&line.text), "{file} new");
+                assert!(start == 0 || new_blob[start - 1] == b'\n');
             }
             if let Some(start) = line.old_byte_start {
-                assert!(
-                    old_blob[start as usize..].starts_with(&line.text),
-                    "{file} old"
-                );
+                let start = usize::try_from(start).unwrap();
+                assert!(old_blob[start..].starts_with(&line.text), "{file} old");
             }
         }
         diff
@@ -721,7 +719,7 @@ fn capture_skips_nested_repositories_without_a_commit() {
     let paths: Vec<&[u8]> = changes.iter().map(|c| c.path.as_bytes()).collect();
     assert_eq!(paths, [&b"full"[..], b"regular.txt"]);
     assert_eq!(
-        changes[0].new_mode, 0o160000,
+        changes[0].new_mode, 0o160_000,
         "committed nested repo is a gitlink"
     );
     assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);

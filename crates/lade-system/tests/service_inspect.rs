@@ -7,6 +7,7 @@
 
 mod service_support;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 
@@ -142,7 +143,8 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
     };
     assert_eq!(found.results.len(), 1);
     let hit = &found.results[0];
-    let start = text.find("Needle").unwrap() as u64;
+    let needle = text.find("Needle").unwrap();
+    let start = needle as u64;
     assert_eq!(hit.line.as_ref().map(Counter::value), Some(3));
     assert_eq!(hit.byte_start.as_ref().map(Counter::value), Some(start));
     assert_eq!(hit.byte_end.as_ref().map(Counter::value), Some(start + 6));
@@ -151,7 +153,7 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
 
     let file = read_file(&mut client, &objective, Basis::Working, "notes.txt");
     let retained = file.text.unwrap().into_bytes();
-    assert_eq!(&retained[start as usize..start as usize + 6], b"Needle");
+    assert_eq!(&retained[needle..needle + 6], b"Needle");
     drop(client);
     service.shutdown();
 }
@@ -285,11 +287,16 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     assert!(length > 0 && length <= 262_144, "{length}");
     let text = first.text.unwrap();
     assert_eq!(text.len() as u64, length);
-    assert_eq!(text.as_bytes(), &content.as_bytes()[..length as usize]);
-    let digest: String = Sha256::digest(content.as_bytes())
+    assert_eq!(
+        text.as_bytes(),
+        &content.as_bytes()[..usize::try_from(length).unwrap()]
+    );
+    let digest = Sha256::digest(content.as_bytes())
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
     assert_eq!(first.artifact_digest.as_str(), digest);
 
     let next = match read_at(&mut client, &objective, "large.txt", length) {
@@ -298,10 +305,11 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     };
     assert_eq!(next.offset.value(), length);
     assert_eq!(next.artifact_digest.as_str(), digest);
-    let at = next.offset.value() as usize;
+    let at = usize::try_from(next.offset.value()).unwrap();
+    let len = usize::try_from(next.length.value()).unwrap();
     assert_eq!(
         next.text.unwrap().as_bytes(),
-        &content.as_bytes()[at..at + next.length.value() as usize]
+        &content.as_bytes()[at..at + len]
     );
     let tail_offset = content.len() as u64 - line.len() as u64;
     let last = match read_at(&mut client, &objective, "large.txt", tail_offset) {

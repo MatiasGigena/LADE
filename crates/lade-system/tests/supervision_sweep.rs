@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use adapters_support::{TempDir, skip_without_sandbox};
 use lade_system::adapters::sandbox::{Limits, SandboxTools, VerificationLaunch, verification_spec};
 use lade_system::supervision::sweep::{
-    PidRecord, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
+    PidRecord, SweepReport, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
 };
 
 fn stat_fields(pid: u32) -> Option<Vec<String>> {
@@ -123,7 +123,7 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
 
     assert_eq!(
         sweep_stale(Path::new("/nonexistent/lade-run")).unwrap(),
-        Default::default()
+        SweepReport::default()
     );
 }
 

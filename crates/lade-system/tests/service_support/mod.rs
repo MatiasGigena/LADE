@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -418,7 +419,6 @@ impl WorkerLauncher for NodeLauncher {
                 }
                 thread::sleep(Duration::from_millis(20));
             };
-            use std::os::unix::process::ExitStatusExt;
             let _ = events.send(SupervisorEvent {
                 binding,
                 event: WorkerEvent::Exited {

@@ -378,9 +378,10 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
     assert!(second.contains("Extensions: ask.js"), "{second}");
 
     send(&mut client, &objective, "/ask now");
-    let request = match client.wait_event("ui.request", |e| matches!(e, Event::UiRequest(_))) {
-        Event::UiRequest(request) => request,
-        _ => unreachable!(),
+    let Event::UiRequest(request) =
+        client.wait_event("ui.request", |e| matches!(e, Event::UiRequest(_)))
+    else {
+        unreachable!()
     };
     assert_eq!(request.generation, Counter::new(2));
     assert!(matches!(request.prompt, UiPrompt::Confirm { .. }));
@@ -419,7 +420,7 @@ fn executable_resources_load_only_by_approved_hash_and_dialogs_keep_generations(
     match client.call(Request::SessionReload(ObjectiveSelector {
         objective_id: objective.clone(),
     })) {
-        Ok(ReplyData::SessionReload(state)) => assert_eq!(state.generation, Counter::new(3)),
+        Ok(ReplyData::SessionReload(reload)) => assert_eq!(reload.generation, Counter::new(3)),
         other => panic!("session.reload: {other:?}"),
     }
     let third = wait_activity(&mut client, &objective, "Generation 3.");
@@ -521,7 +522,7 @@ fn tree_fork_export_import_and_routing_follow_the_session() {
         objective_id: objective.clone(),
         path: WirePath::from_os_str(exported.as_os_str()).unwrap(),
     })) {
-        Ok(ReplyData::SessionImport(state)) => state,
+        Ok(ReplyData::SessionImport(session)) => session,
         other => panic!("session.import: {other:?}"),
     };
     assert_eq!(

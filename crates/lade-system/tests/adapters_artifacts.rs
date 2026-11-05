@@ -54,7 +54,9 @@ fn publishes_content_addressed_private_immutable_files() {
         "not replaced"
     );
 
-    let big: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 256) as u8).collect();
+    let big: Vec<u8> = (0..300_000u32)
+        .map(|i| u8::try_from(i * 7 % 256).unwrap())
+        .collect();
     let big_digest = store.put_reader(&mut &big[..]).unwrap();
     assert_eq!(big_digest, ArtifactDigest::of(&big));
     let mut assembled = Vec::new();

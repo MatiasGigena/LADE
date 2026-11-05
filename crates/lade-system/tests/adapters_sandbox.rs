@@ -331,7 +331,7 @@ impl Drop for ExtraThreads {
 #[test]
 fn probe_succeeds_while_the_user_runs_more_processes_than_the_limit() {
     let Some(tools) = tools() else { return };
-    let busy = ExtraThreads::spawn(Limits::WORKER.processes as usize + 64);
+    let busy = ExtraThreads::spawn(usize::try_from(Limits::WORKER.processes).unwrap() + 64);
     sandbox_available(&tools).expect("sandbox available");
     drop(busy);
     let spec = SandboxSpec::new(vec!["/bin/true".into()], Path::new("/"), Limits::WORKER).unwrap();
@@ -750,7 +750,7 @@ fn worker_sandbox_runs_node_with_gateway_socket_only() {
     let entry = worker.join("worker.js");
     fs::write(
         &entry,
-        r#"
+        r"
 const fs = require('node:fs');
 const net = require('node:net');
 const report = {
@@ -766,7 +766,7 @@ try { fs.writeFileSync(process.argv[2] + '/HEAD', 'x'); report.repoWritable = tr
 try { fs.writeFileSync('./edited.txt', 'worker edit'); report.worktreeWritable = true; } catch { report.worktreeWritable = false; }
 const sock = net.connect(process.env.LADE_GATEWAY_SOCKET, () => sock.end('hello gateway'));
 sock.on('close', () => console.log(JSON.stringify(report)));
-"#,
+",
     )
     .unwrap();
     let spec = worker_spec(&WorkerLaunch {

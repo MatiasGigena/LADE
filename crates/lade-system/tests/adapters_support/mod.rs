@@ -25,8 +25,7 @@ impl TempDir {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.subsec_nanos());
         let path = std::env::temp_dir().join(format!(
             "lade-test-{tag}-{}-{}-{nanos}",
             std::process::id(),
@@ -64,7 +63,7 @@ pub fn git_os<S: AsRef<OsStr>>(dir: &Path, args: &[S]) -> Vec<u8> {
     assert!(
         out.status.success(),
         "git {:?} failed: {}",
-        args.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        args.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
         String::from_utf8_lossy(&out.stderr)
     );
     out.stdout
