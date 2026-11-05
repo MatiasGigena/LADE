@@ -47,21 +47,50 @@ function isBoolean(value: JsonValue): value is boolean {
   return typeof value === "boolean";
 }
 
+const U64_MAX = 2n ** 64n - 1n;
+
+const MAX_PAGE_LIMIT = 200n;
+
+const MAX_READ_LIMIT = 256n * 1024n;
+
+const UNIX_EPOCH_YEAR = 1970;
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+const DECIMAL = /^(?:0|[1-9][0-9]{0,19})$/;
+
+const TIMESTAMP = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.[0-9]{3}Z$/;
+
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+const SHA1_HEX = /^[0-9a-f]{40}$/;
+
+const HEX = /^[0-9a-f]+$/;
+
 function decimal(value: string): bigint | undefined {
-  return /^(?:0|[1-9][0-9]{0,19})$/.test(value) && BigInt(value) <= 18446744073709551615n ? BigInt(value) : undefined;
+  return DECIMAL.test(value) && BigInt(value) <= U64_MAX ? BigInt(value) : undefined;
+}
+
+function daysIn(year: number, month: number): number | undefined {
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
+  return month === 2 && leap ? 29 : DAYS_IN_MONTH[month - 1];
 }
 
 function timestamp(value: string): boolean {
-  const parts = /^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})\.[0-9]{3}Z$/.exec(value);
+  const parts = TIMESTAMP.exec(value);
 
   if (!parts) return false;
   const [year, month, day, hour, minute, second] = parts.slice(1).map(Number);
 
   if (year === undefined || month === undefined || day === undefined || hour === undefined || minute === undefined || second === undefined) return false;
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  const days = daysIn(year, month);
 
-  return days !== undefined && year >= 1970 && day >= 1 && day <= days && hour < 24 && minute < 60 && second < 60;
+  return days !== undefined && year >= UNIX_EPOCH_YEAR && day >= 1 && day <= days && hour < 24 && minute < 60 && second < 60;
 }
 
 function within(value: bigint | undefined, max: bigint): boolean {
@@ -69,26 +98,31 @@ function within(value: bigint | undefined, max: bigint): boolean {
 }
 
 function pathBytes(value: string): boolean {
-  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) return false;
+  if (!BASE64.test(value)) return false;
   const bytes = Buffer.from(value, "base64");
 
   return bytes.toString("base64") === value && bytes.length >= 1 && bytes.length <= MAX_PATH_BYTES;
 }
 
+function chunkHex(value: string): boolean {
+  return value.length > 0 && value.length <= 2 * MAX_CHUNK && value.length % 2 === 0 && HEX.test(value);
+}
+
+const FORMATS = new Map<string, (value: string) => boolean>([
+  ["uuid-v4", value => UUID_V4.test(value)],
+  ["u64", value => decimal(value) !== undefined],
+  ["page-limit", value => within(decimal(value), MAX_PAGE_LIMIT)],
+  ["read-limit", value => within(decimal(value), MAX_READ_LIMIT)],
+  ["sha256", value => SHA256_HEX.test(value)],
+  ["capability", value => SHA256_HEX.test(value)],
+  ["git-sha1", value => SHA1_HEX.test(value)],
+  ["chunk-hex", chunkHex],
+  ["timestamp", timestamp],
+  ["path-b64", pathBytes],
+]);
+
 export function format(value: string, kind: string): boolean {
-  switch (kind) {
-    case "uuid-v4": return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
-    case "u64": return decimal(value) !== undefined;
-    case "page-limit": return within(decimal(value), 200n);
-    case "read-limit": return within(decimal(value), 262144n);
-    case "sha256":
-    case "capability": return /^[0-9a-f]{64}$/.test(value);
-    case "git-sha1": return /^[0-9a-f]{40}$/.test(value);
-    case "chunk-hex": return value.length > 0 && value.length <= 2 * MAX_CHUNK && value.length % 2 === 0 && /^[0-9a-f]+$/.test(value);
-    case "timestamp": return timestamp(value);
-    case "path-b64": return pathBytes(value);
-    default: return false;
-  }
+  return FORMATS.get(kind)?.(value) ?? false;
 }
 
 function codePoints(value: string): number {
@@ -97,6 +131,51 @@ function codePoints(value: string): number {
   for (const _ of value) count++;
 
   return count;
+}
+
+function matchesObject(value: JsonValue, definition: Schema, contract: Contract): boolean {
+  const properties = definition.properties;
+  const required = definition.required;
+
+  return properties !== undefined && required !== undefined && isRecord(value) &&
+    required.every(key => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(key => {
+      const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
+      const entry = value[key];
+
+      return property !== undefined && entry !== undefined && matches(entry, property, contract);
+    });
+}
+
+function matchesArray(value: JsonValue, definition: Schema, contract: Contract): boolean {
+  const items = definition.items;
+
+  return items !== undefined && definition.maxItems !== undefined && Array.isArray(value) &&
+    value.length <= definition.maxItems && value.length >= (definition.minItems ?? 0) &&
+    value.every(item => matches(item, items, contract));
+}
+
+function matchesString(value: JsonValue, definition: Schema): boolean {
+  if (!isString(value)) return false;
+  const { minLength, maxLength } = definition;
+
+  if (minLength !== undefined || maxLength !== undefined) {
+    const count = codePoints(value);
+
+    if (count < (minLength ?? 0) || (maxLength !== undefined && count > maxLength)) return false;
+  }
+
+  return definition.format === undefined || format(value, definition.format);
+}
+
+function matchesType(value: JsonValue, definition: Schema, contract: Contract): boolean {
+  switch (definition.type) {
+    case "object": return matchesObject(value, definition, contract);
+    case "array": return matchesArray(value, definition, contract);
+    case "string": return matchesString(value, definition);
+    case "boolean": return isBoolean(value);
+    default: return false;
+  }
 }
 
 export function matches(value: JsonValue, definition: Schema, contract: Contract): boolean {
@@ -112,45 +191,7 @@ export function matches(value: JsonValue, definition: Schema, contract: Contract
 
   if (definition.enum) return definition.enum.includes(value);
 
-  switch (definition.type) {
-    case "object": {
-      const properties = definition.properties;
-      const required = definition.required;
-
-      return properties !== undefined && required !== undefined && isRecord(value) &&
-        required.every(key => Object.hasOwn(value, key)) &&
-        Object.keys(value).every(key => {
-          const property = Object.hasOwn(properties, key) ? properties[key] : undefined;
-          const entry = value[key];
-
-          return property !== undefined && entry !== undefined && matches(entry, property, contract);
-        });
-    }
-
-    case "array": {
-      const items = definition.items;
-
-      return items !== undefined && definition.maxItems !== undefined && Array.isArray(value) &&
-        value.length <= definition.maxItems && value.length >= (definition.minItems ?? 0) &&
-        value.every(item => matches(item, items, contract));
-    }
-
-    case "string": {
-      if (!isString(value)) return false;
-      const { minLength, maxLength } = definition;
-
-      if (minLength !== undefined || maxLength !== undefined) {
-        const count = codePoints(value);
-
-        if (count < (minLength ?? 0) || (maxLength !== undefined && count > maxLength)) return false;
-      }
-
-      return definition.format === undefined || format(value, definition.format);
-    }
-
-    case "boolean": return isBoolean(value);
-    default: return false;
-  }
+  return matchesType(value, definition, contract);
 }
 
 export function versioned(value: JsonValue): JsonObject {
