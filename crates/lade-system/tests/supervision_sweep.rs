@@ -184,7 +184,14 @@ fn forced_supervisor_loss_races_leave_no_survivors() {
         }
         let _ = supervisor.wait();
     }
-    thread::sleep(Duration::from_millis(1500));
+    // Every opened gate starts its program; once all of them run, a program behind a dropped
+    // gate has had as long to start, so the check below would see it.
+    assert!(
+        wait_until(Duration::from_secs(10), || (0..RUNS)
+            .step_by(2)
+            .all(|i| sleepers(&sleep_marker(i)) > 0)),
+        "a sandbox whose gate was opened did not start its program"
+    );
     let alive: Vec<usize> = (0..RUNS)
         .filter(|i| sleepers(&sleep_marker(*i)) > 0)
         .collect();
