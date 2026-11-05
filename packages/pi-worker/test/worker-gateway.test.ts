@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import http, { createServer } from "node:http";
-import type { Server } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import https from "node:https";
 import { connect, createServer as createNetServer } from "node:net";
-import type { AddressInfo, Socket } from "node:net";
+import type { AddressInfo, Server, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { getGlobalDispatcher } from "undici";
 import { installGateway, installNoNetwork, MAX_CONNECT_RESPONSE, tunnel } from "../src/worker/gateway.ts";
+import { selfSigned } from "./certificate.ts";
 
 const root = mkdtempSync(join(tmpdir(), "lade-gateway-"));
 
@@ -42,6 +45,8 @@ const REFUSED = "refused.lade.test:80";
 
 const OFFLINE = "http://provider.lade.test/";
 
+const SECURE_HOST = "secure.lade.test";
+
 function track(socket: Socket): void {
   open.add(socket);
   socket.once("close", () => open.delete(socket));
@@ -70,16 +75,29 @@ function echoFrame(socket: Socket, frame: Buffer): void {
   socket.write(Buffer.concat([Buffer.from([0x81, payload.length]), payload]));
 }
 
-const origin = createServer((request, response) => {
+function reply(request: IncomingMessage, response: ServerResponse): void {
   response.end(`origin saw ${request.url}`);
-});
+}
 
-origin.on("upgrade", (request, socket: Socket) => {
+function upgrade(request: IncomingMessage, socket: Socket): void {
   track(socket);
   const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"] ?? ""}${WEBSOCKET_GUID}`).digest("base64");
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   socket.once("data", (frame: Buffer) => echoFrame(socket, frame));
-});
+}
+
+const origin = createServer(reply);
+
+origin.on("upgrade", upgrade);
+
+/** A TLS origin whose certificate names only SECURE_HOST; the test process trusts it as an extra root. */
+const certificate = selfSigned(SECURE_HOST);
+
+setDefaultCACertificates([...getCACertificates("default"), certificate.cert]);
+
+const secureOrigin = https.createServer(certificate, reply);
+
+secureOrigin.on("upgrade", upgrade);
 
 function answer(client: Socket, authority: string): void {
   authorities.push(authority);
@@ -91,7 +109,7 @@ function answer(client: Socket, authority: string): void {
     return;
   }
 
-  const upstream = connect({ host: "127.0.0.1", port: portOf(origin) }, () => {
+  const upstream = connect({ host: "127.0.0.1", port: Number(authority.slice(authority.lastIndexOf(":") + 1)) }, () => {
     client.write(`${ESTABLISHED}\r\n`);
     client.pipe(upstream); upstream.pipe(client);
   });
@@ -116,6 +134,8 @@ const gateway = createNetServer(client => {
 
 await new Promise<void>(resolve => origin.listen(0, "127.0.0.1", resolve));
 
+await new Promise<void>(resolve => secureOrigin.listen(0, "127.0.0.1", resolve));
+
 await new Promise<void>(resolve => gateway.listen(socketPath, resolve));
 
 after(async () => {
@@ -123,7 +143,9 @@ after(async () => {
 
   for (const socket of open) socket.destroy();
   origin.closeAllConnections();
+  secureOrigin.closeAllConnections();
   await new Promise(resolve => origin.close(resolve));
+  await new Promise(resolve => secureOrigin.close(resolve));
   await new Promise(resolve => gateway.close(resolve));
   rmSync(root, { recursive: true, force: true });
 });
@@ -146,7 +168,7 @@ test("fetch brackets IPv6 literals in CONNECT tunnel targets", async () => {
 
 function httpGet(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    http.get(url, response => {
+    (url.startsWith("https:") ? https : http).get(url, response => {
       let body = "";
 
       response.setEncoding("utf8");
@@ -182,6 +204,25 @@ test("WebSocket connections are tunnelled through the gateway", async () => {
   assert.equal(authorities.at(-1), `realtime.lade.test:${port}`);
   await assert.rejects(echo(`ws://${REFUSED}/`), /websocket failed/);
   assert.equal(authorities.at(-1), REFUSED);
+});
+
+test("https and wss get end-to-end TLS with certificate checks through the tunnel", async () => {
+  installGateway(socketPath);
+  const port = portOf(secureOrigin);
+  const response = await fetch(`https://${SECURE_HOST}:${port}/v1/models`);
+  assert.equal(await response.text(), "origin saw /v1/models");
+  assert.equal(authorities.at(-1), `${SECURE_HOST}:${port}`, "the gateway sees only the authority");
+  assert.equal(await httpGet(`https://${SECURE_HOST}:${port}/v1/chat`), "origin saw /v1/chat");
+  assert.equal(await echo(`wss://${SECURE_HOST}:${port}/v1/responses`), "ping");
+
+  await assert.rejects(fetch(`https://other.lade.test:${port}/`), (error: Error) => {
+    assert.match(String(error.cause), /altnames|ERR_TLS_CERT_ALTNAME_INVALID/);
+
+    return true;
+  });
+
+  await assert.rejects(httpGet(`https://other.lade.test:${port}/`), { code: "ERR_TLS_CERT_ALTNAME_INVALID" });
+  https.globalAgent.destroy();
 });
 
 test("a refused tunnel fails the request", async () => {
