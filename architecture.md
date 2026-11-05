@@ -100,7 +100,7 @@ scripts/                        # build, verification and generator scripts
 
 `storage` and `supervision` are adapters too, but they sit beside `adapters/` because each is a subsystem with its own state (the database and its migrations; worker processes and their gateways) rather than a single external seam. Lower modules never import `service`: shared primitives live in `support`, and provider facts that profile import and supervision both need live in `adapters/providers.rs`; `supervision/provider_access.rs` only classifies access and egress from those facts. Constants live in, and are imported from, the module that owns them, never through a re-export.
 
-Split a module into another crate only for a real dependency/test/reuse boundary. `lade-core` has no platform dependencies. `lade-desktop` depends on `lade-protocol`, never on `lade-system` or its SQLite connection. `lade-system` maps protocol data into core transitions. The protocol crate is independent of core and contains no approval authority. Cargo dependency checks enforce crate boundaries; import checks and focused review enforce layers inside a crate.
+Split a module into another crate only for a real dependency/test/reuse boundary. `lade-core` has no platform dependencies. `lade-desktop` depends on `lade-protocol`, never on `lade-system` or its SQLite connection. `lade-system` maps protocol data into core transitions. The protocol crate is independent of core and contains no approval authority. Cargo dependency checks enforce crate boundaries. Inside a crate, `scripts/check-architecture.py` fails when `storage`, `supervision`, `adapters`, `transport` or `support` import `service`, or when the desktop's `presentation` imports GTK, `views` or `transport`; focused review covers the rest.
 
 **Proposed implementation choices:** Rust/gtk4-rs for the client; TypeScript for the Node adapter; GtkSourceView 5 as the first read-only text-control candidate; VTE's GTK4 variant only as a terminal presentation candidate. No Libadwaita requirement, web engine or custom-drawn whole UI. Pin runtime, bindings and native libraries in IMP-001; validate rich controls in IMP-002 and terminal ownership in IMP-012. These were not selected by the client decision's C benchmark.
 
@@ -171,7 +171,7 @@ Keep pi SDK types and differences inside the adapter. Preserve the recorded find
 
 ## 7. Enforceable architecture rules
 
-- CI checks the allowed crate graph and forbidden imports; no GTK/SQL/process APIs in domain modules and no service/storage dependency in the client.
+- CI checks the allowed crate graph and forbidden imports; no GTK/SQL/process APIs in domain modules, no service/storage dependency in the client, no `service` imports below the service layer, and no GTK, `views` or `transport` imports in the client's presentation.
 - Core tests exercise exact candidate/target binding, stale batches, immutable input and legal transitions without GTK or pi.
 - Adapter contract tests cover real serialized messages and installed pinned SDK seams; do not require identical model-generated prose.
 - Fault tests inject failure before/after artifact publication, product commit, dispatch, Git ref change and cleanup; query outcomes and retain ambiguous cases.

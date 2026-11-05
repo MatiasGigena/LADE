@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on unreviewed dependency edges or platform imports in the domain."""
+"""Fail closed on unreviewed dependency edges, platform imports in the domain, or layer imports inside a crate."""
 import json
 from pathlib import Path
 import re
@@ -41,6 +41,14 @@ for path in (root/'crates/lade-core/src').rglob('*.rs'):
     text = path.read_text()
     if re.search(r'\b(?:std|gtk4|rusqlite|sqlx|lade_protocol|lade_system)\s*::|\b(?:extern\s+crate|include!|include_str!|include_bytes!)', text):
         errors.append(f'platform/import boundary: {path.relative_to(root)}')
+system_src = root/'crates/lade-system/src'
+for layer in ('storage', 'supervision', 'adapters', 'transport', 'support'):
+    for path in (system_src/layer).rglob('*.rs'):
+        if re.search(r'\bcrate::(?:service\b|\{[^}]*\bservice\b)', path.read_text()):
+            errors.append(f'layer boundary (imports service): {path.relative_to(root)}')
+for path in (root/'crates/lade-desktop/src/presentation').rglob('*.rs'):
+    if re.search(r'\b(?:gtk4|gtk|glib|gio|sourceview5)\s*::|\buse\s+(?:gtk4|gtk|glib|gio|sourceview5)\b|\bcrate::(?:views|transport)\b|\bcrate::\{[^}]*\b(?:views|transport)\b', path.read_text()):
+        errors.append(f'layer boundary (presentation imports GTK, views or transport): {path.relative_to(root)}')
 worker_src = root/'packages/pi-worker/src'
 worker_packages = {'@earendil-works/pi-coding-agent', 'undici'}
 pi_ai = root/'packages/pi-worker/node_modules/@earendil-works/pi-ai/dist/index.js'
