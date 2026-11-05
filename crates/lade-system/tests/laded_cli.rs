@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 #[path = "adapters_support/mod.rs"]
 mod adapters_support;
 
