@@ -413,7 +413,9 @@ mod tests {
     use lade_protocol::client::{ObjectiveSelector, Request};
 
     use super::*;
+    use crate::service::convert::wire_id;
     use crate::service::test_harness::Harness;
+    use crate::support::{new_uuid, wire_ts};
 
     #[test]
     fn json_nodes_count_every_value() {
@@ -446,14 +448,14 @@ mod tests {
     }
 
     fn verification(tail: String, command: Vec<String>) -> VerificationSummary {
-        let id = crate::service::convert::wire_id(crate::support::new_uuid());
+        let id = wire_id(new_uuid());
         VerificationSummary {
             verification_id: id.clone(),
             objective_id: id.clone(),
             candidate_id: id,
             command,
             state: VerificationState::Failed,
-            started_at: crate::support::wire_ts(0),
+            started_at: wire_ts(0),
             output_tail: tail,
             truncated: false,
             provenance: Provenance::ServiceObserved,

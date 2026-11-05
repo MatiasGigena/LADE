@@ -10,6 +10,7 @@ use lade_protocol::types::{DeliveryMode, Id, Model};
 
 use super::*;
 use crate::adapters_support::git;
+use crate::service::convert::wire_id;
 use crate::service::test_harness::Harness;
 use crate::service::{Flow, ReqCtx};
 
@@ -191,7 +192,7 @@ fn an_integration_that_never_ran_is_aborted_and_the_approval_kept_reviewable() {
     assert!(
         harness
             .call(Request::ObjectiveGet(ObjectiveSelector {
-                objective_id: crate::service::convert::wire_id(oid.uuid()),
+                objective_id: wire_id(oid.uuid()),
             }))
             .is_ok()
     );

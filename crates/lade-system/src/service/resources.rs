@@ -17,7 +17,7 @@ use crate::adapters::profile::{self, Kind, Materialized};
 use crate::storage;
 use crate::support::fs::ensure_private_dir;
 
-use super::convert::{invalid, preview};
+use super::convert::{invalid, preview, wire_path};
 use super::{Completed, Flow, ReqCtx, Service, StartError};
 use crate::support::now_ms;
 
@@ -107,7 +107,7 @@ impl Service {
             .collect();
         ResourceInventory {
             profile_dir: WirePath::from_os_str(profile.as_os_str())
-                .unwrap_or_else(|_| super::convert::wire_path(b"profile")),
+                .unwrap_or_else(|_| wire_path(b"profile")),
             entries,
             restrictions: RESTRICTIONS.iter().map(|r| preview(r, 512)).collect(),
         }

@@ -14,7 +14,7 @@ use crate::storage::{self, OperationState};
 use crate::support::{hex, new_uuid, now_ms};
 use crate::transport::{Inbound, Outbound};
 
-use super::convert::{durability, wire_id};
+use super::convert::{durability, preview, wire_id};
 use super::{Flow, OpInfo, ReqCtx, Service, recordable};
 
 pub(super) struct Controller {
@@ -144,7 +144,7 @@ impl Service {
         self.emit(Event::ServiceNotice(ServiceNotice {
             level,
             code,
-            message: super::convert::preview(message, 512),
+            message: preview(message, 512),
         }));
     }
 

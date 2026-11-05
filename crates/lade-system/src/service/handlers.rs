@@ -305,7 +305,9 @@ mod tests {
     use lade_protocol::client::{Empty, ServiceStopCommand, StopReason};
 
     use super::*;
+    use crate::service::convert::wire_id;
     use crate::service::test_harness::Harness;
+    use crate::support::new_uuid;
 
     #[test]
     fn snapshots_list_the_most_recently_updated_objectives_first() {
@@ -342,7 +344,7 @@ mod tests {
         let mut harness = Harness::new("handlers-lookup");
         let unknown = harness
             .call(Request::ObjectiveGet(ObjectiveSelector {
-                objective_id: crate::service::convert::wire_id(crate::support::new_uuid()),
+                objective_id: wire_id(new_uuid()),
             }))
             .expect_err("unknown");
         assert_eq!(unknown.code, lade_protocol::client::ErrorCode::NotFound);

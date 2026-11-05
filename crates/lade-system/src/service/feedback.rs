@@ -25,9 +25,9 @@ use crate::storage;
 
 use super::capture::CapturePurpose;
 use super::convert::{
-    conflict, core_reference, domain_rejection, durability, invalid, not_found, parse_uuid,
+    conflict, core_mode, core_reference, domain_rejection, durability, invalid, not_found,
+    parse_uuid, wire_draft, wire_input,
 };
-use super::convert::{core_mode, wire_draft, wire_input};
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
 use super::state::ObjState;
@@ -571,6 +571,7 @@ mod tests {
     use lade_protocol::types::{Counter, DeliveryMode, Model, PageLimit};
 
     use super::*;
+    use crate::service::convert::wire_id;
     use crate::service::test_harness::Harness;
     use crate::supervision::WorkerEvent;
 
@@ -637,7 +638,7 @@ mod tests {
         harness.worker_event(
             oid,
             WorkerEvent::Body(lade_protocol::worker::WorkerBody::Received {
-                input_id: crate::service::convert::wire_id(input_id.uuid()),
+                input_id: wire_id(input_id.uuid()),
             }),
         );
         assert!(matches!(
@@ -691,7 +692,7 @@ mod tests {
         harness.create_objective("Drafts");
         let missing = harness
             .call(Request::DraftDelete(DraftDeleteCommand {
-                draft_id: crate::service::convert::wire_id(crate::support::new_uuid()),
+                draft_id: wire_id(new_uuid()),
                 expected_revision: Counter::new(1),
             }))
             .expect_err("unknown draft");

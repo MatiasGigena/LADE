@@ -15,7 +15,7 @@ use crate::storage;
 
 use super::{CommandResult, Op, OpenUi, PiState, wire_reason};
 use crate::service::Service;
-use crate::service::convert::wire_id;
+use crate::service::convert::{wire_id, wire_path};
 use crate::support::{new_uuid, now_ms};
 
 impl Service {
@@ -202,7 +202,7 @@ impl Service {
                         .export
                         .as_deref()
                         .and_then(|p| WirePath::from_os_str(p.as_os_str()).ok())
-                        .unwrap_or_else(|| crate::service::convert::wire_path(b"export")),
+                        .unwrap_or_else(|| wire_path(b"export")),
                 }),
                 Op::Navigate => ReplyData::SessionNavigate(
                     self.session_state(oid, SessionChangeReason::Navigate),
