@@ -4,6 +4,7 @@ use lade_protocol::client::{self as wire, Empty, ErrorCode, EventFrame, Rejectio
 use lade_protocol::types::{Counter, Id};
 
 use super::*;
+use crate::presentation::state::model::Basis;
 use crate::presentation::state::model::{
     ArtifactDigest, CaptureId, DeliveryMode, DraftId, Reference, ReferenceVersion, RepoPath, Side,
 };
@@ -259,7 +260,7 @@ fn rejected_query_reaches_its_surface() {
     let (mut core, _) = connected();
     let step = core.submit(Intent::LoadChanges {
         objective_id: oid(),
-        basis: crate::presentation::state::model::Basis::Working,
+        basis: Basis::Working,
     });
     let reply = Reply::rejected(
         step.frames[0].request_id.clone(),

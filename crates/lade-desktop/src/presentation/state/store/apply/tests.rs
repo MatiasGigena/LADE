@@ -171,7 +171,7 @@ fn stale_changes_reply_for_previous_basis_is_ignored() {
     let mut state = PresentationState::default();
     let o = ObjectiveId::new("o");
     state.objective_ui_mut(&o).basis = Basis::Candidate {
-        candidate_id: crate::presentation::state::model::CandidateId::new("c2"),
+        candidate_id: CandidateId::new("c2"),
     };
     let list = change_list(&o, Basis::Working, &[]);
     assert!(state.apply(StoreUpdate::Changes(list)).is_empty());
@@ -266,7 +266,7 @@ fn command_notes_are_kept_apart_from_refusals() {
     let mut state = PresentationState::default();
     let o = ObjectiveId::new("o");
     let note = ServiceNotice {
-        level: crate::presentation::state::model::NoticeLevel::Info,
+        level: NoticeLevel::Info,
         code: ReportCode::CheckingOutcome,
         message: "Checking outcome of “Integrate”…".into(),
         scope: NoticeScope::General,

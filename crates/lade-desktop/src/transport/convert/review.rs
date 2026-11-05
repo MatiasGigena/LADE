@@ -7,6 +7,7 @@ use lade_protocol::types::{self, Counter};
 use super::objective::target;
 use super::{Invalid, delivery_mode, id, path, side, timestamp, to_path, to_side};
 use crate::presentation::state::model as view;
+use crate::presentation::terminal::TerminalEnd;
 
 pub(super) fn activity_role(r: types::ActivityRole) -> view::ActivityRole {
     match r {
@@ -269,8 +270,8 @@ pub fn search_result(r: &wire::SearchResult) -> view::SearchResult {
     }
 }
 
-pub fn terminal_end(c: &wire::TerminalClosed) -> crate::presentation::terminal::TerminalEnd {
-    use crate::presentation::terminal::TerminalEnd as E;
+pub fn terminal_end(c: &wire::TerminalClosed) -> TerminalEnd {
+    use TerminalEnd as E;
     match c.reason {
         wire::TerminalCloseReason::Exited => E::Exited {
             code: c.exit_code.as_ref().map(Counter::value),

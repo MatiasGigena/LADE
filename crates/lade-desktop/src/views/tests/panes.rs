@@ -3,6 +3,7 @@
 
 use crate::presentation::controller::intents::{Intent, RecordingSink};
 use crate::presentation::keys::{AppAction, Keymap};
+use crate::presentation::layout::LayoutClass;
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, ConnectionState, ObjectiveId, Timestamp,
 };
@@ -198,10 +199,7 @@ fn a_compact_window_shows_the_region_switches() {
         app.apply_width(800);
         settle_until("the region switches appear", || app.region_bar.is_visible());
         assert!(app.region_bar.is_visible());
-        assert_eq!(
-            app.store.state().ui.layout,
-            crate::presentation::layout::LayoutClass::Compact
-        );
+        assert_eq!(app.store.state().ui.layout, LayoutClass::Compact);
         app.apply_width(1440);
         settle_until("the region switches hide", || !app.region_bar.is_visible());
         assert!(!app.region_bar.is_visible());

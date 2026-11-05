@@ -1,4 +1,5 @@
 use super::*;
+use crate::presentation::test_fixture::fixture_updates;
 
 fn screen(text: &str) -> Screen {
     let mut s = Screen::new(20, 5);
@@ -170,7 +171,7 @@ fn only_a_defined_objective_points_to_activity_for_its_terminal() {
     use crate::presentation::state::model::{ConnectionState, ExecutionState};
     use crate::presentation::state::store::PresentationState;
     let mut state = PresentationState::new(ConnectionState::Connected);
-    for update in crate::presentation::test_fixture::fixture_updates() {
+    for update in fixture_updates() {
         state.apply(update);
     }
     let mut summary = state

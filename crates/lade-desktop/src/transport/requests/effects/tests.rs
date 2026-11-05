@@ -2,8 +2,11 @@ use lade_protocol::client::{self as wire, ReplyData};
 use lade_protocol::types::{Counter, Digest, Id};
 
 use crate::presentation::state::agent_session::AgentSessionUpdate;
+use crate::presentation::state::agent_session::ProviderStatus;
 use crate::presentation::state::model::{ModelRef, Refusal, ReportCode};
+use crate::presentation::terminal::TerminalMode;
 use crate::transport::convert;
+use crate::transport::core::event_updates;
 use crate::transport::requests::tests::*;
 use crate::transport::requests::*;
 
@@ -135,7 +138,7 @@ fn agent_session_replies_and_events_reach_the_store() {
         [
             StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(c)),
             StoreUpdate::AgentSession(AgentSessionUpdate::Models { provider, models }),
-        ] if c.providers[0].status == crate::presentation::state::agent_session::ProviderStatus::Restricted
+        ] if c.providers[0].status == ProviderStatus::Restricted
             && c.providers[0].reason.is_some()
             && provider == "lade-fixture"
             && models.len() == 1
@@ -168,14 +171,14 @@ fn agent_session_replies_and_events_reach_the_store() {
             .iter()
             .any(|i| matches!(i, Intent::LoadSessionTree { .. }))
     );
-    let changed = crate::transport::core::event_updates(wire::Event::SessionChanged(state));
+    let changed = event_updates(wire::Event::SessionChanged(state));
     assert!(matches!(
         changed.as_slice(),
         [StoreUpdate::AgentSession(
             AgentSessionUpdate::Session { .. }
         )]
     ));
-    let opened = crate::transport::core::event_updates(wire::Event::UiRequest(wire::UiRequest {
+    let opened = event_updates(wire::Event::UiRequest(wire::UiRequest {
         objective_id: Id::parse(O).unwrap(),
         ui_id: Id::parse(D).unwrap(),
         generation: Counter::new(2),
@@ -257,14 +260,13 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
     );
     let stopped = reply_effects(&Context::Stop, &ReplyData::ServiceStop(wire::Empty {}));
     assert_eq!(stopped.updates, vec![StoreUpdate::ServiceStopped]);
-    let closed =
-        crate::transport::core::event_updates(wire::Event::TerminalClosed(wire::TerminalClosed {
-            objective_id: Id::parse(O.to_owned()).unwrap(),
-            terminal_id: Id::parse(T.to_owned()).unwrap(),
-            reason: wire::TerminalCloseReason::ReviewFreeze,
-            exit_code: None,
-            signal: None,
-        }));
+    let closed = event_updates(wire::Event::TerminalClosed(wire::TerminalClosed {
+        objective_id: Id::parse(O.to_owned()).unwrap(),
+        terminal_id: Id::parse(T.to_owned()).unwrap(),
+        reason: wire::TerminalCloseReason::ReviewFreeze,
+        exit_code: None,
+        signal: None,
+    }));
     assert_eq!(
         closed,
         vec![StoreUpdate::TerminalClosed {
@@ -415,7 +417,7 @@ fn an_oversized_terminal_size_is_clamped_and_a_stop_is_reported() {
         [StoreUpdate::TerminalOpened {
             cols: u16::MAX,
             rows: 40,
-            mode: crate::presentation::terminal::TerminalMode::ReadOnly,
+            mode: TerminalMode::ReadOnly,
             ..
         }]
     ));

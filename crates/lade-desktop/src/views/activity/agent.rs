@@ -13,6 +13,7 @@ use crate::views::session;
 use crate::views::widgets::{self, MessageKind, label, space, vbox};
 
 use super::{Activity, SETTINGS_MODEL_NOTE, SETTINGS_RESTART_NOTE, SETUP_NOTE, SETUP_TITLE, fit};
+use crate::views::dialogs::costs_and_data;
 
 impl Activity {
     fn refusal(&self, surface: ActionSurface) -> Option<gtk::Box> {
@@ -80,7 +81,7 @@ impl Activity {
         body.append(&label(SETUP_NOTE, &["secondary"]));
         let help = widgets::button("Costs and data", &["quiet"]);
         help.set_halign(gtk::Align::Start);
-        help.connect_clicked(crate::views::dialogs::costs_and_data);
+        help.connect_clicked(costs_and_data);
         body.append(&help);
         if let Some(error) = self.agent_error.borrow().as_ref() {
             body.append(&widgets::inline_message(MessageKind::Error, error, None));

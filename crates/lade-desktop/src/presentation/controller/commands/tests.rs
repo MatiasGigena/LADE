@@ -5,6 +5,8 @@ use crate::presentation::state::model::{
     ApprovalId, ApprovalState, ApprovalSummary, AvailableAction, CandidateId, ConnectionState,
     GitId, Load, Timestamp,
 };
+use crate::presentation::state::store::PresentationState;
+use crate::presentation::state::store::Store;
 use crate::presentation::state::store::StoreUpdate;
 use crate::presentation::test_fixture;
 use std::rc::Rc;
@@ -359,9 +361,7 @@ fn a_new_objective_is_validated_before_it_is_sent() {
 
 #[test]
 fn a_new_objective_needs_an_open_repository() {
-    let store = crate::presentation::state::store::Store::new(
-        crate::presentation::state::store::PresentationState::new(ConnectionState::Connected),
-    );
+    let store = Store::new(PresentationState::new(ConnectionState::Connected));
     let sink = Rc::new(RecordingSink::default());
     let controller = Controller::new(store, sink.clone());
     controller

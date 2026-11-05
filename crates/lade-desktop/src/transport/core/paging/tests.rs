@@ -1,7 +1,9 @@
 use lade_protocol::client::{self as wire, Empty, ErrorCode, Rejection, SafeAction};
 use lade_protocol::types::{Counter, Id};
 
+use crate::presentation::state::model::DeliveryState;
 use crate::presentation::state::model::DraftId;
+use crate::presentation::state::model::DraftState;
 use crate::transport::core::tests::*;
 use crate::transport::core::*;
 use crate::transport::requests::tests::{
@@ -195,7 +197,7 @@ fn draft_completion_preserves_same_revision_events_additions_and_successful_dele
     submitted.input_id = Some(Id::from_random_bytes([75; 16]));
     let event = live(&mut core, Event::DraftChanged(submitted));
     assert!(
-        matches!(&event.updates[..], [StoreUpdate::DraftChanged(d)] if d.state == crate::presentation::state::model::DraftState::Submitted)
+        matches!(&event.updates[..], [StoreUpdate::DraftChanged(d)] if d.state == DraftState::Submitted)
     );
     live(&mut core, Event::DraftChanged(wire_draft(2)));
     let deleted = core
@@ -217,10 +219,7 @@ fn draft_completion_preserves_same_revision_events_additions_and_successful_dele
             .map(|d| d.draft_id.as_str())
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        drafts[0].state,
-        crate::presentation::state::model::DraftState::Submitted
-    );
+    assert_eq!(drafts[0].state, DraftState::Submitted);
     assert!(drafts[0].input_id.is_some());
 }
 
@@ -266,10 +265,7 @@ fn input_pages_preserve_chronological_order_and_live_delivery_changes() {
             .map(|b| Id::from_random_bytes([*b; 16]).to_string())
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        inputs[0].delivery,
-        crate::presentation::state::model::DeliveryState::Received
-    );
+    assert_eq!(inputs[0].delivery, DeliveryState::Received);
 }
 
 #[test]
@@ -291,7 +287,7 @@ fn a_later_page_reflects_earlier_events_instead_of_replaying_stale_metadata() {
     let complete = core.on_reply(ok(&next, draft_list(vec![newer], false)));
     assert!(
         matches!(&complete.updates[..], [StoreUpdate::Drafts { drafts, .. }]
-        if drafts.len() == 2 && drafts[1].state == crate::presentation::state::model::DraftState::Submitted)
+        if drafts.len() == 2 && drafts[1].state == DraftState::Submitted)
     );
 }
 

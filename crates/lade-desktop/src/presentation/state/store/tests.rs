@@ -1,4 +1,5 @@
 use super::*;
+use crate::presentation::state::model::Execution;
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, ExecutionState, Lifecycle, NoticeLevel,
     NoticeScope, ReportCode, Timestamp,
@@ -31,7 +32,7 @@ pub(super) fn summary(
         title: id.to_owned(),
         outcome: String::new(),
         lifecycle,
-        execution: crate::presentation::state::model::Execution::new(ExecutionState::None, 0),
+        execution: Execution::new(ExecutionState::None, 0),
         attention,
         badges: Vec::new(),
         updated_at: Timestamp(updated),

@@ -6,6 +6,7 @@ use lade_protocol::types::{Counter, GitAlgorithm, GitId};
 use lade_protocol::{Framing, encode};
 
 use crate::presentation::controller::intents::DraftRevisionRef;
+use crate::presentation::controller::intents::StopReason;
 use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswer};
 use crate::presentation::state::model::{
     ApprovalId, CandidateId, DeliveryMode, ModelRef, SessionId, WorkspaceId,
@@ -395,7 +396,7 @@ fn terminal_and_service_intents() -> Vec<(Intent, Option<RequestName>)> {
         ),
         (
             I::StopService {
-                reason: crate::presentation::controller::intents::StopReason::Logout,
+                reason: StopReason::Logout,
             },
             Some(N::ServiceStop),
         ),

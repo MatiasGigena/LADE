@@ -19,7 +19,9 @@ use super::requests::{
     self,
     tests::{epoch, snapshot_data},
 };
+use crate::presentation::controller::intents::StopReason;
 use crate::presentation::controller::intents::{Intent, StartPoint};
+use crate::presentation::state::model::Side;
 use crate::presentation::state::model::{
     Basis, ConnectionState, DeliveryMode, ExecutionState, Intent as ObjectiveIntent, ModelRef,
     ObjectiveId, RepoPath, ReportCode,
@@ -564,7 +566,7 @@ fn inspect_hello(
         objective_id: objective_id.clone(),
         basis: Basis::Working,
         path,
-        side: crate::presentation::state::model::Side::New,
+        side: Side::New,
         offset: 0,
     });
     wait_for(
@@ -621,7 +623,7 @@ fn stop_and_stay_down(
     runtime: &Path,
 ) {
     send(Intent::StopService {
-        reason: crate::presentation::controller::intents::StopReason::Exit,
+        reason: StopReason::Exit,
     });
     wait_for(updates, "service stopped", |u| {
         u == &StoreUpdate::ServiceStopped

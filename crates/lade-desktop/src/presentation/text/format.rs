@@ -1,7 +1,8 @@
 use crate::presentation::state::model::{
-    ActivityRole, ApprovalState, Attention, Basis, CandidateStatus, ChangeStatus, DeliveryMode,
-    DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle, ObjectiveDetail, Reference,
-    ReferenceVersion, SearchScope, Side, Timestamp, VerificationState,
+    ActivityRole, ApprovalState, Attention, Basis, CandidateId, CandidateStatus, ChangeStatus,
+    DeliveryMode, DeliveryState, Execution, ExecutionState, InputSummary, Lifecycle,
+    ObjectiveDetail, Reference, ReferenceVersion, SearchScope, Side, TargetRef, Timestamp,
+    VerificationState,
 };
 
 pub fn attention_label(attention: Attention) -> &'static str {
@@ -226,7 +227,7 @@ pub fn side_label(side: Side) -> &'static str {
 }
 
 pub fn basis_label(basis: &Basis, detail: Option<&ObjectiveDetail>) -> String {
-    let ordinal = |id: &crate::presentation::state::model::CandidateId| {
+    let ordinal = |id: &CandidateId| {
         detail
             .and_then(|d| d.candidates.iter().find(|c| &c.candidate_id == id))
             .map_or_else(|| id.short().to_owned(), |c| c.ordinal.to_string())
@@ -249,7 +250,7 @@ pub fn version_line(
     basis: &Basis,
     service_label: &str,
     candidate_status: Option<CandidateStatus>,
-    target: &crate::presentation::state::model::TargetRef,
+    target: &TargetRef,
 ) -> (String, String) {
     let short_target = target.label();
     let full_target = format!("{} at {}", target.branch, target.commit.hex);
@@ -446,6 +447,7 @@ pub fn journey(detail: &ObjectiveDetail, has_inputs: bool) -> [StepState; 5] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation::state::model::GitId;
 
     #[test]
     fn byte_sizes_use_binary_units() {
@@ -494,7 +496,6 @@ mod tests {
 
     #[test]
     fn version_line_adds_only_what_the_selector_does_not_say() {
-        use crate::presentation::state::model::{CandidateId, GitId, TargetRef};
         let target = TargetRef {
             branch: "main".into(),
             commit: GitId::sha1("86fc063aaaabbbbccccddddeeeeffff000011112"),

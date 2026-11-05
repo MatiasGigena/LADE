@@ -16,6 +16,7 @@ use crate::presentation::state::model::{
     Basis, ChangeList, ChangedFile, Load, ObjectiveDetail, ObjectiveId, RepoPath,
 };
 use crate::presentation::state::store::{Change, PresentationState};
+use crate::presentation::text::format::file_status;
 use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
 use crate::presentation::text::objective;
 
@@ -634,7 +635,7 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     row.add_css_class("file-row");
     set_focus_key(&row, &format!("file:{}", file.path.display));
     let content = hbox(space::ITEM);
-    let (symbol, status) = crate::presentation::text::format::file_status(file.status);
+    let (symbol, status) = file_status(file.status);
     let symbol_label = gtk::Label::new(Some(symbol));
     symbol_label.add_css_class("file-status");
     symbol_label.add_css_class("mono");
