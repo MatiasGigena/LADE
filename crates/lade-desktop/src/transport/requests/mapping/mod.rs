@@ -31,66 +31,20 @@ fn wire_path(path: &Path) -> Result<WirePath, Invalid> {
 }
 
 /// The request for `intent`, or `Ok(None)` when the intent is handled without one.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per Intent variant, grouped by the surface that issues it"
+)]
 pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
-    use Intent as I;
-    let mapped = match intent {
-        I::RetryConnection => return Ok(None),
-        I::OpenWorkspace { .. }
-        | I::Search { .. }
-        | I::CreateObjective { .. }
-        | I::UpdateSettings { .. }
-        | I::StopService { .. }
-        | I::LoadModels { .. }
-        | I::LoadResources
-        | I::DecideResource { .. }
-        | I::ImportProfile { .. } => workspace_request(intent)?,
-        I::LoadObjective { .. }
-        | I::LoadActivity { .. }
-        | I::LoadChanges { .. }
-        | I::LoadDiff { .. }
-        | I::OpenFile { .. }
-        | I::LoadDrafts { .. }
-        | I::LoadInputs { .. } => load_request(intent)?,
-        I::UpdateObjective { .. }
-        | I::StartExecution { .. }
-        | I::Cancel { .. }
-        | I::Resume { .. }
-        | I::SendMessage { .. }
-        | I::Complete { .. }
-        | I::Discard { .. }
-        | I::Cleanup { .. }
-        | I::DeleteHistory { .. } => objective_request(intent)?,
-        I::SaveDraft { .. } | I::DeleteDraft { .. } | I::SubmitFeedback { .. } => {
-            feedback_request(intent)?
-        }
-        I::Freeze { .. }
-        | I::ReturnForRevision { .. }
-        | I::Verify { .. }
-        | I::Approve { .. }
-        | I::Refresh { .. }
-        | I::Integrate { .. } => review_request(intent)?,
-        I::OpenTerminal { .. }
-        | I::TerminalInput { .. }
-        | I::ResizeTerminal { .. }
-        | I::CloseTerminal { .. } => terminal_request(intent)?,
-        I::LoadSessionTree { .. }
-        | I::NavigateSession { .. }
-        | I::ForkSession { .. }
-        | I::ImportSession { .. }
-        | I::ExportSession { .. }
-        | I::CompactSession { .. }
-        | I::ReloadSession { .. }
-        | I::ConfigureSession { .. }
-        | I::RespondDialog { .. } => session_request(intent)?,
-    };
-    Ok(Some(mapped))
-}
-
-/// A request about the workspace, the service and its settings, models or profile resources.
-fn workspace_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
+    use ActionSurface as S;
     use Intent as I;
     let label = intent.label();
-    Ok(match intent {
+    let command = |objective_id: &ObjectiveId, surface| {
+        Context::command(label, Some(objective_id), Some(surface))
+    };
+    let mapped = match intent {
+        I::RetryConnection => return Ok(None),
+        // A request about the workspace, the service and its settings, models or profile resources.
         I::OpenWorkspace { path } => (
             Request::WorkspaceOpen(wire::WorkspaceOpenCommand {
                 path: WirePath::from_os_str(path.as_os_str()).map_err(|_| {
@@ -186,15 +140,7 @@ fn workspace_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             }),
             Context::command(label, None, None),
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A query that loads one view of an Objective.
-fn load_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let label = intent.label();
-    Ok(match intent {
+        // A query that loads one view of an Objective.
         I::LoadObjective { objective_id } => (
             Request::ObjectiveGet(selector(objective_id)?),
             Context::Objective(objective_id.clone()),
@@ -257,19 +203,7 @@ fn load_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             inputs_page(objective_id, None)?,
             Context::Inputs(objective_id.clone()),
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A command on an Objective's intent, its agent's execution or its closing.
-fn objective_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use ActionSurface as S;
-    use Intent as I;
-    let label = intent.label();
-    let command = |objective_id: &ObjectiveId, surface| {
-        Context::command(label, Some(objective_id), Some(surface))
-    };
-    Ok(match intent {
+        // A command on an Objective's intent, its agent's execution or its closing.
         I::UpdateObjective {
             objective_id,
             expected_intent_revision,
@@ -343,16 +277,7 @@ fn objective_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             }),
             command(objective_id, S::Closing),
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A command on review drafts and the feedback they make up.
-fn feedback_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use ActionSurface as S;
-    use Intent as I;
-    let label = intent.label();
-    Ok(match intent {
+        // A command on review drafts and the feedback they make up.
         I::SaveDraft {
             objective_id,
             draft_id,
@@ -420,19 +345,7 @@ fn feedback_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 surface: Some(S::Feedback),
             },
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A command on an Objective's candidate: freezing, returning, checking, approving and integrating it.
-fn review_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use ActionSurface as S;
-    use Intent as I;
-    let label = intent.label();
-    let command = |objective_id: &ObjectiveId, surface| {
-        Context::command(label, Some(objective_id), Some(surface))
-    };
-    Ok(match intent {
+        // A command on an Objective's candidate: freeze, return, check, approve or integrate it.
         I::Freeze { objective_id } => (
             Request::ReviewFreeze(selector(objective_id)?),
             command(objective_id, S::Review),
@@ -487,15 +400,7 @@ fn review_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             }),
             command(objective_id, S::Review),
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A command on an Objective's terminal.
-fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let label = intent.label();
-    Ok(match intent {
+        // A command on an Objective's terminal.
         I::OpenTerminal {
             objective_id,
             cols,
@@ -553,19 +458,7 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 objective_id: objective_id.clone(),
             },
         ),
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// A command on an Objective's pi session or one of its dialogs.
-fn session_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use ActionSurface as S;
-    use Intent as I;
-    let label = intent.label();
-    let command = |objective_id: &ObjectiveId, surface| {
-        Context::command(label, Some(objective_id), Some(surface))
-    };
-    Ok(match intent {
+        // A command on an Objective's pi session or one of its dialogs.
         I::LoadSessionTree { objective_id } => (
             Request::SessionTree(selector(objective_id)?),
             Context::Tree(objective_id.clone()),
@@ -643,14 +536,8 @@ fn session_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             }),
             command(objective_id, S::Dialog),
         ),
-
-        _ => return Err(misrouted(label)),
-    })
-}
-
-/// The error for an intent routed to the wrong family above, which `request`'s match rules out.
-fn misrouted(label: &str) -> Invalid {
-    Invalid(format!("{label} has no request in this family"))
+    };
+    Ok(Some(mapped))
 }
 
 #[cfg(test)]
