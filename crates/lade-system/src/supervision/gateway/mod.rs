@@ -23,7 +23,7 @@ use crate::support::fs::ensure_private_dir;
 
 pub use policy::{EgressPolicy, EgressRule, default_policies};
 pub use proxy::UpstreamProxy;
-use proxy::connect_via_proxy;
+use proxy::{ProxyFailure, connect_via_proxy};
 use request::{Refusal, Target, parse_request, read_head, write_refusal};
 
 pub const MAX_HEADER_BYTES: usize = 8 << 10;
@@ -315,9 +315,17 @@ fn open_upstream(target: &Target, shared: &Shared) -> Result<TcpStream, Refusal>
         code: "upstream_unreachable",
     };
     if let Some(proxy) = shared.upstream.as_ref().filter(|p| !p.bypass(&target.host)) {
-        return connect_via_proxy(proxy, target).map_err(|_| Refusal {
-            status: 502,
-            code: "proxy_failed",
+        return connect_via_proxy(proxy, target).map_err(|failure| {
+            if let ProxyFailure::Refused {
+                status: Some(status),
+            } = failure
+            {
+                shared.log(
+                    &format!("{}:{}", target.host, target.port),
+                    &format!("proxy_status {status}"),
+                );
+            }
+            failure.refusal()
         });
     }
     let addrs: Vec<SocketAddr> = match literal {

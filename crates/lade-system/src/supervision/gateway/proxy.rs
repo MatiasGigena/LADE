@@ -5,8 +5,10 @@ use std::fmt;
 use std::io::{self, Write};
 use std::net::{Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 
+use lade_protocol::base64;
+
 use super::policy::normalize_host;
-use super::request::{Target, read_head};
+use super::request::{Refusal, Target, read_head};
 use super::{CONNECT_TIMEOUT, HANDSHAKE_TIMEOUT};
 
 #[derive(Clone)]
@@ -60,7 +62,8 @@ impl UpstreamProxy {
             None => (None, authority),
         };
         let (host, port) = split_authority(hostport, 80)?;
-        let authorization = userinfo.map(|u| format!("Basic {}", base64(&percent_decode(u))));
+        let authorization =
+            userinfo.map(|u| format!("Basic {}", base64::encode(&percent_decode(u))));
         let no_proxy = no_proxy
             .unwrap_or_default()
             .split(',')
@@ -128,34 +131,52 @@ fn percent_decode(text: &str) -> Vec<u8> {
     out
 }
 
-fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = (u32::from(chunk[0]) << 16)
-            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
-            | u32::from(*chunk.get(2).unwrap_or(&0));
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+/// Why the upstream proxy could not open a tunnel. Each carries its own refusal code so the
+/// gateway log tells a missing proxy host, a dead proxy, a broken handshake and a refused
+/// CONNECT apart; none of them includes the Proxy-Authorization value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ProxyFailure {
+    Resolution,
+    Unreachable,
+    Handshake,
+    /// The proxy answered with a non-2xx status (`None` when the status line was unreadable),
+    /// or sent tunnel bytes before the client did.
+    Refused {
+        status: Option<u16>,
+    },
 }
 
-pub(super) fn connect_via_proxy(proxy: &UpstreamProxy, target: &Target) -> io::Result<TcpStream> {
+impl ProxyFailure {
+    pub(super) const fn refusal(self) -> Refusal {
+        let code = match self {
+            Self::Resolution => "proxy_resolution_failed",
+            Self::Unreachable => "proxy_unreachable",
+            Self::Handshake => "proxy_handshake_failed",
+            Self::Refused { .. } => "proxy_refused",
+        };
+        Refusal { status: 502, code }
+    }
+}
+
+pub(super) fn connect_via_proxy(
+    proxy: &UpstreamProxy,
+    target: &Target,
+) -> Result<TcpStream, ProxyFailure> {
     let addrs: Vec<SocketAddr> = (proxy.host.as_str(), proxy.port)
-        .to_socket_addrs()?
+        .to_socket_addrs()
+        .map_err(|_| ProxyFailure::Resolution)?
         .collect();
     let mut stream = addrs
         .iter()
         .find_map(|addr| TcpStream::connect_timeout(addr, CONNECT_TIMEOUT).ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::ConnectionRefused, "proxy"))?;
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
+        .ok_or(ProxyFailure::Unreachable)?;
+    let handshake = |_: io::Error| ProxyFailure::Handshake;
+    stream
+        .set_read_timeout(Some(HANDSHAKE_TIMEOUT))
+        .map_err(handshake)?;
+    stream
+        .set_write_timeout(Some(HANDSHAKE_TIMEOUT))
+        .map_err(handshake)?;
     let authority = if target.host.contains(':') {
         format!("[{}]:{}", target.host, target.port)
     } else {
@@ -168,18 +189,19 @@ pub(super) fn connect_via_proxy(proxy: &UpstreamProxy, target: &Target) -> io::R
         request.push_str("\r\n");
     }
     request.push_str("\r\n");
-    stream.write_all(request.as_bytes())?;
-    let (head, leftover) =
-        read_head(&mut stream).map_err(|_| io::Error::other("proxy response"))?;
-    let status_ok = head
+    stream.write_all(request.as_bytes()).map_err(handshake)?;
+    let (head, leftover) = read_head(&mut stream).map_err(|_| ProxyFailure::Handshake)?;
+    let status = head
         .strip_prefix(b"HTTP/1.")
         .and_then(|rest| rest.get(1..5))
-        .is_some_and(|code| code.first() == Some(&b' ') && code.get(1) == Some(&b'2'));
-    if !status_ok || !leftover.is_empty() {
-        return Err(io::Error::other("proxy refused"));
+        .filter(|code| code.first() == Some(&b' '))
+        .and_then(|code| std::str::from_utf8(&code[1..]).ok())
+        .and_then(|code| code.parse::<u16>().ok());
+    if !status.is_some_and(|s| (200..300).contains(&s)) || !leftover.is_empty() {
+        return Err(ProxyFailure::Refused { status });
     }
-    stream.set_read_timeout(None)?;
-    stream.set_write_timeout(None)?;
+    stream.set_read_timeout(None).map_err(handshake)?;
+    stream.set_write_timeout(None).map_err(handshake)?;
     Ok(stream)
 }
 
@@ -195,10 +217,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!((proxy.host.as_str(), proxy.port), ("proxy.local", 3128));
-        assert_eq!(
-            proxy.authorization.as_deref(),
-            Some(format!("Basic {}", base64(b"user:p@ss")).as_str())
-        );
+        assert_eq!(proxy.authorization.as_deref(), Some("Basic dXNlcjpwQHNz"));
         assert!(!format!("{proxy:?}").contains("Basic"));
         assert!(proxy.bypass("localhost"));
         assert!(proxy.bypass("a.internal"));
@@ -207,8 +226,5 @@ mod tests {
         assert!(!proxy.bypass("sub.exact.example.org.evil"));
         assert!(!proxy.bypass("api.anthropic.com"));
         assert!(UpstreamProxy::from_vars(Some("socks5://x:1"), None).is_none());
-        assert_eq!(base64(b"ab"), "YWI=");
-        assert_eq!(base64(b"abc"), "YWJj");
-        assert_eq!(base64(b"a"), "YQ==");
     }
 }

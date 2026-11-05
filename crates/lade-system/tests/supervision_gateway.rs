@@ -275,6 +275,60 @@ fn tunnels_chain_through_upstream_proxy_after_the_allowlist() {
 }
 
 #[test]
+fn upstream_proxy_failures_name_their_cause() {
+    let tmp = TempDir::new("gw-proxy-fail");
+    let proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy_port = proxy.local_addr().unwrap().port();
+    let refusing = thread::spawn(move || {
+        let (mut stream, _) = proxy.accept().unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            head.push(byte[0]);
+        }
+        stream
+            .write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n")
+            .unwrap();
+        drop(proxy);
+    });
+    let socket = tmp.path().join("run/gw.sock");
+    let gateway = Gateway::start(
+        &socket,
+        EgressPolicy::https_hosts(&["api.example.test"]),
+        UpstreamProxy::from_vars(Some(&format!("http://127.0.0.1:{proxy_port}")), None),
+    )
+    .unwrap();
+    let request = b"CONNECT api.example.test:443 HTTP/1.1\r\n\r\n";
+    let (_, head) = connect(&socket, request);
+    assert_eq!(status_line(&head), "HTTP/1.1 502 Bad Gateway");
+    assert!(
+        head.contains("X-Lade-Decision: proxy_refused\r\n"),
+        "{head}"
+    );
+    refusing.join().unwrap();
+    let (_, head) = connect(&socket, request);
+    assert!(
+        head.contains("X-Lade-Decision: proxy_unreachable\r\n"),
+        "{head}"
+    );
+    drop(gateway);
+
+    let socket = tmp.path().join("run/gw2.sock");
+    let _gateway = Gateway::start(
+        &socket,
+        EgressPolicy::https_hosts(&["api.example.test"]),
+        UpstreamProxy::from_vars(Some("http://proxy.invalid:3128"), None),
+    )
+    .unwrap();
+    let (_, head) = connect(&socket, request);
+    assert!(
+        head.contains("X-Lade-Decision: proxy_resolution_failed\r\n"),
+        "{head}"
+    );
+}
+
+#[test]
 fn unreachable_destination_is_bad_gateway() {
     let tmp = TempDir::new("gw-unreach");
     let port = TcpListener::bind("127.0.0.1:0")

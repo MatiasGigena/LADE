@@ -284,7 +284,10 @@ HTTP `CONNECT` proxy on the per-launch Unix socket; the worker's undici dispatch
   are chained with `CONNECT` through it (`Proxy-Authorization: Basic` from the URL's userinfo), after the
   allowlist check. `NO_PROXY` minimal semantics: `*`, exact host/IP, and domain suffixes (`example.com`,
   `.example.com`, `*.example.com`); CIDR entries are not interpreted. Through a proxy, names are not resolved
-  locally, so the private-address check applies only to IP literals (the proxy resolves).
+  locally, so the private-address check applies only to IP literals (the proxy resolves). A proxy failure is
+  `502` with its cause as the decision code: `proxy_resolution_failed`, `proxy_unreachable`,
+  `proxy_handshake_failed`, or `proxy_refused` (a non-2xx answer, whose status is logged as `proxy_status`; the
+  credentials never are). Evidence: `supervision_gateway.rs::upstream_proxy_failures_name_their_cause`.
 - At most 32 concurrent connections per gateway (`503`). Bytes are copied by two threads with 16 KiB buffers.
 - `Gateway::stop` (on worker exit, on `terminate`, on drop) removes the socket and shuts down every handshaking
   and open tunnel: revocation closes access that was already granted.
