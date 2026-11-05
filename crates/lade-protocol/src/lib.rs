@@ -6,7 +6,7 @@
 //! request digest that recognises retried operations. Every refusal below the request layer is a
 //! [`WireError`] with a stable wire code.
 
-mod base64;
+pub mod base64;
 mod chunks;
 pub mod client;
 mod framing;

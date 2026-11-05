@@ -1,3 +1,6 @@
+//! Standard (RFC 4648) padded base64, used by the wire path encoding and shared with the service
+//! for the stored path shape and the upstream proxy credentials.
+
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn encode(bytes: &[u8]) -> String {
