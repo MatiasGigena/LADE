@@ -193,10 +193,12 @@ pub(crate) const TICK: Duration = Duration::from_millis(100);
 /// Ticks between storage-usage checks.
 const STORAGE_CHECK_TICKS: u128 = STORAGE_CHECK_INTERVAL.as_millis() / TICK.as_millis();
 
-/// The service's single-threaded state. Each capability keeps its state in one field owned by
-/// its module; the comments name the module that changes each group.
+/// The service's single-threaded state. The comments say who changes each group: the core
+/// records are shared by every capability, while each remaining capability keeps its state in
+/// one field owned by its module.
 pub(crate) struct Service {
-    // Infrastructure (mod.rs).
+    // Infrastructure, set up by mod.rs and startup.rs; link.rs holds jobs while a request is
+    // dispatched, and the service.stop handler sets `stopping`.
     store: Store,
     paths: Paths,
     artifacts: Arc<ArtifactStore>,
@@ -212,27 +214,31 @@ pub(crate) struct Service {
     test_fixture_provider: bool,
     ticks: u64,
     stopping: bool,
-    // The client link and event stream (mod.rs).
+    // The client link and event stream (link.rs); recovery adds its notes for the next client.
     epoch: Id,
     sequence: u64,
     controller: Option<Controller>,
     recovery_notes: Vec<String>,
-    // Workspaces, Objectives and settings (handlers.rs, review.rs, execution.rs).
+    // Core records, read and written by every capability module and loaded by recovery.
+    // An Objective changes only after the commit that records it succeeds (`commit_obj`,
+    // `commit_obj_with`); session configuration is the one documented exception. `runtime`
+    // holds per-Objective state that is never stored: busy markers and worker control.
     workspaces: BTreeMap<WorkspaceId, WsState>,
     objectives: BTreeMap<ObjectiveId, ObjState>,
     runtime: HashMap<ObjectiveId, Runtime>,
     settings: Settings,
-    // Execution activity and accepted input (execution.rs).
+    // Activity sequencing and live items (execution/activity.rs) and accepted-input numbering
+    // (feedback.rs), both seeded by recovery.
     activity_seq: HashMap<ObjectiveId, u64>,
     input_seq: u64,
     live: execution::LiveActivity,
-    // One field per remaining capability, owned by the module of the same name.
-    catalog: models::CatalogCache,
-    extension_approvals: HashMap<(String, String), bool>,
-    agent_sessions: agent_session::AgentSessions,
-    terminals: terminal::Terminals,
-    integrations: review::Integrations,
-    storage: limits::StorageGuard,
+    // One field per remaining capability, changed by the module named beside it.
+    catalog: models::CatalogCache,                        // models.rs
+    extension_approvals: HashMap<(String, String), bool>, // resources.rs
+    agent_sessions: agent_session::AgentSessions,         // agent_session/
+    terminals: terminal::Terminals,                       // terminal.rs
+    integrations: review::Integrations, // review/integrate.rs; targets also by projection/
+    storage: limits::StorageGuard,      // limits.rs (free space), execution/writable.rs (usage)
 }
 
 fn recordable(rejection: &Rejection) -> bool {
