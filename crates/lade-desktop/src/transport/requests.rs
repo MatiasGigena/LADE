@@ -170,9 +170,6 @@ pub fn start_point(start: &StartPoint) -> Result<wire::Start, Invalid> {
         StartPoint::Target => Ok(wire::Start::Target),
         StartPoint::Commit(hex) => {
             let hex = hex.trim().to_ascii_lowercase();
-            if hex == "target" {
-                return Ok(wire::Start::Target);
-            }
             if !matches!(hex.len(), 40 | 64) {
                 return Err(Invalid(
                     "start commit must be 40 or 64 hex characters".into(),

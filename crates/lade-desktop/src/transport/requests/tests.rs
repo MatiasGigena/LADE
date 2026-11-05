@@ -65,9 +65,9 @@ pub(crate) fn test_id(n: u8) -> Id {
 #[test]
 fn start_point_parses_target_and_both_object_formats() {
     assert_eq!(start_point(&StartPoint::Target), Ok(wire::Start::Target));
-    assert_eq!(
-        start_point(&StartPoint::Commit(" target ".into())),
-        Ok(wire::Start::Target)
+    assert!(
+        start_point(&StartPoint::Commit("target".into())).is_err(),
+        "the target is StartPoint::Target, never a commit spelled \"target\""
     );
     let sha256 = "c".repeat(64);
     assert!(matches!(
