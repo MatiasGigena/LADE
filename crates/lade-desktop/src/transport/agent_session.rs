@@ -3,9 +3,9 @@ use lade_protocol::types as wt;
 
 use super::convert::model;
 use crate::presentation::state::agent_session::{
-    Catalog, ForkPosition, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
-    ResourceState, ResourceView, SessionTree, SessionView, ThinkingLevel, TreeNode, UiAnswerView,
-    UiDialog, UiPromptView,
+    Catalog, ForkPosition, Inventory, ModelInfo, ProviderInfo, ProviderStatus, ResourceEntry,
+    ResourceKind, ResourceState, SessionState, SessionTree, ThinkingLevel, TreeNode, UiAnswer,
+    UiDialog, UiPrompt,
 };
 use crate::presentation::state::model::ObjectiveId;
 
@@ -40,15 +40,15 @@ pub fn to_fork(position: ForkPosition) -> wt::ForkPosition {
     }
 }
 
-pub fn to_answer(answer: &UiAnswerView) -> wt::UiAnswer {
+pub fn to_answer(answer: &UiAnswer) -> wt::UiAnswer {
     match answer {
-        UiAnswerView::Confirm(confirmed) => wt::UiAnswer::Confirm {
+        UiAnswer::Confirm(confirmed) => wt::UiAnswer::Confirm {
             confirmed: *confirmed,
         },
-        UiAnswerView::Value(value) => wt::UiAnswer::Value {
+        UiAnswer::Value(value) => wt::UiAnswer::Value {
             value: value.clone(),
         },
-        UiAnswerView::Cancel => wt::UiAnswer::Cancel,
+        UiAnswer::Cancel => wt::UiAnswer::Cancel,
     }
 }
 
@@ -69,7 +69,7 @@ pub fn catalog(c: &wire::ModelCatalog) -> Catalog {
         providers: c
             .providers
             .iter()
-            .map(|p| ProviderView {
+            .map(|p| ProviderInfo {
                 id: p.provider.clone(),
                 name: p.name.clone(),
                 auth: p.auth.iter().map(|a| auth_label(*a).to_owned()).collect(),
@@ -87,10 +87,10 @@ pub fn catalog(c: &wire::ModelCatalog) -> Catalog {
     }
 }
 
-pub fn models(c: &wire::ModelCatalog) -> Vec<ModelView> {
+pub fn models(c: &wire::ModelCatalog) -> Vec<ModelInfo> {
     c.models
         .iter()
-        .map(|m| ModelView {
+        .map(|m| ModelInfo {
             provider: m.provider.clone(),
             id: m.id.clone(),
             name: m.name.clone(),
@@ -112,10 +112,10 @@ fn reason(reason: wt::SessionChangeReason) -> &'static str {
     }
 }
 
-pub fn session(s: &wire::SessionState) -> (ObjectiveId, SessionView) {
+pub fn session(s: &wire::SessionState) -> (ObjectiveId, SessionState) {
     (
         ObjectiveId::new(s.objective_id.as_str()),
-        SessionView {
+        SessionState {
             generation: s.generation.value(),
             reason: reason(s.reason).to_owned(),
             model: model(&s.model),
@@ -169,7 +169,7 @@ pub fn inventory(i: &wire::ResourceInventory) -> Inventory {
         entries: i
             .entries
             .iter()
-            .map(|e| ResourceView {
+            .map(|e| ResourceEntry {
                 kind: match e.kind {
                     wire::ResourceKind::Skill => ResourceKind::Skill,
                     wire::ResourceKind::Prompt => ResourceKind::Prompt,
@@ -198,19 +198,19 @@ pub fn dialog(r: &wire::UiRequest) -> UiDialog {
         ui_id: r.ui_id.as_str().to_owned(),
         generation: r.generation.value(),
         prompt: match &r.prompt {
-            wt::UiPrompt::Confirm { title, message } => UiPromptView::Confirm {
+            wt::UiPrompt::Confirm { title, message } => UiPrompt::Confirm {
                 title: title.clone(),
                 message: message.clone(),
             },
-            wt::UiPrompt::Select { title, options } => UiPromptView::Select {
+            wt::UiPrompt::Select { title, options } => UiPrompt::Select {
                 title: title.clone(),
                 options: options.clone(),
             },
-            wt::UiPrompt::Input { title, placeholder } => UiPromptView::Input {
+            wt::UiPrompt::Input { title, placeholder } => UiPrompt::Input {
                 title: title.clone(),
                 placeholder: placeholder.clone(),
             },
-            wt::UiPrompt::Editor { title, prefill } => UiPromptView::Editor {
+            wt::UiPrompt::Editor { title, prefill } => UiPrompt::Editor {
                 title: title.clone(),
                 prefill: prefill.clone(),
             },
@@ -234,16 +234,16 @@ mod tests {
     #[test]
     fn dialog_answers_map_to_their_wire_form() {
         assert_eq!(
-            to_answer(&UiAnswerView::Confirm(true)),
+            to_answer(&UiAnswer::Confirm(true)),
             wt::UiAnswer::Confirm { confirmed: true }
         );
         assert_eq!(
-            to_answer(&UiAnswerView::Value("main".into())),
+            to_answer(&UiAnswer::Value("main".into())),
             wt::UiAnswer::Value {
                 value: "main".into()
             }
         );
-        assert_eq!(to_answer(&UiAnswerView::Cancel), wt::UiAnswer::Cancel);
+        assert_eq!(to_answer(&UiAnswer::Cancel), wt::UiAnswer::Cancel);
     }
 
     #[test]

@@ -88,7 +88,7 @@ pub enum ViewerContent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Viewer {
+pub struct ViewerState {
     pub key: Option<ViewerKey>,
     pub content: ViewerContent,
     pub reveal: Option<Reveal>,

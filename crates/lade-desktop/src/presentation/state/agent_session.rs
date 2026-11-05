@@ -54,7 +54,7 @@ impl ProviderStatus {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProviderView {
+pub struct ProviderInfo {
     pub id: String,
     pub name: String,
     pub auth: Vec<String>,
@@ -64,7 +64,7 @@ pub struct ProviderView {
     pub models: u64,
 }
 
-impl ProviderView {
+impl ProviderInfo {
     pub fn picker_label(&self) -> String {
         if self.name.trim().is_empty() {
             self.id.clone()
@@ -114,7 +114,7 @@ impl ProviderView {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelView {
+pub struct ModelInfo {
     pub provider: String,
     pub id: String,
     pub name: String,
@@ -122,7 +122,7 @@ pub struct ModelView {
     pub thinking: Vec<ThinkingLevel>,
 }
 
-impl ModelView {
+impl ModelInfo {
     pub fn model_ref(&self) -> ModelRef {
         ModelRef::new(self.provider.clone(), self.id.clone())
     }
@@ -139,12 +139,12 @@ impl ModelView {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Catalog {
     pub sdk_version: String,
-    pub providers: Vec<ProviderView>,
+    pub providers: Vec<ProviderInfo>,
     pub error: Option<String>,
 }
 
 impl Catalog {
-    pub fn provider(&self, id: &str) -> Option<&ProviderView> {
+    pub fn provider(&self, id: &str) -> Option<&ProviderInfo> {
         self.providers.iter().find(|p| p.id == id)
     }
 }
@@ -157,7 +157,7 @@ pub struct ModelChoice {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionView {
+pub struct SessionState {
     pub generation: u64,
     pub reason: String,
     pub model: ModelRef,
@@ -267,7 +267,7 @@ impl ResourceState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResourceView {
+pub struct ResourceEntry {
     pub kind: ResourceKind,
     pub name: String,
     pub state: ResourceState,
@@ -278,7 +278,7 @@ pub struct ResourceView {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Inventory {
     pub profile_dir: String,
-    pub entries: Vec<ResourceView>,
+    pub entries: Vec<ResourceEntry>,
     pub restrictions: Vec<String>,
 }
 
@@ -296,14 +296,14 @@ impl Inventory {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum UiPromptView {
+pub enum UiPrompt {
     Confirm { title: String, message: String },
     Select { title: String, options: Vec<String> },
     Input { title: String, placeholder: String },
     Editor { title: String, prefill: String },
 }
 
-impl UiPromptView {
+impl UiPrompt {
     pub fn title(&self) -> &str {
         match self {
             Self::Confirm { title, .. }
@@ -319,11 +319,11 @@ pub struct UiDialog {
     pub objective_id: ObjectiveId,
     pub ui_id: String,
     pub generation: u64,
-    pub prompt: UiPromptView,
+    pub prompt: UiPrompt,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum UiAnswerView {
+pub enum UiAnswer {
     Confirm(bool),
     Value(String),
     Cancel,
@@ -349,7 +349,7 @@ pub enum Readiness {
         provider: String,
     },
     Ready {
-        model: ModelView,
+        model: ModelInfo,
         thinking: ThinkingLevel,
     },
 }
@@ -392,16 +392,16 @@ pub enum ModelPicker {
 pub struct PickerChoices {
     /// Why some providers may be missing from an otherwise usable catalogue.
     pub catalog_error: Option<String>,
-    pub providers: Vec<ProviderView>,
+    pub providers: Vec<ProviderInfo>,
     pub selected_provider: Option<usize>,
     /// The chosen provider's models, in dropdown order.
-    pub models: Vec<ModelView>,
+    pub models: Vec<ModelInfo>,
     pub model_row: ModelRow,
     pub choice: ModelChoice,
 }
 
 impl PickerChoices {
-    pub fn provider(&self) -> Option<&ProviderView> {
+    pub fn provider(&self) -> Option<&ProviderInfo> {
         self.selected_provider.and_then(|i| self.providers.get(i))
     }
 }
@@ -424,8 +424,8 @@ pub enum ModelRow {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct AgentSessionState {
     pub catalog: Option<Catalog>,
-    pub models: std::collections::HashMap<String, Vec<ModelView>>,
-    pub sessions: std::collections::HashMap<ObjectiveId, SessionView>,
+    pub models: std::collections::HashMap<String, Vec<ModelInfo>>,
+    pub sessions: std::collections::HashMap<ObjectiveId, SessionState>,
     pub trees: std::collections::HashMap<ObjectiveId, SessionTree>,
     pub inventory: Option<Inventory>,
     pub dialogs: Vec<UiDialog>,
@@ -438,11 +438,11 @@ pub enum AgentSessionUpdate {
     Catalog(Catalog),
     Models {
         provider: String,
-        models: Vec<ModelView>,
+        models: Vec<ModelInfo>,
     },
     Session {
         objective_id: ObjectiveId,
-        session: SessionView,
+        session: SessionState,
     },
     Tree {
         objective_id: ObjectiveId,
@@ -531,7 +531,7 @@ impl AgentSessionState {
         }
     }
 
-    pub fn chosen_models(&self) -> &[ModelView] {
+    pub fn chosen_models(&self) -> &[ModelInfo] {
         self.choice
             .provider
             .as_ref()
@@ -552,7 +552,7 @@ impl AgentSessionState {
             return Readiness::NoProviderChosen;
         };
         let view = catalog.provider(id);
-        let provider = view.map_or_else(|| id.clone(), ProviderView::picker_label);
+        let provider = view.map_or_else(|| id.clone(), ProviderInfo::picker_label);
         match view.map(|v| v.status) {
             Some(ProviderStatus::MissingCredentials) => {
                 return Readiness::NeedsCredentials { provider };
@@ -610,7 +610,7 @@ impl AgentSessionState {
         })
     }
 
-    pub fn chosen_model(&self) -> Option<&ModelView> {
+    pub fn chosen_model(&self) -> Option<&ModelInfo> {
         let models = self.chosen_models();
         self.choice
             .model
@@ -628,7 +628,7 @@ mod tests {
     fn older_generations_never_replace_newer_session_reports() {
         let mut state = AgentSessionState::default();
         let objective = ObjectiveId::new("o");
-        let session = |generation| SessionView {
+        let session = |generation| SessionState {
             generation,
             reason: "reload".into(),
             model: ModelRef::new("lade-fixture", "scripted"),
@@ -654,7 +654,7 @@ mod tests {
             objective_id: objective,
             ui_id: "u".into(),
             generation: 3,
-            prompt: UiPromptView::Confirm {
+            prompt: UiPrompt::Confirm {
                 title: "t".into(),
                 message: "m".into(),
             },
@@ -710,7 +710,7 @@ mod tests {
 
     #[test]
     fn labels_never_claim_more_than_the_service_said() {
-        let provider = ProviderView {
+        let provider = ProviderInfo {
             id: "openai-codex".into(),
             name: "OpenAI Codex".into(),
             auth: vec!["OAuth login".into()],
@@ -732,8 +732,8 @@ mod tests {
         );
     }
 
-    fn provider(id: &str, status: ProviderStatus) -> ProviderView {
-        ProviderView {
+    fn provider(id: &str, status: ProviderStatus) -> ProviderInfo {
+        ProviderInfo {
             id: id.into(),
             name: id.to_uppercase(),
             auth: Vec::new(),
@@ -744,8 +744,8 @@ mod tests {
         }
     }
 
-    fn model(id: &str, reasoning: bool, thinking: Vec<ThinkingLevel>) -> ModelView {
-        ModelView {
+    fn model(id: &str, reasoning: bool, thinking: Vec<ThinkingLevel>) -> ModelInfo {
+        ModelInfo {
             provider: "a".into(),
             id: id.into(),
             name: id.to_uppercase(),
@@ -754,7 +754,7 @@ mod tests {
         }
     }
 
-    fn with_catalog(providers: Vec<ProviderView>, error: Option<&str>) -> AgentSessionState {
+    fn with_catalog(providers: Vec<ProviderInfo>, error: Option<&str>) -> AgentSessionState {
         AgentSessionState {
             catalog: Some(Catalog {
                 sdk_version: "1".into(),
@@ -847,7 +847,7 @@ mod tests {
 
     #[test]
     fn credential_help_names_only_the_published_variables() {
-        let mut provider = ProviderView {
+        let mut provider = ProviderInfo {
             id: "anthropic".into(),
             name: "Anthropic".into(),
             auth: vec!["API key".into(), "subscription token".into()],

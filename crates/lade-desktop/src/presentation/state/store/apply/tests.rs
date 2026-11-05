@@ -188,14 +188,14 @@ fn worktree_change_flags_instead_of_replacing() {
 
 #[test]
 fn extension_dialogs_are_dropped_with_the_link_and_reannounced_after_it() {
-    use crate::presentation::state::agent_session::{UiDialog, UiPromptView};
+    use crate::presentation::state::agent_session::{UiDialog, UiPrompt};
     let mut state = PresentationState::new(ConnectionState::Connected);
     let dialog = |id: &str| {
         StoreUpdate::AgentSession(AgentSessionUpdate::DialogOpened(UiDialog {
             objective_id: ObjectiveId::new("o"),
             ui_id: id.to_owned(),
             generation: 1,
-            prompt: UiPromptView::Confirm {
+            prompt: UiPrompt::Confirm {
                 title: "t".into(),
                 message: "m".into(),
             },

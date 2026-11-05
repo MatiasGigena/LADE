@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswerView};
+use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswer};
 use crate::presentation::state::model::{
     ApprovalId, Basis, CandidateId, DeliveryMode, DraftId, GitId, Intent as ObjectiveIntent,
     ModelRef, ObjectiveId, Reference, RepoPath, SearchScope, SessionId, Side, WorkspaceId,
@@ -201,7 +201,7 @@ pub enum Intent {
         objective_id: ObjectiveId,
         ui_id: String,
         generation: u64,
-        answer: UiAnswerView,
+        answer: UiAnswer,
     },
     OpenTerminal {
         objective_id: ObjectiveId,

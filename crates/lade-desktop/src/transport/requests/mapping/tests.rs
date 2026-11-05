@@ -6,7 +6,7 @@ use lade_protocol::types::{Counter, GitAlgorithm, GitId};
 use lade_protocol::{Framing, encode};
 
 use crate::presentation::controller::intents::DraftRevisionRef;
-use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswerView};
+use crate::presentation::state::agent_session::{ForkPosition, ThinkingLevel, UiAnswer};
 use crate::presentation::state::model::{
     ApprovalId, CandidateId, DeliveryMode, ModelRef, SessionId, WorkspaceId,
 };
@@ -324,7 +324,7 @@ fn every_intent() -> Vec<(Intent, Option<RequestName>)> {
                 objective_id: oid(),
                 ui_id: D.into(),
                 generation: 2,
-                answer: UiAnswerView::Confirm(false),
+                answer: UiAnswer::Confirm(false),
             },
             Some(N::UiRespond),
         ),

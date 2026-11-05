@@ -11,9 +11,9 @@ use super::widgets::{
 };
 use crate::presentation::controller::{Controller, SessionUse};
 use crate::presentation::state::agent_session::{
-    ForkPosition, ModelChoice, ModelPicker, ModelRow, ModelView, PickerChoices, ProviderStatus,
-    ProviderView, Readiness, ResourceKind, ResourceState, ThinkingLevel, UiAnswerView, UiDialog,
-    UiPromptView,
+    ForkPosition, ModelChoice, ModelInfo, ModelPicker, ModelRow, PickerChoices, ProviderInfo,
+    ProviderStatus, Readiness, ResourceKind, ResourceState, ThinkingLevel, UiAnswer, UiDialog,
+    UiPrompt,
 };
 use crate::presentation::state::model::{ActionAvailability, ObjectiveDetail};
 
@@ -87,7 +87,7 @@ fn provider_field(controller: &Rc<Controller>, picker: &PickerChoices) -> gtk::B
     let names: Vec<String> = picker
         .providers
         .iter()
-        .map(ProviderView::picker_label)
+        .map(ProviderInfo::picker_label)
         .collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let providers = widgets::dropdown_or(&refs, "No model providers are available");
@@ -146,7 +146,7 @@ fn model_dropdown(
     picker: &PickerChoices,
     selected: Option<usize>,
 ) -> gtk::DropDown {
-    let names: Vec<String> = picker.models.iter().map(ModelView::picker_label).collect();
+    let names: Vec<String> = picker.models.iter().map(ModelInfo::picker_label).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let models = widgets::dropdown_or(&refs, "No models available");
     set_accessible_label(&models, "Model for the agent");
@@ -251,17 +251,17 @@ pub fn session_section(
         )
     };
     match &session {
-        Some(view) => {
+        Some(reported) => {
             s.append(&label(
                 &format!(
                     "Model {} · thinking {} · this generation: {}",
-                    view.model.label(),
-                    view.thinking.label(),
-                    view.reason
+                    reported.model.label(),
+                    reported.thinking.label(),
+                    reported.reason
                 ),
                 &[],
             ));
-            if let Some(pi) = &view.pi_session_id {
+            if let Some(pi) = &reported.pi_session_id {
                 let id =
                     widgets::line_label(pi, &["mono", "meta"], gtk::pango::EllipsizeMode::Middle);
                 id.set_tooltip_text(Some(pi));
@@ -557,18 +557,18 @@ fn present(
         let ui_id = dialog.ui_id.clone();
         let answered = answered.clone();
         let window = shell.window.clone();
-        Rc::new(move |answer: UiAnswerView| {
+        Rc::new(move |answer: UiAnswer| {
             answered.set(true);
             let _ = controller.answer_dialog(&ui_id, answer);
             window.close();
         })
     };
-    let value: Rc<dyn Fn() -> UiAnswerView> = match &dialog.prompt {
-        UiPromptView::Confirm { message, .. } => {
+    let value: Rc<dyn Fn() -> UiAnswer> = match &dialog.prompt {
+        UiPrompt::Confirm { message, .. } => {
             shell.body.append(&label(message, &[]));
-            Rc::new(|| UiAnswerView::Confirm(true))
+            Rc::new(|| UiAnswer::Confirm(true))
         }
-        UiPromptView::Select { options, .. } => {
+        UiPrompt::Select { options, .. } => {
             let refs: Vec<&str> = options.iter().map(String::as_str).collect();
             let choice = widgets::dropdown_or(&refs, "The extension offered no choices");
             set_accessible_label(&choice, "Choice");
@@ -578,23 +578,23 @@ fn present(
                 options
                     .get(choice.selected() as usize)
                     .cloned()
-                    .map_or(UiAnswerView::Cancel, UiAnswerView::Value)
+                    .map_or(UiAnswer::Cancel, UiAnswer::Value)
             })
         }
-        UiPromptView::Input { placeholder, .. } => {
+        UiPrompt::Input { placeholder, .. } => {
             let entry = gtk::Entry::builder().placeholder_text(placeholder).build();
             set_accessible_label(&entry, "Answer");
             shell.body.append(&entry);
-            Rc::new(move || UiAnswerView::Value(entry.text().to_string()))
+            Rc::new(move || UiAnswer::Value(entry.text().to_string()))
         }
-        UiPromptView::Editor { prefill, .. } => {
+        UiPrompt::Editor { prefill, .. } => {
             let view = gtk::TextView::new();
             view.buffer().set_text(prefill);
             set_accessible_label(&view, "Answer");
             shell.body.append(&widgets::bounded_text(&view, 120, 320));
             Rc::new(move || {
                 let buffer = view.buffer();
-                UiAnswerView::Value(
+                UiAnswer::Value(
                     buffer
                         .text(&buffer.start_iter(), &buffer.end_iter(), false)
                         .to_string(),
@@ -602,14 +602,14 @@ fn present(
             })
         }
     };
-    let confirm = matches!(dialog.prompt, UiPromptView::Confirm { .. });
+    let confirm = matches!(dialog.prompt, UiPrompt::Confirm { .. });
     let deny = shell.add_button(if confirm { "Deny" } else { "Cancel" }, &[]);
     let s = send.clone();
     deny.connect_clicked(move |_| {
         s(if confirm {
-            UiAnswerView::Confirm(false)
+            UiAnswer::Confirm(false)
         } else {
-            UiAnswerView::Cancel
+            UiAnswer::Cancel
         });
     });
     let ok = shell.add_button(if confirm { "Allow" } else { "Answer" }, &["primary"]);
@@ -618,7 +618,7 @@ fn present(
     let (controller, ui_id) = (controller.clone(), dialog.ui_id.clone());
     shell.window.connect_close_request(move |_| {
         if !answered.replace(true) {
-            let _ = controller.answer_dialog(&ui_id, UiAnswerView::Cancel);
+            let _ = controller.answer_dialog(&ui_id, UiAnswer::Cancel);
         }
         gtk::glib::Propagation::Proceed
     });

@@ -4,7 +4,7 @@ use super::Controller;
 use super::intents::Intent;
 use crate::presentation::state::agent_session::{
     AgentSessionUpdate, ForkPosition, ModelChoice, ProviderStatus, Readiness, ThinkingLevel,
-    UiAnswerView,
+    UiAnswer,
 };
 use crate::presentation::state::model::{
     ActionAvailability, ExecutionState, ModelRef, ObjectiveId,
@@ -239,7 +239,7 @@ impl Controller {
         self.emit(Intent::ImportProfile { source });
     }
 
-    pub fn answer_dialog(&self, ui_id: &str, answer: UiAnswerView) -> Result<(), String> {
+    pub fn answer_dialog(&self, ui_id: &str, answer: UiAnswer) -> Result<(), String> {
         let dialog = self
             .store
             .state()
@@ -294,8 +294,7 @@ mod tests {
     use super::*;
     use crate::presentation::controller::tests::main_selected;
     use crate::presentation::state::agent_session::{
-        AgentSessionUpdate, Catalog, ModelView, ProviderStatus, ProviderView, UiDialog,
-        UiPromptView,
+        AgentSessionUpdate, Catalog, ModelInfo, ProviderInfo, ProviderStatus, UiDialog, UiPrompt,
     };
     use crate::presentation::state::model::Load;
     use crate::presentation::test_fixture;
@@ -306,7 +305,7 @@ mod tests {
         controller.store.apply_all(vec![StoreUpdate::AgentSession(
             AgentSessionUpdate::Catalog(Catalog {
                 sdk_version: "1.5.0".into(),
-                providers: vec![ProviderView {
+                providers: vec![ProviderInfo {
                     id: "local-llm".into(),
                     name: "Fixture".into(),
                     auth: vec!["no credentials needed".into()],
@@ -337,7 +336,7 @@ mod tests {
         controller.store.apply_all(vec![StoreUpdate::AgentSession(
             AgentSessionUpdate::Models {
                 provider: "local-llm".into(),
-                models: vec![ModelView {
+                models: vec![ModelInfo {
                     provider: "local-llm".into(),
                     id: "scripted".into(),
                     name: "Scripted".into(),
@@ -351,7 +350,7 @@ mod tests {
         assert_eq!(thinking, ThinkingLevel::Off);
     }
 
-    fn catalog(providers: Vec<ProviderView>, error: Option<&str>) -> StoreUpdate {
+    fn catalog(providers: Vec<ProviderInfo>, error: Option<&str>) -> StoreUpdate {
         StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
             sdk_version: "1.5.0".into(),
             providers,
@@ -383,7 +382,7 @@ mod tests {
         );
         assert!(sink.intents.borrow().is_empty(), "nothing to load");
         controller.store.apply(catalog(
-            vec![ProviderView {
+            vec![ProviderInfo {
                 id: "anthropic".into(),
                 name: "Anthropic".into(),
                 auth: vec!["API key".into()],
@@ -420,7 +419,7 @@ mod tests {
             controller.chosen_model().unwrap_err(),
             "Add credentials for Anthropic to start the agent."
         );
-        let anthropic = |status| ProviderView {
+        let anthropic = |status| ProviderInfo {
             id: "anthropic".into(),
             name: "Anthropic".into(),
             auth: vec!["API key".into()],
@@ -454,7 +453,7 @@ mod tests {
         let (controller, sink, _) = main_selected();
         assert!(
             controller
-                .answer_dialog("missing", UiAnswerView::Cancel)
+                .answer_dialog("missing", UiAnswer::Cancel)
                 .is_err()
         );
         controller.store.apply_all(vec![StoreUpdate::AgentSession(
@@ -462,7 +461,7 @@ mod tests {
                 objective_id: ObjectiveId::new(test_fixture::MAIN_OBJECTIVE),
                 ui_id: "00000000-0000-4000-8000-000000000042".into(),
                 generation: 3,
-                prompt: UiPromptView::Confirm {
+                prompt: UiPrompt::Confirm {
                     title: "Proceed?".into(),
                     message: "m".into(),
                 },
@@ -471,14 +470,14 @@ mod tests {
         controller
             .answer_dialog(
                 "00000000-0000-4000-8000-000000000042",
-                UiAnswerView::Confirm(true),
+                UiAnswer::Confirm(true),
             )
             .unwrap();
         assert!(matches!(
             sink.intents.borrow().as_slice(),
             [Intent::RespondDialog {
                 generation: 3,
-                answer: UiAnswerView::Confirm(true),
+                answer: UiAnswer::Confirm(true),
                 ..
             }]
         ));
@@ -507,7 +506,7 @@ mod tests {
         let (controller, sink, _) = main_selected();
         controller.store.apply_all(vec![
             catalog(
-                vec![ProviderView {
+                vec![ProviderInfo {
                     id: "local-llm".into(),
                     name: "Fixture".into(),
                     auth: vec!["no credentials needed".into()],
@@ -520,7 +519,7 @@ mod tests {
             ),
             StoreUpdate::AgentSession(AgentSessionUpdate::Models {
                 provider: "local-llm".into(),
-                models: vec![ModelView {
+                models: vec![ModelInfo {
                     provider: "local-llm".into(),
                     id: "scripted".into(),
                     name: "Scripted".into(),

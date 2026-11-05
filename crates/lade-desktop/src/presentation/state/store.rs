@@ -19,8 +19,8 @@ mod update;
 pub use activity::{ActivityChange, ActivityLog};
 use apply::refusal_changes;
 pub use ui::{
-    InspectorTab, MainView, ObjectiveUi, Reveal, UiState, Viewer, ViewerContent, ViewerKey,
-    ViewerMode,
+    InspectorTab, MainView, ObjectiveUi, Reveal, UiState, ViewerContent, ViewerKey, ViewerMode,
+    ViewerState,
 };
 pub use update::{StoreUpdate, coalesce};
 
@@ -93,7 +93,7 @@ pub struct PresentationState {
     pub working_updated: HashSet<ObjectiveId>,
     pub drafts: HashMap<ObjectiveId, Vec<DraftEditor>>,
     pub inputs: HashMap<ObjectiveId, Vec<InputSummary>>,
-    pub viewer: Viewer,
+    pub viewer: ViewerState,
     pub search: Load<SearchResults>,
     pub notices: Vec<ServiceNotice>,
     pub notices_received: usize,
@@ -125,7 +125,7 @@ impl PresentationState {
             working_updated: HashSet::new(),
             drafts: HashMap::new(),
             inputs: HashMap::new(),
-            viewer: Viewer {
+            viewer: ViewerState {
                 key: None,
                 content: ViewerContent::Empty,
                 reveal: None,

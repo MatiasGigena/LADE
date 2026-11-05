@@ -588,11 +588,11 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
 
 fn agent_session_fixture() -> Vec<StoreUpdate> {
     use super::state::agent_session::{
-        AgentSessionUpdate, Catalog, Inventory, ModelView, ProviderStatus, ProviderView,
-        ResourceKind, ResourceState, ResourceView, SessionView, ThinkingLevel,
+        AgentSessionUpdate, Catalog, Inventory, ModelInfo, ProviderInfo, ProviderStatus,
+        ResourceEntry, ResourceKind, ResourceState, SessionState, ThinkingLevel,
     };
     let provider =
-        |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderView {
+        |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderInfo {
             id: id.into(),
             name: name.into(),
             auth: auth.iter().map(|a| (*a).to_owned()).collect(),
@@ -631,7 +631,7 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
         })),
         StoreUpdate::AgentSession(AgentSessionUpdate::Models {
             provider: "test-provider".into(),
-            models: vec![ModelView {
+            models: vec![ModelInfo {
                 provider: "test-provider".into(),
                 id: "test-model".into(),
                 name: "Test model".into(),
@@ -641,7 +641,7 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
         }),
         StoreUpdate::AgentSession(AgentSessionUpdate::Session {
             objective_id: id(MAIN_OBJECTIVE),
-            session: SessionView {
+            session: SessionState {
                 generation: 2,
                 reason: "reloaded".into(),
                 model: model(),
@@ -654,14 +654,14 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
         StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(Inventory {
             profile_dir: "~/.local/state/lade/profile".into(),
             entries: vec![
-                ResourceView {
+                ResourceEntry {
                     kind: ResourceKind::Context,
                     name: "AGENTS.md".into(),
                     state: ResourceState::Active,
                     sha256: None,
                     reason: None,
                 },
-                ResourceView {
+                ResourceEntry {
                     kind: ResourceKind::Extension,
                     name: "ask.js".into(),
                     state: ResourceState::PendingApproval,
