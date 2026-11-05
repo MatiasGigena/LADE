@@ -318,13 +318,10 @@ fn parse_args(args: &[OsString], allowed: &[&str], positional: bool) -> Option<A
             "--max-terminals" => parsed.limits.max_terminals = count()?,
             "--storage-warn-mib" => parsed.limits.storage_warn_bytes = mib()?,
             "--storage-reserve-mib" => parsed.limits.storage_reserve_bytes = mib()?,
-            "--state-dir" if parsed.state.is_none() => parsed.state = Some(PathBuf::from(value)),
-            "--runtime-dir" if parsed.runtime.is_none() => {
-                parsed.runtime = Some(PathBuf::from(value));
-            }
-            "--schema" if parsed.schema.is_none() => {
-                parsed.schema = Some(value.to_str()?.parse().ok().filter(|v| *v >= 0)?);
-            }
+            "--state-dir" => parsed.state = Some(PathBuf::from(value)),
+            "--runtime-dir" => parsed.runtime = Some(PathBuf::from(value)),
+            "--schema" => parsed.schema = Some(value.to_str()?.parse().ok().filter(|v| *v >= 0)?),
+            // `allowed` admits only the flags above, each at most once (`seen`).
             _ => return None,
         }
     }
