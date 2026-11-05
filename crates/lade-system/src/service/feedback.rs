@@ -7,9 +7,9 @@ use lade_core::Revision;
 use lade_core::domain::feedback::{
     Acceptance, BatchEntry, DraftState, SaveDraft, accept_feedback, accept_message, save_draft,
 };
-use lade_core::domain::ids::{DraftId, InputId, OperationId, SessionId};
+use lade_core::domain::ids::{DraftId, InputId, ObjectiveId, OperationId, SessionId};
 use lade_core::domain::inspection::{
-    ArtifactDigest as CoreDigest, CurrentContent, InspectedVersion,
+    ArtifactDigest as CoreDigest, CurrentContent, InspectedVersion, Reference,
 };
 use lade_protocol::client::{
     ClientBody, ClientEnvelope, Draft as WireDraft, DraftCursor, DraftDeleteCommand, DraftList,
@@ -200,15 +200,15 @@ impl Service {
         Ok(())
     }
 
-    pub(super) fn draft_save(
-        &mut self,
-        ctx: &mut ReqCtx,
-        cmd: &DraftSaveCommand,
-    ) -> Result<ReplyData, Rejection> {
-        let oid = self.objective_id(&cmd.objective_id)?;
-        let draft_id = DraftId::new(parse_uuid(&cmd.draft_id)?);
-        let reference = core_reference(&cmd.reference)?;
-        let st = self.obj(oid)?;
+    /// Checks that `reference` still points at something the client can comment on: its
+    /// capture or candidate belongs to the Objective, its file version is stored, and the
+    /// selected bytes still match.
+    fn check_reference_current(
+        &self,
+        oid: ObjectiveId,
+        st: &ObjState,
+        reference: &Reference,
+    ) -> Result<(), Rejection> {
         match reference.version() {
             InspectedVersion::Working { capture_id } => {
                 let row = sql(storage::load_capture(self.store.conn(), capture_id))?;
@@ -247,6 +247,19 @@ impl Service {
                 "The selected text no longer matches the file. Select it again.",
             ));
         }
+        Ok(())
+    }
+
+    pub(super) fn draft_save(
+        &mut self,
+        ctx: &mut ReqCtx,
+        cmd: &DraftSaveCommand,
+    ) -> Result<ReplyData, Rejection> {
+        let oid = self.objective_id(&cmd.objective_id)?;
+        let draft_id = DraftId::new(parse_uuid(&cmd.draft_id)?);
+        let reference = core_reference(&cmd.reference)?;
+        let st = self.obj(oid)?;
+        self.check_reference_current(oid, st, &reference)?;
         let existing = st.draft(draft_id).cloned();
         if existing.is_none()
             && self
