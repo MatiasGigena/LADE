@@ -12,8 +12,8 @@ use super::widgets::{
     set_accessible_label, space, vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::state::model::{FileEncoding, Load, Side};
-use crate::presentation::state::store::{Change, ViewerContent, ViewerMode};
+use crate::presentation::state::model::{FileContent, FileDiff, FileEncoding, Load, Side};
+use crate::presentation::state::store::{Change, ViewerContent, ViewerKey, ViewerMode};
 use crate::presentation::text::format;
 use crate::presentation::text::map::{self, TextPos, ViewLine, ViewLineKind};
 use crate::presentation::text::syntax::{self, Highlight};
@@ -407,21 +407,8 @@ impl Viewer {
         }
         self.updating.set(false);
         let Some(key) = key.filter(|k| Some(&k.objective_id) == state.ui.selected.as_ref()) else {
-            self.path_label.set_text("");
-            widgets::clear(&self.counts);
-            self.root.set_sensitive(true);
             drop(state);
-            self.toolbar.set_visible(false);
-            self.selection_label.set_visible(false);
-            widgets::clear(&self.message);
-            self.message.set_valign(gtk::Align::Fill);
-            self.message.append(&widgets::empty_state(
-                "Select a file to inspect",
-                "Choose a file from the Change Set to see its diff or full content.",
-                None,
-                None,
-            ));
-            self.stack.set_visible_child_name("message");
+            self.render_no_file();
             return;
         };
         self.toolbar.set_visible(true);
@@ -447,133 +434,155 @@ impl Viewer {
             ViewerContent::Empty | ViewerContent::Loading => {
                 self.show_message("Loading…", &format!("{} · {basis}", key.path.display));
             }
-            ViewerContent::Failed(message) => {
-                widgets::clear(&self.message);
-                self.message.set_valign(gtk::Align::Start);
-                self.message
-                    .append(&inline_message(MessageKind::Error, &message, None));
-                self.stack.set_visible_child_name("message");
-                let retry = widgets::button("Retry", &[]);
-                let controller = self.controller.clone();
-                retry.connect_clicked(move |_| controller.refresh_changes());
-                self.message.append(&retry);
-            }
-            ViewerContent::Diff(diff) => {
-                if diff.binary {
-                    self.show_message(
-                        "Binary file — not shown as text",
-                        "LADE does not render binary content. Its retained identity is listed in Evidence; open it outside LADE if you need to inspect it.",
-                    );
-                } else if diff.hunks.is_empty() {
-                    self.show_message(
-                        "No textual changes",
-                        "Only the mode, type or name changed. Switch to Full file to read the content.",
-                    );
-                } else {
-                    self.set_lines(
-                        map::diff_lines(&diff),
-                        ViewerMode::Diff,
-                        Side::New,
-                        &key.path.display,
-                    );
-                    self.show_highlight_note();
-                    if diff.truncated {
-                        let note = inline_message(
-                            MessageKind::Warning,
-                            "The service truncated this diff. Open Full file to page through every byte.",
-                            None,
-                        );
-                        note.set_hexpand(true);
-                        self.footer.append(&note);
-                        self.footer.set_visible(true);
-                    }
-                }
-            }
-            ViewerContent::File(content) => {
-                if content.encoding == FileEncoding::Binary {
-                    self.show_message(
-                        &format!(
-                            "Binary file — {} bytes, not shown as text",
-                            content.total_bytes
-                        ),
-                        &content.version_label,
-                    );
-                } else {
-                    let value = self
-                        .stack
-                        .child_by_name("text")
-                        .and_downcast::<gtk::ScrolledWindow>()
-                        .map(|s| s.vadjustment().value());
-                    self.set_lines(
-                        map::file_lines(&content),
-                        ViewerMode::FullFile,
-                        content.side,
-                        &key.path.display,
-                    );
-                    let shown = label(
-                        &format!(
-                            "{} · {} of {} bytes shown{}",
-                            content.version_label,
-                            content.loaded_bytes,
-                            content.total_bytes,
-                            if content.eof { " — complete" } else { "" }
-                        ),
-                        &["meta"],
-                    );
-                    shown.set_hexpand(true);
-                    self.footer.append(&shown);
-                    if let Some(note) = self.highlight.get().note() {
-                        self.footer.append(&label(&note, &["meta"]));
-                    }
-                    if content.chunked && !content.eof {
-                        self.footer.append(&label(
-                            &format!(
-                                "Large file ({}) — shown in bounded chunks",
-                                crate::presentation::text::format::byte_size(content.total_bytes)
-                            ),
-                            &["meta"],
-                        ));
-                    }
-                    if !content.eof {
-                        let more = widgets::button("Load more", &[]);
-                        widgets::set_focus_key(&more, "viewer:load-more");
-                        let controller = self.controller.clone();
-                        more.connect_clicked(move |_| controller.load_more());
-                        self.footer.append(&more);
-                    }
-                    self.footer.set_visible(true);
-                    if let (Some(value), Some(scroll)) = (
-                        value,
-                        self.stack
-                            .child_by_name("text")
-                            .and_downcast::<gtk::ScrolledWindow>(),
-                    ) {
-                        glib::idle_add_local_once(move || scroll.vadjustment().set_value(value));
-                    }
-                    if let Some((start, end)) =
-                        self.controller.take_reveal(&key, content.loaded_bytes)
-                    {
-                        let (view, buffer, lines) =
-                            (self.view.clone(), self.buffer.clone(), self.lines.clone());
-                        let side = content.side;
-                        glib::idle_add_local_once(move || {
-                            let lines = lines.borrow();
-                            let iter = |byte| {
-                                let pos = map::position_at(&lines, side, byte)?;
-                                buffer.iter_at_line_offset(
-                                    i32::try_from(pos.line).ok()?,
-                                    i32::try_from(pos.char_offset).ok()?,
-                                )
-                            };
-                            if let (Some(from), Some(to)) = (iter(start), iter(end)) {
-                                buffer.select_range(&from, &to);
-                                view.scroll_to_mark(&buffer.get_insert(), 0.1, true, 0.0, 0.3);
-                            }
-                        });
-                    }
-                }
-            }
+            ViewerContent::Failed(message) => self.render_failed(&message),
+            ViewerContent::Diff(diff) => self.render_diff(&key, &diff),
+            ViewerContent::File(content) => self.render_file(&key, &content),
         }
+    }
+
+    fn render_no_file(&self) {
+        self.path_label.set_text("");
+        widgets::clear(&self.counts);
+        self.root.set_sensitive(true);
+        self.toolbar.set_visible(false);
+        self.selection_label.set_visible(false);
+        widgets::clear(&self.message);
+        self.message.set_valign(gtk::Align::Fill);
+        self.message.append(&widgets::empty_state(
+            "Select a file to inspect",
+            "Choose a file from the Change Set to see its diff or full content.",
+            None,
+            None,
+        ));
+        self.stack.set_visible_child_name("message");
+    }
+
+    fn render_failed(&self, message: &str) {
+        widgets::clear(&self.message);
+        self.message.set_valign(gtk::Align::Start);
+        self.message
+            .append(&inline_message(MessageKind::Error, message, None));
+        self.stack.set_visible_child_name("message");
+        let retry = widgets::button("Retry", &[]);
+        let controller = self.controller.clone();
+        retry.connect_clicked(move |_| controller.refresh_changes());
+        self.message.append(&retry);
+    }
+
+    fn render_diff(&self, key: &ViewerKey, diff: &FileDiff) {
+        if diff.binary {
+            self.show_message(
+                "Binary file — not shown as text",
+                "LADE does not render binary content. Its retained identity is listed in Evidence; open it outside LADE if you need to inspect it.",
+            );
+            return;
+        }
+        if diff.hunks.is_empty() {
+            self.show_message(
+                "No textual changes",
+                "Only the mode, type or name changed. Switch to Full file to read the content.",
+            );
+            return;
+        }
+        self.set_lines(
+            map::diff_lines(diff),
+            ViewerMode::Diff,
+            Side::New,
+            &key.path.display,
+        );
+        self.show_highlight_note();
+        if diff.truncated {
+            let note = inline_message(
+                MessageKind::Warning,
+                "The service truncated this diff. Open Full file to page through every byte.",
+                None,
+            );
+            note.set_hexpand(true);
+            self.footer.append(&note);
+            self.footer.set_visible(true);
+        }
+    }
+
+    fn render_file(&self, key: &ViewerKey, content: &FileContent) {
+        if content.encoding == FileEncoding::Binary {
+            self.show_message(
+                &format!(
+                    "Binary file — {} bytes, not shown as text",
+                    content.total_bytes
+                ),
+                &content.version_label,
+            );
+            return;
+        }
+        let scroll = self
+            .stack
+            .child_by_name("text")
+            .and_downcast::<gtk::ScrolledWindow>();
+        let position = scroll.as_ref().map(|s| s.vadjustment().value());
+        self.set_lines(
+            map::file_lines(content),
+            ViewerMode::FullFile,
+            content.side,
+            &key.path.display,
+        );
+        let shown = label(
+            &format!(
+                "{} · {} of {} bytes shown{}",
+                content.version_label,
+                content.loaded_bytes,
+                content.total_bytes,
+                if content.eof { " — complete" } else { "" }
+            ),
+            &["meta"],
+        );
+        shown.set_hexpand(true);
+        self.footer.append(&shown);
+        self.show_highlight_note();
+        if content.chunked && !content.eof {
+            self.footer.append(&label(
+                &format!(
+                    "Large file ({}) — shown in bounded chunks",
+                    format::byte_size(content.total_bytes)
+                ),
+                &["meta"],
+            ));
+        }
+        if !content.eof {
+            let more = widgets::button("Load more", &[]);
+            widgets::set_focus_key(&more, "viewer:load-more");
+            let controller = self.controller.clone();
+            more.connect_clicked(move |_| controller.load_more());
+            self.footer.append(&more);
+        }
+        self.footer.set_visible(true);
+        if let (Some(position), Some(scroll)) = (position, scroll) {
+            glib::idle_add_local_once(move || scroll.vadjustment().set_value(position));
+        }
+        self.schedule_reveal(key, content);
+    }
+
+    /// Selects and scrolls to the byte range the controller asked to reveal in this file, once
+    /// the new lines are laid out.
+    fn schedule_reveal(&self, key: &ViewerKey, content: &FileContent) {
+        let Some((start, end)) = self.controller.take_reveal(key, content.loaded_bytes) else {
+            return;
+        };
+        let (view, buffer, lines) = (self.view.clone(), self.buffer.clone(), self.lines.clone());
+        let side = content.side;
+        glib::idle_add_local_once(move || {
+            let lines = lines.borrow();
+            let iter = |byte| {
+                let pos = map::position_at(&lines, side, byte)?;
+                buffer.iter_at_line_offset(
+                    i32::try_from(pos.line).ok()?,
+                    i32::try_from(pos.char_offset).ok()?,
+                )
+            };
+            if let (Some(from), Some(to)) = (iter(start), iter(end)) {
+                buffer.select_range(&from, &to);
+                view.scroll_to_mark(&buffer.get_insert(), 0.1, true, 0.0, 0.3);
+            }
+        });
     }
 
     fn show_highlight_note(&self) {
