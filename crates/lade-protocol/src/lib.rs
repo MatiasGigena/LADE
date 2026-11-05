@@ -19,7 +19,7 @@ pub mod worker;
 pub use chunks::Reassembler;
 pub use client::{ClientBody, ClientEnvelope};
 pub use framing::{Decoder, Deframer, Framing, encode};
-pub use io::{FrameReader, FrameWriter, TransportError};
+pub use io::{FrameIoError, FrameReader, FrameWriter};
 pub use json::{bounded_json, json_len};
 pub use schema::Contract;
 pub use worker::{WorkerBody, WorkerEnvelope};

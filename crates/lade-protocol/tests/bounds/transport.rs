@@ -1,6 +1,6 @@
 use super::typed_id;
 use lade_protocol::{
-    FrameReader, FrameWriter, Framing, MAX_FRAME, Message, TransportError, WireError, WorkerBody,
+    FrameIoError, FrameReader, FrameWriter, Framing, MAX_FRAME, Message, WireError, WorkerBody,
     WorkerEnvelope, encode, types::DeliveryMode,
 };
 
@@ -48,11 +48,11 @@ fn blocking_reader_and_writer_frame_one_message_at_a_time() {
         truncated.read_frame().unwrap().unwrap();
         assert!(matches!(
             truncated.read_frame(),
-            Err(TransportError::Wire(WireError::TruncatedFrame))
+            Err(FrameIoError::Wire(WireError::TruncatedFrame))
         ));
         assert!(matches!(
             truncated.read_frame(),
-            Err(TransportError::Wire(WireError::Closed))
+            Err(FrameIoError::Wire(WireError::Closed))
         ));
     }
 }
@@ -63,11 +63,11 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     let mut reader = FrameReader::new(&bytes[..], Framing::Worker);
     assert!(matches!(
         reader.read::<WorkerEnvelope>(),
-        Err(TransportError::Wire(WireError::VersionMismatch))
+        Err(FrameIoError::Wire(WireError::VersionMismatch))
     ));
     assert!(matches!(
         reader.read::<WorkerEnvelope>(),
-        Err(TransportError::Wire(WireError::Closed))
+        Err(FrameIoError::Wire(WireError::Closed))
     ));
 
     let mut writer = FrameWriter::new(Vec::new(), Framing::Worker);
@@ -78,7 +78,7 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     });
     assert!(matches!(
         writer.write(&invalid),
-        Err(TransportError::Wire(WireError::InvalidSchema))
+        Err(FrameIoError::Wire(WireError::InvalidSchema))
     ));
     writer
         .write(&WorkerEnvelope::new(WorkerBody::Shutdown))
@@ -93,7 +93,7 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
     stale.bundle = "0.1.0-imp001".to_owned();
     assert!(matches!(
         writer.write(&stale),
-        Err(TransportError::Wire(WireError::VersionMismatch))
+        Err(FrameIoError::Wire(WireError::VersionMismatch))
     ));
 }
 #[test]
@@ -102,6 +102,6 @@ fn oversized_declared_client_length_fails_before_allocation() {
     let mut reader = FrameReader::new(&header[..], Framing::Client);
     assert!(matches!(
         reader.read_frame(),
-        Err(TransportError::Wire(WireError::FrameSize))
+        Err(FrameIoError::Wire(WireError::FrameSize))
     ));
 }

@@ -18,7 +18,7 @@ use lade_protocol::client::{
     ClientBody, ClientEnvelope, ErrorCode, Event, NoticeCode, Rejection, SafeAction,
 };
 use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Capability, Id};
-use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError, WireError};
+use lade_protocol::{FrameIoError, FrameReader, FrameWriter, Framing, WireError};
 
 use super::core::{Core, Step};
 use crate::presentation::controller::intents::Intent;
@@ -189,7 +189,7 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
             body: ClientBody::Hello,
             ..
         })) => {}
-        Err(TransportError::Wire(WireError::VersionMismatch)) => {
+        Err(FrameIoError::Wire(WireError::VersionMismatch)) => {
             return Err(ConnectError::Protocol(
                 "the service speaks a different LADE version".into(),
             ));
@@ -205,8 +205,8 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
         .map_err(|_| ConnectError::Refused)?;
     let welcome = match reader.read::<ClientEnvelope>() {
         Ok(Some(envelope)) => envelope.body,
-        Ok(None) | Err(TransportError::Io(_)) => return Err(ConnectError::Refused),
-        Err(TransportError::Wire(e)) => return Err(ConnectError::Protocol(e.to_string())),
+        Ok(None) | Err(FrameIoError::Io(_)) => return Err(ConnectError::Refused),
+        Err(FrameIoError::Wire(e)) => return Err(ConnectError::Protocol(e.to_string())),
     };
     let service_epoch = match welcome {
         ClientBody::Welcome { service_epoch, .. } => service_epoch,
@@ -574,8 +574,8 @@ impl<S: UpdateSink> Driver<S> {
                 .write(&ClientEnvelope::new(ClientBody::Request(frame)))
             {
                 Ok(()) => {}
-                Err(TransportError::Io(_)) => self.fail_link(),
-                Err(TransportError::Wire(e)) => {
+                Err(FrameIoError::Io(_)) => self.fail_link(),
+                Err(FrameIoError::Wire(e)) => {
                     let rejection = Rejection::new(
                         ErrorCode::LimitReached,
                         SafeAction::None,

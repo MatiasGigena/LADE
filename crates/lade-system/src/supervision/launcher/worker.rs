@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use lade_protocol::worker::WorkerBody;
-use lade_protocol::{FrameReader, Framing, Message, TransportError, WorkerEnvelope, encode};
+use lade_protocol::{FrameIoError, FrameReader, Framing, Message, WorkerEnvelope, encode};
 
 use crate::supervision::child::{ChildStdio, SandboxedChild, lock};
 use crate::supervision::gateway::Gateway;
@@ -87,8 +87,8 @@ pub(super) fn monitor(
                 Ok(_) => break Ending::Violation("service_body_from_worker"),
                 Err(e) => break Ending::Violation(e.as_str()),
             },
-            Ok(None) | Err(TransportError::Io(_)) => break Ending::Eof,
-            Err(TransportError::Wire(e)) => break Ending::Violation(e.as_str()),
+            Ok(None) | Err(FrameIoError::Io(_)) => break Ending::Eof,
+            Err(FrameIoError::Wire(e)) => break Ending::Violation(e.as_str()),
         }
     };
     drop(reader);
