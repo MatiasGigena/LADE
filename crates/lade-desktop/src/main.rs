@@ -129,7 +129,7 @@ fn main() -> glib::ExitCode {
     app.connect_startup(|_| views::load_css());
     let windows: Rc<std::cell::RefCell<Vec<Rc<views::App>>>> = Rc::default();
     let action = gio::SimpleAction::new(
-        views::notify::OPEN_OBJECTIVE_ACTION,
+        views::platform::notify::OPEN_OBJECTIVE_ACTION,
         Some(glib::VariantTy::STRING),
     );
     let open = windows.clone();
@@ -155,7 +155,7 @@ fn main() -> glib::ExitCode {
         let updates = transport::bridge::connect(&store, 1024);
         let transport = Rc::new(Transport::new());
         let window = views::App::new(app, store, transport.clone(), env.clone());
-        window.set_notifier(Rc::new(views::notify::DesktopNotifier::new(app)));
+        window.set_notifier(Rc::new(views::platform::notify::DesktopNotifier::new(app)));
         if transport.start(config.clone(), updates).is_err() {
             eprintln!("lade-desktop: could not start the transport thread");
         }

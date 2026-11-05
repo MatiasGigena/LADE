@@ -10,10 +10,10 @@ use crate::presentation::layout::{self, LayoutClass, Region};
 use crate::presentation::state::model::{ConnectionState, NoticeLevel, NoticeScope};
 use crate::presentation::state::store::MainView;
 
-use super::{App, dialogs, widgets};
+use crate::views::{App, dialogs, widgets};
 
 impl App {
-    pub(super) fn render_centre(&self) {
+    pub(in crate::views) fn render_centre(&self) {
         let view = self.store.state().ui.view;
         self.centre.set_visible_child_name(match view {
             MainView::Workbench => "workbench",
@@ -22,7 +22,7 @@ impl App {
         });
     }
 
-    pub(super) fn render_body(self: &Rc<Self>) {
+    pub(in crate::views) fn render_body(self: &Rc<Self>) {
         let state = self.store.state();
         let has_workspace = state.active_workspace().is_some();
         let connection = state.connection.clone();
@@ -88,7 +88,7 @@ impl App {
         self.body.set_visible_child_name("empty");
     }
 
-    pub(super) fn render_notice(self: &Rc<Self>) {
+    pub(in crate::views) fn render_notice(self: &Rc<Self>) {
         widgets::clear(&self.notice);
         let state = self.store.state();
         let total = state.notices_received;
@@ -143,7 +143,7 @@ impl App {
         );
     }
 
-    pub(super) fn apply_width(&self, width: i32) {
+    pub(in crate::views) fn apply_width(&self, width: i32) {
         let sizes = layout::wide_sizes(width);
         if self.sizes.replace(sizes) != sizes {
             self.workbench.set_file_list_width(sizes.file_list);
@@ -175,7 +175,7 @@ impl App {
         state.ui.layout == LayoutClass::Compact || state.ui.selected.is_some()
     }
 
-    pub(super) fn sync_inspector(&self) {
+    pub(in crate::views) fn sync_inspector(&self) {
         let (class, region, details) = {
             let state = self.store.state();
             (
@@ -215,7 +215,7 @@ impl App {
         });
     }
 
-    pub(super) fn render_layout(&self) {
+    pub(in crate::views) fn render_layout(&self) {
         let (class, region, details) = {
             let state = self.store.state();
             (

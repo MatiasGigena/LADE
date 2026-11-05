@@ -87,7 +87,8 @@ crates/
     bin/laded.rs                # composition root and CLI
   lade-desktop/src/
     presentation/               # state projection and controller, no business authority
-    views/                      # GTK widgets and view composition
+    views/                      # GTK widgets per window region; window/ runs the window as a whole,
+                                # platform/ holds desktop notifications and the intent trace
     transport/                  # bounded client connection
     assets/                     # reviewed icons, GTK styles, resources
   */tests/                      # per-crate integration tests and fixtures

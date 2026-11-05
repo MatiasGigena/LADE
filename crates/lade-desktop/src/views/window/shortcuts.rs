@@ -11,10 +11,10 @@ use crate::presentation::layout::{self, LayoutClass, Region};
 use crate::presentation::state::model::{NoticeLevel, NoticeScope, ReportCode, ServiceNotice};
 use crate::presentation::state::store::{MainView, StoreUpdate};
 
-use super::{App, dialogs};
+use crate::views::{App, dialogs};
 
 impl App {
-    pub(super) fn load_keymap(&self) {
+    pub(in crate::views) fn load_keymap(&self) {
         let Some(path) = &self.keys_path else { return };
         let (keymap, problem) = keys::load(path);
         self.controller.set_keymap(keymap);
@@ -28,7 +28,7 @@ impl App {
         }
     }
 
-    pub(super) fn install_shortcuts(self: &Rc<Self>) {
+    pub(in crate::views) fn install_shortcuts(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
         let keymap = self.store.state().ui.keymap.clone();
@@ -56,7 +56,7 @@ impl App {
         self.terminal.set_shortcut_hints(&keymap);
     }
 
-    pub(super) fn apply_keymap(&self) {
+    pub(in crate::views) fn apply_keymap(&self) {
         let keymap = self.store.state().ui.keymap.clone();
         for (action, shortcut) in self.shortcuts.borrow().iter() {
             shortcut.set_trigger(gtk::ShortcutTrigger::parse_string(&keymap.gtk(*action)));
@@ -136,7 +136,7 @@ impl App {
         }
     }
 
-    pub(super) fn region_widget(&self, region: Region) -> gtk::Widget {
+    pub(in crate::views) fn region_widget(&self, region: Region) -> gtk::Widget {
         match region {
             Region::Header => self.header.root.clone().upcast(),
             Region::Objectives => self.rail.root.clone().upcast(),
@@ -145,7 +145,7 @@ impl App {
         }
     }
 
-    pub(super) fn focused_region(&self) -> Option<Region> {
+    pub(in crate::views) fn focused_region(&self) -> Option<Region> {
         let focus = gtk::prelude::GtkWindowExt::focus(&self.window)?;
         layout::REGION_ORDER.into_iter().find(|region| {
             let widget = self.region_widget(*region);
@@ -153,7 +153,7 @@ impl App {
         })
     }
 
-    pub(super) fn focus_region(&self, region: Region) {
+    pub(in crate::views) fn focus_region(&self, region: Region) {
         let target = self.region_widget(region);
         if !target.child_focus(gtk::DirectionType::TabForward) {
             target.grab_focus();

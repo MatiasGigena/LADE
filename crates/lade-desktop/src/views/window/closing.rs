@@ -10,16 +10,16 @@ use gtk4 as gtk;
 use crate::presentation::controller::intents::StopReason;
 use crate::presentation::state::drafts::CLOSE_WAIT_MS;
 
-use super::{App, dialogs, widgets};
+use crate::views::{App, dialogs, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CloseAfter {
+pub(in crate::views) enum CloseAfter {
     Window,
     Exit,
 }
 
 impl App {
-    pub(super) fn confirm_exit(self: &Rc<Self>, opener: &gtk::Widget) {
+    pub(in crate::views) fn confirm_exit(self: &Rc<Self>, opener: &gtk::Widget) {
         let controls = self.store.state().connection.is_connected();
         let body = if controls {
             "Exit stops the LADE service: running agents are stopped and recorded as interrupted, terminals end, and nothing resumes on its own when LADE starts again. To keep agents working in the background, close the window instead."
@@ -42,7 +42,7 @@ impl App {
         self.controller.request_service_stop(StopReason::Logout);
     }
 
-    pub(super) fn guard_unsaved(self: &Rc<Self>, after: CloseAfter) -> bool {
+    pub(in crate::views) fn guard_unsaved(self: &Rc<Self>, after: CloseAfter) -> bool {
         if self.controller.unsaved_drafts().is_empty() {
             return true;
         }
@@ -75,7 +75,7 @@ impl App {
         false
     }
 
-    pub(super) fn check_pending_close(self: &Rc<Self>) {
+    pub(in crate::views) fn check_pending_close(self: &Rc<Self>) {
         let Some(after) = self.close_pending.get() else {
             return;
         };
@@ -149,7 +149,7 @@ impl App {
         }
     }
 
-    pub(super) fn quit(&self) {
+    pub(in crate::views) fn quit(&self) {
         match self.window.application() {
             Some(application) => application.quit(),
             None => self.window.close(),

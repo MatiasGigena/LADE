@@ -1,17 +1,14 @@
 mod activity;
-mod closing;
 mod dialogs;
-mod frame;
 mod header;
 mod inspector;
-pub mod notify;
+pub mod platform;
 mod rail;
 mod session;
-mod shortcuts;
 mod terminal;
-pub mod trace;
 mod viewer;
 mod widgets;
+mod window;
 mod workbench;
 
 use std::cell::{Cell, RefCell};
@@ -31,7 +28,8 @@ use crate::presentation::state::attention::{self, AttentionWatcher, Delivery, No
 use crate::presentation::state::model::{Attention, DraftId, NoticeScope};
 use crate::presentation::state::store::{Change, Store, StoreUpdate, ViewerContent};
 
-use closing::CloseAfter;
+use platform::trace;
+use window::CloseAfter;
 
 const CSS: &str = include_str!("../assets/style.css");
 
