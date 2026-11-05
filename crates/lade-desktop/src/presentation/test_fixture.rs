@@ -1,12 +1,13 @@
 use super::state::model::{
     ActionName, ApprovalId, ArtifactDigest, Attention, AvailableAction, Badge, CandidateId,
-    CandidateStatus, CandidateSummary, ChangeCounts, DeliveryMode, DeliveryState, Draft, DraftId,
-    DraftState, Execution, ExecutionState, GitId, InputId, InputSummary, Intent as ObjectiveIntent,
-    Lifecycle, ModelRef, ObjectiveDetail, ObjectiveId, ObjectiveSummary, OperationId, Provenance,
-    Reference, ReferenceVersion, RepoPath, SessionId, SessionInfo, Settings, Side, TargetRef,
-    Timestamp, VerificationId, VerificationState, VerificationSummary, Workspace, WorkspaceId,
+    CandidateStatus, CandidateSummary, ChangeCounts, ConnectionState, DeliveryMode, DeliveryState,
+    Draft, DraftId, DraftState, Execution, ExecutionState, GitId, InputId, InputSummary,
+    Intent as ObjectiveIntent, Lifecycle, ModelRef, ObjectiveDetail, ObjectiveId, ObjectiveSummary,
+    OperationId, Provenance, Reference, ReferenceVersion, RepoPath, SessionId, SessionInfo,
+    Settings, Side, TargetRef, Timestamp, VerificationId, VerificationState, VerificationSummary,
+    Workspace, WorkspaceId,
 };
-use super::state::store::StoreUpdate;
+use super::state::store::{PresentationState, StoreUpdate};
 
 pub const MAIN_OBJECTIVE: &str = "7d0c2a3e-5b1f-4c8e-9a62-0f4f1b7c2d11";
 pub const SECOND_OBJECTIVE: &str = "a41f9c07-2e6d-4b3a-8f15-6c9e0d2b7a22";
@@ -694,4 +695,19 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
 
 pub fn fixture_updates() -> Vec<StoreUpdate> {
     fixture_updates_at(Timestamp(1_790_000_000_000))
+}
+
+/// The loaded details of every fixture Objective.
+pub fn details() -> Vec<ObjectiveDetail> {
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    for update in fixture_updates() {
+        state.apply(update);
+    }
+    let details: Vec<ObjectiveDetail> = state
+        .details
+        .values()
+        .filter_map(|d| d.loaded().cloned())
+        .collect();
+    assert!(details.len() > 1, "the test data has several Objectives");
+    details
 }

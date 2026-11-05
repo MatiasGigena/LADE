@@ -1,11 +1,12 @@
+//! Which actions an Objective's panels offer and how they are labelled, derived from the
+//! service's available actions: the next step, the overflow menu, the activity controls and
+//! what blocks starting the agent.
+
 use super::state::agent_session::{Catalog, ProviderStatus};
-use super::state::model::{
-    ActionAvailability, ActionName, Lifecycle, ObjectiveDetail, ObjectiveSummary, Timestamp,
-};
+use super::state::model::{ActionAvailability, ActionName, Lifecycle, ObjectiveDetail};
 use super::text::format;
 
 pub const MORE_ACTIONS_TITLE: &str = "More actions";
-pub const DETAILS_TITLE: &str = "Details";
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -274,85 +275,11 @@ pub fn start_blocker(catalog: Option<&Catalog>) -> Option<String> {
     )
 }
 
-pub fn status_line(summary: &ObjectiveSummary) -> (&'static str, String) {
-    let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
-    if summary.badges.is_empty() {
-        (sign, text.to_owned())
-    } else {
-        (sign, format!("{text} · {}", summary.badge_text()))
-    }
-}
-
-pub fn objective_row_line(summary: &ObjectiveSummary) -> Option<String> {
-    let (sign, text) = format::status_pill(summary.lifecycle, summary.attention);
-    if !summary.badges.is_empty() {
-        Some(format!("{sign} {}", summary.badge_text()))
-    } else if summary.lifecycle.is_archived() {
-        Some(format!("{sign} {text}"))
-    } else {
-        None
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DetailRow {
-    pub key: &'static str,
-    pub value: String,
-    pub full: Option<String>,
-    pub mono: bool,
-}
-
-pub fn details_rows(detail: &ObjectiveDetail, now: Timestamp) -> Vec<DetailRow> {
-    let row = |key, value: String, full: Option<String>, mono| DetailRow {
-        key,
-        value,
-        full,
-        mono,
-    };
-    vec![
-        row(
-            "Lifecycle",
-            format::lifecycle_label(detail.summary.lifecycle).to_owned(),
-            None,
-            false,
-        ),
-        row(
-            "Updated",
-            format::relative_time(now, detail.summary.updated_at),
-            None,
-            false,
-        ),
-        row("Branch", detail.branch.clone(), None, true),
-        row(
-            "Started at",
-            detail.start_commit.short().to_owned(),
-            Some(detail.start_commit.hex.clone()),
-            true,
-        ),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presentation::state::model::{AvailableAction, Badge, ExecutionState};
-    use crate::presentation::state::store::PresentationState;
+    use crate::presentation::state::model::{AvailableAction, ExecutionState};
     use crate::presentation::test_fixture;
-
-    fn details() -> Vec<ObjectiveDetail> {
-        let mut state =
-            PresentationState::new(crate::presentation::state::model::ConnectionState::Connected);
-        for update in test_fixture::fixture_updates() {
-            state.apply(update);
-        }
-        let details: Vec<ObjectiveDetail> = state
-            .details
-            .values()
-            .filter_map(|d| d.loaded().cloned())
-            .collect();
-        assert!(details.len() > 1, "the test data has several Objectives");
-        details
-    }
 
     fn with(
         detail: &ObjectiveDetail,
@@ -405,7 +332,7 @@ mod tests {
 
     #[test]
     fn every_action_is_rendered_in_exactly_one_surface() {
-        let mut cases: Vec<ObjectiveDetail> = details();
+        let mut cases: Vec<ObjectiveDetail> = test_fixture::details();
         let base = cases[0].clone();
         for lifecycle in [
             Lifecycle::Defined,
@@ -439,7 +366,7 @@ mod tests {
 
     #[test]
     fn next_action_mirrors_the_services_projection() {
-        for base in details() {
+        for base in test_fixture::details() {
             let next = next_action(&base);
             if let Some(next) = &next {
                 assert_eq!(next.availability, base.availability(next.action));
@@ -470,7 +397,7 @@ mod tests {
 
     #[test]
     fn the_most_advanced_enabled_step_is_next_and_integrate_only_when_enabled() {
-        let base = details().into_iter().next().unwrap();
+        let base = test_fixture::details().into_iter().next().unwrap();
         let d = with(
             &base,
             &all(&[ActionName::ReviewApprove, ActionName::ReviewFreeze]),
@@ -508,7 +435,7 @@ mod tests {
 
     #[test]
     fn agent_controls_are_pointed_to_not_repeated() {
-        let base = details().into_iter().next().unwrap();
+        let base = test_fixture::details().into_iter().next().unwrap();
         let mut d = with(&base, &all(&[ActionName::ExecutionStart]));
         d.summary.lifecycle = Lifecycle::Defined;
         assert!(next_action(&d).is_none());
@@ -547,7 +474,7 @@ mod tests {
 
     #[test]
     fn closed_objectives_suggest_only_an_enabled_clean_up_as_destructive() {
-        let base = details().into_iter().next().unwrap();
+        let base = test_fixture::details().into_iter().next().unwrap();
         let mut d = with(&base, &all(&[ActionName::ObjectiveCleanup]));
         d.summary.lifecycle = Lifecycle::Integrated;
         let next = next_action(&d).unwrap();
@@ -563,7 +490,7 @@ mod tests {
 
     #[test]
     fn shown_actions_keep_the_services_reason() {
-        for d in details() {
+        for d in test_fixture::details() {
             let next = next_action(&d);
             let (regular, destructive) = more_actions(&d, next.as_ref());
             let shown: Vec<&PanelAction> =
@@ -579,7 +506,7 @@ mod tests {
 
     #[test]
     fn enabled_notes_are_kept() {
-        let base = details().into_iter().next().unwrap();
+        let base = test_fixture::details().into_iter().next().unwrap();
         let mut d = with(&base, &all(&[]));
         d.available_actions
             .retain(|a| a.action != ActionName::ReviewApprove);
@@ -596,32 +523,5 @@ mod tests {
         );
         assert_eq!(next.availability, ActionAvailability::Enabled);
         assert_eq!(next.tone, Tone::Neutral);
-    }
-
-    #[test]
-    fn the_list_row_says_only_what_its_group_does_not() {
-        let base = details().into_iter().next().unwrap();
-        let mut s = base.summary.clone();
-        s.badges = vec![Badge::VerificationFailed, Badge::UnsentDrafts];
-        let line = objective_row_line(&s).unwrap();
-        assert!(line.contains("check failed") && !line.contains('\n'));
-        let (_, attention) = format::status_pill(s.lifecycle, s.attention);
-        assert!(!line.contains(attention));
-        assert!(status_line(&s).1.contains(" · "));
-        s.badges.clear();
-        s.lifecycle = Lifecycle::Active;
-        assert!(objective_row_line(&s).is_none());
-        s.lifecycle = Lifecycle::Integrated;
-        assert!(objective_row_line(&s).unwrap().contains("Integrated"));
-    }
-
-    #[test]
-    fn details_hold_only_what_no_other_surface_shows() {
-        let d = details().into_iter().find(|d| d.session.is_some()).unwrap();
-        let rows = details_rows(&d, d.summary.updated_at);
-        let keys: Vec<&str> = rows.iter().map(|r| r.key).collect();
-        assert_eq!(keys, ["Lifecycle", "Updated", "Branch", "Started at"]);
-        let start = rows.iter().find(|r| r.key == "Started at").unwrap();
-        assert_eq!(start.full.as_deref(), Some(d.start_commit.hex.as_str()));
     }
 }

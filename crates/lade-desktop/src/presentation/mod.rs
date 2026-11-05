@@ -1,7 +1,7 @@
 pub mod controller;
 pub mod keys;
 pub mod layout;
-pub mod panel;
+pub mod objective_actions;
 pub mod state;
 pub mod terminal;
 #[cfg(test)]

@@ -12,12 +12,12 @@ use super::widgets::{
     vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::panel;
 use crate::presentation::state::model::{
     Basis, ChangeList, ChangedFile, Load, ObjectiveDetail, ObjectiveId, RepoPath,
 };
 use crate::presentation::state::store::{Change, PresentationState};
 use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
+use crate::presentation::text::objective;
 
 /// The work area's state for a Workspace without Objectives: one instruction and the New
 /// Objective action (the same dialog as the Objectives list's). The inspector stays blank.
@@ -345,7 +345,7 @@ impl Workbench {
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
         self.heading.append(&text);
-        let (sign, status_text) = panel::status_line(&summary);
+        let (sign, status_text) = objective::status_line(&summary);
         let status = widgets::sign_text(sign, &status_text);
         status.add_css_class("meta");
         set_accessible_label(&status, &format!("Status: {status_text}"));

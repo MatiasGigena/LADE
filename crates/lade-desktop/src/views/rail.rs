@@ -6,10 +6,10 @@ use gtk4 as gtk;
 
 use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
 use crate::presentation::controller::Controller;
-use crate::presentation::panel;
 use crate::presentation::state::model::{ObjectiveId, ObjectiveSummary};
 use crate::presentation::state::store::Change;
 use crate::presentation::text::format;
+use crate::presentation::text::objective;
 
 pub type ButtonHandler = Rc<dyn Fn(&gtk::Button)>;
 
@@ -97,7 +97,7 @@ impl Rail {
         title.set_lines(2);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.append(&title);
-        if let Some(line) = panel::objective_row_line(objective) {
+        if let Some(line) = objective::objective_row_line(objective) {
             content.append(&widgets::line_label(
                 &line,
                 &["meta", "objective-status"],

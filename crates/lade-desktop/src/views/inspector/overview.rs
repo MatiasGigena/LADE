@@ -5,12 +5,12 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::presentation::panel::{self, PanelAction, Tone};
+use crate::presentation::objective_actions::{self, PanelAction, Tone};
 use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActionSurface, ObjectiveDetail, Timestamp,
 };
 use crate::presentation::state::store::MainView;
-use crate::presentation::text::format;
+use crate::presentation::text::{format, objective};
 use crate::views::dialogs;
 use crate::views::widgets::{
     self, MessageKind, action_row, field, inline_message, label, set_accessible_description,
@@ -44,9 +44,10 @@ impl Inspector {
         if let Some(approval) = &detail.approval {
             next_area.append(&label(format::approval_label(approval.state), &["meta"]));
         }
-        let blocker =
-            panel::start_blocker(self.controller.store.state().agent_session.catalog.as_ref());
-        let pointer = panel::agent_pointer(detail, blocker.as_deref());
+        let blocker = objective_actions::start_blocker(
+            self.controller.store.state().agent_session.catalog.as_ref(),
+        );
+        let pointer = objective_actions::agent_pointer(detail, blocker.as_deref());
         if let Some(pointer) = &pointer {
             let row = vbox(space::TIGHT);
             row.append(&label(pointer, &["meta"]));
@@ -59,7 +60,7 @@ impl Inspector {
             row.append(&open);
             next_area.append(&row);
         }
-        let next = panel::next_action(detail);
+        let next = objective_actions::next_action(detail);
         match &next {
             Some(next) => next_area.append(&self.action_widget(detail, next, true)),
             None if !detail.summary.lifecycle.is_archived() && pointer.is_none() => {
@@ -86,7 +87,7 @@ impl Inspector {
 
     /// The other actions, regular then destructive, in the More actions disclosure.
     fn render_more_actions(self: &Rc<Self>, detail: &ObjectiveDetail, next: Option<&PanelAction>) {
-        let (regular, destructive) = panel::more_actions(detail, next);
+        let (regular, destructive) = objective_actions::more_actions(detail, next);
         if !regular.is_empty() || !destructive.is_empty() || detail.history_deleted {
             let list = vbox(space::TIGHT);
             for action in &regular {
@@ -108,7 +109,7 @@ impl Inspector {
             }
             let this = Rc::downgrade(self);
             self.overview.append(&widgets::disclosure(
-                panel::MORE_ACTIONS_TITLE,
+                objective_actions::MORE_ACTIONS_TITLE,
                 self.more_open.get(),
                 &list,
                 move |open| {
@@ -160,7 +161,7 @@ impl Inspector {
     /// The Objective's details rows in their disclosure.
     fn render_details(self: &Rc<Self>, detail: &ObjectiveDetail) {
         let rows = vbox(space::ITEM);
-        for row in panel::details_rows(detail, Timestamp(widgets::now_ms())) {
+        for row in objective::details_rows(detail, Timestamp(widgets::now_ms())) {
             let value = if row.mono {
                 widgets::line_label(&row.value, &["mono"], gtk::pango::EllipsizeMode::Middle)
             } else {
@@ -174,7 +175,7 @@ impl Inspector {
         }
         let this = Rc::downgrade(self);
         self.overview.append(&widgets::disclosure(
-            panel::DETAILS_TITLE,
+            objective::DETAILS_TITLE,
             self.details_open.get(),
             &rows,
             move |open| {

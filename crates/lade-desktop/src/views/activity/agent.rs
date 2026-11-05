@@ -5,7 +5,7 @@ use std::rc::Rc;
 use gtk::prelude::*;
 use gtk4 as gtk;
 
-use crate::presentation::panel::{self, PanelAction, Tone};
+use crate::presentation::objective_actions::{self, PanelAction, Tone};
 use crate::presentation::state::model::{
     ActionAvailability, ActionName, ActionSurface, ExecutionState, ObjectiveDetail,
 };
@@ -86,7 +86,7 @@ impl Activity {
             body.append(&widgets::inline_message(MessageKind::Error, error, None));
         }
         body.append(&session::model_picker(&self.controller));
-        let start = panel::activity_controls(detail)
+        let start = objective_actions::activity_controls(detail)
             .into_iter()
             .find(|c| c.action == ActionName::ExecutionStart);
         match start {
@@ -213,7 +213,7 @@ impl Activity {
             _ if detail.session.is_none() => &[],
             _ => &[ActionName::ExecutionResume, ActionName::ExecutionStart],
         };
-        let offered: Vec<PanelAction> = panel::activity_controls(detail)
+        let offered: Vec<PanelAction> = objective_actions::activity_controls(detail)
             .into_iter()
             .filter(|c| wanted.contains(&c.action))
             .collect();
