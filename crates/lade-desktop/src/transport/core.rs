@@ -487,11 +487,7 @@ impl Core {
         match data {
             ReplyData::DraftSave(draft) => self.draft_changed(convert::draft(draft)),
             ReplyData::DraftDelete(_) => {
-                if let Context::Command {
-                    draft_id: Some(draft_id),
-                    ..
-                } = context
-                {
+                if let Context::DraftDelete(_, draft_id) = context {
                     for pages in self.draft_pages.values_mut() {
                         pages.remove(draft_id.clone());
                     }

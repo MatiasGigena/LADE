@@ -244,8 +244,8 @@ fn command_effects(context: &Context, data: &ReplyData, records: Records, effect
                 updates.push(StoreUpdate::DraftChanged(convert::draft(d)));
             }
         }
-        (Context::Command { draft_id, .. }, ReplyData::DraftDelete(_)) => {
-            if let Some(draft_id) = draft_id.as_ref().filter(|_| current) {
+        (Context::DraftDelete(_, draft_id), ReplyData::DraftDelete(_)) => {
+            if current {
                 updates.push(StoreUpdate::DraftDeleted {
                     draft_id: draft_id.clone(),
                 });

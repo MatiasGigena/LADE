@@ -197,7 +197,7 @@ fn stale_reference_names_the_stale_drafts() {
     let context = Context::Command {
         label: "Submit feedback",
         objective_id: Some(oid()),
-        draft_id: None,
+        saved_draft: None,
         batch: vec![DraftId::new(D), DraftId::new(C)],
         surface: Some(ActionSurface::Feedback),
     };
@@ -235,7 +235,7 @@ fn refused_draft_save_keeps_text_and_reports_beside_the_draft() {
     let context = Context::Command {
         label: "Save draft",
         objective_id: Some(oid()),
-        draft_id: Some(DraftId::new(D)),
+        saved_draft: Some(DraftId::new(D)),
         batch: Vec::new(),
         surface: Some(ActionSurface::Drafts),
     };
@@ -359,7 +359,7 @@ fn a_refused_command_reloads_its_objective_and_the_drafts_it_touched() {
     let command = |batch: Vec<DraftId>| Context::Command {
         label: "Submit feedback",
         objective_id: Some(oid()),
-        draft_id: None,
+        saved_draft: None,
         batch,
         surface: Some(ActionSurface::Feedback),
     };
@@ -402,7 +402,7 @@ fn several_stale_drafts_are_named_together() {
     let context = Context::Command {
         label: "Submit feedback",
         objective_id: Some(oid()),
-        draft_id: None,
+        saved_draft: None,
         batch: ids.iter().map(|i| DraftId::new(i.as_str())).collect(),
         surface: Some(ActionSurface::Feedback),
     };

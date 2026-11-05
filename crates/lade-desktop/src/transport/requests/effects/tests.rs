@@ -67,7 +67,7 @@ fn query_replies_carry_their_request_context() {
 #[test]
 fn objective_create_selects_and_loads_the_new_objective() {
     let effects = reply_effects(
-        &Context::command("Create Objective", None),
+        &Context::command("Create Objective", None, None),
         &ReplyData::ObjectiveCreate(Box::new(wire_detail(O))),
     );
     assert!(
@@ -150,7 +150,7 @@ fn agent_session_replies_and_events_reach_the_store() {
         leaf_id: None,
     };
     let forked = reply_effects(
-        &Context::command("Fork session", Some(&oid())),
+        &Context::command("Fork session", Some(&oid()), Some(ActionSurface::Session)),
         &ReplyData::SessionFork(state.clone()),
     );
     assert!(forked.updates.iter().any(|u| matches!(
@@ -265,11 +265,11 @@ fn terminal_replies_and_refusals_land_in_the_terminal_pane() {
     );
 }
 
-fn command(label: &'static str, draft_id: Option<DraftId>, batch: Vec<DraftId>) -> Context {
+fn command(label: &'static str, saved_draft: Option<DraftId>, batch: Vec<DraftId>) -> Context {
     Context::Command {
         label,
         objective_id: Some(oid()),
-        draft_id,
+        saved_draft,
         batch,
         surface: Some(ActionSurface::Drafts),
     }
@@ -307,7 +307,7 @@ fn recovered_outcomes_leave_draft_and_input_records_to_current_state() {
             .iter()
             .any(|u| matches!(u, StoreUpdate::DraftChanged(_)))
     );
-    let delete = command("Delete draft", Some(DraftId::new(D)), Vec::new());
+    let delete = Context::DraftDelete("Delete draft", DraftId::new(D));
     let deleted = ReplyData::DraftDelete(wire::Empty {});
     assert!(
         reply_effects(&delete, &deleted)

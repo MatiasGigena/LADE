@@ -16,6 +16,7 @@ mod mapping;
 mod rejection;
 
 pub use effects::{recovered_effects, reply_effects};
+pub use mapping::request;
 pub use rejection::{rejection_effects, rejection_message};
 
 pub const ACTIVITY_PAGE: u32 = 100;
@@ -46,23 +47,32 @@ pub enum Context {
     Resources,
     Terminal(ObjectiveId, &'static str),
     Stop,
+    /// Deleting this draft. A delete names no objective; the draft's own state carries it.
+    DraftDelete(&'static str, DraftId),
     Command {
         label: &'static str,
         objective_id: Option<ObjectiveId>,
-        draft_id: Option<DraftId>,
+        /// The draft this command saves, when it is a draft save.
+        saved_draft: Option<DraftId>,
+        /// The drafts this command submits as feedback.
         batch: Vec<DraftId>,
+        /// Where the command was issued from, so its refusal is shown there.
         surface: Option<ActionSurface>,
     },
 }
 
 impl Context {
-    fn command(label: &'static str, objective_id: Option<&ObjectiveId>) -> Self {
+    fn command(
+        label: &'static str,
+        objective_id: Option<&ObjectiveId>,
+        surface: Option<ActionSurface>,
+    ) -> Self {
         Self::Command {
             label,
             objective_id: objective_id.cloned(),
-            draft_id: None,
+            saved_draft: None,
             batch: Vec::new(),
-            surface: None,
+            surface,
         }
     }
 
@@ -73,6 +83,7 @@ impl Context {
             | Self::Search { .. }
             | Self::Models(_)
             | Self::Resources
+            | Self::DraftDelete(..)
             | Self::Stop => None,
             Self::Tree(o)
             | Self::Terminal(o, _)
@@ -102,7 +113,9 @@ impl Context {
             Self::Models(_) => "Load models",
             Self::Tree(_) => "Load session tree",
             Self::Resources => "Load profile resources",
-            Self::Command { label, .. } | Self::Terminal(_, label) => label,
+            Self::Command { label, .. }
+            | Self::Terminal(_, label)
+            | Self::DraftDelete(label, _) => label,
             Self::Stop => "Exit and stop the service",
         }
     }
@@ -180,53 +193,6 @@ pub fn start_point(start: &StartPoint) -> Result<wire::Start, Invalid> {
                 .map_err(|_| Invalid("start commit is not hexadecimal".into()))
         }
     }
-}
-
-pub fn surface(intent: &Intent) -> Option<ActionSurface> {
-    use Intent as I;
-    Some(match intent {
-        I::UpdateObjective { .. } => ActionSurface::Intent,
-        I::StartExecution { .. } | I::Cancel { .. } | I::Resume { .. } => ActionSurface::Agent,
-        I::NavigateSession { .. }
-        | I::ForkSession { .. }
-        | I::ImportSession { .. }
-        | I::ExportSession { .. }
-        | I::CompactSession { .. }
-        | I::ReloadSession { .. }
-        | I::ConfigureSession { .. } => ActionSurface::Session,
-        I::SendMessage { .. } => ActionSurface::Send,
-        I::SaveDraft { .. } | I::DeleteDraft { .. } => ActionSurface::Drafts,
-        I::SubmitFeedback { .. } => ActionSurface::Feedback,
-        I::Freeze { .. }
-        | I::ReturnForRevision { .. }
-        | I::Approve { .. }
-        | I::Refresh { .. }
-        | I::Integrate { .. } => ActionSurface::Review,
-        I::Verify { .. } => ActionSurface::Checks,
-        I::Complete { .. } | I::Discard { .. } | I::Cleanup { .. } | I::DeleteHistory { .. } => {
-            ActionSurface::Closing
-        }
-        I::OpenTerminal { .. }
-        | I::TerminalInput { .. }
-        | I::ResizeTerminal { .. }
-        | I::CloseTerminal { .. } => ActionSurface::Terminal,
-        I::RespondDialog { .. } => ActionSurface::Dialog,
-        _ => return None,
-    })
-}
-
-pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
-    let Some((request, mut context)) = mapping::request_for(intent)? else {
-        return Ok(None);
-    };
-    if let Context::Command {
-        surface: issued_from,
-        ..
-    } = &mut context
-    {
-        *issued_from = surface(intent);
-    }
-    Ok(Some((request, context)))
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]

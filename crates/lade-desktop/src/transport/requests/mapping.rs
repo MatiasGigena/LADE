@@ -1,6 +1,6 @@
-//! Maps each request-backed [`Intent`] to its wire [`Request`] and the [`Context`] that
-//! interprets the reply. Each mapper handles one family of intents and hands any other intent
-//! to the next family; the last one rejects intents that have no request.
+//! Maps each [`Intent`] to its wire [`Request`] and the [`Context`] that interprets the reply,
+//! including the surface a command was issued from. The match is exhaustive, so a new intent
+//! does not compile until it is mapped here.
 
 use std::path::Path;
 
@@ -12,14 +12,32 @@ use super::{
     selector, start_point,
 };
 use crate::presentation::controller::intents::{Intent, StopReason};
-use crate::presentation::state::model::ObjectiveId;
+use crate::presentation::state::model::{ActionSurface, ObjectiveId};
 use crate::transport::agent_session;
 use crate::transport::convert::{self, Invalid, id, to_basis, to_path};
 
-/// The first mapper: workspace, search, objective creation, settings and service lifetime.
-/// `Ok(None)` means the intent is handled without a request.
-pub(super) fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
+/// Text fields the Agent Session protocol bounds to 1–256 characters.
+fn bounded_text(value: &str, what: &str) -> Result<String, Invalid> {
+    if value.is_empty() || value.chars().count() > 256 {
+        Err(Invalid(format!("{what} must be 1 to 256 characters")))
+    } else {
+        Ok(value.to_owned())
+    }
+}
+
+fn wire_path(path: &Path) -> Result<WirePath, Invalid> {
+    WirePath::from_os_str(path.as_os_str())
+        .map_err(|_| Invalid("the path cannot be sent (empty or over 4096 bytes)".into()))
+}
+
+/// The request for `intent`, or `Ok(None)` when the intent is handled without one.
+pub fn request(intent: &Intent) -> Result<Option<(Request, Context)>, Invalid> {
+    use ActionSurface as S;
     use Intent as I;
+    let label = intent.label();
+    let command = |objective_id: &ObjectiveId, surface| {
+        Context::command(label, Some(objective_id), Some(surface))
+    };
     let mapped = match intent {
         I::RetryConnection => return Ok(None),
         I::OpenWorkspace { path } => (
@@ -73,14 +91,14 @@ pub(super) fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>,
                 integration_target: integration_target.clone(),
                 start: start_point(start)?,
             }),
-            Context::command(intent.label(), None),
+            Context::command(label, None, None),
         ),
         I::UpdateSettings { default_model } => (
             Request::SettingsUpdate(wire::SettingsUpdateCommand {
                 default_model: Some(convert::to_model(default_model)),
                 verification_commands: None,
             }),
-            Context::command(intent.label(), None),
+            Context::command(label, None, None),
         ),
         I::StopService { reason } => (
             Request::ServiceStop(wire::ServiceStopCommand {
@@ -91,15 +109,6 @@ pub(super) fn request_for(intent: &Intent) -> Result<Option<(Request, Context)>,
             }),
             Context::Stop,
         ),
-        _ => return objective_query(intent).map(Some),
-    };
-    Ok(Some(mapped))
-}
-
-/// Reads scoped to one objective.
-fn objective_query(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let mapped = match intent {
         I::LoadObjective { objective_id } => (
             Request::ObjectiveGet(selector(objective_id)?),
             Context::Objective(objective_id.clone()),
@@ -162,21 +171,12 @@ fn objective_query(intent: &Intent) -> Result<(Request, Context), Invalid> {
             inputs_page(objective_id, None)?,
             Context::Inputs(objective_id.clone()),
         ),
-        _ => return objective_command(intent),
-    };
-    Ok(mapped)
-}
-
-/// Intent, execution, messaging and closing commands on one objective.
-fn objective_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let mapped = match intent {
         I::UpdateObjective {
             objective_id,
             expected_intent_revision,
             intent: objective_intent,
         } => (
-            Request::ObjectiveUpdateIntent(wire::UpdateIntentCommand {
+            Request::ObjectiveUpdateIntent(wire::ObjectiveUpdateIntentCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 expected_intent_revision: Counter::new(*expected_intent_revision),
                 intent: wire::Intent {
@@ -185,7 +185,7 @@ fn objective_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                     acceptance: objective_intent.acceptance.clone(),
                 },
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Intent),
         ),
         I::StartExecution {
             objective_id,
@@ -197,15 +197,15 @@ fn objective_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 model: convert::to_model(model),
                 thinking: thinking.map(agent_session::to_thinking),
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Agent),
         ),
         I::Cancel { objective_id } => (
             Request::ExecutionCancel(selector(objective_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Agent),
         ),
         I::Resume { objective_id } => (
             Request::ExecutionResume(selector(objective_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Agent),
         ),
         I::SendMessage {
             objective_id,
@@ -217,15 +217,15 @@ fn objective_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 text: text.clone(),
                 mode: convert::to_delivery_mode(*mode),
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Send),
         ),
         I::Complete { objective_id } => (
             Request::ObjectiveComplete(selector(objective_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Closing),
         ),
         I::Discard { objective_id } => (
             Request::ObjectiveDiscard(selector(objective_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Closing),
         ),
         I::Cleanup {
             objective_id,
@@ -235,24 +235,15 @@ fn objective_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 confirm_data_loss: *confirm_data_loss,
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Closing),
         ),
         I::DeleteHistory { objective_id } => (
-            Request::ObjectiveDeleteHistory(wire::ObjectiveHistoryDeleteCommand {
+            Request::ObjectiveDeleteHistory(wire::ObjectiveDeleteHistoryCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 confirm_history_loss: true,
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Closing),
         ),
-        _ => return draft_command(intent),
-    };
-    Ok(mapped)
-}
-
-/// Review drafts and their submission as feedback.
-fn draft_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let mapped = match intent {
         I::SaveDraft {
             objective_id,
             draft_id,
@@ -268,11 +259,11 @@ fn draft_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 body: body.clone(),
             }),
             Context::Command {
-                label: intent.label(),
+                label,
                 objective_id: Some(objective_id.clone()),
-                draft_id: Some(draft_id.clone()),
+                saved_draft: Some(draft_id.clone()),
                 batch: Vec::new(),
-                surface: None,
+                surface: Some(S::Drafts),
             },
         ),
         I::DeleteDraft {
@@ -283,13 +274,7 @@ fn draft_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 draft_id: id(draft_id.as_str(), "draft id")?,
                 expected_revision: Counter::new(*expected_revision),
             }),
-            Context::Command {
-                label: intent.label(),
-                objective_id: None,
-                draft_id: Some(draft_id.clone()),
-                batch: Vec::new(),
-                surface: None,
-            },
+            Context::DraftDelete(label, draft_id.clone()),
         ),
         I::SubmitFeedback {
             objective_id,
@@ -316,32 +301,23 @@ fn draft_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 note: note.clone(),
             }),
             Context::Command {
-                label: intent.label(),
+                label,
                 objective_id: Some(objective_id.clone()),
-                draft_id: None,
+                saved_draft: None,
                 batch: drafts.iter().map(|d| d.draft_id.clone()).collect(),
-                surface: None,
+                surface: Some(S::Feedback),
             },
         ),
-        _ => return review_command(intent),
-    };
-    Ok(mapped)
-}
-
-/// Candidate review: freeze, return, verify, approve, refresh and integrate.
-fn review_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let mapped = match intent {
         I::Freeze { objective_id } => (
             Request::ReviewFreeze(selector(objective_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Review),
         ),
         I::ReturnForRevision {
             objective_id,
             candidate_id,
         } => (
             Request::ReviewReturn(candidate(objective_id, candidate_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Review),
         ),
         I::Verify {
             objective_id,
@@ -353,7 +329,7 @@ fn review_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 candidate_id: id(candidate_id.as_str(), "candidate id")?,
                 command: argv.clone(),
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Checks),
         ),
         I::Approve {
             objective_id,
@@ -367,14 +343,14 @@ fn review_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 target_commit: convert::to_git_id(target_commit)?,
                 override_reason: override_reason.clone(),
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Review),
         ),
         I::Refresh {
             objective_id,
             candidate_id,
         } => (
             Request::ReviewRefresh(candidate(objective_id, candidate_id)?),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Review),
         ),
         I::Integrate {
             objective_id,
@@ -384,17 +360,8 @@ fn review_command(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 approval_id: id(approval_id.as_str(), "approval id")?,
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Review),
         ),
-        _ => return terminal_request(intent),
-    };
-    Ok(mapped)
-}
-
-/// The objective terminal.
-fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let mapped = match intent {
         I::OpenTerminal {
             objective_id,
             cols,
@@ -405,7 +372,7 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 cols: Counter::new(u64::from(*cols)),
                 rows: Counter::new(u64::from(*rows)),
             }),
-            Context::Terminal(objective_id.clone(), intent.label()),
+            Context::Terminal(objective_id.clone(), label),
         ),
         I::TerminalInput {
             objective_id,
@@ -416,7 +383,7 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 terminal_id: id(terminal_id, "terminal id")?,
                 data: data.clone(),
             }),
-            Context::Terminal(objective_id.clone(), intent.label()),
+            Context::Terminal(objective_id.clone(), label),
         ),
         I::ResizeTerminal {
             objective_id,
@@ -429,7 +396,7 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 cols: Counter::new(u64::from(*cols)),
                 rows: Counter::new(u64::from(*rows)),
             }),
-            Context::Terminal(objective_id.clone(), intent.label()),
+            Context::Terminal(objective_id.clone(), label),
         ),
         I::CloseTerminal {
             objective_id,
@@ -438,32 +405,8 @@ fn terminal_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
             Request::TerminalClose(wire::TerminalSelector {
                 terminal_id: id(terminal_id, "terminal id")?,
             }),
-            Context::Terminal(objective_id.clone(), intent.label()),
+            Context::Terminal(objective_id.clone(), label),
         ),
-        _ => return agent_session_request(intent),
-    };
-    Ok(mapped)
-}
-
-/// Text fields the Agent Session protocol bounds to 1–256 characters.
-fn bounded_text(value: &str, what: &str) -> Result<String, Invalid> {
-    if value.is_empty() || value.chars().count() > 256 {
-        Err(Invalid(format!("{what} must be 1 to 256 characters")))
-    } else {
-        Ok(value.to_owned())
-    }
-}
-
-fn wire_path(path: &Path) -> Result<WirePath, Invalid> {
-    WirePath::from_os_str(path.as_os_str())
-        .map_err(|_| Invalid("the path cannot be sent (empty or over 4096 bytes)".into()))
-}
-
-/// Agent Session (pi) models, tree and session commands.
-fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    let command = |objective_id: &ObjectiveId| Context::command(intent.label(), Some(objective_id));
-    Ok(match intent {
         I::LoadModels { provider } => (
             Request::ModelsList(wire::ModelsListQuery {
                 provider: provider.clone(),
@@ -482,7 +425,7 @@ fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid>
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 entry_id: bounded_text(entry_id, "the entry id")?,
             }),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::ForkSession {
             objective_id,
@@ -494,7 +437,7 @@ fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid>
                 entry_id: bounded_text(entry_id, "the entry id")?,
                 position: agent_session::to_fork(*position),
             }),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::ImportSession {
             objective_id,
@@ -504,22 +447,22 @@ fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid>
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 path: wire_path(file)?,
             }),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::ExportSession { objective_id } => (
             Request::SessionExport(selector(objective_id)?),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::CompactSession { objective_id } => (
             Request::SessionCompact(wire::SessionCompactCommand {
                 objective_id: id(objective_id.as_str(), "objective id")?,
                 instructions: None,
             }),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::ReloadSession { objective_id } => (
             Request::SessionReload(selector(objective_id)?),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
         I::ConfigureSession {
             objective_id,
@@ -531,17 +474,8 @@ fn agent_session_request(intent: &Intent) -> Result<(Request, Context), Invalid>
                 model: convert::to_model(model),
                 thinking: agent_session::to_thinking(*thinking),
             }),
-            command(objective_id),
+            command(objective_id, S::Session),
         ),
-        _ => return profile_request(intent),
-    })
-}
-
-/// The LADE profile's resources and extension approvals, and Agent Session dialogs; any other
-/// intent has no request.
-fn profile_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
-    use Intent as I;
-    Ok(match intent {
         I::LoadResources => (Request::ResourcesList(wire::Empty {}), Context::Resources),
         I::DecideResource {
             name,
@@ -554,13 +488,13 @@ fn profile_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                     .map_err(|_| Invalid("the extension hash is not a sha256 digest".into()))?,
                 approve: *approve,
             }),
-            Context::command(intent.label(), None),
+            Context::command(label, None, None),
         ),
         I::ImportProfile { source } => (
             Request::ProfileImport(wire::ProfileImportCommand {
                 source: wire_path(source)?,
             }),
-            Context::command(intent.label(), None),
+            Context::command(label, None, None),
         ),
         I::RespondDialog {
             objective_id,
@@ -574,10 +508,10 @@ fn profile_request(intent: &Intent) -> Result<(Request, Context), Invalid> {
                 generation: Counter::new(*generation),
                 answer: agent_session::to_answer(answer),
             }),
-            Context::command(intent.label(), Some(objective_id)),
+            command(objective_id, S::Dialog),
         ),
-        _ => return Err(Invalid("not an Agent Session intent".into())),
-    })
+    };
+    Ok(Some(mapped))
 }
 
 #[cfg(test)]

@@ -144,8 +144,7 @@ impl Core {
             ),
             OperationState::Unknown => {
                 if let Context::Command {
-                    draft_id: Some(draft_id),
-                    objective_id: Some(_),
+                    saved_draft: Some(draft_id),
                     ..
                 } = &operation.context
                 {

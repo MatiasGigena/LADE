@@ -124,9 +124,13 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
         | Context::Models(_)
         | Context::Tree(_)
         | Context::Resources => updates.push(notice(NoticeScope::General, refused)),
+        Context::DraftDelete(_, draft_id) => updates.push(StoreUpdate::DraftDeleteRefused {
+            draft_id: draft_id.clone(),
+            refusal: refused,
+        }),
         Context::Command {
             objective_id,
-            draft_id,
+            saved_draft,
             batch,
             surface,
             ..
@@ -134,19 +138,15 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             if let Some(note) = stale_drafts_note(batch, rejection) {
                 refused.message.push_str(&note);
             }
-            match (objective_id, draft_id) {
-                (Some(_), Some(draft_id)) => updates.push(StoreUpdate::DraftSaveRefused {
+            match (saved_draft, objective_id) {
+                (Some(draft_id), _) => updates.push(StoreUpdate::DraftSaveRefused {
                     draft_id: draft_id.clone(),
                     refusal: Refusal {
                         message: reason_and_advice(rejection),
                         details: refused.details,
                     },
                 }),
-                (None, Some(draft_id)) => updates.push(StoreUpdate::DraftDeleteRefused {
-                    draft_id: draft_id.clone(),
-                    refusal: refused,
-                }),
-                (Some(o), None) => {
+                (None, Some(o)) => {
                     updates.push(StoreUpdate::CommandStatus {
                         objective_id: o.clone(),
                         status: None,
@@ -161,7 +161,7 @@ pub fn rejection_effects(context: &Context, rejection: &Rejection) -> Effects {
             }
             if let Some(o) = objective_id {
                 effects.follow_ups.push(refresh_objective(o));
-                if !batch.is_empty() || draft_id.is_some() {
+                if !batch.is_empty() || saved_draft.is_some() {
                     effects.follow_ups.push(Intent::LoadDrafts {
                         objective_id: o.clone(),
                     });

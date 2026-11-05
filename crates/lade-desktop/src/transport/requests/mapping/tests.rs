@@ -441,8 +441,25 @@ fn every_intent_maps_to_its_request_and_encodes_against_the_schema() {
         let Some((request, context)) = mapped else {
             continue;
         };
-        if let Context::Command { label, .. } = &context {
-            assert_eq!(*label, intent.label());
+        match &context {
+            Context::Command {
+                label,
+                objective_id,
+                surface,
+                ..
+            } => {
+                assert_eq!(*label, intent.label());
+                assert_eq!(
+                    objective_id.is_some(),
+                    surface.is_some(),
+                    "a command on an Objective is refused on its surface: {intent:?}"
+                );
+            }
+            Context::DraftDelete(label, _) => {
+                assert!(matches!(intent, Intent::DeleteDraft { .. }), "{intent:?}");
+                assert_eq!(*label, intent.label());
+            }
+            _ => {}
         }
         covered.insert(request.name());
         let operation_id = request.name().is_mutating().then(|| test_id(2));
