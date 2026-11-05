@@ -1,10 +1,37 @@
 import { Theme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
-import type { Id, UiAnswer, UiPrompt, WorkerToService } from "../dto.ts";
-import type { SystemNotice } from "./activity.ts";
+import type { Id, UiAnswer, UiCloseReason, UiPrompt, WorkerToService } from "../dto.ts";
 import { counter, newId } from "../schema.ts";
+import type { Schema } from "../schema.ts";
+import type { SystemNotice } from "./activity.ts";
 import { prefix } from "./text.ts";
 import type { RespondBody } from "./wire.ts";
+import workerSchema from "./worker-schema.json" with { type: "json" };
+
+const PROMPTS: readonly Schema[] = workerSchema.$defs.UiPrompt.oneOf;
+
+function promptField(kind: UiPrompt["kind"], field: string): Schema | undefined {
+  return PROMPTS.find(prompt => prompt.properties?.kind?.const === kind)?.properties?.[field];
+}
+
+/** A dialog bound read from the worker schema, so that a clipped `ui.request` always encodes. */
+function bound(value: number | undefined): number {
+  if (value === undefined) throw new Error("worker-schema.json: a UiPrompt field has no length bound");
+
+  return value;
+}
+
+const MAX_DIALOG_TITLE = Math.min(...PROMPTS.map(prompt => bound(prompt.properties?.title?.maxLength)));
+
+const MAX_CONFIRM_MESSAGE = bound(promptField("confirm", "message")?.maxLength);
+
+const MAX_SELECT_OPTIONS = bound(promptField("select", "options")?.maxItems);
+
+const MAX_SELECT_OPTION = bound(promptField("select", "options")?.items?.maxLength);
+
+const MAX_INPUT_PLACEHOLDER = bound(promptField("input", "placeholder")?.maxLength);
+
+const MAX_EDITOR_PREFILL = bound(promptField("editor", "prefill")?.maxLength);
 
 type ThemeColors = ConstructorParameters<typeof Theme>[0];
 
@@ -36,21 +63,20 @@ export class UiBridge {
   private readonly systemNotice: SystemNotice;
   private readonly pending = new Map<Id, Pending>();
   private dialogOpened: (() => void) | undefined;
-  private current = 1;
+  private currentGeneration = 1;
   constructor(send: (body: WorkerToService) => void, systemNotice: SystemNotice) { this.send = send; this.systemNotice = systemNotice; }
 
-  get generation(): number { return this.current; }
+  get generation(): number { return this.currentGeneration; }
 
-  advance(): number {
+  /** Starts a new session generation, closing every open dialog as `replaced`. */
+  advance(): void {
     this.closePending("replaced");
-    this.current += 1;
-
-    return this.current;
+    this.currentGeneration += 1;
   }
 
   cancel(): void { this.closePending("aborted"); }
 
-  private closePending(reason: "replaced" | "aborted"): void {
+  private closePending(reason: Extract<UiCloseReason, "replaced" | "aborted">): void {
     for (const [id, open] of this.pending) {
       this.pending.delete(id);
       this.send({ kind: "ui.closed", ui_id: id, reason });
@@ -70,8 +96,6 @@ export class UiBridge {
     return undefined;
   }
 
-  get open(): number { return this.pending.size; }
-
   async runUntilDialog(run: () => Promise<void>): Promise<void> {
     const opened = new Promise<void>(resolve => {
       this.dialogOpened = resolve;
@@ -85,7 +109,7 @@ export class UiBridge {
 
   private ask(prompt: UiPrompt, options: ExtensionUIDialogOptions | undefined): Promise<UiAnswer | undefined> {
     const id = newId();
-    const generation = this.current;
+    const generation = this.currentGeneration;
 
     return new Promise(resolve => {
       let timer: NodeJS.Timeout | undefined;
@@ -96,7 +120,7 @@ export class UiBridge {
         resolve(answer);
       };
 
-      const close = (reason: "timeout" | "aborted"): void => {
+      const close = (reason: Extract<UiCloseReason, "timeout" | "aborted">): void => {
         if (!this.pending.delete(id)) return;
         this.send({ kind: "ui.closed", ui_id: id, reason });
         finish(undefined);
@@ -104,9 +128,7 @@ export class UiBridge {
 
       function onAbort(): void { close("aborted"); }
 
-      if (options?.signal?.aborted) { resolve(undefined);
-
- return; }
+      if (options?.signal?.aborted) return resolve(undefined);
 
       this.pending.set(id, { generation, resolve: finish });
       options?.signal?.addEventListener("abort", onAbort, { once: true });
@@ -123,28 +145,28 @@ export class UiBridge {
     return {
       select: async (title, options, opts) => {
         if (options.length === 0) throw new Error("LADE: a select dialog needs at least one option");
-        let shown = options.slice(0, 64).map(option => prefix(option, 512));
+        let shown = options.slice(0, MAX_SELECT_OPTIONS).map(option => prefix(option, MAX_SELECT_OPTION));
 
         if (new Set(shown).size !== shown.length) {
           shown = shown.map((option, index) => {
             const suffix = ` [${index + 1}]`;
 
-            return `${prefix(option, 512 - suffix.length)}${suffix}`;
+            return `${prefix(option, MAX_SELECT_OPTION - suffix.length)}${suffix}`;
           });
         }
 
-        const answer = value(await this.ask({ kind: "select", title: prefix(title, 512), options: shown }, opts));
+        const answer = value(await this.ask({ kind: "select", title: prefix(title, MAX_DIALOG_TITLE), options: shown }, opts));
         const index = answer === undefined ? -1 : shown.indexOf(answer);
 
         return index < 0 ? undefined : options[index];
       },
       confirm: async (title, message, opts) => {
-        const answer = await this.ask({ kind: "confirm", title: prefix(title, 512), message: prefix(message, 4096) }, opts);
+        const answer = await this.ask({ kind: "confirm", title: prefix(title, MAX_DIALOG_TITLE), message: prefix(message, MAX_CONFIRM_MESSAGE) }, opts);
 
         return answer?.kind === "confirm" && answer.confirmed;
       },
-      input: async (title, placeholder, opts) => value(await this.ask({ kind: "input", title: prefix(title, 512), placeholder: prefix(placeholder ?? "", 512) }, opts)),
-      editor: async (title, prefill) => value(await this.ask({ kind: "editor", title: prefix(title, 512), prefill: prefix(prefill ?? "", 65_536) }, undefined)),
+      input: async (title, placeholder, opts) => value(await this.ask({ kind: "input", title: prefix(title, MAX_DIALOG_TITLE), placeholder: prefix(placeholder ?? "", MAX_INPUT_PLACEHOLDER) }, opts)),
+      editor: async (title, prefill) => value(await this.ask({ kind: "editor", title: prefix(title, MAX_DIALOG_TITLE), prefill: prefix(prefill ?? "", MAX_EDITOR_PREFILL) }, undefined)),
       notify: (message, type) => { this.systemNotice("Extension notice", message, type === "error"); },
       onTerminalInput: () => () => {},
       setStatus: () => {},

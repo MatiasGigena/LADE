@@ -18,8 +18,6 @@ export type ResultBody = Extract<WorkerToService, { kind: "session.result" }>;
 
 export type ChangedBody = Extract<WorkerToService, { kind: "session.changed" }>;
 
-export type LoadedResource = Extract<WorkerToService, { kind: "resources.loaded" }>["resources"][number];
-
 export type TurnState = Extract<WorkerToService, { kind: "turn.state" }>["state"];
 
 /** A `worker.error` whose message is made safe to leave the worker. */

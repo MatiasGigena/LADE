@@ -6,7 +6,7 @@ import { WireError } from "../json.ts";
 import type { WireCode } from "../json.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "./wire.ts";
 
-export const DELTA_BUDGET = 4 * 1024 * 1024;
+const DELTA_BUDGET = 4 * 1024 * 1024;
 
 const MAX_COALESCED_DELTA = 64 * 1024;
 
@@ -50,6 +50,12 @@ export class StdioChannel {
     this.input = input; this.write = write; this.drains = drains;
   }
 
+  /**
+   * Queues a frame and resolves once the queue is written. Every frame is kept except `activity.delta`, which is
+   * best-effort: consecutive deltas of one item coalesce, and above DELTA_BUDGET of queued output a delta that cannot
+   * coalesce is dropped. Nothing is lost by the drop, because the `activity.item` that ends every streamed block
+   * carries its complete bounded text and replaces what was streamed.
+   */
   send(body: WorkerToService): Promise<void> {
     const last = this.queue.at(-1);
 

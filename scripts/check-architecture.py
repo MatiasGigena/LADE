@@ -55,7 +55,7 @@ for path in (root/'crates').glob('*/src/**/*.rs'):
 worker_src = root/'packages/pi-worker/src'
 worker_packages = {'@earendil-works/pi-coding-agent', 'undici'}
 pi_ai = root/'packages/pi-worker/node_modules/@earendil-works/pi-ai/dist/index.js'
-worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:tls'}
+worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:timers/promises', 'node:tls'}
 for path in worker_src.rglob('*.ts'):
     text = path.read_text()
     if re.search(r'\bany\b|import\s*\(', text):

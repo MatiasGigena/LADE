@@ -15,7 +15,7 @@ export const MAX_TRANSFERS = 2;
 
 export const MAX_ITEM_TEXT_BYTES = 192 * 1024;
 
-export const MAX_PATH_BYTES = 4096;
+const MAX_PATH_BYTES = 4096;
 
 export interface Schema {
   $ref?: string;
@@ -39,7 +39,7 @@ export function isRecord(value: JsonValue | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isString(value: JsonValue): value is string {
+export function isString<Value>(value: Value): value is Value & string {
   return typeof value === "string";
 }
 
@@ -93,7 +93,7 @@ function timestamp(value: string): boolean {
   return days !== undefined && year >= UNIX_EPOCH_YEAR && day >= 1 && day <= days && hour < 24 && minute < 60 && second < 60;
 }
 
-function within(value: bigint | undefined, max: bigint): boolean {
+function inRange(value: bigint | undefined, max: bigint): boolean {
   return value !== undefined && value >= 1n && value <= max;
 }
 
@@ -111,8 +111,8 @@ function chunkHex(value: string): boolean {
 const FORMATS = new Map<string, (value: string) => boolean>([
   ["uuid-v4", value => UUID_V4.test(value)],
   ["u64", value => decimal(value) !== undefined],
-  ["page-limit", value => within(decimal(value), MAX_PAGE_LIMIT)],
-  ["read-limit", value => within(decimal(value), MAX_READ_LIMIT)],
+  ["page-limit", value => inRange(decimal(value), MAX_PAGE_LIMIT)],
+  ["read-limit", value => inRange(decimal(value), MAX_READ_LIMIT)],
   ["sha256", value => SHA256_HEX.test(value)],
   ["capability", value => SHA256_HEX.test(value)],
   ["git-sha1", value => SHA1_HEX.test(value)],
@@ -121,7 +121,7 @@ const FORMATS = new Map<string, (value: string) => boolean>([
   ["path-b64", pathBytes],
 ]);
 
-export function format(value: string, kind: string): boolean {
+function matchesFormat(value: string, kind: string): boolean {
   return FORMATS.get(kind)?.(value) ?? false;
 }
 
@@ -165,7 +165,7 @@ function matchesString(value: JsonValue, definition: Schema): boolean {
     if (count < (minLength ?? 0) || (maxLength !== undefined && count > maxLength)) return false;
   }
 
-  return definition.format === undefined || format(value, definition.format);
+  return definition.format === undefined || matchesFormat(value, definition.format);
 }
 
 function matchesType(value: JsonValue, definition: Schema, contract: Contract): boolean {
@@ -219,7 +219,7 @@ export function isWorkerToService(body: WorkerBody): body is WorkerToService {
 }
 
 export function parseId(text: string): Id {
-  if (!format(text, "uuid-v4")) throw new WireError("invalid_schema");
+  if (!matchesFormat(text, "uuid-v4")) throw new WireError("invalid_schema");
 
   // SAFETY: the uuid-v4 format check above is the brand's defining invariant.
   return text as Id;
@@ -232,7 +232,7 @@ export function newId(): Id {
 export function counter(value: number): Counter {
   const text = String(value);
 
-  if (!Number.isSafeInteger(value) || value < 0 || !format(text, "u64")) throw new WireError("invalid_schema");
+  if (!Number.isSafeInteger(value) || value < 0 || !matchesFormat(text, "u64")) throw new WireError("invalid_schema");
 
   // SAFETY: the u64 format check above is the brand's defining invariant.
   return text as Counter;

@@ -3,16 +3,15 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory, LoadExtensionsResult, PromptTemplate, ResourceDiagnostic, ResourceLoader, Skill, SettingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import type { WorkerResources } from "../dto.ts";
+import type { LoadedResource, WorkerResources } from "../dto.ts";
 import { isInside } from "./paths.ts";
 import { prefix, safeMessage } from "./text.ts";
-import type { LoadedResource } from "./wire.ts";
 
 type ExtensionPaths = Parameters<ResourceLoader["extendResources"]>[0];
 
-export const MAX_EXTENSION_FILES = 256;
+const MAX_EXTENSION_FILES = 256;
 
-export const MAX_EXTENSION_BYTES = 8 * 1024 * 1024;
+const MAX_EXTENSION_BYTES = 8 * 1024 * 1024;
 
 const MAX_DEPTH = 8;
 
@@ -20,7 +19,7 @@ const MAX_RESOURCE_NAME = 256;
 
 const MAX_RESOURCES = 256;
 
-export const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
+const CONTEXT_FILES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"];
 
 class HashError extends Error {
   readonly name = "HashError";
@@ -87,7 +86,7 @@ function contextFile(dir: string, names: readonly string[]): ContextFile | undef
   return undefined;
 }
 
-export function contextFiles(profileDir: string | undefined, cwd: string): ContextFile[] {
+function contextFiles(profileDir: string | undefined, cwd: string): ContextFile[] {
   const found: ContextFile[] = [];
   const profile = profileDir === undefined ? undefined : contextFile(profileDir, ["AGENTS.md"]);
 
@@ -101,7 +100,7 @@ export function contextFiles(profileDir: string | undefined, cwd: string): Conte
 
 interface Verified { paths: string[]; report: LoadedResource[] }
 
-export function verifyExtensions(resources: WorkerResources | undefined): Verified {
+function verifyExtensions(resources: WorkerResources | undefined): Verified {
   const verified: Verified = { paths: [], report: [] };
 
   if (!resources) return verified;
@@ -129,7 +128,7 @@ export function verifyExtensions(resources: WorkerResources | undefined): Verifi
   return verified;
 }
 
-export interface LoaderInputs {
+interface LoaderInputs {
   cwd: string;
   agentDir: string;
   settingsManager: SettingsManager;

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "./pi-ai.ts";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Message, Model, SimpleStreamOptions, TextContent, ToolCall, TranscriptContext } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -9,11 +10,11 @@ export const FIXTURE_SWITCH = "LADE_TEST_FIXTURE_PROVIDER";
 
 export const FIXTURE_MODEL = "scripted";
 
-export const FIXTURE_API = "lade-fixture-scripted";
+const FIXTURE_API = "lade-fixture-scripted";
 
-export const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
+const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
 
-export const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
+const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
 
 const MARKER = /LADE-MARKER:[A-Za-z0-9_.-]+/g;
 
@@ -67,26 +68,8 @@ function userText(message: Message): string {
   return message.content;
 }
 
-function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("aborted"));
-
-      return;
-    }
-
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
-
-    function onAbort(): void { clearTimeout(timer); reject(new Error("aborted")); }
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-const transientFailed = new Set<string>();
-
 /** True the first time a transient directive is seen for this user message, so its retry succeeds. */
-function firstTransientAttempt(message: Message | undefined): boolean {
+function firstTransientAttempt(message: Message | undefined, transientFailed: Set<string>): boolean {
   const key = message ? `${message.timestamp}:${userText(message)}` : "";
 
   if (transientFailed.has(key)) return false;
@@ -131,7 +114,7 @@ function writeCalls(writes: Directives["writes"], users: number): Reply {
   };
 }
 
-function reply(context: TranscriptContext, lastUser: number, script: Directives): Reply {
+function reply(context: TranscriptContext, lastUser: number, script: Directives, transientFailed: Set<string>): Reply {
   const messages = context.messages;
   const latest = messages[lastUser];
   const results = messages.slice(lastUser + 1).flatMap(message => message.role === "toolResult" ? [message] : []);
@@ -141,7 +124,7 @@ function reply(context: TranscriptContext, lastUser: number, script: Directives)
 
   if (script.fail) return { text: "", calls: [], fail: true };
 
-  if (script.transient && firstTransientAttempt(latest)) return { text: "", calls: [], fail: true, transient: true };
+  if (script.transient && firstTransientAttempt(latest, transientFailed)) return { text: "", calls: [], fail: true, transient: true };
 
   if (script.echo) return textReply(`lade-fixture echo: ${latest ? userText(latest) : ""}`);
 
@@ -152,17 +135,17 @@ function reply(context: TranscriptContext, lastUser: number, script: Directives)
   return textReply(`lade-fixture scripted reply (offline fixture model, not a real model). The context holds ${users} user message(s).`);
 }
 
-function plan(context: TranscriptContext): Script {
+function plan(context: TranscriptContext, transientFailed: Set<string>): Script {
   const lastUser = context.messages.findLastIndex(message => message.role === "user");
   const latest = context.messages[lastUser];
   const script = directives(latest ? userText(latest) : "");
 
-  return { ...reply(context, lastUser, script), delayMs: script.delayMs };
+  return { ...reply(context, lastUser, script, transientFailed), delayMs: script.delayMs };
 }
 
-async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream): Promise<void> {
+async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream, transientFailed: Set<string>): Promise<void> {
   const signal = options?.signal;
-  const script = plan(context);
+  const script = plan(context, transientFailed);
 
   const output: AssistantMessage = {
     role: "assistant",
@@ -179,7 +162,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "start", partial: output });
 
     if (script.fail) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       throw new Error(script.transient ? FIXTURE_TRANSIENT : FIXTURE_FAILURE);
     }
 
@@ -189,7 +172,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
 
     for (const delta of chunks(script.text)) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       block.text += delta;
       stream.push({ type: "text_delta", contentIndex: textIndex, delta, partial: output });
     }
@@ -197,7 +180,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "text_end", contentIndex: textIndex, content: block.text, partial: output });
 
     for (const call of script.calls) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       output.content.push(call);
       const index = output.content.length - 1;
       stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
@@ -216,14 +199,17 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
   stream.end();
 }
 
-function streamFixture(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
-  const stream = createAssistantMessageEventStream();
-  void run(model, context, options, stream);
-
-  return stream;
-}
-
+/** The provider registration; each registration keeps its own memory of the transient failures it has scripted. */
 export function fixtureProvider(): ProviderRegistration {
+  const transientFailed = new Set<string>();
+
+  const streamFixture = (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream => {
+    const stream = createAssistantMessageEventStream();
+    void run(model, context, options, stream, transientFailed);
+
+    return stream;
+  };
+
   return {
     name: "LADE fixture provider (offline, scripted; not a real model)",
     baseUrl: "lade-fixture://offline",
@@ -242,9 +228,6 @@ export function fixtureProvider(): ProviderRegistration {
   };
 }
 
-export function registerTestFixture(runtime: ModelRuntime): boolean {
-  if (process.env[FIXTURE_SWITCH] !== "1") return false;
-  runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
-
-  return true;
+export function registerTestFixture(runtime: ModelRuntime): void {
+  if (process.env[FIXTURE_SWITCH] === "1") runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
 }

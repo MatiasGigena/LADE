@@ -2,7 +2,7 @@ export const MAX_FRAME = 1024 * 1024;
 
 export const MAX_STRING = 256 * 1024;
 
-export const MAX_DEPTH = 32;
+const MAX_DEPTH = 32;
 
 export const MAX_NODES = 16_384;
 
