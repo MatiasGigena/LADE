@@ -57,10 +57,11 @@ The full list is in [AGENTS.md](AGENTS.md). The main points:
   removing or weakening code. Check the dependency's own types in `node_modules`; do not guess APIs.
 - **Rust.** `unsafe` is forbidden workspace-wide. New crate dependency edges, and platform imports in the domain crate, must pass the
   reviewed allowlist in `scripts/check-architecture.py`.
+  A module with submodules keeps its root in `foo/mod.rs`, never `foo.rs` beside `foo/`; the same script checks it.
 - **TypeScript.** The worker runs under Node's type stripping, so use only erasable syntax: no `enum`, `namespace`,
   parameter properties, `import =`/`export =`. No `any` unless absolutely necessary. Top-level imports only (no
   inline `import("pkg").Type`). External input is validated at the protocol boundaries without coercion.
-- **Keybindings** are never hardcoded; add defaults to `DEFAULT_APP_KEYBINDINGS` in `crates/lade-desktop/src/presentation/keys.rs`.
+- **Keybindings** are never hardcoded; add defaults to `DEFAULT_APP_KEYBINDINGS` in `crates/lade-desktop/src/presentation/keys/mod.rs`.
 - **Keep it small.** Inline one-line helpers with a single call site. No backward-compatibility shims unless needed.
   Ask before removing behaviour that looks intentional.
 - **Docs.** When behaviour, limits or guarantees change, update the matching document (user guide, the

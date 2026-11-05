@@ -49,6 +49,9 @@ for layer in ('storage', 'supervision', 'adapters', 'transport', 'support'):
 for path in (root/'crates/lade-desktop/src/presentation').rglob('*.rs'):
     if re.search(r'\b(?:gtk4|gtk|glib|gio|sourceview5)\s*::|\buse\s+(?:gtk4|gtk|glib|gio|sourceview5)\b|\bcrate::(?:views|transport)\b|\bcrate::\{[^}]*\b(?:views|transport)\b', path.read_text()):
         errors.append(f'layer boundary (presentation imports GTK, views or transport): {path.relative_to(root)}')
+for path in (root/'crates').glob('*/src/**/*.rs'):
+    if path.with_suffix('').is_dir():
+        errors.append(f'module root outside mod.rs (use {path.stem}/mod.rs): {path.relative_to(root)}')
 worker_src = root/'packages/pi-worker/src'
 worker_packages = {'@earendil-works/pi-coding-agent', 'undici'}
 pi_ai = root/'packages/pi-worker/node_modules/@earendil-works/pi-ai/dist/index.js'
