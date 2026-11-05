@@ -145,26 +145,28 @@ automatically.
 
 ## SDK APIs used (1.5.0 root exports)
 
-- `ModelRuntime.create({authPath, modelsPath: null, modelsStorePath, allowModelNetwork: false})`,
-  `modelRuntime.registerProvider(id, config)`, `modelRuntime.getModel(provider, id)`.
+- `ModelRuntime.create({authPath, modelsPath, modelsStorePath, allowModelNetwork: false})` (`modelsPath` is the
+  profile snapshot's `models.json` when it exists, otherwise `null`), `modelRuntime.registerProvider(id, config)`,
+  `modelRuntime.getModel(provider, id)`.
 - `SettingsManager.inMemory({...})` (no global or project `settings.json`; `defaultProjectTrust:
   "never"`, telemetry/analytics off, one-at-a-time queues).
 - `new DefaultResourceLoader({cwd, agentDir, settingsManager, noExtensions, noSkills,
   noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, extensionFactories,
   additionalSkillPaths, additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
   appendSystemPromptOverride: () => [system_note]})` + `reload()`.
-- `createAgentSessionRuntime`, `createAgentSessionFromServices`,
-  `AgentSessionRuntime` (`fork`, `importFromJsonl`, `setRebindSession`, `setBeforeSessionInvalidate`,
-  `dispose`), `SessionManager.open`, `Theme` (a plain theme for the UI context).
+- `createAgentSessionRuntime(factory, {cwd, agentDir, sessionManager})` with a factory over
+  `createAgentSessionFromServices({services, sessionManager, model, tools: ["read","bash","edit","write"],
+  sessionStartEvent?, thinkingLevel?})`; `AgentSessionRuntime` (`session`, `services`, `fork`, `importFromJsonl`,
+  `setRebindSession`, `setBeforeSessionInvalidate`, `dispose`); `Theme` (a plain theme for the UI context).
+- `SessionManager.open(file, sessionsDir, cwd)`, `SessionManager.create(cwd, sessionsDir)`,
+  `SessionManager.continueRecent(cwd, sessionsDir)`.
 - `AgentSession`: `bindExtensions`, `navigateTree`, `compact`, `setModel`, `setThinkingLevel`,
-  `exportToJsonl`, `reload`, `extensionRunner.getCommand`, `sessionManager` (`getEntries`, `getLeafId`,
-  `getLabel`).
+  `exportToJsonl`, `reload`, `waitForIdle`, `extensionRunner.getCommand`, `model`, `thinkingLevel`,
+  `isCompacting`, `sessionManager` (`getEntries`, `getEntry`, `getLeafId`, `getLabel`).
 - `ModelRuntime.getProviders` / `getModels` and pi-ai `getSupportedThinkingLevels` (catalogue).
-- `SessionManager.create(cwd, sessionsDir)` / `SessionManager.continueRecent(cwd, sessionsDir)`.
-- `createAgentSession({cwd, agentDir, modelRuntime, model, tools: ["read","bash","edit","write"],
-  resourceLoader, sessionManager, settingsManager})`.
 - `AgentSession`: `subscribe`, `prompt(text, {expandPromptTemplates, source, preflightResult})`,
-  `steer`, `followUp`, `clearQueue`, `abort`, `isStreaming`, `sessionId`, `sessionFile`, `dispose`.
+  `steer`, `followUp`, `clearQueue`, `abort` (which also stops compaction and retries), `isStreaming`,
+  `sessionId`, `sessionFile`.
   `preflightResult` reports only how an accepted prompt was dispatched; a delivery cancelled before
   the run starts (a newer input epoch) is dropped by the worker's own `input` handler (`InputGate` in
   `src/worker/session.ts`, passed as the only `extensionFactories` entry), which answers `handled`
@@ -199,6 +201,12 @@ Behaviour, decided only from the visible conversation (last user message):
   a short text, then one real `write` tool call per line (`stopReason: "toolUse"`); after the tool
   results it replies `lade-fixture: K of M tool call(s) succeeded. Done.`;
 - `lade-fixture: fail`: emits a provider error `lade-fixture: scripted provider failure`;
+- `lade-fixture: transient`: fails once with `lade-fixture: overloaded (scripted transient failure)`, which pi
+  retries, and the retry succeeds (each provider registration remembers which user messages it failed);
+- `lade-fixture: echo`: replies `lade-fixture echo: <the user message>`, so a test can see what pi delivered
+  (for example an expanded prompt template or a transformed input);
+- `lade-fixture: system`: replies with the sorted, de-duplicated `LADE-MARKER:<name>` tokens of the system prompt,
+  so a test can see which context files and skills were loaded;
 - `lade-fixture: delay <ms>` (≤ 2000): waits before each delta/tool call, honouring the abort
   signal — used to test steering and abort during a running turn.
 
@@ -226,7 +234,9 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
 - `test/worker-wire.test.ts` — closed inbound validation, LF fragmentation/poisoning, outbound
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled
-  `fetch`, refused tunnel, invalid authority, and the no-gateway failure.
+  `fetch`, `node:http` and WebSocket, `https`/`wss` with end-to-end TLS against a local origin whose certificate the
+  test builds with `node:crypto` (no openssl; a wrong host name is refused), refused tunnel, invalid authority,
+  CONNECT header bounds, and the no-gateway failure.
 - `test/worker-deps.test.ts` — the dependency seam: exactly one pi-ai is locked and installed (no
   direct dependency, no nested copy), every locked package that depends on pi-ai (pi-coding-agent,
   pi-agent-core, …) resolves the hoisted copy that `src/worker/pi-ai.ts` re-exports, the fixture
@@ -282,7 +292,8 @@ must re-run that test.
   agents are routed through the gateway (`src/worker/gateway.ts`). SDKs that bring their own agent
   (or `agent: false`), raw sockets and other runtimes have no network in the sandbox. TLS through the
   real gateway is tested against a local origin with a test-generated certificate, for both `fetch`
-  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`).
+  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`, skipped
+  without openssl), and the worker's own tunnel for `fetch`, `node:https` and `wss` in `test/worker-gateway.test.ts`.
 - **Tool output isolation**: pi's `bash` tool spawns children with piped stdout, but nothing in the
   worker stops a hostile process from writing to the worker's inherited fd 1 via `/proc`; the
   service must treat every frame as untrusted (it does: closed schema validation).
