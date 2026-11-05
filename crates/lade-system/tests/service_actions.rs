@@ -1,6 +1,7 @@
 mod service_support;
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -367,6 +368,8 @@ fn start_without_credentials_is_refused_synchronously_naming_the_variable() {
     let mut config = LauncherConfig::new(
         env.root.path().join("state/run"),
         env.root.path().join("run/g"),
+        std::env::var_os("LADE_NODE").map(PathBuf::from),
+        std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
     )
     .unwrap();
     config.credentials = CredentialSource::empty();

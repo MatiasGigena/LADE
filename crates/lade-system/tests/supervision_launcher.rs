@@ -15,9 +15,7 @@ use lade_protocol::worker::{TurnState, WorkerBody};
 use lade_system::adapters::sandbox::{SandboxTools, WORKER_LIMITS};
 use lade_system::supervision::credentials::{CredentialSource, FIXTURE_REFUSED};
 use lade_system::supervision::gateway::{EgressPolicy, EgressRule, default_policies};
-use lade_system::supervision::launcher::{
-    NODE_ARGS, default_worker_dir, resolve_node, worker_dir_from,
-};
+use lade_system::supervision::launcher::{NODE_ARGS, resolve_node, worker_dir_from};
 use lade_system::supervision::sweep::read_pidfile;
 use lade_system::supervision::{
     LaunchBinding, LaunchError, LaunchRequest, LauncherConfig, SupervisorEvent, WorkerEvent,
@@ -32,7 +30,7 @@ fn prerequisites() -> Option<PathBuf> {
         skip_without_sandbox(e);
         return None;
     }
-    match resolve_node(None) {
+    match resolve_node(std::env::var_os("LADE_NODE").map(PathBuf::from)) {
         Ok(node) => Some(node),
         Err(e) => {
             skip_without_sandbox(e.detail());
@@ -77,7 +75,11 @@ impl Fixture {
     }
 
     fn config(&self, node: PathBuf) -> LauncherConfig {
-        let worker_dir = default_worker_dir().unwrap();
+        let worker_dir = worker_dir_from(
+            std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
+            std::env::current_exe().ok().as_deref(),
+        )
+        .unwrap();
         LauncherConfig {
             node,
             entry: worker_dir.join("src/worker.ts"),

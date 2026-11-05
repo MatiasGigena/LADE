@@ -8,7 +8,7 @@ use rustix::termios::{LocalModes, OptionalActions, Termios, isatty, tcgetattr, t
 
 use lade_system::adapters::providers::FIXTURE_PROVIDER;
 use lade_system::adapters::sandbox::{
-    FIXTURE_SWITCH, OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup,
+    CgroupError, FIXTURE_SWITCH, OBJECTIVE_CGROUP_LIMITS, SandboxCgroups, cgroup,
 };
 use lade_system::diagnostics;
 use lade_system::service::{self, ResourceLimits, ServiceConfig, StartError};
@@ -221,7 +221,14 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
         .recursive(true)
         .create(&run_dir)
         .map_err(LaunchError::Io)
-        .and_then(|()| LauncherConfig::new(run_dir, socket_dir))
+        .and_then(|()| {
+            LauncherConfig::new(
+                run_dir,
+                socket_dir,
+                std::env::var_os("LADE_NODE").map(PathBuf::from),
+                std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
+            )
+        })
         .and_then(|launcher| {
             default_launcher(LauncherConfig {
                 cgroups: config.cgroups.clone(),
@@ -239,7 +246,12 @@ fn make_launcher(config: &ServiceConfig) -> Arc<dyn WorkerLauncher> {
 }
 
 fn delegated_cgroups() -> Option<Arc<SandboxCgroups>> {
-    match cgroup::detect(OBJECTIVE_CGROUP_LIMITS) {
+    let detected = if std::env::var_os("LADE_CGROUPS").is_some_and(|v| v == "off") {
+        Err(CgroupError::Disabled)
+    } else {
+        cgroup::detect(OBJECTIVE_CGROUP_LIMITS)
+    };
+    match detected {
         Ok(cgroups) => {
             let swept = cgroups.sweep();
             eprintln!(

@@ -457,6 +457,8 @@ pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>,
         && let Ok(launcher) = LauncherConfig::new(
             env.root.path().join("state/run"),
             env.root.path().join("run/g"),
+            std::env::var_os("LADE_NODE").map(PathBuf::from),
+            std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
         )
         .and_then(|config| {
             default_launcher(LauncherConfig {

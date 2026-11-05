@@ -124,13 +124,9 @@ pub struct SandboxCgroups {
 ///
 /// # Errors
 ///
-/// Returns the [`CgroupError`] that says why delegated limits are unavailable: disabled by
-/// `LADE_CGROUPS=off`, no cgroup v2, not owned or not delegated, missing controllers, unmovable
+/// Returns the [`CgroupError`] that says why delegated limits are unavailable: no cgroup v2, not owned or not delegated, missing controllers, unmovable
 /// processes, an unreadable or unwritable file, or limits that a probe shows are not enforced.
 pub fn detect(limits: CgroupLimits) -> Result<SandboxCgroups, CgroupError> {
-    if std::env::var_os("LADE_CGROUPS").is_some_and(|v| v == "off") {
-        return Err(CgroupError::Disabled);
-    }
     let membership =
         fs::read_to_string("/proc/self/cgroup").map_err(CgroupError::io("/proc/self/cgroup"))?;
     let cgroups = detect_in(

@@ -83,17 +83,23 @@ pub struct LauncherConfig {
 
 impl LauncherConfig {
     /// The default launcher configuration: Node and the worker package found as
-    /// [`resolve_node`] and [`default_worker_dir`] find them, built-in provider policies, and
-    /// credentials and proxy settings from the process environment.
+    /// [`resolve_node`] and [`worker_dir_from`] find them from the configured `node` and
+    /// `worker_dir` (the composition root reads `LADE_NODE` and `LADE_WORKER_DIR`), built-in
+    /// provider policies, and credentials and proxy settings from the process environment.
     ///
     /// # Errors
     ///
-    /// Fails as [`resolve_node`] and [`default_worker_dir`] do.
-    pub fn new(run_dir: PathBuf, socket_dir: PathBuf) -> Result<Self, LaunchError> {
-        let worker_dir = default_worker_dir()?;
+    /// Fails as [`resolve_node`] and [`worker_dir_from`] do.
+    pub fn new(
+        run_dir: PathBuf,
+        socket_dir: PathBuf,
+        node: Option<PathBuf>,
+        worker_dir: Option<PathBuf>,
+    ) -> Result<Self, LaunchError> {
+        let worker_dir = worker_dir_from(worker_dir, std::env::current_exe().ok().as_deref())?;
         Ok(Self {
             socket_dir,
-            node: resolve_node(None)?,
+            node: resolve_node(node)?,
             entry: worker_dir.join("src").join("worker.ts"),
             node_args: NODE_ARGS.iter().map(OsString::from).collect(),
             worker_dir,
@@ -109,23 +115,20 @@ impl LauncherConfig {
     }
 }
 
-/// The canonical path of the Node runtime: `explicit`, else `LADE_NODE`, else `node` on
-/// `PATH`.
+/// The canonical path of the Node runtime: `configured` (from `LADE_NODE` or the launcher
+/// configuration), else `node` on `PATH`.
 ///
 /// # Errors
 ///
-/// Returns [`LaunchError::SandboxUnavailable`] when `LADE_NODE` is relative, no runtime is found,
-/// or its path cannot be resolved.
-pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
-    let from_env = std::env::var_os("LADE_NODE").map(PathBuf::from);
-    if let Some(path) = &from_env
-        && !path.is_absolute()
-    {
+/// Returns [`LaunchError::SandboxUnavailable`] when `configured` is relative, no runtime is
+/// found, or its path cannot be resolved.
+pub fn resolve_node(configured: Option<PathBuf>) -> Result<PathBuf, LaunchError> {
+    if configured.as_ref().is_some_and(|path| !path.is_absolute()) {
         return Err(LaunchError::SandboxUnavailable(
             "LADE_NODE must be an absolute path to the node runtime".into(),
         ));
     }
-    let candidate = match explicit.map(Path::to_path_buf).or(from_env) {
+    let candidate = match configured {
         Some(path) => path,
         None => find_program("node").ok_or_else(|| {
             LaunchError::SandboxUnavailable(
@@ -136,20 +139,6 @@ pub fn resolve_node(explicit: Option<&Path>) -> Result<PathBuf, LaunchError> {
     candidate
         .canonicalize()
         .map_err(|_| LaunchError::SandboxUnavailable("node runtime path unresolvable".into()))
-}
-
-/// The worker package directory for this process, as [`worker_dir_from`] finds it from
-/// `LADE_WORKER_DIR` and the running executable.
-///
-/// # Errors
-///
-/// Fails as [`worker_dir_from`] does.
-pub fn default_worker_dir() -> Result<PathBuf, LaunchError> {
-    let exe = std::env::current_exe().ok();
-    worker_dir_from(
-        std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
-        exe.as_deref(),
-    )
 }
 
 /// The worker package directory: `env_dir` when set, else the bundle next to
@@ -219,7 +208,7 @@ impl SandboxLauncher {
     /// run or socket directory is relative, or a private directory cannot be created.
     pub fn new(mut config: LauncherConfig) -> Result<Self, LaunchError> {
         let tools = SandboxTools::locate()?;
-        config.node = resolve_node(Some(&config.node))?;
+        config.node = resolve_node(Some(config.node))?;
         config.worker_dir = config.worker_dir.canonicalize().map_err(LaunchError::Io)?;
         if !config.entry.is_absolute() || !config.entry.starts_with(&config.worker_dir) {
             return Err(invalid("worker entry must be inside the worker directory"));
