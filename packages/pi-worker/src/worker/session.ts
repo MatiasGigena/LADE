@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { createAgentSessionFromServices, createAgentSessionRuntime, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionRuntime, AgentSessionServices, CreateAgentSessionRuntimeFactory, CreateAgentSessionRuntimeResult, ExtensionFactory, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { Model, ThinkingLevel, TreeEntry, WorkerErrorCode, WorkerResources, WorkerToService } from "../dto.ts";
 import { counter } from "../schema.ts";
 import { prefix, safeMessage } from "./activity.ts";
@@ -19,6 +19,8 @@ const MAX_TREE_BYTES = 900 * 1024;
 const MAX_LABEL = 200;
 
 type Bindings = Parameters<AgentSession["bindExtensions"]>[0];
+
+type RuntimeOptions = Parameters<CreateAgentSessionRuntimeFactory>[0];
 
 type ChangeReason = Extract<WorkerToService, { kind: "session.changed" }>["reason"];
 
@@ -59,40 +61,41 @@ function contentText(content: string | ReadonlyArray<{ type: string; text?: stri
   return content.map(part => part.type === "text" ? part.text ?? "" : `[${part.type}]`).join(" ");
 }
 
-export function treeEntry(entry: SessionEntry, bookmark: string | undefined): TreeEntry {
-  const base = (kind: TreeEntry["kind"], label: string): TreeEntry => {
-    const node: TreeEntry = { kind, entry_id: entry.id, label: clip(label) };
-
-    if (entry.parentId !== null) node.parent_id = entry.parentId;
-
-    if (bookmark !== undefined) node.bookmark = clip(bookmark);
-
-    return node;
-  };
-
+function describe(entry: SessionEntry): Pick<TreeEntry, "kind" | "label"> {
   switch (entry.type) {
     case "message": {
       const message = entry.message;
 
-      if (message.role === "user") return base("user", contentText(message.content));
+      if (message.role === "user") return { kind: "user", label: contentText(message.content) };
 
-      if (message.role === "assistant") return base("assistant", contentText(message.content));
+      if (message.role === "assistant") return { kind: "assistant", label: contentText(message.content) };
 
-      if (message.role === "toolResult") return base("tool_result", `${message.toolName} result`);
+      if (message.role === "toolResult") return { kind: "tool_result", label: `${message.toolName} result` };
 
-      return base("other", message.role);
+      return { kind: "other", label: message.role };
     }
 
-    case "custom_message": return base("custom_message", entry.customType);
-    case "compaction": return base("compaction", "Compaction summary");
-    case "branch_summary": return base("branch_summary", "Branch summary");
-    case "model_change": return base("model_change", `${entry.provider}/${entry.modelId}`);
-    case "thinking_level_change": return base("thinking_change", entry.thinkingLevel);
-    case "label": return base("label", entry.label ?? "label cleared");
-    case "session_info": return base("session_info", entry.name ?? "session info");
-    case "custom": return base("custom", entry.customType);
-    default: return base("other", "entry");
+    case "custom_message": return { kind: "custom_message", label: entry.customType };
+    case "compaction": return { kind: "compaction", label: "Compaction summary" };
+    case "branch_summary": return { kind: "branch_summary", label: "Branch summary" };
+    case "model_change": return { kind: "model_change", label: `${entry.provider}/${entry.modelId}` };
+    case "thinking_level_change": return { kind: "thinking_change", label: entry.thinkingLevel };
+    case "label": return { kind: "label", label: entry.label ?? "label cleared" };
+    case "session_info": return { kind: "session_info", label: entry.name ?? "session info" };
+    case "custom": return { kind: "custom", label: entry.customType };
+    default: return { kind: "other", label: "entry" };
   }
+}
+
+export function treeEntry(entry: SessionEntry, bookmark: string | undefined): TreeEntry {
+  const { kind, label } = describe(entry);
+  const node: TreeEntry = { kind, entry_id: entry.id, label: clip(label) };
+
+  if (entry.parentId !== null) node.parent_id = entry.parentId;
+
+  if (bookmark !== undefined) node.bookmark = clip(bookmark);
+
+  return node;
 }
 
 export interface TreePage { entries: TreeEntry[]; truncated: boolean }
@@ -198,30 +201,31 @@ export class SessionHost {
       followUpMode: "one-at-a-time",
     });
 
-    const createRuntime: CreateAgentSessionRuntimeFactory = async ({ agentDir: dir, sessionManager, sessionStartEvent }) => {
-      const cwd = start.cwd;
-      const loader = new LadeResourceLoader({ cwd, agentDir: dir, settingsManager, systemNote: start.system_note, resources: this.resources, inputGate: this.gate.extension });
-      await loader.reload();
-      this.loader = loader;
-      const services: AgentSessionServices = { cwd, agentDir: dir, modelRuntime, settingsManager, resourceLoader: loader, diagnostics: [] };
-      const model = modelRuntime.getModel(this.model.provider, this.model.id);
-
-      if (!model) throw new StartError("startup_failed", "the requested model is not registered");
-      const options: Parameters<typeof createAgentSessionFromServices>[0] = { services, sessionManager, model, tools: WORKER_TOOLS };
-
-      if (sessionStartEvent) options.sessionStartEvent = sessionStartEvent;
-
-      if (this.thinking !== undefined) options.thinkingLevel = this.thinking;
-      const result = await createAgentSessionFromServices(options);
-
-      return { ...result, services, diagnostics: [] };
-    };
-
+    const createRuntime: CreateAgentSessionRuntimeFactory = options => this.createSession(modelRuntime, settingsManager, options);
     const sessionManager = this.openManager(sessionsDir);
     this.runtimeHost = await createAgentSessionRuntime(createRuntime, { cwd: start.cwd, agentDir, sessionManager });
     this.runtimeHost.setBeforeSessionInvalidate(() => { this.ui.advance(); });
     this.runtimeHost.setRebindSession(session => this.bind(session));
     await this.bind(this.runtimeHost.session);
+  }
+
+  private async createSession(modelRuntime: ModelRuntime, settingsManager: SettingsManager, { agentDir, sessionManager, sessionStartEvent }: RuntimeOptions): Promise<CreateAgentSessionRuntimeResult> {
+    const cwd = this.start.cwd;
+    const loader = new LadeResourceLoader({ cwd, agentDir, settingsManager, systemNote: this.start.system_note, resources: this.resources, inputGate: this.gate.extension });
+    await loader.reload();
+    this.loader = loader;
+    const services: AgentSessionServices = { cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader, diagnostics: [] };
+    const model = modelRuntime.getModel(this.model.provider, this.model.id);
+
+    if (!model) throw new StartError("startup_failed", "the requested model is not registered");
+    const options: Parameters<typeof createAgentSessionFromServices>[0] = { services, sessionManager, model, tools: WORKER_TOOLS };
+
+    if (sessionStartEvent) options.sessionStartEvent = sessionStartEvent;
+
+    if (this.thinking !== undefined) options.thinkingLevel = this.thinking;
+    const result = await createAgentSessionFromServices(options);
+
+    return { ...result, services, diagnostics: [] };
   }
 
   private openManager(sessionsDir: string): SessionManager {
@@ -233,20 +237,24 @@ export class SessionHost {
     return start.resume ? SessionManager.continueRecent(start.cwd, sessionsDir) : SessionManager.create(start.cwd, sessionsDir);
   }
 
-  private bindings(): Bindings {
-    const refuse = (what: string) => async () => {
+  /** An extension action that LADE refuses: it notes the attempt and rejects. */
+  private refusal(what: string): () => Promise<never> {
+    return () => {
       this.note("Extension request refused", `An extension asked to ${what}; LADE replaces sessions only through its own session controls.`, true);
-      throw new Error(`LADE: extensions cannot ${what}`);
-    };
 
+      return Promise.reject(new Error(`LADE: extensions cannot ${what}`));
+    };
+  }
+
+  private bindings(): Bindings {
     return {
       uiContext: this.ui.context(),
       mode: "rpc",
       commandContextActions: {
         waitForIdle: () => this.session.waitForIdle(),
-        newSession: refuse("start a new session"),
-        fork: refuse("fork the session"),
-        switchSession: refuse("switch sessions"),
+        newSession: this.refusal("start a new session"),
+        fork: this.refusal("fork the session"),
+        switchSession: this.refusal("switch sessions"),
         navigateTree: async (targetId, options) => {
           const result = await this.session.navigateTree(targetId, { summarize: options?.summarize ?? false });
           this.changed("navigate");
@@ -341,87 +349,91 @@ export class SessionHost {
     const session = runtime.session;
 
     switch (command.op) {
-      case "tree": {
-        const manager = session.sessionManager;
-        const page = treePage(manager.getEntries(), id => manager.getLabel(id));
-        result.entries = page.entries;
-        result.truncated = page.truncated;
-        const leaf = manager.getLeafId();
-
-        if (leaf !== null) result.leaf_id = leaf;
+      case "tree":
+        this.tree(session, result);
 
         return;
-      }
-
-      case "navigate": {
-        this.idle("tree navigation");
-
-        if (!session.sessionManager.getEntry(command.entry_id)) throw new CommandError("no such session entry");
-        const outcome = await session.navigateTree(command.entry_id, { summarize: false });
-
-        if (outcome.cancelled) throw new CommandError("tree navigation was cancelled by an extension");
-        this.changed("navigate");
-
-        return;
-      }
-
-      case "fork": {
+      case "navigate":
+        return this.navigate(session, command.entry_id);
+      case "fork":
         this.idle("forking");
-        this.reason = "fork";
-        const outcome = await runtime.fork(command.entry_id, { position: command.position });
 
-        if (outcome.cancelled) { this.reason = "start"; throw new CommandError("fork was cancelled by an extension"); }
-
-        return;
-      }
-
-      case "import": {
+        return this.replaceSession("fork", () => runtime.fork(command.entry_id, { position: command.position }));
+      case "import":
         this.idle("importing");
 
         if (!inside(join(this.start.session_dir, "imports"), command.path)) throw new CommandError("imports are read only from the service's import directory");
-        this.reason = "import";
-        const outcome = await runtime.importFromJsonl(command.path, this.start.cwd);
 
-        if (outcome.cancelled) { this.reason = "start"; throw new CommandError("import was cancelled by an extension"); }
-
-        return;
-      }
-
-      case "export": {
+        return this.replaceSession("import", () => runtime.importFromJsonl(command.path, this.start.cwd));
+      case "export":
         if (!inside(join(this.start.session_dir, "exports"), command.path)) throw new CommandError("exports are written only to the service's export directory");
         mkdirSync(dirname(command.path), { recursive: true, mode: 0o700 });
         session.exportToJsonl(command.path);
 
         return;
-      }
-
-      case "compact": {
+      case "compact":
         this.idle("compaction");
         await session.compact(command.instructions);
         this.changed("compact");
 
         return;
-      }
-
       case "reload":
         this.idle("reload");
 
         if (!inside(this.start.session_dir, command.resources.profile_dir)) throw new CommandError("the profile snapshot must be inside session_dir");
-        await this.reload(command.resources);
 
-        return;
-      case "configure": {
-        this.idle("changing the model");
-        const model = runtime.services.modelRuntime.getModel(command.model.provider, command.model.id);
+        return this.reload(command.resources);
+      case "configure":
+        return this.configure(runtime, command.model, command.thinking);
+      default: {
+        const unhandled: never = command;
 
-        if (!model) throw new CommandError("the requested model is not registered");
-        await session.setModel(model);
-        this.model = command.model;
-        session.setThinkingLevel(command.thinking);
-        this.thinking = command.thinking;
-        this.changed("configure");
+        return unhandled;
       }
     }
+  }
+
+  private tree(session: AgentSession, result: ResultBody): void {
+    const manager = session.sessionManager;
+    const page = treePage(manager.getEntries(), id => manager.getLabel(id));
+    result.entries = page.entries;
+    result.truncated = page.truncated;
+    const leaf = manager.getLeafId();
+
+    if (leaf !== null) result.leaf_id = leaf;
+  }
+
+  private async navigate(session: AgentSession, entryId: string): Promise<void> {
+    this.idle("tree navigation");
+
+    if (!session.sessionManager.getEntry(entryId)) throw new CommandError("no such session entry");
+    const outcome = await session.navigateTree(entryId, { summarize: false });
+
+    if (outcome.cancelled) throw new CommandError("tree navigation was cancelled by an extension");
+    this.changed("navigate");
+  }
+
+  /** Replaces the session; the rebind it triggers reports `reason` unless an extension cancels it. */
+  private async replaceSession(reason: "fork" | "import", replace: () => Promise<{ cancelled: boolean }>): Promise<void> {
+    this.reason = reason;
+    const outcome = await replace();
+
+    if (!outcome.cancelled) return;
+    this.reason = "start";
+    throw new CommandError(`${reason} was cancelled by an extension`);
+  }
+
+  private async configure(runtime: AgentSessionRuntime, model: Model, thinking: ThinkingLevel): Promise<void> {
+    this.idle("changing the model");
+    const session = runtime.session;
+    const registered = runtime.services.modelRuntime.getModel(model.provider, model.id);
+
+    if (!registered) throw new CommandError("the requested model is not registered");
+    await session.setModel(registered);
+    this.model = model;
+    session.setThinkingLevel(thinking);
+    this.thinking = thinking;
+    this.changed("configure");
   }
 
   async dispose(): Promise<void> {
