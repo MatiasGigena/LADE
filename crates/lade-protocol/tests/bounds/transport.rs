@@ -98,7 +98,7 @@ fn reader_poisons_on_invalid_frames_and_writer_rejects_invalid_messages() {
 }
 #[test]
 fn oversized_declared_client_length_fails_before_allocation() {
-    let header = ((MAX_FRAME + 1) as u32).to_be_bytes();
+    let header = u32::try_from(MAX_FRAME + 1).unwrap().to_be_bytes();
     let mut reader = FrameReader::new(&header[..], Framing::Client);
     assert!(matches!(
         reader.read_frame(),

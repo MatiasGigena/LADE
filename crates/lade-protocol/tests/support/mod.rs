@@ -47,7 +47,7 @@ pub fn source(s: &Value) -> Vec<u8> {
 fn framed(bytes: &[u8], framing: Framing) -> Vec<u8> {
     match framing {
         Framing::Client => {
-            let mut v = (bytes.len() as u32).to_be_bytes().to_vec();
+            let mut v = u32::try_from(bytes.len()).unwrap().to_be_bytes().to_vec();
             v.extend(bytes);
             v
         }
@@ -226,7 +226,7 @@ pub fn report() -> Vec<Value> {
     corpus()
         .iter()
         .map(|case| {
-            let actual = run(case).map(|_| "ok").unwrap_or_else(WireError::as_str);
+            let actual = run(case).map_or_else(WireError::as_str, |()| "ok");
             assert_eq!(actual, case["expected"].as_str().unwrap(), "{}", case["id"]);
             json!({"id":case["id"], "outcome":actual})
         })

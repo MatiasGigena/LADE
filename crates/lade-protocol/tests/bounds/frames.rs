@@ -109,7 +109,7 @@ fn input_page() -> RecordPage {
 /// The page as one client frame of exactly `MAX_FRAME` bytes. Each record's field takes as many
 /// control characters (six bytes once escaped) and then plain bytes as it may, until the frame is
 /// full.
-fn at_frame_bound(page: RecordPage) -> Vec<u8> {
+fn at_frame_bound(page: &RecordPage) -> Vec<u8> {
     let data = json!({page.list: page.records, "next_after": page.next_after});
     let mut frame = json!({"protocol":1,"bundle":lade_protocol::BUNDLE,
         "body":{"kind":"reply","request_id":id(1),"name":page.name,"result":{"status":"ok","data":data}}});
@@ -131,7 +131,7 @@ fn at_frame_bound(page: RecordPage) -> Vec<u8> {
 
 /// A page at the frame bound decodes and re-encodes to the bound; one byte more is refused both
 /// when encoding and when decoding.
-fn assert_exact_frame_bound(page: RecordPage, grow_by_one_byte: impl FnOnce(&mut ReplyData)) {
+fn assert_exact_frame_bound(page: &RecordPage, grow_by_one_byte: impl FnOnce(&mut ReplyData)) {
     let mut decoded = ClientEnvelope::decode(&at_frame_bound(page)).unwrap();
     assert_eq!(
         encode(&decoded, Framing::Client).unwrap().len(),
@@ -157,7 +157,7 @@ fn assert_exact_frame_bound(page: RecordPage, grow_by_one_byte: impl FnOnce(&mut
 
 #[test]
 fn draft_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
-    assert_exact_frame_bound(draft_page(), |data| match data {
+    assert_exact_frame_bound(&draft_page(), |data| match data {
         ReplyData::DraftsList(page) => page.drafts.last_mut().unwrap().body.push('a'),
         _ => panic!("expected a draft page"),
     });
@@ -165,7 +165,7 @@ fn draft_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
 
 #[test]
 fn input_pages_round_trip_at_the_exact_frame_bound_and_reject_one_byte_over() {
-    assert_exact_frame_bound(input_page(), |data| match data {
+    assert_exact_frame_bound(&input_page(), |data| match data {
         ReplyData::InputsList(page) => page.inputs.last_mut().unwrap().text_preview.push('a'),
         _ => panic!("expected an input page"),
     });

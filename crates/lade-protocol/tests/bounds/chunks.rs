@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use super::{id, message, scope};
 use lade_protocol::{
     ClientEnvelope, Decoder, Framing, MAX_CHUNK, MAX_TRANSFER, Reassembler, encode,
@@ -21,8 +23,10 @@ fn logical_content_larger_than_a_frame_is_preserved_at_reassembly_limit() {
     let bytes = vec![b'a'; MAX_TRANSFER];
     let digest = Sha256::digest(&bytes)
         .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
     let mut chunks = reassembler();
     chunks
         .accept(&message(start(4, MAX_TRANSFER, &digest)).body)
