@@ -1,6 +1,7 @@
+use super::history::RequestHistory;
 use super::{id, typed_id, wire};
 use lade_protocol::{
-    ClientBody, ClientEnvelope, Framing, Message, RequestHistory,
+    ClientBody, ClientEnvelope, Framing, Message,
     client::{
         Empty, ErrorCode, MessageSendCommand, ObjectiveSelector, Rejection, Reply, ReplyData,
         ReplyResult, Request, RequestFrame, RequestName, SafeAction,

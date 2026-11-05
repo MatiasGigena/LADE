@@ -1,6 +1,9 @@
+mod history;
+
+use history::RequestHistory;
 use lade_protocol::{
-    ClientEnvelope, Decoder, Framing, Message, Reassembler, RequestHistory, WireError,
-    WorkerEnvelope, bounded_json,
+    ClientEnvelope, Decoder, Framing, Message, Reassembler, WireError, WorkerEnvelope,
+    bounded_json,
     client::{ClientBody, ErrorCode, Rejection, ReplyResult, SafeAction, Scope},
     encode,
     types::Counter,

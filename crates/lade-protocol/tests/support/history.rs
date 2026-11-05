@@ -1,4 +1,8 @@
-use crate::{
+//! The reference model of the protocol's retry rule: a bounded, in-memory history that returns the
+//! first recorded outcome for a retried operation. The service applies the same rule through its
+//! durable operation journal; this model exists to check the contract fixtures against.
+
+use lade_protocol::{
     WireError,
     client::{ReplyResult, RequestFrame},
     types::Id,

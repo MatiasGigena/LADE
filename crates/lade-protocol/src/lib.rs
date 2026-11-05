@@ -2,15 +2,14 @@
 //! service, and the worker protocol between the service and the pi worker.
 //!
 //! It holds the DTOs ([`client`], [`worker`], [`types`]), validation against the closed JSON
-//! schemas with bounded parsing, frame encoding and decoding, chunked transfers, and the bounded
-//! request history that recognises retried operations. Every refusal below the request layer is a
+//! schemas with bounded parsing, frame encoding and decoding, chunked transfers, and the canonical
+//! request digest that recognises retried operations. Every refusal below the request layer is a
 //! [`WireError`] with a stable wire code.
 
 mod base64;
 mod chunks;
 pub mod client;
 mod framing;
-mod history;
 mod io;
 mod json;
 mod schema;
@@ -20,7 +19,6 @@ pub mod worker;
 pub use chunks::Reassembler;
 pub use client::{ClientBody, ClientEnvelope};
 pub use framing::{Decoder, Deframer, Framing, encode};
-pub use history::RequestHistory;
 pub use io::{FrameReader, FrameWriter, TransportError};
 pub use json::{bounded_json, json_len};
 pub use schema::Contract;

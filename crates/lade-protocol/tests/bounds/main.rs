@@ -3,6 +3,8 @@
 
 mod chunks;
 mod frames;
+#[path = "../support/history.rs"]
+mod history;
 mod requests;
 mod transport;
 
