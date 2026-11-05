@@ -24,7 +24,7 @@ use crate::support::fs::ensure_private_dir;
 
 use super::{COMMAND_TIMEOUT, MAX_IMPORT_BYTES, Op, PendingCommand};
 use crate::service::convert::{
-    conflict, domain_rejection, durability, invalid, io_rejection, not_found, wire_id,
+    conflict, domain_rejection, durability_failure, invalid, io_rejection, not_found, wire_id,
 };
 use crate::service::resources::snapshot;
 use crate::service::{Completed, Flow, ReqCtx, Service};
@@ -383,7 +383,7 @@ fn copy_import(source: &Path, copy: &Path) -> Result<(), Rejection> {
     };
     let not_copied = |e: std::io::Error| {
         eprintln!("laded: session import copy failed: {}", e.kind());
-        durability("The session could not be copied for import. Try again.")
+        durability_failure("The session could not be copied for import. Try again.")
     };
     let meta = fs::metadata(source).map_err(unreadable)?;
     if !meta.is_file() || meta.len() > MAX_IMPORT_BYTES {

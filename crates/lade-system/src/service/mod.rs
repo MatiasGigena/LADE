@@ -1,6 +1,6 @@
 mod agent_session;
 mod capture;
-pub mod convert;
+mod convert;
 mod execution;
 mod feedback;
 mod handlers;
@@ -45,7 +45,7 @@ pub use limits::ResourceLimits;
 pub use startup::{RunningService, ServiceConfig, StartError, start};
 
 use crate::support::{new_uuid, now_ms};
-use convert::{durability, wire_id};
+use convert::{durability_failure, wire_id};
 use link::Controller;
 use state::{ObjState, Runtime, WsState};
 
@@ -238,7 +238,7 @@ pub(crate) struct Service {
     agent_sessions: agent_session::AgentSessions,         // agent_session/
     terminals: terminal::Terminals,                       // terminal.rs
     integrations: review::Integrations, // review/integrate.rs; targets also by projection/
-    storage: limits::StorageGuard,      // limits.rs (free space), execution/writable.rs (usage)
+    storage: limits::StorageState,      // limits.rs (free space), execution/writable.rs (usage)
 }
 
 fn recordable(rejection: &Rejection) -> bool {
@@ -294,7 +294,7 @@ impl Service {
             recovery_notes: Vec::new(),
             integrations: review::Integrations::default(),
             held: None,
-            storage: limits::StorageGuard::new(config.storage_limit_bytes),
+            storage: limits::StorageState::new(config.storage_limit_bytes),
             cgroups: config.cgroups.clone(),
             test_fixture_provider: config.test_fixture_provider,
         }
@@ -432,8 +432,6 @@ impl Service {
     }
 }
 
-/// Logs a store failure in `Service::commit` with its stage and cause, then rejects with
-/// `detail`.
 /// Logs a store failure at `stage` with its cause and rejects with `detail`: the policy for every
 /// SQLite error a request meets.
 pub(crate) fn store_failed(
@@ -442,7 +440,7 @@ pub(crate) fn store_failed(
 ) -> impl Fn(rusqlite::Error) -> Rejection {
     move |e| {
         eprintln!("laded: store {stage} failed: {}", sql_cause(&e));
-        durability(detail)
+        durability_failure(detail)
     }
 }
 

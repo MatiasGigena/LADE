@@ -10,7 +10,7 @@ use lade_protocol::client::{
 use lade_protocol::types::Id;
 
 use crate::adapters::git;
-use crate::service::convert::{domain_rejection, durability, invalid};
+use crate::service::convert::{domain_rejection, durability_failure, invalid};
 use crate::service::handlers::sql;
 use crate::service::jobs;
 use crate::service::projection::actions::delete_history_blocker;
@@ -216,7 +216,9 @@ impl Service {
             st.row.history_deleted = true;
             let data = ReplyData::ObjectiveDeleteHistory(Box::new(self.fresh_detail(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)
-                .map_err(|_| durability("history deleted but not recorded; query the objective"))?;
+                .map_err(|_| {
+                    durability_failure("history deleted but not recorded; query the objective")
+                })?;
             Ok(data)
         })();
         self.finish(ctx, outcome);
@@ -244,7 +246,9 @@ impl Service {
             st.row.worktree = None;
             let data = ReplyData::ObjectiveCleanup(Box::new(self.fresh_detail(&st)));
             self.commit_obj(Some(&mut ctx), Some(&data), st)
-                .map_err(|_| durability("cleanup done but not recorded; query the objective"))?;
+                .map_err(|_| {
+                    durability_failure("cleanup done but not recorded; query the objective")
+                })?;
             Ok(data)
         })();
         self.finish(ctx, outcome);

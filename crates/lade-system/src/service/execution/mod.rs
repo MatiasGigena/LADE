@@ -26,7 +26,7 @@ use crate::supervision::credentials::FIXTURE_REFUSED;
 use crate::supervision::{LaunchBinding, LaunchError, LaunchRequest};
 
 use super::convert::wire_input;
-use super::convert::{domain_rejection, preview, wire_id};
+use super::convert::{domain_rejection, limit_reached, preview, wire_id};
 use super::jobs::{self, LaunchInput, ProfileSnapshot, Provision};
 use super::{Completed, ReqCtx, Service};
 use crate::support::{new_uuid, now_ms, ts_now};
@@ -55,7 +55,7 @@ impl Service {
             .start_execution(session, model, ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
-            return Err(Self::quota_rejection(&why));
+            return Err(limit_reached(&why));
         }
         self.preflight(&cmd.model.provider)?;
         if let Some(thinking) = cmd.thinking {
@@ -126,7 +126,7 @@ impl Service {
             .resume_execution(ts_now())
             .map_err(domain_rejection)?;
         if let Some(why) = self.worker_blocker(oid) {
-            return Err(Self::quota_rejection(&why));
+            return Err(limit_reached(&why));
         }
         if let Some(session) = st.objective().execution().session() {
             self.preflight(session.model.provider())?;

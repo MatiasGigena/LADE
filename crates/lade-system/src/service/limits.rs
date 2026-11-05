@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use lade_core::domain::ids::ObjectiveId;
-use lade_protocol::client::{ErrorCode, NoticeCode, NoticeLevel, Rejection, SafeAction};
+use lade_protocol::client::{NoticeCode, NoticeLevel};
 
 use super::Service;
 
@@ -47,24 +47,25 @@ pub(crate) enum Pressure {
     Critical,
 }
 
+/// Free space on the state volume: its pressure level and the bytes free when they could be read.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Storage {
-    pub level: Pressure,
-    pub free: Option<u64>,
+pub(crate) struct FreeSpace {
+    pub pressure: Pressure,
+    pub bytes: Option<u64>,
 }
 
 /// Storage limits: free space on the state volume, and the writable-storage limit per
 /// Objective with whether a measurement is already running.
-pub(crate) struct StorageGuard {
-    pub free_space: Storage,
+pub(crate) struct StorageState {
+    pub free_space: FreeSpace,
     pub writable_limit: u64,
     pub measuring: bool,
 }
 
-impl StorageGuard {
+impl StorageState {
     pub fn new(writable_limit: u64) -> Self {
         Self {
-            free_space: Storage::default(),
+            free_space: FreeSpace::default(),
             writable_limit,
             measuring: false,
         }
@@ -102,18 +103,14 @@ impl Service {
     }
 
     pub(crate) fn storage_blocker(&self) -> Option<String> {
-        (self.storage.free_space.level == Pressure::Critical).then(|| {
+        (self.storage.free_space.pressure == Pressure::Critical).then(|| {
             format!(
                 "The disk that holds LADE's data has {} MiB free, below the {} MiB LADE keeps in \
                  reserve. Free some space and try again.",
-                self.storage.free_space.free.map_or(0, mib),
+                self.storage.free_space.bytes.map_or(0, mib),
                 mib(self.limits.storage_reserve_bytes)
             )
         })
-    }
-
-    pub(crate) fn quota_rejection(detail: &str) -> Rejection {
-        Rejection::new(ErrorCode::LimitReached, SafeAction::Refresh, detail)
     }
 
     pub(crate) fn check_free_space(&mut self) {
@@ -123,8 +120,11 @@ impl Service {
             Some(free) if free < self.limits.storage_warn_bytes => Pressure::Low,
             _ => Pressure::Normal,
         };
-        let changed = level != self.storage.free_space.level;
-        self.storage.free_space = Storage { level, free };
+        let changed = level != self.storage.free_space.pressure;
+        self.storage.free_space = FreeSpace {
+            pressure: level,
+            bytes: free,
+        };
         if changed {
             eprintln!(
                 "laded: storage level={level:?} free_mib={}",
@@ -135,8 +135,8 @@ impl Service {
     }
 
     pub(crate) fn announce_storage(&mut self, transition: bool) {
-        let free = self.storage.free_space.free.map_or(0, mib);
-        match self.storage.free_space.level {
+        let free = self.storage.free_space.bytes.map_or(0, mib);
+        match self.storage.free_space.pressure {
             Pressure::Normal if transition => self.notice(
                 NoticeLevel::Info,
                 NoticeCode::StorageOk,
@@ -195,8 +195,8 @@ mod tests {
         assert!(harness.service.storage_blocker().is_none());
         harness.service.limits.storage_warn_bytes = u64::MAX;
         harness.service.check_free_space();
-        assert_eq!(harness.service.storage.free_space.level, Pressure::Low);
-        assert!(harness.service.storage.free_space.free.is_some());
+        assert_eq!(harness.service.storage.free_space.pressure, Pressure::Low);
+        assert!(harness.service.storage.free_space.bytes.is_some());
         harness.service.check_free_space();
         assert_eq!(
             notices(&mut harness),
@@ -206,7 +206,10 @@ mod tests {
 
         harness.service.limits.storage_reserve_bytes = u64::MAX;
         harness.service.check_free_space();
-        assert_eq!(harness.service.storage.free_space.level, Pressure::Critical);
+        assert_eq!(
+            harness.service.storage.free_space.pressure,
+            Pressure::Critical
+        );
         assert_eq!(notices(&mut harness), [NoticeCode::StorageCritical]);
         let blocker = harness.service.storage_blocker().expect("critical blocks");
         assert!(blocker.contains("MiB free"), "{blocker}");
@@ -219,7 +222,10 @@ mod tests {
             ..ResourceLimits::default()
         };
         harness.service.check_free_space();
-        assert_eq!(harness.service.storage.free_space.level, Pressure::Normal);
+        assert_eq!(
+            harness.service.storage.free_space.pressure,
+            Pressure::Normal
+        );
         assert_eq!(notices(&mut harness), [NoticeCode::StorageOk]);
         harness.service.announce_storage(false);
         assert!(
@@ -233,9 +239,5 @@ mod tests {
         assert!(free_bytes(Path::new("/")).is_some());
         assert_eq!(free_bytes(Path::new("/lade/no/such/volume")), None);
         assert_eq!(mib(3 * MIB - 1), 2);
-        assert_eq!(
-            Service::quota_rejection("full").code,
-            ErrorCode::LimitReached
-        );
     }
 }

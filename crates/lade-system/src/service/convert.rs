@@ -75,8 +75,15 @@ pub fn conflict(detail: &str) -> Rejection {
     Rejection::new(ErrorCode::Conflict, SafeAction::Refresh, detail)
 }
 
+/// A request refused by a resource limit (agents, terminals or disk space) the user can lift,
+/// so the client refreshes to see the current state.
 #[must_use]
-pub fn durability(detail: &str) -> Rejection {
+pub fn limit_reached(detail: &str) -> Rejection {
+    Rejection::new(ErrorCode::LimitReached, SafeAction::Refresh, detail)
+}
+
+#[must_use]
+pub fn durability_failure(detail: &str) -> Rejection {
     Rejection::new(
         ErrorCode::DurabilityFailure,
         SafeAction::QueryOperation,
@@ -102,7 +109,7 @@ pub fn artifact_rejection(detail: &'static str) -> impl Fn(ArtifactError) -> Rej
                 &format!("{detail}: the retained content is missing"),
             ),
             ArtifactError::Io { .. } | ArtifactError::InvalidDigest | ArtifactError::Corrupt => {
-                durability(detail)
+                durability_failure(detail)
             }
         }
     }
@@ -121,7 +128,7 @@ pub fn io_rejection(detail: &'static str) -> impl Fn(io::Error) -> Rejection {
             io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded => {
                 (ErrorCode::LimitReached, SafeAction::None)
             }
-            _ => return durability(&detail),
+            _ => return durability_failure(&detail),
         };
         Rejection::new(code, action, &detail)
     }
@@ -222,7 +229,7 @@ pub fn git_rejection(error: GitError) -> Rejection {
         }
         GitError::CheckoutFailed {
             reverted: false, ..
-        } => durability(
+        } => durability_failure(
             "target checkout update failed and the ref could not be restored; inspect the target",
         ),
         GitError::StaleRef { .. } => conflict("reference changed concurrently"),

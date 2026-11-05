@@ -204,7 +204,7 @@ fn a_conflicting_refresh_returns_the_objective_for_revision() {
 fn verification_is_refused_while_storage_is_critical() {
     let mut harness = Harness::new("review-verify-storage");
     let (id, _, candidate) = harness.frozen("Verify", "verify.txt");
-    harness.service.storage.free_space.level = Pressure::Critical;
+    harness.service.storage.free_space.pressure = Pressure::Critical;
     let refused = harness
         .call(Request::ReviewVerify(ReviewVerifyCommand {
             objective_id: id,

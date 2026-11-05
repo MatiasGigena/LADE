@@ -25,8 +25,8 @@ use crate::storage;
 
 use super::capture::CapturePurpose;
 use super::convert::{
-    artifact_rejection, conflict, core_mode, core_reference, domain_rejection, durability, invalid,
-    not_found, parse_uuid, wire_draft, wire_input,
+    artifact_rejection, conflict, core_mode, core_reference, domain_rejection, durability_failure,
+    invalid, not_found, parse_uuid, wire_draft, wire_input,
 };
 use super::handlers::sql;
 use super::jobs::{self, CaptureOut};
@@ -301,7 +301,7 @@ impl Service {
         let data = ReplyData::DraftSave(wire.clone());
         match fault::operation("draft.save") {
             Some(Fault::Refuse) => {
-                return Err(durability(
+                return Err(durability_failure(
                     "The draft was not written (injected test fault).",
                 ));
             }

@@ -14,7 +14,7 @@ use crate::storage::{self, OperationState};
 use crate::support::{hex, new_uuid, now_ms};
 use crate::transport::{Inbound, Outbound};
 
-use super::convert::{durability, preview, wire_id};
+use super::convert::{durability_failure, preview, wire_id};
 use super::{Flow, OpInfo, ReqCtx, Service, recordable};
 
 pub(super) struct Controller {
@@ -234,7 +234,7 @@ impl Service {
                     let reply = Reply::rejected(
                         frame.request_id,
                         Some(name),
-                        durability("operation journal unavailable"),
+                        durability_failure("operation journal unavailable"),
                     );
                     self.send_reply(conn, reply);
                     return;
@@ -341,7 +341,7 @@ impl Service {
                 let reply = Reply::rejected(
                     ctx.request_id,
                     Some(ctx.name),
-                    durability("operation outcome could not be recorded"),
+                    durability_failure("operation outcome could not be recorded"),
                 );
                 self.send_reply(ctx.conn, reply);
                 return;

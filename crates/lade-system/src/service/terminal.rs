@@ -12,7 +12,7 @@ use lade_protocol::types::{Counter, Id};
 use crate::adapters::sandbox::TERMINAL_LIMITS;
 use crate::supervision::terminal::{MAX_COLS, MAX_ROWS, Terminal, TerminalExit, TerminalRequest};
 
-use super::convert::{conflict, invalid, not_found, parse_uuid, wire_id};
+use super::convert::{conflict, invalid, limit_reached, not_found, parse_uuid, wire_id};
 use super::projection::actions::{TERMINAL_SANDBOX_UNAVAILABLE, terminal_blocker};
 use super::{Completed, Flow, ReqCtx, Service};
 use crate::support::new_uuid;
@@ -126,7 +126,7 @@ impl Service {
                 ));
             }
             if writable && let Some(why) = self.storage_blocker() {
-                return Err(Self::quota_rejection(&why));
+                return Err(limit_reached(&why));
             }
             let tools = self
                 .sandbox_tools()

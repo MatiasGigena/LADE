@@ -25,7 +25,9 @@ use lade_protocol::types::Id;
 
 use crate::storage;
 
-use super::convert::{conflict, domain_rejection, from_wire_git, invalid, not_found, parse_uuid};
+use super::convert::{
+    conflict, domain_rejection, from_wire_git, invalid, limit_reached, not_found, parse_uuid,
+};
 use super::convert::{wire_approval, wire_candidate, wire_verification};
 use super::jobs::{self, FreezeInput, RefreshInput, VerifyInput};
 use super::projection::actions::{VERIFICATION_SANDBOX_UNAVAILABLE, freeze_blocker};
@@ -237,7 +239,7 @@ impl Service {
         self.check_idle(oid)?;
         let candidate_id = Self::candidate_id(&cmd.candidate_id)?;
         if let Some(why) = self.storage_blocker() {
-            return Err(Self::quota_rejection(&why));
+            return Err(limit_reached(&why));
         }
         let tools = self.sandbox_tools().ok_or_else(|| {
             Rejection::new(
