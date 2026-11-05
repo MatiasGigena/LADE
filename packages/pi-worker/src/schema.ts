@@ -159,9 +159,18 @@ export function versioned(value: JsonValue): JsonObject {
   return value;
 }
 
+// Every service-to-worker kind, checked against the generated union: a new kind fails type-checking until it is listed.
+const SERVICE_KINDS = {
+  "worker.start": true,
+  "input.deliver": true,
+  "session.abort": true,
+  "worker.shutdown": true,
+  "session.command": true,
+  "ui.respond": true,
+} as const satisfies Record<ServiceToWorker["kind"], true>;
+
 export function isServiceToWorker(body: WorkerBody): body is ServiceToWorker {
-  return body.kind === "worker.start" || body.kind === "input.deliver" || body.kind === "session.abort" || body.kind === "worker.shutdown" ||
-    body.kind === "session.command" || body.kind === "ui.respond";
+  return Object.hasOwn(SERVICE_KINDS, body.kind);
 }
 
 export function isWorkerToService(body: WorkerBody): body is WorkerToService {
