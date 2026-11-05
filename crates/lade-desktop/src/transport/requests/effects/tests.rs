@@ -331,14 +331,9 @@ fn recovered_outcomes_leave_draft_and_input_records_to_current_state() {
     );
     assert_eq!(
         recovered.follow_ups,
-        [
-            Intent::LoadObjective {
-                objective_id: oid()
-            },
-            Intent::LoadInputs {
-                objective_id: oid()
-            },
-        ]
+        [Intent::LoadInputs {
+            objective_id: oid()
+        }]
     );
 }
 
@@ -386,14 +381,10 @@ fn accepted_feedback_reloads_the_drafts_it_consumed() {
     );
     assert_eq!(
         effects.follow_ups,
-        [
-            Intent::LoadDrafts {
-                objective_id: oid()
-            },
-            Intent::LoadObjective {
-                objective_id: oid()
-            },
-        ]
+        [Intent::LoadDrafts {
+            objective_id: oid()
+        }],
+        "the Objective arrives with the objective.detail event that follows"
     );
 }
 

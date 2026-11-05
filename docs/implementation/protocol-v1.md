@@ -121,6 +121,8 @@ Events: `objective.changed` → `ObjectiveSummary`; `objective.detail` → `Obje
 `TerminalClosed {objective_id, terminal_id, reason: exited|closed|review_freeze|lifecycle|failed, exit_code?,
 signal?}`; `session.changed` → `SessionState`; `ui.request` → `UiRequest {objective_id, ui_id, generation, prompt: UiPrompt}` (also re-announced to a newly attached client); `ui.closed` → `UiClosed {objective_id, ui_id, reason: answered|timeout|aborted|replaced}` (a stopped worker closes its dialogs as `aborted`); `resources.changed` → `ResourceInventory`. Field-level shapes are the schema `$defs` of those names (mirrored 1:1 by Rust `lade_protocol::client` and TS `dto.ts`).
 
+Every command that changes an Objective record is followed, on the same ordered stream, by that Objective's `objective.changed` and `objective.detail` events, so a client keeps its Objective current without re-fetching it after a reply. Agent Session navigation, compaction and reload that do not replace or reconfigure the session send neither.
+
 ### Contained terminal and lifetime (IMP-012, additive)
 
 The `terminal.*` names are *interaction* with a service-owned PTY: like queries they carry no `operation_id`

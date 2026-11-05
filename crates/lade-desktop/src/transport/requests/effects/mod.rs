@@ -1,4 +1,8 @@
 //! What a successful reply changes: store updates and follow-up queries per [`Context`].
+//!
+//! A command that changes an Objective is followed by its `objective.changed` and
+//! `objective.detail` events, so a reply never re-fetches the Objective for that. Only Agent
+//! Session replies do, because navigating, compacting or reloading a session sends no such event.
 
 use lade_protocol::client::{self as wire, ReplyData};
 use lade_protocol::types::Counter;
@@ -118,11 +122,8 @@ pub fn reply_effects(context: &Context, data: &ReplyData) -> Effects {
             }),
             _ => mismatched(context, data),
         },
-        ReplyData::ReviewFreeze(_) | ReplyData::ReviewRefresh(_) | ReplyData::ReviewApprove(_) => {
-            if let Some(o) = context.objective_id() {
-                effects.follow_ups.push(refresh_objective(o));
-            }
-        }
+        // The candidate or approval reaches the store with the `objective.detail` that follows.
+        ReplyData::ReviewFreeze(_) | ReplyData::ReviewRefresh(_) | ReplyData::ReviewApprove(_) => {}
         ReplyData::ReviewVerify(v) => {
             updates.push(StoreUpdate::VerificationChanged(convert::verification(v)));
         }
@@ -257,15 +258,13 @@ fn objective_created(detail: &wire::ObjectiveDetail, effects: &mut Effects) {
     ]);
 }
 
-/// An accepted feedback submission reloads the drafts it consumed, and an accepted input
-/// reloads the Objective it changed.
+/// An accepted feedback submission reloads the drafts it consumed.
 fn consumed_drafts(context: &Context, objective_id: &ObjectiveId, effects: &mut Effects) {
     if matches!(context, Context::Command { batch, .. } if !batch.is_empty()) {
         effects.follow_ups.push(Intent::LoadDrafts {
             objective_id: objective_id.clone(),
         });
     }
-    effects.follow_ups.push(refresh_objective(objective_id));
 }
 
 /// A session command's new state, and a reload of the tree and Objective it changed.
