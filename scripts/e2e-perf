@@ -51,9 +51,9 @@ scroll_inspector() {
 }
 find_button() {
   case $1 in
-    black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
+    primary) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" primary 1148 1383 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1124 1411 100 900 ;;
   esac
 }
 click_start() {
@@ -222,8 +222,8 @@ while [ $i -le "$N" ]; do
 done
 
 phase review
-click 1170 80 1
-click_inspector "Freeze for review" black
+click 1166 73 1
+click_inspector "Freeze for review" primary
 wait_for 60 "candidate" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3
 click_inspector "Approve Candidate 1" outline
@@ -231,7 +231,7 @@ typ "Reference trace: no check configured."
 key Tab Tab
 key Return
 sleep 2
-click_inspector "Integrate into main" black
+click_inspector "Integrate into main" primary
 key Tab
 key Return
 wait_for 60 "integration" sh -c "git -C '$REPO' log -1 --format=%s main | grep -q 'Reference trace'"
