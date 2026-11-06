@@ -99,7 +99,7 @@ fn summaries(now: Timestamp) -> Vec<ObjectiveSummary> {
         ),
         summary(
             SECOND_OBJECTIVE,
-            "Explain interrupted work",
+            "Explain interrupted work and the recovery steps after a service restart",
             "Provide clear recovery steps when an agent run is interrupted by a service restart.",
             (
                 Lifecycle::Active,
