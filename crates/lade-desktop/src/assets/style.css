@@ -624,6 +624,10 @@ image.info-sign { color: @ink_metadata; }
   background-color: transparent;
 }
 .transcript > row.activity-item:hover { background-color: transparent; }
+/* Where the transcript is scrolled past an edge, a rim marks that edge, so an item cut by it does
+   not read as overlapping the controls above or the composer below. */
+scrolledwindow.transcript-scroll > undershoot.top { box-shadow: inset 0 1px @rim; }
+scrolledwindow.transcript-scroll > undershoot.bottom { box-shadow: inset 0 -1px @rim; }
 .transcript > row.from-user { padding: 0; margin: 4px 0 16px 0; }
 .transcript .bubble {
   padding: 8px 14px;

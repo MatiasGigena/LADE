@@ -92,6 +92,7 @@ fn transcript() -> (gtk::ListBox, gtk::ScrolledWindow) {
     list.set_selection_mode(gtk::SelectionMode::None);
     set_accessible_label(&list, "Agent Session transcript");
     let scroll = widgets::region_scroll(&list);
+    scroll.add_css_class("transcript-scroll");
     scroll.set_vexpand(true);
     scroll.set_min_content_height(160);
     (list, scroll)
