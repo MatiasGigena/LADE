@@ -8,7 +8,7 @@ use crate::presentation::text::bound::TextLimit;
 use crate::views::tests::{descendants, laid_out, settle_until};
 use crate::views::widgets::{
     Dialog, LimitedInput, MessageKind, action_row, compact_action, counts, disclosure, dropdown_or,
-    find_named, inline_message, list_action_row, rebuild_preserving_focus, set_focus_key,
+    find_named, heading, inline_message, list_action_row, rebuild_preserving_focus, set_focus_key,
 };
 use crate::views::*;
 
@@ -278,5 +278,22 @@ fn a_dialog_lists_its_errors_and_cancel_closes_it() {
         settle_until("cancel closes the dialog", || !dialog.window.is_visible());
         assert!(!dialog.window.is_visible());
         opener.close();
+    });
+}
+
+#[test]
+#[ignore = "requires a graphical display"]
+fn a_heading_needs_no_more_width_when_given_any_height() {
+    gtk::test_synced(|| {
+        load_css();
+        let title = heading("Activity — Make retries safe", "objective-heading");
+        let window = gtk::Window::new();
+        window.set_child(Some(&title));
+        // GTK expects the unconstrained minimum to hold for every height. A wrapped label that
+        // may insert hyphens measures less without a height than with one, and overlaps.
+        let (unconstrained, ..) = title.measure(gtk::Orientation::Horizontal, -1);
+        let (tall, ..) = title.measure(gtk::Orientation::Horizontal, 1 << 20);
+        assert_eq!(unconstrained, tall);
+        window.destroy();
     });
 }

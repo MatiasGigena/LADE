@@ -386,6 +386,7 @@ pub fn heading(text: &str, class: &str) -> gtk::Label {
         .accessible_role(gtk::AccessibleRole::Heading)
         .build();
     title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    no_hyphens(&title);
     title.add_css_class(class);
     title
 }
