@@ -4,7 +4,7 @@ Status: **developer-approved composition and visual direction; GTK4 native is no
 
 ## GTK4 styling direction
 
-Retain the approved design, not the minimal benchmark's styling. GTK CSS and native layout APIs support the intended neutral colors, typography, spacing, density, boundaries and focus states. GTK CSS is not browser CSS; widget structure and highly customized controls may require GTK-specific implementation. Prefer accessible native controls over custom-drawing the interface. Rich file/diff components remain an implementation choice to validate. No pixel-perfect result, particular widget library or full accessibility guarantee follows from toolkit selection.
+Retain the approved design, not the minimal benchmark's styling. GTK CSS and native layout APIs support the intended gray surfaces, accent, typography, spacing, density, elevation and focus states. GTK CSS is not browser CSS; widget structure and highly customized controls may require GTK-specific implementation. Prefer accessible native controls over custom-drawing the interface. Rich file/diff components remain an implementation choice to validate. No pixel-perfect result, particular widget library or full accessibility guarantee follows from toolkit selection.
 
 ## Reference and adaptation
 
@@ -18,7 +18,7 @@ The concept composition is not a literal specification of code, labels, fixture 
 
 | Region | Function |
 | --- | --- |
-| Header | LADE mark and **LADE** only beside it, navigation (including Workspace overview), search and profile. No “Agentic development environment” subtitle. |
+| Header | LADE mark and **LADE** only beside it, search and profile. The fixed view navigation (including Workspace overview) sits in the notch of the work-area pane directly below. No “Agentic development environment” subtitle. |
 | Left column | Objectives with brief context, selected Objective and system-derived attention/status. No lateral accent stripe or border on Objective cards/rows. |
 | Dominant center | Objective intent/discussion when defining work; Read-only Inspection of full files and Change Sets when understanding results; revision comparison when checking corrections. |
 | Right panel | Summary, observed evidence and its provenance, Contextual Feedback, review and integration actions with reasons for blocked/unavailable actions. |
@@ -37,40 +37,41 @@ Apply the Scandinavian-style guidance through its operating priority: comprehens
 | Guideline | LADE application / boundary |
 | --- | --- |
 | Clear hierarchy before decorative reduction | Keep context, controls, comments, evidence and errors near the task they explain. Left-align labels/prose by default; vertically centering the profile name against its avatar does not mean centering all text. Reuse accessible GTK4 primitives; specific higher-level widget libraries remain unselected. |
-| Restrained type and spacing | One sans-serif UI family with monospace for code; use a platform font for a native client unless an established product face is justified. Do not infer Inter, a paid font, exact weights or pixel sizes from the image. Operational rows may need more text styles than editorial defaults. Spacing/radius examples are starting guidance, not fixed layout or performance budgets. |
+| Restrained type and spacing | One sans-serif UI family with monospace for code. The [visual specification](../../design.md#4-typography-spacing-and-shape) prefers Inter and JetBrains Mono when installed and falls back to the platform faces; bundling either needs a license decision. Nothing about type is inferred from the concept image. Operational rows may need more text styles than editorial defaults. Spacing/radius values are implementation tokens, not performance budgets. |
 | Avoid styled uppercase | **LADE** stays uppercase as expressly approved. Preserve code, paths, acronyms and user content rather than case-transforming them. |
-| Neutral chrome and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs; no decorative accent or tinted chrome. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
+| Gray chrome, one accent and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs. Salmon is the one chrome accent, limited to its listed roles (primary action, focus, checked state, journey progress, the mark, text selection); no tinted panels or decorative accents. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
 | Quiet boundaries and repeated records | No lateral Objective accent bar, including pseudo-elements or shadows that recreate one. Keep selected/focus states distinct; retain useful column separators and control boundaries when needed for dense simultaneous inspection. Equivalent controls share geometry; avoid pills/boxes added purely for style. |
-| Spacious chapters, media dominance and mobile examples | Marketing/commerce chapters, large editorial margins and mobile scope do not transfer to LADE. The Change Set/task—not a promotional image—is dominant. Preserve useful desktop density, narrow available logical space and 200% scaling. The guideline's dark-canvas recipes do not add a dark-mode requirement to the approved white base. |
+| Spacious chapters, media dominance and mobile examples | Marketing/commerce chapters, large editorial margins and mobile scope do not transfer to LADE. The Change Set/task—not a promotional image—is dominant. Preserve useful desktop density, narrow available logical space and 200% scaling. LADE ships one dark gray appearance; this does not add a light-mode requirement. |
 | Purposeful motion | Do not add animation for polish or animate frequent/keyboard actions. Any later functional motion must be interruptible, honor reduced motion and preserve state feedback; guideline timing examples are not measured LADE responsiveness budgets. |
 | Verification against the real interface | When UI work is authorized, inspect actual rendered controls, computed interaction states (or native equivalents), contrast on real surfaces, keyboard/Orca behavior and clipping at supported desktop sizes/200%. An image inspection cannot satisfy these tests. No browser/application test or UI change is part of this asset/documentation follow-up. |
 
 Operational rules retained from the approved direction:
 
-- White foundation, black ink and **genuinely neutral** grays. No beige, warm, blue-tinted or green-tinted chrome.
-- Clear hierarchy, useful information density, consistent spacing and minimal decoration. A single sans-serif UI family; monospace where code/output requires it. Exact font, metrics and spacing scale remain implementation choices subject to legibility and redistribution checks, not selected by this approval.
-- Coherent iconography with accessible names; no decorative emojis. Shadows and containers only to communicate grouping, elevation or interaction.
+- Charcoal window chrome, gray panes, white ink tiers and **one salmon accent**. Grays stay neutral: no beige, blue-tinted or green-tinted chrome; salmon is the only hue outside semantic content.
+- Clear hierarchy, useful information density, consistent spacing and minimal decoration. A single sans-serif UI family; monospace where code/output requires it. Font, metrics and spacing scale are set in the [visual specification](../../design.md) and remain subject to legibility and redistribution checks.
+- Coherent iconography with accessible names; no decorative emojis. Shadows, rims and containers only to communicate grouping, elevation or interaction: raised controls and floating surfaces carry a soft shadow, panes and rows do not.
 - Do not import oversized editorial margins, decorative uppercase conventions or mobile requirements automatically. LADE remains uppercase as a proper name. Linux desktop scope still requires usable 200% scaling and narrow available logical space.
 - Remove motivational copy, greetings, slogans and functionless cards: no “Small steps. Meaningful progress.”, “Good morning, Alex.” or “You’re in control.”
 - Removing decoration does **not** remove review comments, draft text, code references, errors, verification results, permission scope or explanations needed to understand an action.
-- Semantic colors remain where useful, especially diff additions/deletions, warnings, errors and states, with signs or text labels. Monochrome chrome is not a reason to remove status information or accessibility.
+- Semantic colors remain where useful, especially diff additions/deletions, warnings, errors and states, with signs or text labels. A restrained gray palette is not a reason to remove status information or accessibility.
 
-### Initial token references
+### Token references
 
-These are starting references, **not measured passing pairs**. Test compositing over actual surfaces, hover/pressed/selected combinations, text size and rendering; functional text needs sufficient contrast under the accessibility baseline.
+The colour, type, spacing, radius and elevation tokens live in the [visual specification](../../design.md#3-color-tokens) and, as implemented, in `crates/lade-desktop/src/assets/style.css`. In short:
 
 | Role | Reference |
 | --- | --- |
-| Base | White `#FFFFFF` |
-| Primary ink | Black `#000000` |
-| Secondary ink | Black at 64% opacity |
-| Separators | Black at 10% opacity |
-| Hover | Black at 5% opacity over the surface |
-| Pressed | Black at 9% opacity over the surface |
+| Window chrome | `#141416` |
+| Pane surface | `#1C1C1F` |
+| Raised control / well | `#27272B` / `#161618` |
+| Primary ink | `#E4E4E7` (strong `#F4F4F5`) |
+| Secondary / metadata ink | `#B9B9C0` / `#A4A4AC` |
+| Hover / selected fill | White at 6% / 10% over the surface |
+| Accent | Salmon `#F2937E`, with `#1B1311` ink on it |
 
-Use alpha colors rather than fading a whole container with `opacity`, which also dims content and states. Preserve distinct functional ink levels; do not collapse them merely to fit a three-band palette. The guideline's 44% tertiary ink is **not** a default for functional metadata such as paths, versions, timestamps, verification or disabled-action explanations; choose sufficient contrast over the actual surface. Its suggested stronger rungs are guidance, not measured LADE passes. Existing truly neutral, accessible tokens need not be rewritten solely to change their representation.
+Use alpha colors rather than fading a whole container with `opacity`, which also dims content and states. Preserve distinct functional ink levels; do not collapse them merely to fit a smaller palette. Functional metadata such as paths, versions, timestamps, verification or disabled-action explanations must keep at least 4.5:1 on every surface and fill it can sit on; `scripts/check-contrast.py` computes those pairs.
 
-A 10% separator is not automatically adequate for a control boundary or focus indicator. Selected and keyboard-focus states need independent discernibility. Proposed implementation: neutral selected fill plus weight/state label, and a sufficiently contrasting full focus outline; do not reintroduce a lateral accent bar. Final combinations must pass testing.
+A low-alpha rim is not a focus indicator. Selected and keyboard-focus states need independent discernibility: the selected fill plus strong ink, weight and the accessible selected state, and a full accent focus outline at 3:1 or more on every surface; do not reintroduce a lateral accent bar. Final combinations must pass testing on the rendered client.
 
 ### Profile correction
 
@@ -101,16 +102,17 @@ Historical B styling and mock data are not the new design baseline. Its document
 
 ## Implemented tokens (GTK client, calm-UI pass)
 
-Appended record of what the native client implements; it does not change the approved direction above. Colour tokens and their measured pairs stay in `crates/lade-desktop/src/assets/style.css` and `scripts/check-contrast.py`.
+Appended record of what the native client implements; it does not change the approved direction above. Colour tokens and their computed pairs stay in `crates/lade-desktop/src/assets/style.css` and `scripts/check-contrast.py`.
 
 | Kind | Token | Value | Use |
 | --- | --- | --- | --- |
-| Spacing | tight / item / group / section / page | 4 / 8 / 12 / 16 / 24 px (32 for empty-state margins) | `views::widgets::space` for gaps between widgets; the same scale for CSS paddings |
-| Type | title | 24px, 600 | Objective and page titles (`.objective-heading`, `.empty-title`) |
-| Type | heading | 16px, 600 | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
+| Spacing | tight / item / group / section / page / region | 4 / 8 / 12 / 16 / 24 / 32 px | `views::widgets::space` for gaps between widgets; CSS paddings also use the 2, 6, 10 and 20 half steps for controls and pane insets |
+| Type | title | 22px, 600, strong ink | Objective and page titles (`.objective-heading`, `.empty-title`) |
+| Type | heading | 15px, 600 (17px for `.empty-heading`) | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
 | Type | body | platform size, 400 (600 for emphasis by weight) | Plain labels |
-| Type | meta | 13px, 400, metadata ink (600 for group headings) | Secondary text, reasons, identities |
-| Type | mono | 13px monospace | Code, paths, ids, commands |
+| Type | control | 13px, 500 | Buttons, tabs, segmented items |
+| Type | meta | 12px, 500, metadata ink | Secondary text, reasons, identities, group headings |
+| Type | mono | 12.5px JetBrains Mono, else monospace | Code, paths, ids, commands |
 
 Shared components (`crates/lade-desktop/src/views/widgets/mod.rs` and its `input` and `dialog` submodules), used instead of one-off layouts:
 
@@ -121,7 +123,7 @@ Shared components (`crates/lade-desktop/src/views/widgets/mod.rs` and its `input
 | `text_field` / `placeholder_text` | Metadata label above a bounded multi-line field with a visible placeholder (shown while empty, as an entry's) | Intent fields, the composer, override reasons |
 | `dropdown_or` | Drop-down that ellipsizes a long choice (full text in tooltip and list) and, with no choices, is insensitive and says what is missing | Provider, model, thinking, delivery mode, integration target |
 | `disclosure` | Quiet full-width toggle (▸/▾) showing or hiding its content | More actions, Details, Agent settings, Accepted inputs, profile resources |
-| `action_row`, `list_action_row`, `compact_action` | An action whose availability is the service's projection: a disabled one keeps its place with its reason (visible, tooltip, accessible description); a not-offered one is hidden; black only when cleanly available | Overview next action, More actions, Activity's agent action and Send |
+| `action_row`, `list_action_row`, `compact_action` | An action whose availability is the service's projection: a disabled one keeps its place with its reason (visible, tooltip, accessible description); a not-offered one is hidden; accent-filled only when cleanly available | Overview next action, More actions, Activity's agent action and Send |
 | Header search | Entry and scope drop-down as one seamless linked control: one boundary, one focus ring | Ctrl+K search |
 
 A refused command is shown once, on the surface that issued it (`PresentationState::last_refusal` per Objective and `ActionSurface`), as an `inline_message` in plain words; it clears when that surface's command succeeds or the Objective changes. Refusals no Objective surface can show are the only global notices.
