@@ -352,7 +352,7 @@ impl Inspector {
         };
         view.grab_focus();
         let viewport = self
-            .root
+            .pages
             .nth_page(Some(2))
             .and_downcast::<gtk::ScrolledWindow>()
             .and_then(|s| s.child())
