@@ -9,9 +9,10 @@ stylesheet crates/lade-desktop/src/assets/style.css. It checks that:
 - every colour of the syntax scheme (assets/code-scheme.xml) is the style.css token of the same
   name and value, and each syntax ink stays readable on the code surface, the diff fills and the
   selection overlay;
-- each specified ink/fill pair, alpha-composited onto the black surface as GTK draws it, meets
-  WCAG 2.2 AA: 4.5:1 for functional text, 3:1 for required non-text indicators (control
-  boundaries, focus outline, the inverse focus ring of primary buttons, journey markers).
+- each specified ink/fill pair, alpha-composited onto the opaque surface it sits on (the window
+  chrome, the pane surface, a raised control, a sunken well or a popover) as GTK draws it, meets
+  WCAG 2.2 AA: 4.5:1 for functional text, 3:1 for required non-text indicators (focus outline,
+  checkbox and journey-marker edges, the accent fill of checked controls).
 
 This verifies token pairs only. It is not a rendered-surface measurement, an Orca pass or a
 blanket accessibility conformance claim; see scripts/sample-rendered-contrast.py for optional
@@ -79,10 +80,13 @@ def ratio(a, b):
 
 
 def solid(*layers):
-    """Composes token layers bottom-up onto the black surface."""
-    color = tokens['surface']
-    for layer in layers:
-        color = composite(tokens[layer] if isinstance(layer, str) else layer, color)
+    """Composes token layers bottom-up; the first layer is an opaque surface token."""
+    base, *rest = layers
+    color = tokens[base]
+    if color[3] != 1.0:
+        errors.append(f'{base} is not an opaque surface')
+    for layer in rest:
+        color = composite(tokens[layer], color)
     return color
 
 
@@ -112,32 +116,43 @@ for attribute, value in re.findall(r'(foreground|background)="([^"]+)"', scheme)
 syntax_inks = sorted(set(re.findall(r'foreground="(\w+)"', scheme)))
 
 TEXT, NON_TEXT = 4.5, 3.0
-pairs = [(ink, ['surface'], TEXT, 'text') for ink in ['ink_primary', 'ink_secondary', 'ink_metadata']]
+# Every opaque surface text can sit on, with the hover and selected fills composited where rows
+# and tabs use them.
+grounds = [['chrome'], ['chrome', 'hover_fill'], ['chrome', 'selected_fill'], ['surface'],
+           ['surface', 'hover_fill'], ['surface', 'selected_fill'], ['raised'], ['raised_hover'],
+           ['raised_pressed'], ['well'], ['popover'], ['popover', 'hover_fill'],
+           ['popover', 'selected_fill']]
+pairs = [(ink, ground, TEXT, 'text') for ink in ['ink_strong', 'ink_primary', 'ink_secondary', 'ink_metadata']
+         for ground in grounds]
 pairs += [
-    ('add_ink', ['add_fill'], TEXT, 'text'),
-    ('add_ink', ['surface'], TEXT, 'text'),
-    ('del_ink', ['del_fill'], TEXT, 'text'),
-    ('del_ink', ['surface'], TEXT, 'text'),
-    ('warn_ink', ['warn_fill'], TEXT, 'text'),
-    ('warn_ink', ['surface'], TEXT, 'text'),
-    ('ink_metadata', ['warn_fill'], TEXT, 'text'),
-    ('ink_primary', ['text_selection'], TEXT, 'text'),
+    *[(ink, ground, TEXT, 'semantic text') for ink in ['add_ink', 'del_ink', 'warn_ink']
+      for ground in (['surface'], ['chrome'], ['raised'], ['well'], ['popover'])],
+    ('add_ink', ['surface', 'add_fill'], TEXT, 'text'),
+    ('del_ink', ['surface', 'del_fill'], TEXT, 'text'),
+    ('warn_ink', ['surface', 'warn_fill'], TEXT, 'text'),
+    ('del_ink', ['raised', 'del_fill'], TEXT, 'destructive hover'),
+    ('ink_metadata', ['surface', 'warn_fill'], TEXT, 'text'),
+    ('ink_primary', ['surface', 'hover_fill'], TEXT, 'info message'),
+    ('ink_strong', ['surface', 'text_selection'], TEXT, 'text'),
+    ('ink_primary', ['surface', 'text_selection'], TEXT, 'text'),
     ('ink_primary', ['add_fill', 'text_selection'], TEXT, 'text'),
     ('ink_primary', ['del_fill', 'text_selection'], TEXT, 'text'),
-    ('surface', ['ink_primary'], TEXT, 'text'),
-    ('del_ink', ['del_fill'], TEXT, 'text'),
+    ('accent_ink', ['accent'], TEXT, 'text on the primary action'),
+    ('accent_ink', ['accent_hover'], TEXT, 'text on the hovered primary action'),
     *[(ink, fills, TEXT, 'syntax text') for ink in syntax_inks
-      for fills in (['surface'], ['add_fill'], ['del_fill'], ['text_selection'],
+      for fills in (['surface'], ['add_fill'], ['del_fill'], ['surface', 'text_selection'],
                     ['add_fill', 'text_selection'], ['del_fill', 'text_selection'])],
-    ('border_control', ['surface'], NON_TEXT, 'control boundary'),
-    ('focus_ring', ['surface'], NON_TEXT, 'focus outline'),
-    ('focus_ring', ['warn_fill'], NON_TEXT, 'focus outline'),
-    ('focus_ring', ['del_fill'], NON_TEXT, 'focus outline'),
-    ('surface', ['ink_primary'], NON_TEXT, 'inverse focus ring on primary buttons'),
-    ('ink_primary', ['surface'], NON_TEXT, 'done journey marker'),
-    ('surface', ['ink_primary'], NON_TEXT, 'check sign on a done journey marker'),
-    ('ink_primary', ['surface'], NON_TEXT, 'icon, marker and outline ink'),
-    ('surface', ['ink_primary'], TEXT, 'text on inverted selection'),
+    *[('focus_ring', ground, NON_TEXT, 'focus outline') for ground in grounds],
+    ('focus_ring', ['surface', 'warn_fill'], NON_TEXT, 'focus outline'),
+    ('focus_ring', ['surface', 'del_fill'], NON_TEXT, 'focus outline'),
+    ('control_edge', ['well'], NON_TEXT, 'checkbox edge'),
+    ('control_edge', ['surface'], NON_TEXT, 'upcoming journey marker'),
+    ('accent', ['well'], NON_TEXT, 'checked checkbox fill'),
+    ('accent', ['surface'], NON_TEXT, 'done and current journey markers'),
+    ('accent_ink', ['accent'], NON_TEXT, 'check sign on a checked control or done marker'),
+    ('accent', ['chrome'], NON_TEXT, 'the LADE mark'),
+    ('ink_secondary', ['chrome'], NON_TEXT, 'icon ink'),
+    ('ink_secondary', ['surface'], NON_TEXT, 'icon ink'),
 ]
 results = []
 for ink, fills, threshold, kind in pairs:

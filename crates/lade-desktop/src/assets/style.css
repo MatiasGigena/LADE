@@ -1,36 +1,70 @@
+/* Surfaces: the window chrome, the panes on it, and the raised, sunken and floating recipes. */
+@define-color chrome #141416;
+@define-color surface #1C1C1F;
+@define-color raised #27272B;
+@define-color raised_hover #2E2E33;
+@define-color raised_pressed #232327;
+@define-color well #161618;
+@define-color popover #232327;
+@define-color hover_fill rgba(255, 255, 255, 0.06);
+@define-color selected_fill rgba(255, 255, 255, 0.10);
+@define-color rim rgba(255, 255, 255, 0.08);
+@define-color rim_raised rgba(255, 255, 255, 0.14);
+@define-color hairline rgba(255, 255, 255, 0.06);
 
-@define-color surface #000000;
-@define-color ink_primary #FFFFFF;
-@define-color ink_secondary rgba(255, 255, 255, 0.72);
-@define-color ink_metadata rgba(255, 255, 255, 0.62);
-@define-color ink_optional rgba(255, 255, 255, 0.50);
-@define-color border_control #FFFFFF;
-@define-color focus_ring #FFFFFF;
+/* Ink tiers. */
+@define-color ink_strong #F4F4F5;
+@define-color ink_primary #E4E4E7;
+@define-color ink_secondary #B9B9C0;
+@define-color ink_metadata #A4A4AC;
+@define-color ink_optional #6E6E76;
+
+/* The salmon accent: primary action, focus, checked controls, the mark and text selection. */
+@define-color accent #F2937E;
+@define-color accent_hover #F6A694;
+@define-color accent_ink #1B1311;
+@define-color focus_ring #F2937E;
+@define-color text_selection rgba(242, 147, 126, 0.16);
+
+/* Control edges that must read as an indicator, and disabled edges. */
+@define-color control_edge rgba(255, 255, 255, 0.42);
+@define-color border_disabled rgba(255, 255, 255, 0.06);
+
+/* Semantic content pairs. */
 @define-color add_ink #5BD08F;
-@define-color add_fill #0D2B1B;
-@define-color del_ink #FF8A7D;
-@define-color del_fill #3A100C;
-@define-color warn_ink #F5B940;
-@define-color warn_fill #2E2108;
-@define-color text_selection rgba(255, 255, 255, 0.16);
-@define-color border_disabled rgba(255, 255, 255, 0.40);
-@define-color scrollbar_slider rgba(255, 255, 255, 0.40);
-@define-color scrollbar_slider_hover rgba(255, 255, 255, 0.60);
-@define-color syntax_comment #BDBDBD;
+@define-color add_fill #132A1E;
+@define-color del_ink #FF6B81;
+@define-color del_fill #36161C;
+@define-color warn_ink #F2BE4A;
+@define-color warn_fill #2E2510;
+@define-color del_rim rgba(255, 107, 129, 0.32);
+@define-color warn_rim rgba(242, 190, 74, 0.32);
+
+/* Syntax inks. */
+@define-color syntax_comment #B0B0B8;
 @define-color syntax_string #8CC2F0;
 @define-color syntax_constant #C9A8F2;
 
+/* Elevation. */
+@define-color shadow_soft rgba(0, 0, 0, 0.28);
+@define-color shadow_popover rgba(0, 0, 0, 0.45);
+@define-color shadow_dialog rgba(0, 0, 0, 0.60);
 
-window, window.background, dialog, stack, notebook > stack, scrolledwindow,
-viewport, list, listview, textview, textview > text {
-  background-color: @surface;
+@define-color scrollbar_slider rgba(255, 255, 255, 0.16);
+@define-color scrollbar_slider_hover rgba(255, 255, 255, 0.28);
+
+
+/* ---------------------------------------------------------------- base */
+
+window, window.background, dialog {
+  background-color: @chrome;
+  color: @ink_primary;
+  font-family: "Inter Variable", "Inter", sans-serif;
+}
+stack, notebook > stack, scrolledwindow, viewport, list, listview, textview, textview > text {
+  background-color: transparent;
   color: @ink_primary;
 }
-
-.centre-region.sheet { margin: 0 0 12px 0; }
-.centre-region.sheet.alone { margin-right: 12px; }
-notebook.inspector.sheet { margin: 0 12px 12px 0; }
-.compact .centre-region.sheet, .compact notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 
 label { color: inherit; }
 label:disabled { color: @ink_metadata; }
@@ -42,8 +76,6 @@ label:disabled { color: @ink_metadata; }
 row:focus:focus-visible, textview:focus:focus-visible, label:focus:focus-visible {
   outline-offset: -2px;
 }
-.objective-list > row:selected:focus:focus-visible, .file-list > row:selected:focus:focus-visible,
-popover row:selected:focus:focus-visible { outline-color: @surface; }
 label.objective-heading:focus:focus-visible { outline-offset: 4px; border-radius: 4px; }
 entry:focus-within, spinbutton:focus-within, scrolledwindow.text-input:focus-within {
   outline: none;
@@ -56,69 +88,104 @@ scrolledwindow.text-input textview:focus:focus-visible { outline: none; }
 selection, text selection, textview > text > selection, label > selection,
 entry > text > selection {
   background-color: @text_selection;
-  color: @ink_primary;
+  color: @ink_strong;
 }
 textview > text > selection:focus-within, label > selection:focus-within,
 entry > text > selection:focus-within {
   background-color: @text_selection;
-  color: @ink_primary;
+  color: @ink_strong;
 }
 
 
-.wordmark { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
-.objective-heading, .empty-title { font-size: 28px; font-weight: 700; letter-spacing: -0.4px; }
-.section-title, .empty-heading, .popover-heading { font-size: 16px; font-weight: 600; letter-spacing: -0.1px; }
-.empty-heading { font-size: 18px; }
-.group-heading { font-size: 12px; font-weight: 600; letter-spacing: 0.3px; color: @ink_metadata; }
-.meta { font-size: 13px; color: @ink_metadata; }
+/* ---------------------------------------------------------------- panes on the chrome */
+
+.centre-region.sheet, notebook.inspector.sheet {
+  background-color: @surface;
+  border-radius: 14px;
+}
+notebook.inspector.sheet { margin: 0 8px 8px 8px; }
+.compact notebook.inspector.sheet { margin: 0 6px 6px 6px; }
+
+.centre-region.sheet { margin: 0 0 8px 0; }
+.centre-region.sheet.alone { margin-right: 8px; }
+.compact .centre-region.sheet { margin: 0 6px 6px 6px; }
+
+
+/* ---------------------------------------------------------------- type roles */
+
+.wordmark { font-size: 15px; font-weight: 600; letter-spacing: 0.6px; color: @ink_strong; }
+.objective-heading, .empty-title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  color: @ink_strong;
+}
+.section-title, .empty-heading, .popover-heading {
+  font-size: 15px;
+  font-weight: 600;
+  color: @ink_strong;
+}
+.empty-heading { font-size: 17px; }
+.group-heading { font-size: 12px; font-weight: 500; color: @ink_metadata; }
+.meta { font-size: 12px; font-weight: 500; color: @ink_metadata; }
 .secondary { color: @ink_secondary; }
-.activity-text, .inspector-page label.prose, .empty-block label.secondary { line-height: 1.3; }
-.strong { font-weight: 600; }
-.mono { font-family: monospace; font-size: 13px; }
-.numeric { font-feature-settings: "tnum"; font-size: 13px; font-weight: 500; }
+.activity-text, .inspector-page label.prose, .empty-block label.secondary { line-height: 1.38; }
+.strong { font-weight: 600; color: @ink_strong; }
+.mono { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+.numeric { font-feature-settings: "tnum"; font-size: 12px; font-weight: 500; }
 .added { color: @add_ink; }
 .removed { color: @del_ink; }
 .warning-text { color: @warn_ink; }
 
 
+/* ---------------------------------------------------------------- buttons */
+
+/* Raised: the default control. */
 button {
-  min-height: 26px;
-  padding: 4px 12px;
+  min-height: 22px;
+  padding: 4px 11px;
   border-radius: 8px;
-  border: 1px solid @border_control;
-  background-color: @surface;
+  border: 1px solid @rim;
+  border-top-color: @rim_raised;
+  background-color: @raised;
   background-image: none;
-  box-shadow: none;
+  box-shadow: 0 1px 2px @shadow_soft;
   color: @ink_primary;
+  font-size: 13px;
   font-weight: 500;
   text-shadow: none;
   -gtk-icon-shadow: none;
 }
-button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
-button:active, button:checked { background-color: @ink_primary; color: @surface; box-shadow: none; }
-button:checked label { color: @surface; }
+button:hover { background-color: @raised_hover; }
+button:active { background-color: @raised_pressed; box-shadow: none; }
+button:checked { background-color: @raised_hover; color: @ink_strong; }
 button:disabled {
   color: @ink_metadata;
   border-color: @border_disabled;
-  background-color: @surface;
+  background-color: @raised_pressed;
   box-shadow: none;
 }
+
+/* Lit: the one primary action, in the accent. */
 button.primary {
-  background-color: @ink_primary;
-  border-color: @ink_primary;
-  color: @surface;
+  background-color: @accent;
+  border-color: @accent;
+  color: @accent_ink;
+  font-weight: 600;
 }
-button.primary label { color: @surface; }
-button.primary:hover, button.primary:active { box-shadow: inset 0 0 0 2px @surface; }
-button.primary:focus:focus-visible {
-  box-shadow: inset 0 0 0 2px @surface;
-  outline: 2px solid @focus_ring;
-  outline-offset: 2px;
+button.primary label { color: @accent_ink; }
+button.primary:hover { background-color: @accent_hover; border-color: @accent_hover; }
+button.primary:active { background-color: @accent; }
+button.primary:disabled, button.primary:disabled label {
+  background-color: @raised_pressed;
+  border-color: @border_disabled;
+  color: @ink_metadata;
 }
+
+/* Destructive: raised, in the deletion ink; its hover takes the deletion tint. */
 button.destructive {
   color: @del_ink;
-  border-color: @del_ink;
-  background-color: @surface;
+  border-color: @del_rim;
 }
 button.destructive label { color: @del_ink; }
 button.destructive:hover { background-color: @del_fill; }
@@ -126,16 +193,21 @@ button.destructive:disabled, button.destructive:disabled label {
   color: @ink_metadata;
   border-color: @border_disabled;
 }
+
+/* Ghost: no fill, rim or shadow at rest; hover takes the hover fill. */
 button.quiet, button.icon-button {
   border-color: transparent;
   background-color: transparent;
   box-shadow: none;
 }
-button.quiet:hover, button.icon-button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+button.quiet:hover, button.icon-button:hover { background-color: @hover_fill; }
+button.quiet:active, button.icon-button:active { background-color: @selected_fill; }
+button.quiet:disabled, button.icon-button:disabled { background-color: transparent; }
 button.destructive-quiet, button.destructive-quiet label { color: @del_ink; }
 button.destructive-quiet:hover { background-color: @del_fill; }
 button.destructive-quiet:disabled, button.destructive-quiet:disabled label { color: @ink_metadata; }
-button.icon-button { min-width: 32px; min-height: 32px; padding: 0; }
+button.icon-button { min-width: 32px; min-height: 32px; padding: 0; color: @ink_secondary; }
+button.icon-button:hover { color: @ink_strong; }
 menubutton.icon-button > button {
   min-width: 32px;
   min-height: 32px;
@@ -143,19 +215,23 @@ menubutton.icon-button > button {
   border-color: transparent;
   background-color: transparent;
   box-shadow: none;
+  color: @ink_secondary;
 }
-menubutton.icon-button > button:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+menubutton.icon-button > button:hover { background-color: @hover_fill; color: @ink_strong; }
+
+
+/* ---------------------------------------------------------------- fields (wells) */
 
 entry, scrolledwindow.text-input, spinbutton {
-  min-height: 34px;
+  min-height: 30px;
   border-radius: 8px;
-  border: 1px solid transparent;
-  background-color: @surface;
+  border: 1px solid @rim;
+  background-color: @well;
   background-image: none;
   box-shadow: none;
   color: @ink_primary;
-  padding-left: 8px;
-  padding-right: 8px;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 scrolledwindow.text-input { padding: 0; }
 scrolledwindow.text-input textview, scrolledwindow.text-input textview > text {
@@ -167,47 +243,65 @@ entry > text > placeholder, spinbutton > text > placeholder,
 entry:focus-within > text > placeholder { color: @ink_metadata; opacity: 1; }
 
 dropdown > button, dropdown > .dropdown, menubutton > button {
-  border: 1px solid @border_control;
+  border: 1px solid @rim;
+  border-top-color: @rim_raised;
   border-radius: 8px;
-  background-color: @surface;
-  box-shadow: none;
+  background-color: @raised;
+  box-shadow: 0 1px 2px @shadow_soft;
 }
+dropdown > button:hover, menubutton > button:hover { background-color: @raised_hover; }
 columnview > header > button { border-color: transparent; border-radius: 0; background-color: transparent; box-shadow: none; }
-columnview > header > button:hover { box-shadow: inset 0 -1px 0 @ink_primary; }
+columnview > header > button:hover { background-color: @hover_fill; }
 dropdown > button stack { background-color: transparent; }
 
 checkbutton check {
-  border: 1px solid @border_control;
-  background-color: @surface;
+  border: 1px solid @control_edge;
+  background-color: @well;
   background-image: none;
   border-radius: 4px;
-  min-width: 16px;
-  min-height: 16px;
-  color: @surface;
+  min-width: 14px;
+  min-height: 14px;
+  color: @accent_ink;
 }
-checkbutton check:checked { background-color: @ink_primary; border-color: @ink_primary; color: @surface; }
+checkbutton check:checked { background-color: @accent; border-color: @accent; color: @accent_ink; }
+
+
+/* ---------------------------------------------------------------- floating surfaces */
 
 popover > contents {
-  background-color: @surface;
+  background-color: @popover;
   color: @ink_primary;
   border-radius: 12px;
-  border: 1px solid @border_control;
-  box-shadow: none;
+  border: 1px solid @rim;
+  border-top-color: @rim_raised;
+  box-shadow: 0 8px 24px @shadow_popover;
   padding: 12px;
 }
-popover > arrow { background-color: @surface; border-color: @border_control; }
-popover.menu > contents { padding: 6px; }
+popover > arrow { background-color: @popover; border-color: @rim; }
+popover.menu > contents { padding: 4px; }
 popover modelbutton, popover row { border-radius: 6px; }
-popover modelbutton:hover, popover row:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
-popover row:selected { background-color: @ink_primary; color: @surface; }
-popover row:selected label { color: @surface; }
+popover modelbutton:hover, popover row:hover { background-color: @hover_fill; }
+popover row:selected { background-color: @selected_fill; color: @ink_strong; }
+popover row:selected label { color: @ink_strong; }
+
+tooltip, tooltip.background {
+  background-color: @popover;
+  color: @ink_primary;
+  border-radius: 7px;
+  border: 1px solid @rim;
+  box-shadow: 0 3px 9px @shadow_popover;
+}
+
+
+/* ---------------------------------------------------------------- disclosure and list actions */
 
 button.disclosure-toggle, button.list-action-button {
   padding: 4px 8px;
   margin-left: -8px;
-  min-height: 24px;
+  min-height: 20px;
 }
-button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 600; }
+button.disclosure-toggle label { font-size: 13px; color: @ink_secondary; font-weight: 500; }
+button.disclosure-toggle:hover label { color: @ink_strong; }
 button.disclosure-toggle image.disclosure-chevron {
   -gtk-icon-size: 12px;
   min-height: 18px;
@@ -215,17 +309,24 @@ button.disclosure-toggle image.disclosure-chevron {
   color: @ink_metadata;
 }
 button.disclosure-toggle:checked { background-color: transparent; }
+button.disclosure-toggle:checked:hover { background-color: @hover_fill; }
 button.list-action-button label { font-weight: 500; }
 .list-action-reason { padding-bottom: 4px; }
 separator.list-separator {
-  min-height: 0;
-  background-color: transparent;
+  min-height: 1px;
+  background-color: @hairline;
   margin-top: 12px;
   margin-bottom: 12px;
 }
 
 scrollbar { background-color: transparent; border: none; }
-scrollbar slider { background-color: @scrollbar_slider; border-radius: 6px; min-width: 6px; min-height: 6px; border: none; }
+scrollbar slider {
+  background-color: @scrollbar_slider;
+  border-radius: 6px;
+  min-width: 6px;
+  min-height: 6px;
+  border: none;
+}
 scrollbar slider:hover { background-color: @scrollbar_slider_hover; }
 
 paned.horizontal > separator {
@@ -238,34 +339,58 @@ paned.horizontal > separator {
 }
 
 
+/* ---------------------------------------------------------------- messages */
+
 .empty-block { padding: 40px; }
 
-.inline-message { border-radius: 6px; padding: 8px 12px; }
-.inline-message.message-info { color: @ink_primary; }
-.inline-message.message-warning { background-color: @warn_fill; color: @warn_ink; }
-.inline-message.message-error { background-color: @del_fill; color: @del_ink; }
+.inline-message { border-radius: 10px; padding: 8px 12px; border: 1px solid transparent; }
+.inline-message.message-info { background-color: @hover_fill; border-color: @rim; color: @ink_primary; }
+.inline-message.message-warning { background-color: @warn_fill; border-color: @warn_rim; color: @warn_ink; }
+.inline-message.message-error { background-color: @del_fill; border-color: @del_rim; color: @del_ink; }
 .inline-message .message-sign { font-weight: 700; }
 .inline-message button.disclosure-toggle label, .inline-message .message-details { color: inherit; }
 
-label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
+label.text-placeholder { color: @ink_metadata; padding: 8px 10px; margin: 1px; }
 
+
+/* ---------------------------------------------------------------- header (on the chrome) */
 
 .lade-header {
-  min-height: 64px;
-  padding: 0 24px;
+  min-height: 52px;
+  padding: 0 12px 0 16px;
 }
 .brand { min-width: 0; }
-.compact .lade-header { padding: 0 12px; }
-.nav button.nav-tab { padding: 4px 14px; min-height: 26px; }
-.connection { font-size: 13px; }
-.search {
-  border: 1px solid @border_control;
+.brand .mark { color: @accent; }
+.compact .lade-header { padding: 0 8px; }
+.connection { font-size: 12px; }
+
+/* Pane tabs: no track; muted peers, a hover fill, the current one on the selected fill. */
+.nav button.nav-tab {
+  min-height: 20px;
+  padding: 4px 10px;
+  margin: 0 1px;
+  border: none;
   border-radius: 8px;
-  background-color: @surface;
+  background-color: transparent;
+  box-shadow: none;
+  color: @ink_metadata;
+  font-size: 13px;
+  font-weight: 500;
 }
+.nav button.nav-tab:hover { background-color: @hover_fill; color: @ink_primary; }
+.nav button.nav-tab:checked { background-color: @selected_fill; color: @ink_strong; }
+.nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
+
+/* Search: a ghost field on the chrome that takes the hover fill and a ring when focused. */
+.search {
+  border: 1px solid @rim;
+  border-radius: 8px;
+  background-color: @well;
+}
+.search:hover { border-color: @rim_raised; }
 .search:focus-within { border-color: @focus_ring; box-shadow: inset 0 0 0 1px @focus_ring; }
 .search entry, .search entry:focus-within {
-  min-height: 34px;
+  min-height: 30px;
   border: none;
   border-radius: 8px 0 0 8px;
   background-color: transparent;
@@ -273,95 +398,104 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 }
 .search entry, .search dropdown > button { background-image: none; outline: none; }
 .search dropdown > button {
-  min-height: 34px;
+  min-height: 30px;
   padding: 0 8px;
   border: none;
   border-radius: 0 8px 8px 0;
   background-color: transparent;
   box-shadow: none;
+  color: @ink_secondary;
 }
-.search dropdown > button:focus:focus-visible { outline: none; box-shadow: inset 0 0 0 1px @focus_ring; }
+.search dropdown > button:hover { background-color: @hover_fill; color: @ink_strong; }
+.search dropdown > button:focus:focus-visible { outline: none; box-shadow: inset 0 0 0 2px @focus_ring; }
 .search-results > contents { padding: 12px; }
-.search-popover > contents { padding: 8px; }
-.result-row { padding: 4px 8px; }
-.header-menu button.menu-item { padding: 8px 12px; border-radius: 6px; }
+.search-popover > contents { padding: 6px; }
+.result-row { padding: 6px 8px; border-radius: 6px; }
+.header-menu button.menu-item { padding: 6px 10px; border-radius: 6px; }
 .avatar {
-  min-width: 32px;
-  min-height: 32px;
+  min-width: 28px;
+  min-height: 28px;
   border-radius: 9999px;
-  background-color: @surface;
-  font-size: 13px;
+  background-color: @raised;
+  box-shadow: inset 0 0 0 1px @rim_raised;
+  color: @ink_strong;
+  font-size: 12px;
   font-weight: 600;
 }
-.profile-name { font-weight: 500; }
+.profile-name { font-size: 13px; font-weight: 500; }
 
 .notice-bar {
-  padding: 8px 16px;
-  margin: 0 12px 8px 12px;
-  border-radius: 10px;
-  background-color: @surface;
+  padding: 8px 12px;
+  margin: 0 8px 8px 8px;
+  border-radius: 12px;
+  background-color: @raised;
+  border: 1px solid @rim;
 }
-.notice-bar.notice-warning { background-color: @warn_fill; color: @warn_ink; }
-.notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
+.notice-bar.notice-warning { background-color: @warn_fill; border-color: @warn_rim; color: @warn_ink; }
+.notice-bar.notice-error { background-color: @del_fill; border-color: @del_rim; color: @del_ink; }
 
-.region-bar { padding: 0 8px 8px 8px; }
+.region-bar { padding: 0 6px 6px 6px; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 
 
-.rail { padding: 8px 16px 24px 16px; }
-.rail .section-title, .rail .group-heading { margin-left: 12px; }
+/* ---------------------------------------------------------------- Objectives rail (on the chrome) */
+
+.rail { padding: 4px 8px 16px 12px; }
+.rail .section-title, .rail .group-heading { margin-left: 10px; }
+.rail .section-title { font-size: 13px; color: @ink_secondary; font-weight: 600; }
 .rail .group-heading { margin-bottom: 2px; }
-.rail .archive > button.disclosure-toggle { margin-left: 4px; }
+.rail .archive > button.disclosure-toggle { margin-left: 2px; }
 .rail button.icon-button:focus:focus-visible {
   outline: none;
-  border-color: @focus_ring;
-  box-shadow: inset 0 0 0 1px @focus_ring;
+  box-shadow: inset 0 0 0 2px @focus_ring;
 }
 list.objective-list, list.file-list, list.plain-list, list.transcript {
   background-color: transparent;
 }
 .objective-list > row {
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   margin: 0 0 2px 0;
   background-color: transparent;
   box-shadow: none;
   border: none;
 }
-.objective-list > row:hover, .file-list > row:hover { box-shadow: inset 0 0 0 1px @ink_primary; }
+.objective-list > row:hover, .file-list > row:hover { background-color: @hover_fill; }
 .objective-list > row:selected, .file-list > row:selected {
-  background-color: @ink_primary;
-  color: @surface;
+  background-color: @selected_fill;
+  color: @ink_strong;
   box-shadow: none;
 }
-.objective-list > row:selected label, .file-list > row:selected label { color: @surface; }
+.objective-list > row:selected label.objective-title, .file-list > row:selected label.file-name { color: @ink_strong; }
 .objective-list > row:selected .objective-title { font-weight: 600; }
-.objective-title { font-weight: 500; }
+.objective-title { font-weight: 500; font-size: 13.5px; }
 
 .status-sign { font-weight: 700; }
 
 
-.centre-page { padding: 32px 32px 28px 32px; }
+/* ---------------------------------------------------------------- work area */
+
+.centre-page { padding: 28px 32px 24px 32px; }
 .empty-state { padding: 32px; }
-.breadcrumb-current { font-size: 13px; font-weight: 500; }
+.breadcrumb-current { font-size: 12px; font-weight: 500; }
 
 .journey { padding-top: 4px; }
 .journey-dot {
   min-width: 16px;
   min-height: 16px;
   border-radius: 9999px;
-  border: 2px solid @ink_secondary;
-  font-size: 13px;
+  border: 1.5px solid @control_edge;
+  font-size: 11px;
   line-height: 1;
   font-weight: 700;
   padding: 0;
 }
-.journey-dot.done { background-color: @ink_primary; border-color: transparent; color: @surface; }
-.journey-dot.current { background-color: @ink_primary; border-color: @ink_primary; }
-.journey-dot.upcoming { border-color: @ink_primary; background-color: @surface; }
-.journey-label { color: @ink_secondary; font-size: 13px; }
-.journey-label.current { color: @ink_primary; font-weight: 600; }
+.journey-dot.done { background-color: @accent; border-color: @accent; color: @accent_ink; }
+.journey-dot.current { background-color: @surface; border: 2px solid @accent; }
+.journey-dot.upcoming { border-color: @control_edge; background-color: @surface; }
+.journey-label { color: @ink_metadata; font-size: 12px; font-weight: 500; }
+.journey-label.current { color: @ink_strong; font-weight: 600; }
 .journey-connector { min-height: 1px; min-width: 12px; background-color: @ink_optional; }
 
 .basis-selector > button { min-width: 220px; }
@@ -369,10 +503,10 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .version-line { padding: 0; }
 
 .file-list > row {
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin: 0 0 4px 0;
-  min-height: 32px;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 0 0 2px 0;
+  min-height: 30px;
 }
 .file-status { color: @ink_metadata; font-weight: 600; min-width: 12px; }
 .file-name { font-size: 13px; font-weight: 500; }
@@ -384,77 +518,90 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 .selection-line { padding: 6px 12px; }
 .viewer-message { padding: 24px; }
 .viewer-footer { padding: 8px 0 0 0; }
-.segmented { border-radius: 10px; }
+
+/* Segmented control: a sunken track; the current item is raised on it. */
+.segmented {
+  padding: 2px;
+  border-radius: 10px;
+  border: 1px solid @rim;
+  background-color: @well;
+}
 .segmented button {
-  min-height: 24px;
-  padding: 3px 12px;
+  min-height: 20px;
+  padding: 2px 10px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 7px;
   background-color: transparent;
   box-shadow: none;
-  color: @ink_secondary;
+  color: @ink_metadata;
+  font-size: 13px;
   font-weight: 500;
 }
-.segmented button:hover { box-shadow: none; color: @ink_primary; }
+.segmented button:hover { background-color: transparent; color: @ink_primary; }
 .segmented button:checked {
-  background-color: @ink_primary;
-  border-color: @ink_primary;
-  color: @surface;
-  font-weight: 600;
+  background-color: @raised;
+  border-color: @rim;
+  border-top-color: @rim_raised;
+  box-shadow: 0 1px 2px @shadow_soft;
+  color: @ink_strong;
 }
-.segmented button:focus:focus-visible { outline-offset: 0; }
+.segmented button:focus:focus-visible { outline-offset: -2px; }
+/* The header navigation is a tab strip, not a track. */
+.segmented.nav { padding: 0; border: none; background-color: transparent; }
 
 textview.code-view, textview.code-view > text {
   background-color: @surface;
   color: @ink_primary;
-  font-family: monospace;
-  font-size: 13px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
 }
 textview.code-view border.left, textview.code-view gutter {
   background-color: @surface;
   color: @ink_metadata;
 }
-.gutter-number { color: @ink_metadata; font-family: monospace; font-size: 13px; }
-.gutter-sign { font-family: monospace; font-size: 13px; }
+.gutter-number { color: @ink_metadata; font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+.gutter-sign { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
 
 
-notebook.inspector, notebook.inspector > header {
-  background-color: @surface;
+/* ---------------------------------------------------------------- inspector */
+
+notebook.inspector > header {
+  background-color: transparent;
   border: none;
   box-shadow: none;
 }
-notebook.inspector > header { padding: 20px 12px 4px 12px; }
-notebook.inspector > header > tabs { border-radius: 10px; }
+notebook.inspector > header { padding: 12px 12px 4px 12px; }
 notebook.inspector > header > tabs > tab {
-  padding: 4px 8px;
-  margin: 0;
-  min-height: 24px;
+  padding: 4px 10px;
+  margin: 0 1px;
+  min-height: 20px;
   border: none;
   border-radius: 8px;
   background-color: transparent;
   box-shadow: none;
-  color: @ink_secondary;
+  color: @ink_metadata;
+  font-size: 13px;
   font-weight: 500;
-  outline-offset: 0;
+  outline-offset: -2px;
 }
-notebook.inspector > header > tabs > tab:hover { color: @ink_primary; }
-notebook.inspector > header > tabs > tab:checked {
-  color: @surface;
-  background-color: @ink_primary;
-  border-color: @ink_primary;
-  font-weight: 600;
-}
-notebook.inspector > header > tabs > tab:checked label { color: @surface; }
-notebook.inspector > stack { background-color: @surface; }
-.inspector-page { padding: 20px 20px 32px 20px; }
+notebook.inspector > header > tabs > tab:hover { background-color: @hover_fill; color: @ink_primary; }
+notebook.inspector > header > tabs > tab:checked { background-color: @selected_fill; color: @ink_strong; }
+notebook.inspector > header > tabs > tab:checked label { color: @ink_strong; }
+notebook.inspector > stack { background-color: transparent; }
+.inspector-page { padding: 16px 20px 32px 20px; }
 .field-key { min-width: 88px; }
 image.info-sign { color: @ink_metadata; }
-.evidence-row { padding: 12px 0; }
+.evidence-row { padding: 10px 0; }
 .output { margin-top: 4px; }
 
-.draft { padding: 12px 0; }
+.draft {
+  padding: 12px;
+  border-radius: 12px;
+  background-color: @raised;
+  border: 1px solid @rim;
+}
 .draft-reference { font-weight: 500; }
-.draft button.destructive-quiet { margin-left: -12px; }
+.draft button.destructive-quiet { margin-left: -8px; }
 .excerpt { color: @ink_secondary; }
 .save-state.save-failed { color: @del_ink; font-weight: 600; }
 .save-state.save-warning { color: @warn_ink; font-weight: 600; }
@@ -462,22 +609,26 @@ image.info-sign { color: @ink_metadata; }
 
 .error-box {
   background-color: @del_fill;
+  border: 1px solid @del_rim;
   color: @del_ink;
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 8px 12px;
 }
 .warning-box {
   background-color: @warn_fill;
+  border: 1px solid @warn_rim;
   color: @warn_ink;
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 8px 12px;
 }
 
 
-.activity { padding: 32px 32px 24px 32px; }
+/* ---------------------------------------------------------------- activity */
+
+.activity { padding: 28px 32px 20px 32px; }
 .agent-setup { padding: 16px 0; }
 .transcript > row.activity-item {
-  padding: 10px 14px;
+  padding: 8px 4px;
   margin: 0 0 12px 0;
   border-radius: 12px;
   background-color: transparent;
@@ -485,43 +636,55 @@ image.info-sign { color: @ink_metadata; }
 .transcript > row.activity-item:hover { background-color: transparent; }
 .transcript > row.from-user { padding: 0; margin: 4px 0 16px 0; }
 .transcript .bubble {
-  padding: 10px 14px;
-  border-radius: 14px 14px 4px 14px;
-  background-color: @ink_primary;
-  color: @surface;
+  padding: 8px 14px;
+  border-radius: 16px 16px 6px 16px;
+  background-color: @raised;
+  border: 1px solid @rim;
+  color: @ink_strong;
 }
-.transcript .bubble label { color: @surface; }
-.transcript .bubble label > selection { background-color: @surface; color: @ink_primary; }
-.role { font-size: 13px; }
+.transcript .bubble label { color: @ink_strong; }
+.role { font-size: 12px; color: @ink_secondary; }
 .activity-text { margin-top: 2px; }
 .composer {
   margin-top: 8px;
-  padding: 10px 12px 10px 12px;
-  border-radius: 14px;
-  background-color: @surface;
-  box-shadow: inset 0 0 0 1px @ink_primary;
+  padding: 10px 12px;
+  border-radius: 17px;
+  background-color: @raised;
+  border: 1px solid @rim;
+  border-top-color: @rim_raised;
+  box-shadow: 0 1px 2px @shadow_soft, 0 3px 10px @shadow_soft;
 }
-.composer:focus-within { box-shadow: inset 0 0 0 2px @focus_ring; }
+.composer:focus-within { border-color: @focus_ring; box-shadow: inset 0 0 0 1px @focus_ring, 0 3px 10px @shadow_soft; }
 .composer scrolledwindow.text-input, .composer scrolledwindow.text-input:focus-within {
   border-color: transparent;
+  background-color: transparent;
   box-shadow: none;
 }
 
 
-window.lade-dialog { background-color: @surface; border-radius: 12px; }
+/* ---------------------------------------------------------------- dialogs */
+
+window.lade-dialog {
+  background-color: @surface;
+  border-radius: 14px;
+  border: 1px solid @rim;
+  box-shadow: 0 16px 40px @shadow_dialog;
+}
 .dialog-content { padding: 24px 24px 20px 24px; }
-.dialog-title { font-size: 18px; font-weight: 600; }
+.dialog-title { font-size: 17px; font-weight: 600; color: @ink_strong; }
 .dialog-footer { padding: 4px 24px 24px 24px; }
 .field-label { font-size: 13px; font-weight: 500; color: @ink_secondary; }
 .confirm-item { padding: 8px 0; }
 .limited-error > .error-box { margin-top: 4px; }
 
 
-.terminal-pane { padding: 32px; }
+/* ---------------------------------------------------------------- terminal */
+
+.terminal-pane { padding: 28px 32px; }
 .compact .terminal-pane { padding: 16px; }
 textview.terminal-view, textview.terminal-view > text {
   background-color: @surface;
   color: @ink_primary;
-  font-family: monospace;
-  font-size: 13px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
 }

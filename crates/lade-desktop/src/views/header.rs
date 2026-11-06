@@ -172,6 +172,7 @@ fn brand() -> gtk::Box {
     mark.set_content_width(26);
     mark.set_content_height(23);
     mark.set_valign(gtk::Align::Center);
+    mark.add_css_class("mark");
     draw_mark(&mark);
     set_accessible_label(&mark, "LADE mark");
     brand.append(&mark);

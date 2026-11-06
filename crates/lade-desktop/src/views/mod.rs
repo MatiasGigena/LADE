@@ -49,7 +49,7 @@ pub fn load_css() {
     if let Some(settings) = gtk::Settings::default() {
         settings.set_gtk_theme_name(Some("Adwaita"));
         settings.set_gtk_icon_theme_name(Some("Adwaita"));
-        settings.set_gtk_application_prefer_dark_theme(false);
+        settings.set_gtk_application_prefer_dark_theme(true);
         settings.set_gtk_label_select_on_focus(false);
     }
 }

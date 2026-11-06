@@ -43,7 +43,8 @@ python3 scripts/compare-fixtures.py
 `scripts/check-contrast.py` (part of `scripts/verify`, no display needed) reads the desktop stylesheet
 `crates/lade-desktop/src/assets/style.css`: it fails on colour literals outside `@define-color` tokens and on viewer
 colours (set from Rust) that are not tokens, and prints the WCAG ratio of each specified ink/fill pair composited on the
-black surface (4.5:1 text, 3:1 control boundaries, focus outline and markers). It is a token computation, not a
+opaque surface it sits on: chrome, pane, raised, well or popover, with the hover and selected fills where rows and tabs
+use them (4.5:1 text, 3:1 focus outline, checkbox edges and accent markers). It is a token computation, not a
 rendered-surface measurement. To sample a real native capture (optional, needs Pillow):
 
 ```sh
