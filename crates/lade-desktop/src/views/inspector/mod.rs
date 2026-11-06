@@ -24,7 +24,11 @@ mod overview;
 use feedback::DraftWidgets;
 
 pub struct Inspector {
-    pub root: gtk::Notebook,
+    /// The inspector column: its tabs on the window chrome, above the pane they switch.
+    pub root: gtk::Box,
+    /// The Overview, Evidence and Feedback pages, without tabs of their own.
+    pub pages: gtk::Notebook,
+    tabs: widgets::PaneTabs,
     controller: Rc<Controller>,
     overview: gtk::Box,
     evidence: gtk::Box,
@@ -67,18 +71,24 @@ fn group_separator() -> gtk::Separator {
 
 impl Inspector {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
-        let root = gtk::Notebook::new();
-        root.add_css_class("inspector");
-        root.set_show_border(false);
+        let pages = gtk::Notebook::new();
+        pages.add_css_class("inspector-pages");
+        pages.add_css_class("sheet");
+        pages.set_show_tabs(false);
+        pages.set_show_border(false);
+        pages.set_overflow(gtk::Overflow::Hidden);
+        pages.set_vexpand(true);
         let (overview_scroll, overview) = page("Overview");
         let (evidence_scroll, evidence) = page("Evidence");
         let (feedback_scroll, feedback) = page("Feedback");
-        root.append_page(&overview_scroll, Some(&gtk::Label::new(Some("Overview"))));
-        root.append_page(&evidence_scroll, Some(&gtk::Label::new(Some("Evidence"))));
-        root.append_page(&feedback_scroll, Some(&gtk::Label::new(Some("Feedback"))));
         for scroll in [&overview_scroll, &evidence_scroll, &feedback_scroll] {
-            root.page(scroll).set_tab_expand(true);
+            pages.append_page(scroll, None::<&gtk::Widget>);
         }
+        let tabs = widgets::pane_tabs("Inspector tabs", &["Overview", "Evidence", "Feedback"]);
+        let root = vbox(0);
+        root.add_css_class("inspector");
+        root.append(&tabs.root);
+        root.append(&pages);
 
         let drafts_heading = vbox(space::TIGHT);
         feedback.append(&drafts_heading);
@@ -98,6 +108,8 @@ impl Inspector {
 
         let inspector = Rc::new(Self {
             root,
+            pages,
+            tabs,
             controller: controller.clone(),
             overview,
             evidence,
@@ -115,16 +127,28 @@ impl Inspector {
             more_open: Cell::new(false),
             details_open: Cell::new(false),
         });
+        for (index, tab) in inspector.tabs.tabs.iter().enumerate() {
+            let pages = inspector.pages.clone();
+            let index = u32::try_from(index).ok();
+            tab.connect_toggled(move |tab| {
+                if tab.is_active() {
+                    pages.set_current_page(index);
+                }
+            });
+        }
         let this = Rc::downgrade(&inspector);
-        inspector.root.connect_switch_page(move |_, _, index| {
-            if let Some(this) = this.upgrade()
-                && !this.updating.get()
-            {
-                this.controller.set_inspector_tab(match index {
-                    1 => InspectorTab::Evidence,
-                    2 => InspectorTab::Feedback,
-                    _ => InspectorTab::Overview,
-                });
+        inspector.pages.connect_switch_page(move |_, _, index| {
+            if let Some(this) = this.upgrade() {
+                if let Some(tab) = this.tabs.tabs.get(index as usize) {
+                    tab.set_active(true);
+                }
+                if !this.updating.get() {
+                    this.controller.set_inspector_tab(match index {
+                        1 => InspectorTab::Evidence,
+                        2 => InspectorTab::Feedback,
+                        _ => InspectorTab::Overview,
+                    });
+                }
             }
         });
         inspector.render_overview();
@@ -189,12 +213,14 @@ impl Inspector {
 
     fn sync_tab(&self) {
         let tab = self.controller.store.state().ui.inspector_tab;
-        self.updating.set(true);
-        self.root.set_current_page(Some(match tab {
+        let index = match tab {
             InspectorTab::Overview => 0,
             InspectorTab::Evidence => 1,
             InspectorTab::Feedback => 2,
-        }));
+        };
+        self.updating.set(true);
+        self.pages.set_current_page(Some(index));
+        self.tabs.tabs[index as usize].set_active(true);
         self.updating.set(false);
     }
 

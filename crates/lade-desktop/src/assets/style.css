@@ -99,29 +99,41 @@ entry > text > selection:focus-within {
 
 /* ---------------------------------------------------------------- panes on the chrome */
 
-.centre-region.sheet, notebook.inspector.sheet, .pane-shoulder {
+.sheet {
   background-color: @surface;
   border-radius: 14px;
 }
-notebook.inspector.sheet { margin: 0 8px 8px 8px; }
-.compact notebook.inspector.sheet { margin: 0 6px 6px 6px; }
-
-/* The work-area pane gives up its top-left corner to a notch on the chrome that holds the view
-   tabs. Its shoulder (the pane's top beside the notch) and its body meet without a seam; the
-   foot is the pane's concave curve where the notch's bottom edge meets the shoulder. */
 .centre-column { margin: 0 0 8px 0; }
 .centre-column.alone { margin-right: 8px; }
-.compact .centre-column { margin: 0 6px 6px 6px; }
-/* The notch keeps no padding of its own, so the foot reaches the body's top edge. */
-.pane-notch { padding: 0; }
-.pane-notch .nav { margin: 3px 6px 3px 0; }
-.notch-foot {
-  min-width: 12px;
-  min-height: 12px;
-  background-image: radial-gradient(circle at left top, transparent 11.5px, @surface 12px);
+.inspector { margin: 0 8px 8px 8px; }
+.compact .centre-column, .compact .inspector { margin: 0 6px 6px 6px; }
+
+/* Pane tabs: one row of fixed tabs on the chrome above each pane. The current tab takes the
+   pane's fill and joins it; its feet are the pane's concave curves on either side. The strip
+   starts past the pane's 14 px corner so the first foot lands on a straight edge. */
+.pane-tabs { padding: 6px 0 0 12px; }
+.tab-foot { min-width: 10px; min-height: 10px; }
+.pane-tab-cell.current .tab-foot.start {
+  background-image: radial-gradient(circle at left top, transparent 9.5px, @surface 10px);
 }
-.pane-shoulder { border-radius: 14px 14px 0 0; }
-.centre-column .centre-region.sheet { border-radius: 14px 0 14px 14px; }
+.pane-tab-cell.current .tab-foot.end {
+  background-image: radial-gradient(circle at right top, transparent 9.5px, @surface 10px);
+}
+button.pane-tab {
+  min-height: 20px;
+  padding: 5px 12px 5px 12px;
+  border: none;
+  border-radius: 10px 10px 0 0;
+  background-color: transparent;
+  box-shadow: none;
+  color: @ink_metadata;
+  font-size: 13px;
+  font-weight: 500;
+}
+button.pane-tab:hover { background-color: @hover_fill; color: @ink_primary; }
+button.pane-tab:checked, button.pane-tab:checked:hover { background-color: @surface; color: @ink_strong; }
+button.pane-tab:checked label { color: @ink_strong; }
+button.pane-tab:focus:focus-visible { outline-offset: -3px; }
 
 
 /* ---------------------------------------------------------------- type roles */
@@ -377,23 +389,6 @@ label.text-placeholder { color: @ink_metadata; padding: 8px 10px; margin: 1px; }
 .compact .lade-header { padding: 0 8px; }
 .connection { font-size: 12px; }
 
-/* Pane tabs: no track; muted peers, a hover fill, the current one on the selected fill. */
-.nav button.nav-tab {
-  min-height: 20px;
-  padding: 4px 10px;
-  margin: 0 1px;
-  border: none;
-  border-radius: 8px;
-  background-color: transparent;
-  box-shadow: none;
-  color: @ink_metadata;
-  font-size: 13px;
-  font-weight: 500;
-}
-.nav button.nav-tab:hover { background-color: @hover_fill; color: @ink_primary; }
-.nav button.nav-tab:checked { background-color: @selected_fill; color: @ink_strong; }
-.nav button.nav-tab:focus:focus-visible { outline-offset: -2px; }
-
 /* Search: a ghost field on the chrome that takes the hover fill and a ring when focused. */
 .search {
   border: 1px solid @rim;
@@ -454,11 +449,13 @@ label.text-placeholder { color: @ink_metadata; padding: 8px 10px; margin: 1px; }
 
 /* ---------------------------------------------------------------- Objectives rail (on the chrome) */
 
-.rail { padding: 4px 8px 16px 12px; }
-.rail .section-title, .rail .group-heading { margin-left: 10px; }
-.rail .section-title { font-size: 13px; color: @ink_secondary; font-weight: 600; }
+.rail { padding: 2px 8px 16px 10px; }
+.rail .section-title, .rail .group-heading { margin-left: 8px; }
+.rail .section-title { font-size: 12px; color: @ink_metadata; font-weight: 500; }
 .rail .group-heading { margin-bottom: 2px; }
-.rail .archive > button.disclosure-toggle { margin-left: 2px; }
+.rail .archive > button.disclosure-toggle { margin-left: 0; }
+.rail .archive > button.disclosure-toggle label { font-size: 12px; color: @ink_metadata; }
+.rail button.icon-button { min-width: 26px; min-height: 26px; }
 .rail button.icon-button:focus:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px @focus_ring;
@@ -467,9 +464,10 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   background-color: transparent;
 }
 .objective-list > row {
-  border-radius: 10px;
-  padding: 8px 10px;
-  margin: 0 0 2px 0;
+  border-radius: 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  margin: 0 0 1px 0;
   background-color: transparent;
   box-shadow: none;
   border: none;
@@ -482,7 +480,9 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 }
 .objective-list > row:selected label.objective-title, .file-list > row:selected label.file-name { color: @ink_strong; }
 .objective-list > row:selected .objective-title { font-weight: 600; }
-.objective-title { font-weight: 500; font-size: 13.5px; }
+.objective-title { font-weight: 500; font-size: 13px; color: @ink_primary; }
+.objective-sign { font-size: 12px; color: @ink_metadata; }
+.objective-list > row:selected .objective-sign { color: @ink_secondary; }
 
 .status-sign { font-weight: 700; }
 
@@ -576,29 +576,8 @@ textview.code-view border.left, textview.code-view gutter {
 
 /* ---------------------------------------------------------------- inspector */
 
-notebook.inspector > header {
-  background-color: transparent;
-  border: none;
-  box-shadow: none;
-}
-notebook.inspector > header { padding: 12px 12px 4px 12px; }
-notebook.inspector > header > tabs > tab {
-  padding: 4px 10px;
-  margin: 0 1px;
-  min-height: 20px;
-  border: none;
-  border-radius: 8px;
-  background-color: transparent;
-  box-shadow: none;
-  color: @ink_metadata;
-  font-size: 13px;
-  font-weight: 500;
-  outline-offset: -2px;
-}
-notebook.inspector > header > tabs > tab:hover { background-color: @hover_fill; color: @ink_primary; }
-notebook.inspector > header > tabs > tab:checked { background-color: @selected_fill; color: @ink_strong; }
-notebook.inspector > header > tabs > tab:checked label { color: @ink_strong; }
-notebook.inspector > stack { background-color: transparent; }
+notebook.inspector-pages, notebook.inspector-pages > stack { background-color: transparent; border: none; }
+notebook.inspector-pages.sheet { background-color: @surface; }
 .inspector-page { padding: 16px 20px 32px 20px; }
 .field-key { min-width: 88px; }
 image.info-sign { color: @ink_metadata; }

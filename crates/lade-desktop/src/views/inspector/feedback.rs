@@ -341,7 +341,7 @@ impl Inspector {
     }
 
     pub fn focus_draft(&self, draft_id: &DraftId) {
-        self.root.set_current_page(Some(2));
+        self.pages.set_current_page(Some(2));
         let Some((view, draft)) = self
             .drafts
             .borrow()

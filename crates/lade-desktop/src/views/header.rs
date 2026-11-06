@@ -1,6 +1,6 @@
 //! The window header: the LADE mark, search and its results, the profile, the connection status
-//! and the compact menu. It also builds the main view tabs, which the window places in the notch
-//! of the work-area pane.
+//! and the compact menu. It also builds the main view tabs, which the window places above the
+//! work-area pane.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -71,7 +71,7 @@ pub type OpenerHandler = Rc<dyn Fn(&gtk::Widget)>;
 pub struct Header {
     pub root: gtk::Box,
     pub viewport: gtk::ScrolledWindow,
-    /// The Workbench, Activity and Terminal tabs, placed by the window in the work-area notch.
+    /// The Workbench, Activity and Terminal tabs, placed by the window above the work-area pane.
     pub nav: gtk::Box,
     row: gtk::Box,
     controller: Rc<Controller>,
@@ -190,21 +190,11 @@ fn nav_tabs() -> (
     gtk::ToggleButton,
     gtk::ToggleButton,
 ) {
-    let nav = hbox(0);
-    nav.add_css_class("nav");
-    nav.set_valign(gtk::Align::Center);
-    set_accessible_label(&nav, "Main view");
-    let workbench_tab = gtk::ToggleButton::with_label("Workbench");
-    let activity_tab = gtk::ToggleButton::with_label("Activity");
-    activity_tab.set_group(Some(&workbench_tab));
-    let terminal_tab = gtk::ToggleButton::with_label("Terminal");
-    terminal_tab.set_group(Some(&workbench_tab));
-    for tab in [&workbench_tab, &activity_tab, &terminal_tab] {
-        tab.add_css_class("nav-tab");
-        nav.append(tab);
-    }
+    let strip = widgets::pane_tabs("Main view", &["Workbench", "Activity", "Terminal"]);
+    strip.root.add_css_class("nav");
+    let [workbench_tab, activity_tab, terminal_tab] = [0, 1, 2].map(|i| strip.tabs[i].clone());
     workbench_tab.set_active(true);
-    (nav, workbench_tab, activity_tab, terminal_tab)
+    (strip.root, workbench_tab, activity_tab, terminal_tab)
 }
 
 /// The search results popover under `search`, as the popover, its heading, its status line and

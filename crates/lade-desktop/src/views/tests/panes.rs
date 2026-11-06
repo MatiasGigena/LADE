@@ -121,15 +121,15 @@ fn the_inspector_tabs_show_the_objective_its_checks_and_its_drafts() {
         assert!(shows(&app.inspector.root, "Harden network calls"));
         app.controller.set_inspector_tab(InspectorTab::Evidence);
         settle_until("the evidence tab shows its checks", || {
-            app.inspector.root.current_page() == Some(1) && shows(&app.inspector.root, "npm test")
+            app.inspector.pages.current_page() == Some(1) && shows(&app.inspector.root, "npm test")
         });
-        assert_eq!(app.inspector.root.current_page(), Some(1));
+        assert_eq!(app.inspector.pages.current_page(), Some(1));
         assert!(shows(&app.inspector.root, "npm test"));
         app.controller.set_inspector_tab(InspectorTab::Feedback);
         settle_until("the feedback tab is shown", || {
-            app.inspector.root.current_page() == Some(2) && !shows(&app.inspector.root, "npm test")
+            app.inspector.pages.current_page() == Some(2) && !shows(&app.inspector.root, "npm test")
         });
-        assert_eq!(app.inspector.root.current_page(), Some(2));
+        assert_eq!(app.inspector.pages.current_page(), Some(2));
         assert!(!shows(&app.inspector.root, "npm test"));
         app.window.close();
     });

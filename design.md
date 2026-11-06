@@ -17,7 +17,7 @@ This specification makes no claim of a rendered GTK implementation or runtime vi
 LADE is a dark, gray, desktop tool. Three ideas carry the whole interface:
 
 - **Chrome and panes.** The window is one charcoal *chrome*. The header and the Objectives rail sit directly on it. The work area and the inspector are *panes*: rounded gray surfaces inset from the window edges and from each other by the same small gap, so the chrome shows as an even frame around them. Panes are separated by that gap, never by rules.
-- **The notch.** The work-area pane gives up its top-left corner to a *notch* of chrome that holds the fixed view tabs (Workbench, Activity, Terminal). The pane's top edge rises beside the notch with its usual rounded corner, meets the notch's bottom edge in a concave curve, and the pane's left edge starts below the notch with another rounded corner, so the tabs read as sitting on the window and belonging to the pane beneath them.
+- **One tab row, tabs joined to their pane.** A single row of fixed tabs runs across the window on the chrome: Workbench, Activity and Terminal above the work-area pane, Overview, Evidence and Feedback above the inspector pane. The current tab of each pane takes the pane's fill and joins it, with a concave curve on either side where its edges meet the pane's top; the other tabs stay on the chrome. Tabs are never closed, reordered or added.
 - **Surfaces by recipe, not by colour.** Every non-text element is one of five recipes: *chrome*, *pane*, *raised* (buttons, selects, popovers, the composer, drafts), *well* (sunken: text fields, search, segmented tracks, checkboxes) and *ghost* (no fill until hover: quiet buttons, rows, tabs). Raised surfaces have a hairline rim lit slightly brighter at the top and a short, soft shadow; wells have a rim and no shadow; panes have neither: their shape against the chrome is the edge.
 - **One accent.** Salmon is the only hue in the chrome. It marks the available primary action, keyboard focus, checked controls, completed and current journey steps, the LADE mark and text selection. It is never a panel tint, row stripe, tab underline or decoration, and never the only signal of a state.
 
@@ -38,11 +38,11 @@ Units below are logical pixels at 100% scaling. They are layout targets; GTK/Pan
 
 | Region | Wide-layout geometry | Treatment |
 | --- | --- | --- |
-| Header | 52 high, 16 left and 12 right inset, 16 between groups | On the chrome; no divider. Brand, connection status, search and profile; the view tabs live in the work-area notch, not here |
-| Objectives | 264 wide, adjustable approximately 224–280 | On the chrome; 12 left inset; rows 10 from the rail edge; groups 24 apart; titles, group labels and the archive toggle share one text edge |
-| Work-area notch | 34 high (28 tabs with 3 above and below), as wide as the tabs plus 6, then the 12 concave foot | On the chrome at the work area's top-left; the pane's shoulder fills the rest of the row with a 14 top corner |
-| Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | A pane: surface fill, 14 radius except the notched corner; 8 from the window's bottom edge and 8 from the inspector pane. Dominant reading area, not a grid of unrelated cards |
-| Right inspector | 344 wide, adjustable approximately 280–360; 20 inset, sections 32 apart; at the tight 280 width the tabs and their padding must still fit | A pane like the work area, 8 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area takes the full width and its own 8 right gap |
+| Header | 52 high, 16 left and 12 right inset, 16 between groups | On the chrome; no divider. Brand, connection status, search and profile; the view tabs live above their panes, not here |
+| Objectives | 264 wide, adjustable approximately 224–280 | On the chrome; 10 left inset; one-line rows 28 high with 8 side padding, 1 apart; groups 24 apart; titles, group labels and the archive toggle share one text edge |
+| Tab row | 36 high: 6 above the tabs, tabs 30 high flush with the pane top; each pane's strip starts 12 in from its edge | On the chrome above each pane; the current tab joins its pane with 10-pixel concave feet |
+| Main work area | Remaining width; 32 inset (16 compact), 16 within related groups | A pane: surface fill, 14 radius; 8 from the window's bottom edge and 8 from the inspector pane. Dominant reading area, not a grid of unrelated cards |
+| Right inspector | 344 wide, adjustable approximately 280–360; 20 inset, sections 32 apart; at the tight 280 width its three tabs must still fit | A pane like the work area with its own tabs in the same row, 8 from the window's right and bottom edges. Shown only when an Objective is selected; without one the work area takes the full width and its own 8 right gap |
 | Changed-file list inside center | Approximately 192 wide when center permits | Ghost rows: file name on the first line, directory and line counts on the second |
 | Code/diff viewport | Remaining center width | On the pane surface; path toolbar, gutters and footer unruled, aligned to the work area's text edge; semantic diff fills only |
 
@@ -52,7 +52,7 @@ Display the navigation destinations defined by the accepted product contract; do
 
 ### Narrow and scaled layouts
 
-At roughly 1100 logical pixels and below, use a compact version of the same workbench: reduce rail widths, present secondary rails in accessible collapsible/drawer surfaces, and keep the active code or feedback surface dominant. The compact region switcher is the segmented control; the visible pane keeps a 6-pixel gap to the window. At approximately 800 by 550 logical pixels, do not insist on three simultaneous fixed-width columns. Search remains reachable; the profile does not push anything offscreen, and the view tabs stay in the work-area notch.
+At roughly 1100 logical pixels and below, use a compact version of the same workbench: reduce rail widths, present secondary rails in accessible collapsible/drawer surfaces, and keep the active code or feedback surface dominant. The compact region switcher is the segmented control; the visible pane keeps a 6-pixel gap to the window. At approximately 800 by 550 logical pixels, do not insist on three simultaneous fixed-width columns. Search remains reachable; the profile does not push anything offscreen, and each pane keeps its tabs above it.
 
 These are responsive compositions, not a mobile-support promise. Do not remove functionality, shrink text below the type scale, clip actions or shrink the whole application with a visual transform. Let document content scroll within its viewport; allow deliberate horizontal scrolling for code. Long labels wrap or truncate with a way to inspect the full value under the functional contract. At 200% text/UI scaling, controls and focus must remain visible.
 
@@ -141,7 +141,7 @@ Spacing scale: **2, 4, 6, 8, 10, 12, 16, 20, 24, 32** (a 4-pixel base with 2-pix
 
 - **Whitespace groups.** A title sits closer to its own metadata (4) than to the next record (12 or more); groups of records sit 24 apart, inspector sections 32. Never spread lines evenly to fill a region.
 - **Words keep their inset.** Text stays at least 10 from the edge of any row or field, 12 from a card, 20 from a pane edge in the inspector and 32 in the work area; carry the same inset round the bottom.
-- **Rows breathe.** Objective rows 8 by 10 padding with 2 between; file rows 6 by 10 with 2 between; evidence rows 10 vertical; code lines 3 above and below.
+- **Rows breathe.** Objective rows are one line, 28 high with 8 side padding and 1 between; file rows 6 by 10 with 2 between; evidence rows 10 vertical; code lines 3 above and below.
 - **Running text has leading and a measure.** Read-only prose (activity, intent, empty-state bodies) uses 1.38 line height; agent and system text wrap at about 88 characters, your messages at about 64.
 - **Compact gives space back first.** Below the wide layout, insets drop to 16 and pane gaps to 6; rows keep their padding.
 
@@ -152,21 +152,21 @@ Radii by role, so surfaces agree without one-off values:
 | 4 | Checkboxes, focus rings around text |
 | 6 | File rows, menu and result rows |
 | 7 | Items inside a segmented track, tooltips |
-| 8 | Buttons, selects, fields, search, tabs |
-| 10 | Objective rows, segmented tracks, inline messages, notices |
-| 12 | Popovers, drafts, error and warning boxes, the concave foot of the work-area notch |
-| 14 | Panes (including the notch's shoulder and corner under it) and dialogs |
+| 8 | Buttons, selects, fields, search, Objective rows |
+| 10 | Segmented tracks, inline messages, notices, the top corners of a tab and its concave feet |
+| 12 | Popovers, drafts, error and warning boxes |
+| 14 | Panes and dialogs |
 | 16–17 | Activity bubbles and the composer |
 
-Default control height is 32 (28 inside a segmented track, 30 for fields), expanding for scaled text; icon-only hit areas are at least 32 by 32. Dense file rows begin around 30 high and Objective rows expand with their content. Status labels stay sign plus text, not pills. Cards appear only where a record is a unit the person acts on (a feedback draft, the composer, an activity bubble); lists of peers stay ghost rows.
+Default control height is 32 (28 inside a segmented track, 30 for fields), expanding for scaled text; icon-only hit areas are at least 32 by 32. Dense file rows begin around 30 high; Objective rows are one line, 28 high. Status labels stay sign plus text, not pills, except in Objective rows, where the group heading names the status and the row's sign is backed by its tooltip and accessible name. Cards appear only where a record is a unit the person acts on (a feedback draft, the composer, an activity bubble); lists of peers stay ghost rows.
 
 ## 5. Component appearance
 
 | Component | Visual contract |
 | --- | --- |
-| Objective row | Title, brief description and compact state grouped together; ghost row; unselected titles medium weight; hover fill; selected fill with a semibold title in strong ink; no lateral rule |
+| Objective row | One line: the title, truncated, and a small status sign at the right when the Objective has badges or is archived; the full title, state, badges and outcome in the tooltip and accessible name. Ghost row; unselected titles medium weight; hover fill; selected fill with a semibold title in strong ink; no lateral rule |
 | Header/search | On the chrome; the mark in the accent beside the wordmark; search a well with a rim beside the aligned avatar/name group; no account greeting |
-| Pane tabs (work-area notch, inspector tabs) | Fixed destinations, never closed, reordered or added. No track. Each tab is 28 high, 8 radius, 10 side padding, 13/500 text. Inactive tabs use metadata ink and take the hover fill under the pointer; the current tab takes the selected fill and strong ink. Focus is an inset accent ring because the tab sits on a pane edge. Inspector tabs split the panel width evenly |
+| Pane tabs (work area and inspector) | Fixed destinations, never closed, reordered or added. No track. Each tab is 30 high with 12 side padding, 13/500 text and 10-radius top corners. Inactive tabs use metadata ink on the chrome and take the hover fill under the pointer; the current tab takes the pane's fill and strong ink and joins the pane through its concave feet. Focus is an inset accent ring |
 | Segmented control (Diff/Full, compact regions) | A well track (10 radius, 2 padding) holding ghost items (7 radius); the current item is raised with its rim and soft shadow and strong ink |
 | File list | Ghost rows; file name first, directory dimmed below with change counts right-aligned beside it; full path in tooltip and accessible name; selected row on the selected fill; symbols distinguish file changes |
 | Code/diff | Stable line-number/sign gutters, monospaced alignment, restrained syntax; semantically colored changed lines; selection remains visible over diff fill |
@@ -206,7 +206,7 @@ Default to no animation for typing, selection, frequent navigation or status str
 
 The visual sheet must include the workbench, Objective list, file/diff selection, feedback, evidence and action group with realistic long text and all relevant states.
 
-Capture the actual GTK application at 1440 by 900 and 1280 by 800 logical pixels, a compact window, and the supported desktop's real 200% text/UI scaling. The ignored `capture_fixture_views` test renders populated fixture views at 1440 by 900 and 800 by 550 into `LADE_CAPTURE_DIR` for before/after comparison; it does not replace the scaled and assistive-technology passes. Review label/avatar vertical alignment, matched control dimensions, the even chrome gap round the panes, a seamless notch (no hairline or colour step where the shoulder, foot and body meet, at 100% and 200%), readable small text, full focus outlines, that the accent appears only in its listed roles, and the absence of lateral Objective accents.
+Capture the actual GTK application at 1440 by 900 and 1280 by 800 logical pixels, a compact window, and the supported desktop's real 200% text/UI scaling. The ignored `capture_fixture_views` test renders populated fixture views at 1440 by 900 and 800 by 550 into `LADE_CAPTURE_DIR` for before/after comparison; it does not replace the scaled and assistive-technology passes. Review label/avatar vertical alignment, matched control dimensions, the even chrome gap round the panes, seamless current tabs (no hairline, gap or colour step where a tab, its feet and its pane meet, at 100% and 200%), readable small text, full focus outlines, that the accent appears only in its listed roles, and the absence of lateral Objective accents.
 
 Measure text contrast against actual composed surfaces: normal functional text at least 4.5:1, eligible large text 3:1, and required non-text indicators 3:1 under the accepted accessibility contract. Compare source/diff signs and selection in combination. Check actual hover/focus/pressed rendering, not declarations alone. The full keyboard/Orca acceptance belongs to the functional checklist, not a claim made by screenshots.
 
