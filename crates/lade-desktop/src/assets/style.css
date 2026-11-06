@@ -112,8 +112,9 @@ notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 .centre-column { margin: 0 0 8px 0; }
 .centre-column.alone { margin-right: 8px; }
 .compact .centre-column { margin: 0 6px 6px 6px; }
-.pane-notch { padding: 3px 0 3px 0; }
-.pane-notch .nav { margin-right: 6px; }
+/* The notch keeps no padding of its own, so the foot reaches the body's top edge. */
+.pane-notch { padding: 0; }
+.pane-notch .nav { margin: 3px 6px 3px 0; }
 .notch-foot {
   min-width: 12px;
   min-height: 12px;
