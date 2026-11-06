@@ -125,7 +125,7 @@ notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 
 /* ---------------------------------------------------------------- type roles */
 
-.wordmark { font-size: 15px; font-weight: 600; letter-spacing: 0.6px; color: @ink_strong; }
+.wordmark { font-size: 14px; font-weight: 600; letter-spacing: 0.6px; color: @ink_strong; }
 .objective-heading, .empty-title {
   font-size: 22px;
   font-weight: 600;
