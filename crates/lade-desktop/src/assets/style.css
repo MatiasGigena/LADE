@@ -111,8 +111,9 @@ entry > text > selection:focus-within {
 /* Pane tabs: one row of fixed tabs on the chrome above each pane. The current tab takes the
    pane's fill and joins it; its feet are the pane's concave curves on either side. The strip
    starts past the pane's 14 px corner so the first foot lands on a straight edge. */
-.pane-tabs { padding: 6px 0 0 12px; }
+.pane-tabs { padding: 6px 0 0 6px; }
 .tab-foot { min-width: 10px; min-height: 10px; }
+.pane-tab-cell + .pane-tab-cell { margin-left: -10px; }
 .pane-tab-cell.current .tab-foot.start {
   background-image: radial-gradient(circle at left top, transparent 9.5px, @surface 10px);
 }
@@ -121,7 +122,7 @@ entry > text > selection:focus-within {
 }
 button.pane-tab {
   min-height: 20px;
-  padding: 5px 12px 5px 12px;
+  padding: 5px 6px 5px 6px;
   border: none;
   border-radius: 10px 10px 0 0;
   background-color: transparent;
