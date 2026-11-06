@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod adapters_support;
 
 use std::fs;
@@ -6,12 +13,10 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::TempDir;
-use lade_system::adapters::sandbox::{
-    Limits, SandboxCommand, SandboxTools, VerificationLaunch, verification_spec,
-};
+use adapters_support::{TempDir, skip_without_sandbox};
+use lade_system::adapters::sandbox::{Limits, SandboxTools, VerificationLaunch, verification_spec};
 use lade_system::supervision::sweep::{
-    PidRecord, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
+    PidRecord, SweepReport, kill_marked, read_pidfile, sandbox_marker, sweep_stale, write_pidfile,
 };
 
 fn stat_fields(pid: u32) -> Option<Vec<String>> {
@@ -55,9 +60,9 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
 
 #[test]
 fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
-    let Ok(tools) = SandboxTools::locate() else {
-        eprintln!("skipping sweep test: bubblewrap/prlimit not installed");
-        return;
+    let tools = match SandboxTools::locate() {
+        Ok(tools) => tools,
+        Err(e) => return skip_without_sandbox(e),
     };
     let tmp = TempDir::new("sweep");
     let run = tmp.path().join("run");
@@ -118,18 +123,17 @@ fn sweep_kills_recorded_sandbox_and_ignores_recycled_pid() {
 
     assert_eq!(
         sweep_stale(Path::new("/nonexistent/lade-run")).unwrap(),
-        Default::default()
+        SweepReport::default()
     );
 }
 
-fn shell_line(cmd: &SandboxCommand) -> String {
+fn shell_line(cmd: &Command) -> String {
     let quote = |arg: &std::ffi::OsStr| {
         format!(
             "'{}'",
             arg.to_str().expect("utf-8 argument").replace('\'', "'\\''")
         )
     };
-    let cmd = cmd.get_command();
     std::iter::once(quote(cmd.get_program()))
         .chain(cmd.get_args().map(quote))
         .collect::<Vec<_>>()
@@ -139,9 +143,9 @@ fn shell_line(cmd: &SandboxCommand) -> String {
 #[test]
 fn forced_supervisor_loss_races_leave_no_survivors() {
     const RUNS: usize = 40;
-    let Ok(tools) = SandboxTools::locate() else {
-        eprintln!("skipping race test: bubblewrap/prlimit not installed");
-        return;
+    let tools = match SandboxTools::locate() {
+        Ok(tools) => tools,
+        Err(e) => return skip_without_sandbox(e),
     };
     let tmp = TempDir::new("sweep-race");
     let run = tmp.path().join("run");
@@ -159,16 +163,20 @@ fn forced_supervisor_loss_races_leave_no_survivors() {
         .unwrap();
         spec.marker(&sandbox_marker(&run)).unwrap();
         let cmd = spec.command(&tools).unwrap();
-        let mut supervisor = Command::new("/bin/sh");
-        supervisor
-            .arg("-c")
-            .arg(format!(
-                "{} </dev/null >/dev/null 2>&1 & kill -KILL $$",
-                shell_line(&cmd)
-            ))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let (mut supervisor, mut gate) = cmd.spawn_via(supervisor).unwrap();
+        let (mut supervisor, mut gate) = cmd
+            .spawn_via(|sandbox| {
+                let mut supervisor = Command::new("/bin/sh");
+                supervisor
+                    .arg("-c")
+                    .arg(format!(
+                        "{} </dev/null >/dev/null 2>&1 & kill -KILL $$",
+                        shell_line(sandbox)
+                    ))
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null());
+                supervisor
+            })
+            .unwrap();
         if i % 2 == 0 {
             gate.open().unwrap();
         } else {
@@ -176,7 +184,14 @@ fn forced_supervisor_loss_races_leave_no_survivors() {
         }
         let _ = supervisor.wait();
     }
-    thread::sleep(Duration::from_millis(1500));
+    // Every opened gate starts its program; once all of them run, a program behind a dropped
+    // gate has had as long to start, so the check below would see it.
+    assert!(
+        wait_until(Duration::from_secs(10), || (0..RUNS)
+            .step_by(2)
+            .all(|i| sleepers(&sleep_marker(i)) > 0)),
+        "a sandbox whose gate was opened did not start its program"
+    );
     let alive: Vec<usize> = (0..RUNS)
         .filter(|i| sleepers(&sleep_marker(*i)) > 0)
         .collect();

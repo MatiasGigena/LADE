@@ -44,6 +44,7 @@ pub fn directory() -> Option<&'static Path> {
     None
 }
 
+#[must_use]
 pub fn fault_in(dir: &Path, operation: &str) -> Option<Fault> {
     let text = std::fs::read_to_string(dir.join(operation)).ok()?;
     let delay = text
@@ -56,6 +57,7 @@ pub fn fault_in(dir: &Path, operation: &str) -> Option<Fault> {
     })
 }
 
+#[must_use]
 pub fn operation(operation: &str) -> Option<Fault> {
     fault_in(directory()?, operation)
 }

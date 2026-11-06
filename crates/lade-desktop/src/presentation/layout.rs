@@ -1,3 +1,6 @@
+//! Responsive layout rules: compact and wide classes by window width, region order for focus
+//! moves, and the wide layout's pane sizes.
+
 pub const COMPACT_WIDTH: i32 = 1100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -91,6 +94,10 @@ pub fn wide_sizes(width: i32) -> WideSizes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag shows or hides one independent part of the window"
+)]
 pub struct Composition {
     pub rail: bool,
     pub centre: bool,

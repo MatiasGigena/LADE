@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod adapters_support;
 
 use std::fs;
@@ -5,9 +12,10 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::TempDir;
+use adapters_support::{TempDir, skip_without_sandbox};
+use lade_system::adapters::sandbox::TERMINAL_LIMITS;
 use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
-use lade_system::supervision::terminal::{RING_BYTES, TERMINAL_LIMITS, Terminal, TerminalRequest};
+use lade_system::supervision::terminal::{RING_BYTES, Terminal, TerminalRequest};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -18,11 +26,15 @@ struct Fixture {
 
 impl Fixture {
     fn new(tag: &str) -> Option<Self> {
-        let tools = SandboxTools::locate().ok()?;
-        if let Err(e) = sandbox_available(&tools) {
-            eprintln!("skipping terminal test: sandbox unavailable ({e})");
-            return None;
-        }
+        let probed =
+            SandboxTools::locate().and_then(|tools| sandbox_available(&tools).map(|()| tools));
+        let tools = match probed {
+            Ok(tools) => tools,
+            Err(e) => {
+                skip_without_sandbox(e);
+                return None;
+            }
+        };
         let root = TempDir::new(tag);
         for dir in ["worktree", "common", "run"] {
             fs::create_dir_all(root.path().join(dir)).unwrap();

@@ -102,3 +102,56 @@ pub fn stopped_objective() -> Objective {
         .expect("stopped");
     objective
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::execution::ExecutionState;
+    use crate::domain::objectives::Lifecycle;
+
+    #[test]
+    fn fixture_ids_are_distinct_valid_uuids() {
+        let ids = [uuid(0), uuid(1), uuid(2), uuid(u128::MAX)];
+        for (index, id) in ids.iter().enumerate() {
+            assert_eq!(Uuid::parse(&id.to_string()), Ok(*id));
+            assert!(ids[..index].iter().all(|earlier| earlier != id));
+        }
+        assert_eq!(objective_id(7).uuid(), uuid(7));
+    }
+
+    #[test]
+    fn fixture_values_are_valid_and_distinct() {
+        assert_ne!(git(1), git(2));
+        assert_ne!(digest(1), digest(2));
+        assert_eq!(ts(5).unix_ms(), 5);
+        let reference = reference_at(1, 3, 5, "ab").expect("reference");
+        assert_eq!(
+            (reference.byte_range().start(), reference.byte_range().end()),
+            (3, 5)
+        );
+        assert!(reference_at(1, 3, 5, "abc").is_err(), "length must match");
+    }
+
+    #[test]
+    fn objective_fixtures_are_in_their_named_states() {
+        let defined = defined_objective();
+        assert_eq!(defined.lifecycle(), Lifecycle::Defined);
+        assert_eq!(defined.execution().state(), &ExecutionState::None);
+
+        let (active, generation) = active_objective();
+        assert_eq!(active.lifecycle(), Lifecycle::Active);
+        assert_eq!(active.execution().state(), &ExecutionState::Idle);
+        assert_eq!(active.execution().generation(), generation);
+        assert_eq!(
+            active.execution().session().map(|s| s.session_id),
+            Some(session_id(1))
+        );
+
+        let stopped = stopped_objective();
+        assert_eq!(stopped.lifecycle(), Lifecycle::Active);
+        assert_eq!(
+            stopped.execution().state(),
+            &ExecutionState::Cancelled { interrupted: false }
+        );
+    }
+}

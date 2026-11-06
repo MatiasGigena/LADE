@@ -1,0 +1,238 @@
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus};
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+
+use super::sweep::{PidRecord, kill_record, record_sandbox};
+use crate::adapters::sandbox::{CgroupLeaf, SandboxCommand};
+
+/// How long one kill waits for the sandbox to be reaped.
+const KILL_WAIT: Duration = Duration::from_secs(10);
+/// How many kills teardown sends before it gives up waiting.
+const KILL_ATTEMPTS: u32 = 3;
+/// Upper bound between two exit polls while waiting.
+const POLL: Duration = Duration::from_millis(10);
+
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The piped standard streams of a sandboxed child, taken before its gate opens.
+pub(crate) struct ChildStdio {
+    pub stdin: Option<ChildStdin>,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+/// A running sandbox (worker or terminal): its outer process, the recorded namespace init, its
+/// cgroup leaf and its pidfile.
+///
+/// Teardown policy, shared by every owner: kill the namespace init and the outer process, wait up
+/// to [`KILL_WAIT`] for the reap, and retry up to [`KILL_ATTEMPTS`] times. The cgroup leaf is then
+/// released (which kills whatever is still in it). The pidfile is removed once the child is
+/// reaped; when it is not, the pidfile stays for the startup sweep and the loss is logged. Dropping
+/// the last handle tears the sandbox down the same way.
+pub(crate) struct SandboxedChild {
+    child: Mutex<Child>,
+    status: Mutex<Option<ExitStatus>>,
+    exited: Condvar,
+    init: Mutex<Option<PidRecord>>,
+    leaf: Mutex<Option<CgroupLeaf>>,
+    pidfile: PathBuf,
+}
+
+impl SandboxedChild {
+    /// Spawns the sandbox, records it in `pidfile`, places it in `leaf` and opens its gate, so the
+    /// sandboxed program runs only once the sandbox can be swept and limited. On failure the
+    /// sandbox is torn down before the error is returned.
+    pub(crate) fn spawn(
+        command: SandboxCommand,
+        pidfile: PathBuf,
+        leaf: Option<CgroupLeaf>,
+    ) -> io::Result<(Self, ChildStdio)> {
+        let (mut child, mut gate) = command.spawn()?;
+        let stdio = ChildStdio {
+            stdin: child.stdin.take(),
+            stdout: child.stdout.take(),
+            stderr: child.stderr.take(),
+        };
+        let pid = child.id();
+        let this = Self {
+            child: Mutex::new(child),
+            status: Mutex::new(None),
+            exited: Condvar::new(),
+            init: Mutex::new(None),
+            leaf: Mutex::new(None),
+            pidfile,
+        };
+        let started = record_sandbox(&this.pidfile, pid, leaf.as_ref(), || {
+            this.poll_exit().is_some()
+        })
+        .and_then(|init| {
+            *lock(&this.init) = init;
+            *lock(&this.leaf) = leaf;
+            gate.open()
+        });
+        // On failure `this` is dropped here, which tears the sandbox down.
+        started.map(|()| (this, stdio))
+    }
+
+    pub(crate) fn pidfile(&self) -> &Path {
+        &self.pidfile
+    }
+
+    pub(crate) fn namespace_init(&self) -> Option<u32> {
+        lock(&self.init).map(|record| record.pid)
+    }
+
+    pub(crate) fn poll_exit(&self) -> Option<ExitStatus> {
+        if let Some(status) = *lock(&self.status) {
+            return Some(status);
+        }
+        let status = lock(&self.child).try_wait().ok().flatten()?;
+        *lock(&self.status) = Some(status);
+        self.exited.notify_all();
+        Some(status)
+    }
+
+    pub(crate) fn wait_exit(&self, timeout: Duration) -> Option<ExitStatus> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = self.poll_exit() {
+                return Some(status);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return None;
+            }
+            let guard = lock(&self.status);
+            let _ = self
+                .exited
+                .wait_timeout(guard, POLL.min(deadline - now))
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    pub(crate) fn kill(&self) {
+        let mut child = lock(&self.child);
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        // The outer process first: killed after the namespace init, bwrap could see the init die
+        // and exit with status 137 before the signal reached it.
+        let _ = child.kill();
+        if let Some(init) = *lock(&self.init) {
+            kill_record(&init);
+        }
+    }
+
+    /// Kills the sandbox and releases its cgroup leaf and pidfile (see the type's teardown
+    /// policy). Idempotent; returns the exit status when the child was reaped.
+    pub(crate) fn terminate(&self) -> Option<ExitStatus> {
+        let mut status = self.poll_exit();
+        for _ in 0..KILL_ATTEMPTS {
+            if status.is_some() {
+                break;
+            }
+            self.kill();
+            status = self.wait_exit(KILL_WAIT);
+        }
+        if let Some(leaf) = lock(&self.leaf).take()
+            && leaf.oom_kills() > 0
+        {
+            eprintln!(
+                "laded: sandbox memory limit reached ({} OOM kill(s)) cgroup={}",
+                leaf.oom_kills(),
+                leaf.path().display()
+            );
+        }
+        if status.is_some() {
+            let _ = std::fs::remove_file(&self.pidfile);
+        } else {
+            eprintln!(
+                "laded: sandbox not reaped after {KILL_ATTEMPTS} kills; {} is left for the startup sweep",
+                self.pidfile.display()
+            );
+        }
+        status
+    }
+}
+
+impl Drop for SandboxedChild {
+    fn drop(&mut self) {
+        self.terminate();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+
+    use super::*;
+    use crate::adapters_support::TempDir;
+
+    /// A shell standing in for bwrap: its background child plays the namespace init.
+    fn sandbox(script: &str) -> SandboxCommand {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        command.into()
+    }
+
+    #[test]
+    fn a_sandbox_is_recorded_with_its_init_until_it_is_torn_down() {
+        let tmp = TempDir::new("child-teardown");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, stdio) =
+            SandboxedChild::spawn(sandbox("sleep 30 & wait"), pidfile.clone(), None)
+                .expect("spawn");
+        assert!(stdio.stdin.is_some() && stdio.stdout.is_some());
+        assert!(stdio.stderr.is_none(), "only piped streams are handed over");
+        assert_eq!(child.pidfile(), pidfile);
+        let init = child.namespace_init().expect("the init was discovered");
+        let recorded = std::fs::read_to_string(&pidfile).expect("pidfile");
+        assert!(recorded.contains(&init.to_string()), "{recorded}");
+        assert!(child.poll_exit().is_none());
+        assert!(child.wait_exit(Duration::from_millis(50)).is_none());
+
+        let status = child.terminate().expect("reaped");
+        assert_eq!(status.signal(), Some(9));
+        assert!(
+            !pidfile.exists(),
+            "the pidfile goes once the child is reaped"
+        );
+        assert_eq!(child.terminate(), Some(status), "teardown is idempotent");
+        assert_eq!(child.poll_exit(), Some(status));
+    }
+
+    #[test]
+    fn an_exited_sandbox_reports_its_status_to_waiters() {
+        let tmp = TempDir::new("child-exit");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, _stdio) =
+            SandboxedChild::spawn(sandbox("sleep 0.2 & wait; exit 3"), pidfile.clone(), None)
+                .expect("spawn");
+        let status = child.wait_exit(Duration::from_secs(10)).expect("exited");
+        assert_eq!(status.code(), Some(3));
+        child.kill();
+        assert_eq!(child.terminate().and_then(|s| s.code()), Some(3));
+        assert!(!pidfile.exists());
+    }
+
+    #[test]
+    fn dropping_the_last_handle_tears_the_sandbox_down() {
+        let tmp = TempDir::new("child-drop");
+        let pidfile = tmp.path().join("sandbox.pid");
+        let (child, _stdio) =
+            SandboxedChild::spawn(sandbox("sleep 30 & wait"), pidfile.clone(), None)
+                .expect("spawn");
+        assert!(pidfile.exists());
+        drop(child);
+        assert!(!pidfile.exists());
+    }
+}

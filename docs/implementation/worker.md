@@ -23,9 +23,11 @@ Environment read by the worker:
 | provider credential variables (e.g. `ANTHROPIC_API_KEY`) | Read by pi's provider auth for the selected model only; the sandbox passes only the selected provider's variables. |
 | `PATH`, `HOME`, `LANG`, `TERM` | Ordinary process environment for the built-in `bash` tool. `HOME` is the session dir in the sandbox; nothing is written under it by the worker itself. |
 
-The worker sets for itself (inherited by tool subprocesses): `PI_CODING_AGENT_DIR=<session_dir>/agent`,
+The launch environment (`laded`'s sandbox spawn) is the only source of pi's own variables, which tool
+subprocesses inherit: `PI_CODING_AGENT_DIR=<session_dir>/agent`,
 `PI_CODING_AGENT_SESSION_DIR=<session_dir>/sessions`, `PI_OFFLINE=1`, `PI_SKIP_VERSION_CHECK=1`,
-`PI_TELEMETRY=0`.
+`PI_TELEMETRY=0`. The worker never writes them; `worker.start` fails with `startup_failed` (naming the
+variable) when one is missing or does not match the `session_dir`, before anything is created.
 
 Files written (all under `session_dir` from `worker.start`, plus whatever the agent's tools write
 in `cwd`):
@@ -40,27 +42,30 @@ in `cwd`):
 Read only: `<session_dir>/profile/` (the service's snapshot of the LADE profile, IMP-011) and
 `<session_dir>/imports/` (service copies of sessions to import). The real `~/.pi`, `~/.agents` and the
 repository's `.pi/` are never read or written. The model catalogue for the service is produced by
-`node src/worker/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox.
+`node src/catalog.ts <out.json> [<models.json>]`, run by `laded` in the same network-less sandbox
+(a script, not an importable module: importing it redirects stdout and disables the network).
 
 ## Protocol mapping
 
-Envelope `{"protocol":1,"bundle":"0.2.0","body":{…}}`. Inbound bodies are parsed with the IMP-001
-bounded JSON parser (`src/json.ts`: 1 MiB frame, 256 KiB strings, duplicate-key rejection) and a
-closed validator in `src/worker/wire.ts` (unknown fields, wrong kinds, non-UUIDv4 ids rejected).
-`wire.ts` also holds the hand-mirrored DTOs and the `WorkerChannel` interface
-(`send(body)` / `incoming()`); replacing it with WP-A's generated worker DTOs/validators is a
-one-file change. The shared `Decoder("worker")` in `src/framing.ts` validates against the IMP-001
-client schema, so `wire.ts` carries an equivalent `LineDecoder` (split on byte LF only, bound the
-line before allocating, poison after the first error) until WP-A generalises it.
+Envelope `{"protocol":1,"bundle":"0.2.0","body":{…}}`. Body types are the generated `src/dto.ts`
+(`ServiceToWorker`, `WorkerToService`, `Model`, …). Inbound frames are parsed with the IMP-001
+bounded JSON parser (`src/json.ts`: 1 MiB frame, 256 KiB strings, duplicate-key rejection), validated
+against the package-local generated schema by `src/worker/contract.ts` (`decodeWorkerFrame`,
+`validateWorker` over `src/worker/worker-schema.json`: unknown fields, wrong kinds and non-UUIDv4 ids are
+rejected) and checked for direction (`isServiceToWorker`). `src/worker/wire.ts` holds the one worker wire
+codec: `parseInbound`, `encodeOutbound` (every outbound frame is re-validated against the same schema)
+and `LineDecoder` (split on byte LF only, bound the line before allocating, poison after the first
+error), plus per-kind aliases of the generated bodies. The test-only reference framing
+(`test/reference/framing.ts`) reuses that `LineDecoder` for worker framing.
 
 | Inbound | Worker action |
 | --- | --- |
-| `worker.start` | Create (`resume:false`) or reopen (`resume:true`: the given `session_file`, otherwise the most recent session in `<session_dir>/sessions`) the pi session with the optional `thinking` level and `resources` snapshot, then `worker.ready {pi_session_id, session_file}`, `session.changed {reason:"start", generation:"1"}` and `resources.loaded`. |
+| `worker.start` | Open the given `session_file` when it exists (it takes precedence over `resume`; the service sends one only with `resume:true`, and one outside `<session_dir>/sessions/` fails with `startup_failed`), otherwise create (`resume:false`) or reopen the most recent session in `<session_dir>/sessions` (`resume:true`) for the pi session with the optional `thinking` level and `resources` snapshot, then `worker.ready {pi_session_id, session_file}`, `session.changed {reason:"start", generation:"1"}` and `resources.loaded`. |
 | `input.deliver` | `input.received {input_id}` first, then deliver by mode (below). |
-| `session.abort` | `clearQueue()` (reported as a `system` item "Queue cleared" with counts only), then `abort()`; waits until the session is idle. |
+| `session.abort` | Cancels inputs not yet accepted (closing their dialogs), `clearQueue()` (reported as a `system` item "Queue cleared" with counts only), then `abort()`, which also stops compaction and retries; waits until the session is idle. |
 | `session.command {command_id, command}` | One session operation (`tree`, `navigate`, `fork`, `import`, `export`, `compact`, `reload`, `configure`), answered by `session.result {command_id, ok, message?, entries?, leaf_id?, truncated?}`. Not awaited by the read loop (an operation can wait for a dialog); a second command while one runs fails at once. Operations that change the session need an idle session. |
 | `ui.respond {ui_id, generation, answer}` | Answers an open extension dialog of the current generation; anything else is refused and reported. |
-| `worker.shutdown` | Abort if streaming, `dispose()`, flush stdout, exit 0. |
+| `worker.shutdown` | The same abort as `session.abort`, `dispose()`, flush stdout, exit 0 (stdin EOF does the same). |
 
 Delivery modes:
 
@@ -74,7 +79,10 @@ Delivery modes:
 commands are expanded exactly once, by pi, on this single path (the service and client never expand).
 The worker awaits `preflightResult` (acceptance), not the end of the run, before reading the next
 frame; an extension command (`/name` registered by an approved extension) is started without
-awaiting it, because it may wait for a dialog that only a later frame answers. Steering and
+awaiting it: it has no preflight to wait for, it runs extension code at once like a turn, and it may wait
+for a dialog that only a later frame answers. It therefore does not count as a delivery in progress, so
+session commands (for example a reload that replaces its dialogs) stay available while it runs, whereas
+they are refused while a prompt's preflight is pending. Steering and
 follow-up modes are pi's `one-at-a-time`. A rejected input is `worker.error {code:"delivery_failed"}`;
 a failure after acceptance is `session_failed`.
 
@@ -109,9 +117,9 @@ unboundedly either.
 
 ## Sessions, resources and extension UI (IMP-011)
 
-`src/worker/session.ts` (`SessionHost`) owns pi's `AgentSessionRuntime`
-(`createAgentSessionRuntime` with a factory over
-`createAgentSessionFromServices`). Fork and import go through the runtime (`fork`, `importFromJsonl`),
+`src/worker/session.ts` (`SessionHost`) owns pi's `AgentSessionRuntime` (`createAgentSessionRuntime` with a
+factory over `createAgentSessionFromServices`), input delivery, abort and the admission of session commands
+(refused while a prompt's preflight is pending or another command runs). Fork and import go through the runtime (`fork`, `importFromJsonl`),
 which replaces the `AgentSession`; `setRebindSession` re-subscribes and re-binds extensions, and every
 replacement or reload increments the **generation** (starting at 1) reported in `session.changed`
 `{generation, reason, model, thinking, pi_session_id, session_file, leaf_id?}`. Navigation uses
@@ -137,26 +145,28 @@ automatically.
 
 ## SDK APIs used (1.5.0 root exports)
 
-- `ModelRuntime.create({authPath, modelsPath: null, modelsStorePath, allowModelNetwork: false})`,
-  `modelRuntime.registerProvider(id, config)`, `modelRuntime.getModel(provider, id)`.
+- `ModelRuntime.create({authPath, modelsPath, modelsStorePath, allowModelNetwork: false})` (`modelsPath` is the
+  profile snapshot's `models.json` when it exists, otherwise `null`), `modelRuntime.registerProvider(id, config)`,
+  `modelRuntime.getModel(provider, id)`.
 - `SettingsManager.inMemory({...})` (no global or project `settings.json`; `defaultProjectTrust:
   "never"`, telemetry/analytics off, one-at-a-time queues).
 - `new DefaultResourceLoader({cwd, agentDir, settingsManager, noExtensions, noSkills,
   noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, extensionFactories,
   additionalSkillPaths, additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
   appendSystemPromptOverride: () => [system_note]})` + `reload()`.
-- `createAgentSessionRuntime`, `createAgentSessionFromServices`,
-  `AgentSessionRuntime` (`fork`, `importFromJsonl`, `setRebindSession`, `setBeforeSessionInvalidate`,
-  `dispose`), `SessionManager.open`, `Theme` (a plain theme for the UI context).
+- `createAgentSessionRuntime(factory, {cwd, agentDir, sessionManager})` with a factory over
+  `createAgentSessionFromServices({services, sessionManager, model, tools: ["read","bash","edit","write"],
+  sessionStartEvent?, thinkingLevel?})`; `AgentSessionRuntime` (`session`, `services`, `fork`, `importFromJsonl`,
+  `setRebindSession`, `setBeforeSessionInvalidate`, `dispose`); `Theme` (a plain theme for the UI context).
+- `SessionManager.open(file, sessionsDir, cwd)`, `SessionManager.create(cwd, sessionsDir)`,
+  `SessionManager.continueRecent(cwd, sessionsDir)`.
 - `AgentSession`: `bindExtensions`, `navigateTree`, `compact`, `setModel`, `setThinkingLevel`,
-  `exportToJsonl`, `reload`, `extensionRunner.getCommand`, `sessionManager` (`getEntries`, `getLeafId`,
-  `getLabel`).
+  `exportToJsonl`, `reload`, `waitForIdle`, `extensionRunner.getCommand`, `model`, `thinkingLevel`,
+  `isCompacting`, `sessionManager` (`getEntries`, `getEntry`, `getLeafId`, `getLabel`).
 - `ModelRuntime.getProviders` / `getModels` and pi-ai `getSupportedThinkingLevels` (catalogue).
-- `SessionManager.create(cwd, sessionsDir)` / `SessionManager.continueRecent(cwd, sessionsDir)`.
-- `createAgentSession({cwd, agentDir, modelRuntime, model, tools: ["read","bash","edit","write"],
-  resourceLoader, sessionManager, settingsManager})`.
 - `AgentSession`: `subscribe`, `prompt(text, {expandPromptTemplates, source, preflightResult})`,
-  `steer`, `followUp`, `clearQueue`, `abort`, `isStreaming`, `sessionId`, `sessionFile`, `dispose`.
+  `steer`, `followUp`, `clearQueue`, `abort` (which also stops compaction and retries), `isStreaming`,
+  `sessionId`, `sessionFile`.
   `preflightResult` reports only how an accepted prompt was dispatched; a delivery cancelled before
   the run starts (a newer input epoch) is dropped by the worker's own `input` handler (`InputGate` in
   `src/worker/session.ts`, passed as the only `extensionFactories` entry), which answers `handled`
@@ -172,7 +182,7 @@ automatically.
 ## `lade-fixture` provider (test-only)
 
 The offline fixture provider exists only for test harnesses. The worker (`src/worker/session.ts`) and the
-model catalogue (`src/worker/catalog.ts`) register it only when `LADE_TEST_FIXTURE_PROVIDER=1` is set in
+model catalogue (`src/catalog.ts`) register it only when `LADE_TEST_FIXTURE_PROVIDER=1` is set in
 their environment; `laded` sets it in the sandbox only when it was itself started with that switch (see
 [service.md](service.md#test-only-fixture-provider)). Without it the provider is not in the catalogue and a
 `worker.start` naming it fails with `startup_failed` ("the requested model is not registered"). The worker
@@ -191,6 +201,12 @@ Behaviour, decided only from the visible conversation (last user message):
   a short text, then one real `write` tool call per line (`stopReason: "toolUse"`); after the tool
   results it replies `lade-fixture: K of M tool call(s) succeeded. Done.`;
 - `lade-fixture: fail`: emits a provider error `lade-fixture: scripted provider failure`;
+- `lade-fixture: transient`: fails once with `lade-fixture: overloaded (scripted transient failure)`, which pi
+  retries, and the retry succeeds (each provider registration remembers which user messages it failed);
+- `lade-fixture: echo`: replies `lade-fixture echo: <the user message>`, so a test can see what pi delivered
+  (for example an expanded prompt template or a transformed input);
+- `lade-fixture: system`: replies with the sorted, de-duplicated `LADE-MARKER:<name>` tokens of the system prompt,
+  so a test can see which context files and skills were loaded;
 - `lade-fixture: delay <ms>` (≤ 2000): waits before each delta/tool call, honouring the abort
   signal — used to test steering and abort during a running turn.
 
@@ -213,12 +229,14 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
   prompt while streaming → follow-up; abort clears the queue and keeps the worker usable; resume
   keeps `pi_session_id`/`session_file` and history; invalid frame → exit 2 without echo; frame
   before start → exit 2; fixture failure → `provider_failed` and recovery; > 192 KiB tool item
-  truncated; stdin EOF → exit 0; unknown model → exit 1; without `LADE_TEST_FIXTURE_PROVIDER=1` the
+  truncated; stdin EOF → exit 0; unknown model → exit 1; launch environment not matching `session_dir` → exit 1; without `LADE_TEST_FIXTURE_PROVIDER=1` the
   fixture model is not registered and `worker.start` fails with `startup_failed`.
 - `test/worker-wire.test.ts` — closed inbound validation, LF fragmentation/poisoning, outbound
   bounds, UTF-8/frame-size truncation, drain backpressure and delta coalescing.
 - `test/worker-gateway.test.ts` — loopback-only CONNECT gateway on a Unix socket: tunnelled
-  `fetch`, refused tunnel, invalid authority, and the no-gateway failure.
+  `fetch`, `node:http` and WebSocket, `https`/`wss` with end-to-end TLS against a local origin whose certificate the
+  test builds with `node:crypto` (no openssl; a wrong host name is refused), refused tunnel, invalid authority,
+  CONNECT header bounds, and the no-gateway failure.
 - `test/worker-deps.test.ts` — the dependency seam: exactly one pi-ai is locked and installed (no
   direct dependency, no nested copy), every locked package that depends on pi-ai (pi-coding-agent,
   pi-agent-core, …) resolves the hoisted copy that `src/worker/pi-ai.ts` re-exports, the fixture
@@ -268,13 +286,14 @@ must re-run that test.
 - **Durability**: inherited from pi — first user message not flushed before an assistant entry; no
   fsync. `resume:true` with no prior session file starts a new session; the service detects this
   by a changed `pi_session_id`.
-- **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4: WP-A's schema must type
+- **pi session ids are UUIDv7-shaped** strings chosen by pi, not UUIDv4, so the worker schema types
   `pi_session_id` as a bounded string.
 - **Network coverage**: undici/global `fetch` traffic and `node:http(s)` clients that use the global
   agents are routed through the gateway (`src/worker/gateway.ts`). SDKs that bring their own agent
   (or `agent: false`), raw sockets and other runtimes have no network in the sandbox. TLS through the
   real gateway is tested against a local origin with a test-generated certificate, for both `fetch`
-  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`).
+  and `node:https` (`supervision_gateway.rs::worker_https_reaches_a_local_tls_origin_through_the_gateway`, skipped
+  without openssl), and the worker's own tunnel for `fetch`, `node:https` and `wss` in `test/worker-gateway.test.ts`.
 - **Tool output isolation**: pi's `bash` tool spawns children with piped stdout, but nothing in the
   worker stops a hostile process from writing to the worker's inherited fd 1 via `/proc`; the
   service must treat every frame as untrusted (it does: closed schema validation).

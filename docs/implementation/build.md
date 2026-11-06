@@ -57,7 +57,7 @@ Domain-only tests compile no GTK/SQLite. The fixture corpus is `contracts/v1/fix
 
 ### Boundary-validator lint
 
-`anti-slop/no-runtime-typeof` remains an error. Only `src/protocol.ts` has an override with `["error", { "allowInTypeGuards": true }]`, supported by pinned Oxlint/@oxlint/plugins 1.83.0 and the unchanged vendored rule. Even there, runtime checks outside a type-predicate function still reject (the plugin's existing `typeof x === "undefined"` existence-probe exemption remains unchanged). Other files retain the default prohibition, including guards. External JSON values are checked at the boundary without coercion; internal code consumes the validated DTOs. No `unknown` rule exception is needed: `JsonValue` honestly represents the output of the bounded parser before schema validation.
+`anti-slop/no-runtime-typeof` remains an error. Only `src/schema.ts` has an override with `["error", { "allowInTypeGuards": true }]`, supported by pinned Oxlint/@oxlint/plugins 1.83.0 and the unchanged vendored rule. Even there, runtime checks outside a type-predicate function still reject (the plugin's existing `typeof x === "undefined"` existence-probe exemption remains unchanged). Other files retain the default prohibition, including guards. External JSON values are checked at the boundary without coercion; internal code consumes the validated DTOs. No `unknown` rule exception is needed: `JsonValue` honestly represents the output of the bounded parser before schema validation.
 
 The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external-input boundary with the same shape (bounded parser output checked by type-predicate guards), so it shares exactly that override; every other worker file (`src/worker.ts`, `src/worker/*.ts`) keeps the default prohibition. `tsconfig.json` sets `skipLibCheck: true` because the published pi 1.5.0 declarations import JSON without `type: "json"` attributes and fail under `module: NodeNext`; our own sources are still checked in full strict mode. See [worker.md](worker.md).
 
@@ -76,8 +76,17 @@ The pi worker's closed §4.2 validator `src/worker/wire.ts` is a second external
 
 `laded serve` runs in the foreground until killed (redacted diagnostics on stderr and in the bounded `$STATE/logs`, see [service.md](service.md#diagnostics)) and refuses to start (exit 78) on an unsafe runtime directory, an unopenable/corrupt/newer database or a second instance on the same state directory. `scripts/verify` checks the usage exit and that an unsafe (0777) runtime directory is refused before any socket exists. The service, its storage, admission and recovery are described in [service.md](service.md). The service tests use disposable repositories and state; the full-loop test runs the real pi worker with the `lade-fixture` test model (a test-only provider: the harnesses enable it with `LADE_TEST_FIXTURE_PROVIDER=1`, see [service.md](service.md#test-only-fixture-provider)) through the real bubblewrap launcher when bubblewrap works on the host (otherwise an unsandboxed **test-only** launcher), including sandboxed verification.
 
+Tests that need the sandbox (bubblewrap, prlimit and working user namespaces; the worker launcher tests also need
+node) print a `skipping:` note and pass when it is missing. With `LADE_REQUIRE_SANDBOX=1` they fail instead, and the
+tests that choose between the bubblewrap launcher and the unsandboxed test launcher refuse the fallback; CI sets it for
+`scripts/verify`, so a CI run never passes with the sandbox tests silently skipped. Some sandbox tests assume a
+non-root user (root is exempt from `RLIMIT_NPROC`). The desktop's live-service test runs the `laded` built in the same
+target directory; `cargo test -p lade-desktop` does not rebuild it, so the test is skipped with a note when that
+binary is missing, reports another release, or is older than the `lade-system` or `lade-protocol` sources. With
+`LADE_REQUIRE_LADED=1`, which CI also sets for `scripts/verify`, it fails instead.
+
 IMP-013 adds `service_concurrency.rs` and `service_crash.rs` (part of `scripts/verify`; the crash tests run the real
-`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and skip without bubblewrap) and the long
+`laded` binary with `LADE_FAULT_POINT`, a debug-build-only hook, and need bubblewrap) and the long
 procedures, which are **not** part of `scripts/verify`:
 
 ```sh
@@ -111,12 +120,14 @@ Inspect the resulting PNG; do not infer native rendering from source/CSS. Captur
 Scripted native runs under Xvfb (development host): `scripts/e2e-gui` drives the whole review loop and
 `scripts/e2e-terminal` the IMP-012 terminal, single-instance, client-close, Exit and restart flows (it runs inside its
 own `dbus-run-session`). Both need a debug build, Xvfb, xdotool, ImageMagick and bubblewrap and are not part of
-`scripts/verify`. Native, resilience, performance and load scripts write captures and reports under the ignored
+`scripts/verify`. The `#[ignore]`d `lade-desktop` display tests (launch QA layout checks and the fixture-view
+capture, which writes PNGs to `LADE_CAPTURE_DIR` and does nothing without it) are not in `scripts/verify` either; CI
+runs them after it with `xvfb-run -a ./scripts/cargo test -p lade-desktop --locked -- --ignored`. Native, resilience, performance and load scripts write captures and reports under the ignored
 `evidence-local/` directory by default; pass an output directory to retain them elsewhere.
 
 The contained terminal (IMP-012) adds no dependency: the PTY comes from rustix (`pty`, `termios` features of the
 already-reviewed `rustix =1.1.4`) and the client renders it with its own minimal VT parser
-(`presentation/terminal.rs`). VTE (`vte4`) was not adopted: it is not in the CI image or the documented host
+(`presentation/terminal/screen.rs`). VTE (`vte4`) was not adopted: it is not in the CI image or the documented host
 prerequisites, its Rust bindings would add a native dependency chain for a supporting feature, and its full
 terminal emulation (hyperlinks, clipboard escape sequences, its own key handling) would bypass the reviewed keymap
 escape routes.

@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, SyncSender};
@@ -21,8 +22,11 @@ use lade_protocol::client::{
 use lade_protocol::types::{Capability, Id};
 use lade_protocol::worker::{TurnState, WorkerBody, WorkerEnvelope};
 use lade_protocol::{FrameReader, FrameWriter, Framing};
+use lade_system::adapters::sandbox::FIXTURE_SWITCH;
 use lade_system::service::{self, RunningService, ServiceConfig};
-use lade_system::supervision::credentials::{CredentialSource, FIXTURE_SWITCH};
+use lade_system::storage::Store;
+use lade_system::supervision::credentials::CredentialSource;
+use lade_system::supervision::launcher::PI_FLAGS;
 use lade_system::supervision::{
     LaunchError, LaunchRequest, SupervisorEvent, WorkerControl, WorkerEvent, WorkerLauncher,
 };
@@ -33,7 +37,7 @@ pub const TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn new_id() -> Id {
     let mut bytes = [0u8; 16];
-    lade_system::service::convert::random_fill(&mut bytes).unwrap();
+    lade_system::support::random_fill(&mut bytes).unwrap();
     Id::from_random_bytes(bytes)
 }
 
@@ -60,8 +64,23 @@ impl Env {
         }
     }
 
+    /// The service's database file.
+    pub fn database(&self) -> PathBuf {
+        self.root.path().join("state/lade.db")
+    }
+
+    /// The service's store, for checking or seeding durable state while the service is stopped.
+    pub fn store(&self) -> Store {
+        Store::open(&self.database()).expect("store opens")
+    }
+
+    /// A raw connection to the service's database, for state the store has no accessor for.
+    pub fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(self.database()).expect("database opens")
+    }
+
     pub fn start(&self, launcher: Arc<dyn WorkerLauncher>) -> RunningService {
-        service::start(self.config(), launcher).expect("service starts")
+        service::start(&self.config(), launcher).expect("service starts")
     }
 
     pub fn start_limited(
@@ -71,7 +90,7 @@ impl Env {
     ) -> RunningService {
         let mut config = self.config();
         config.limits = limits;
-        service::start(config, launcher).expect("service starts")
+        service::start(&config, launcher).expect("service starts")
     }
 
     pub fn capability(&self) -> String {
@@ -314,7 +333,7 @@ impl WorkerLauncher for NodeLauncher {
     }
 
     fn catalog(&self, scratch: &Path, models: Option<&Path>) -> Result<Vec<u8>, LaunchError> {
-        let script = self.entry.with_file_name("worker").join("catalog.ts");
+        let script = self.entry.with_file_name("catalog.ts");
         let output = scratch.join("catalog.json");
         let mut command = Command::new("node");
         command
@@ -324,6 +343,7 @@ impl WorkerLauncher for NodeLauncher {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", scratch)
             .env("PI_CODING_AGENT_DIR", scratch)
+            .envs(PI_FLAGS)
             .env(FIXTURE_SWITCH, "1")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -350,6 +370,12 @@ impl WorkerLauncher for NodeLauncher {
             .env("HOME", &request.session_dir)
             .env("LANG", "C.UTF-8")
             .env("TERM", "dumb")
+            .env("PI_CODING_AGENT_DIR", request.session_dir.join("agent"))
+            .env(
+                "PI_CODING_AGENT_SESSION_DIR",
+                request.session_dir.join("sessions"),
+            )
+            .envs(PI_FLAGS)
             .env(FIXTURE_SWITCH, "1")
             .current_dir(&request.worktree)
             .stdin(Stdio::piped())
@@ -393,7 +419,6 @@ impl WorkerLauncher for NodeLauncher {
                 }
                 thread::sleep(Duration::from_millis(20));
             };
-            use std::os::unix::process::ExitStatusExt;
             let _ = events.send(SupervisorEvent {
                 binding,
                 event: WorkerEvent::Exited {
@@ -409,9 +434,17 @@ impl WorkerLauncher for NodeLauncher {
     }
 }
 
+/// Whether the bubblewrap sandbox works here; a test that needs it skips otherwise, and fails
+/// under `LADE_REQUIRE_SANDBOX=1`.
 pub fn sandbox_works() -> bool {
     use lade_system::adapters::sandbox::{SandboxTools, sandbox_available};
-    SandboxTools::locate().is_ok_and(|tools| sandbox_available(&tools).is_ok())
+    match SandboxTools::locate().and_then(|tools| sandbox_available(&tools)) {
+        Ok(()) => true,
+        Err(e) => {
+            adapters_support::skip_without_sandbox(e);
+            false
+        }
+    }
 }
 
 pub fn best_launcher(env: &Env) -> (Arc<dyn WorkerLauncher>, bool) {
@@ -424,6 +457,8 @@ pub fn best_launcher_with(env: &Env, fixture: bool) -> (Arc<dyn WorkerLauncher>,
         && let Ok(launcher) = LauncherConfig::new(
             env.root.path().join("state/run"),
             env.root.path().join("run/g"),
+            std::env::var_os("LADE_NODE").map(PathBuf::from),
+            std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
         )
         .and_then(|config| {
             default_launcher(LauncherConfig {

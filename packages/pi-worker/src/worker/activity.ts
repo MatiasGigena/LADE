@@ -1,26 +1,31 @@
-import { newId } from "../schema.ts";
+import { isString, MAX_ITEM_TEXT_BYTES, newId } from "../schema.ts";
 import type { AgentSessionEvent, AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { Id } from "../dto.ts";
-import type { ActivityItemBody, ActivityRole, OutboundBody, TurnState } from "./wire.ts";
-import { MAX_ERROR_MESSAGE } from "./wire.ts";
-
-export const MAX_ITEM_BYTES = 192 * 1024;
+import type { ActivityRole, Id, WorkerToService } from "../dto.ts";
+import type { ActivityItemBody, TurnState } from "./wire.ts";
+import { clip, isHighSurrogate, safeMessage } from "./text.ts";
 
 const MAX_ENCODED_TEXT = 900 * 1024;
 
 const MAX_TITLE = 200;
 
+const MAX_TOOL_TARGET = 120;
+
 type SessionMessage = Extract<AgentSessionEvent, { type: "message_end" }>["message"];
+
+type CompactionEnd = Extract<AgentSessionEvent, { type: "compaction_end" }>;
 
 type StreamEvent = Extract<AgentSessionEvent, { type: "message_update" }>["assistantMessageEvent"];
 
 type ToolOutput = Pick<AgentToolResult<void>, "content">;
 
+/** Reports a worker-side event to the user as a `system` activity item. */
+export type SystemNotice = (title: string, text: string, isError: boolean) => void;
+
 interface Bounded { text: string; truncated: boolean; bytes: number }
 
 export function boundText(text: string): Bounded {
   const bytes = Buffer.from(text, "utf8");
-  let limit = MAX_ITEM_BYTES;
+  let limit = MAX_ITEM_TEXT_BYTES;
 
   for (;;) {
     let cut = Math.min(limit, bytes.length);
@@ -33,24 +38,6 @@ export function boundText(text: string): Bounded {
   }
 }
 
-export function prefix(text: string, max: number): string {
-  if (text.length <= max) return text;
-
-  return text.slice(0, isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max);
-}
-
-export function safeMessage(text: string): string {
-  const line = text.replace(/\p{Cc}+/gu, " ").replace(/[A-Za-z0-9_\-+/=.]{32,}/g, "[redacted]").trim();
-
-  return line.length > MAX_ERROR_MESSAGE ? `${prefix(line, MAX_ERROR_MESSAGE - 1)}…` : line;
-}
-
-function clip(text: string, max: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
-
-  return line.length > max ? `${prefix(line, max - 1)}…` : line;
-}
-
 function messageText(message: SessionMessage): string {
   if (message.role !== "user") return "";
 
@@ -59,66 +46,51 @@ function messageText(message: SessionMessage): string {
   return message.content.map(part => part.type === "text" ? part.text : `[${part.type}]`).join("\n");
 }
 
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
 interface Block { itemId: Id; role: ActivityRole; title: string; sent: number; carry: string; capped: boolean }
 
 interface Tool { itemId: Id; name: string; title: string; args: string }
 
 export class ActivityMapper {
-  private readonly send: (body: OutboundBody) => void;
+  private readonly send: (body: WorkerToService) => void;
   private readonly blocks = new Map<number, Block>();
   private readonly tools = new Map<string, Tool>();
   private turn: TurnState = "idle";
-  constructor(send: (body: OutboundBody) => void) { this.send = send; }
+  constructor(send: (body: WorkerToService) => void) { this.send = send; }
 
   handle(event: AgentSessionEvent): void {
     switch (event.type) {
-      case "agent_start": this.setTurn("running");
-
-        return;
-      case "agent_settled": this.setTurn("idle");
-
-        return;
+      case "agent_start": return this.setTurn("running");
+      case "agent_settled": return this.setTurn("idle");
       case "message_start":
         if (event.message.role === "assistant") this.blocks.clear();
 
         return;
-      case "message_update": this.update(event.assistantMessageEvent);
+      case "message_update": return this.update(event.assistantMessageEvent);
+      case "message_end": return this.finish(event.message);
+      case "tool_execution_start": {
+        // The SDK leaves tool arguments untyped: only a string path or command names the target.
+        const path: unknown = event.args?.path;
+        const command: unknown = event.args?.command;
 
-        return;
-      case "message_end": this.finish(event.message);
+        return this.toolStart(event.toolCallId, event.toolName, JSON.stringify(event.args, null, 2) ?? "", isString(path) ? path : isString(command) ? command : undefined);
+      }
 
-        return;
-      case "tool_execution_start": this.toolStart(event.toolCallId, event.toolName, JSON.stringify(event.args, null, 2) ?? "", event.args?.path, event.args?.command);
-
-        return;
-      case "tool_execution_end": this.toolEnd(event.toolCallId, event.result, event.isError);
-
-        return;
-      case "compaction_start": this.system("Compacting context", `Context compaction started (${event.reason}).`, false);
-
-        return;
-      case "compaction_end": this.compactionEnd(event.reason, event.aborted, event.willRetry, event.errorMessage, event.result?.tokensBefore);
-
-        return;
-      case "auto_retry_start": this.system("Retrying model request", `Attempt ${event.attempt} of ${event.maxAttempts} after ${event.delayMs} ms (${safeMessage(event.errorMessage)}).`, false);
-
-        return;
-      case "auto_retry_end": this.system(event.success ? "Retry succeeded" : "Retry gave up", event.success ? `The model request succeeded on attempt ${event.attempt}.` : `The model request failed after ${event.attempt} attempt(s): ${safeMessage(event.finalError ?? "unknown error")}.`, !event.success);
-
-        return;
+      case "tool_execution_end": return this.toolEnd(event.toolCallId, event.result, event.isError);
+      case "compaction_start": return this.system("Compacting context", `Context compaction started (${event.reason}).`, false);
+      case "compaction_end": return this.compactionEnd(event);
+      case "auto_retry_start": return this.system("Retrying model request", `Attempt ${event.attempt} of ${event.maxAttempts} after ${event.delayMs} ms (${safeMessage(event.errorMessage)}).`, false);
+      case "auto_retry_end": return this.system(event.success ? "Retry succeeded" : "Retry gave up", event.success ? `The model request succeeded on attempt ${event.attempt}.` : `The model request failed after ${event.attempt} attempt(s): ${safeMessage(event.finalError ?? "unknown error")}.`, !event.success);
       default:
     }
   }
 
-  system(title: string, text: string, isError: boolean): void {
-    this.item(newId(), "system", title, text, isError, undefined);
-  }
+  readonly system: SystemNotice = (title, text, isError) => {
+    this.item(newId(), "system", title, text, isError);
+  };
 
-  private compactionEnd(reason: string, aborted: boolean, willRetry: boolean, error: string | undefined, tokensBefore: number | undefined): void {
+  private compactionEnd({ reason, aborted, willRetry, errorMessage: error, result }: CompactionEnd): void {
+    const tokensBefore = result?.tokensBefore;
+
     if (aborted) this.system("Compaction aborted", `Context compaction (${reason}) was aborted.`, false);
     else if (error !== undefined) this.system("Compaction failed", `Context compaction (${reason}) failed${willRetry ? " and will be retried" : ""}: ${safeMessage(error)}.`, true);
     else this.system("Context compacted", `Context compaction (${reason}) finished${tokensBefore === undefined ? "" : ` (${tokensBefore} tokens before)`}.`, false);
@@ -130,7 +102,7 @@ export class ActivityMapper {
     this.send({ kind: "turn.state", state });
   }
 
-  private item(itemId: Id, role: ActivityRole, title: string, text: string, isError: boolean, toolName: string | undefined): void {
+  private item(itemId: Id, role: ActivityRole, title: string, text: string, isError: boolean, toolName?: string): void {
     const bounded = boundText(text);
     const label = bounded.truncated ? clip(`${title} (truncated; ${bounded.bytes} bytes)`, MAX_TITLE) : clip(title, MAX_TITLE);
     const body: ActivityItemBody = { kind: "activity.item", item_id: itemId, role, title: label, text: bounded.text, is_error: isError, truncated: bounded.truncated };
@@ -139,31 +111,24 @@ export class ActivityMapper {
     this.send(body);
   }
 
-  private block(index: number, role: ActivityRole): Block {
+  /** The block streaming content `index`; the first use opens it and announces it as an empty item. */
+  private openBlock(index: number, role: ActivityRole): Block {
     const existing = this.blocks.get(index);
 
     if (existing) return existing;
     const created: Block = { itemId: newId(), role, title: role === "thinking" ? "Thinking" : "Assistant", sent: 0, carry: "", capped: false };
     this.blocks.set(index, created);
-    this.item(created.itemId, role, created.title, "", false, undefined);
+    this.item(created.itemId, role, created.title, "", false);
 
     return created;
   }
 
   private update(event: StreamEvent): void {
     switch (event.type) {
-      case "text_start": this.block(event.contentIndex, "assistant");
-
-        return;
-      case "thinking_start": this.block(event.contentIndex, "thinking");
-
-        return;
-      case "text_delta": this.delta(this.block(event.contentIndex, "assistant"), event.delta);
-
-        return;
-      case "thinking_delta": this.delta(this.block(event.contentIndex, "thinking"), event.delta);
-
-        return;
+      case "text_start": return void this.openBlock(event.contentIndex, "assistant");
+      case "thinking_start": return void this.openBlock(event.contentIndex, "thinking");
+      case "text_delta": return this.delta(this.openBlock(event.contentIndex, "assistant"), event.delta);
+      case "thinking_delta": return this.delta(this.openBlock(event.contentIndex, "thinking"), event.delta);
       default:
     }
   }
@@ -179,18 +144,17 @@ export class ActivityMapper {
     text = bounded.text;
     const size = Buffer.byteLength(text);
 
-    if (block.sent + size > MAX_ITEM_BYTES) { block.capped = true;
+    const full = block.sent + size > MAX_ITEM_TEXT_BYTES;
+    block.capped = full || bounded.truncated;
 
- return; }
-
+    if (full) return;
     block.sent += size;
-    block.capped = bounded.truncated;
     this.send({ kind: "activity.delta", item_id: block.itemId, append_text: text });
   }
 
   private finish(message: SessionMessage): void {
     if (message.role === "user") {
-      this.item(newId(), "user", "User", messageText(message), false, undefined);
+      this.item(newId(), "user", "User", messageText(message), false);
 
       return;
     }
@@ -198,8 +162,8 @@ export class ActivityMapper {
     if (message.role !== "assistant") return;
 
     for (const [index, part] of message.content.entries()) {
-      if (part.type === "text") this.item(this.blocks.get(index)?.itemId ?? newId(), "assistant", "Assistant", part.text, false, undefined);
-      else if (part.type === "thinking") this.item(this.blocks.get(index)?.itemId ?? newId(), "thinking", "Thinking", part.redacted ? "[redacted thinking]" : part.thinking, false, undefined);
+      if (part.type === "text") this.item(this.blocks.get(index)?.itemId ?? newId(), "assistant", "Assistant", part.text, false);
+      else if (part.type === "thinking") this.item(this.blocks.get(index)?.itemId ?? newId(), "thinking", "Thinking", part.redacted ? "[redacted thinking]" : part.thinking, false);
     }
 
     this.blocks.clear();
@@ -211,9 +175,8 @@ export class ActivityMapper {
     } else if (message.stopReason === "aborted") this.system("Turn aborted", "The model request was aborted.", false);
   }
 
-  private toolStart(id: string, name: string, args: string, path: string | undefined, command: string | undefined): void {
-    const target = path ?? command;
-    const tool: Tool = { itemId: newId(), name, title: target === undefined ? name : `${name} ${clip(String(target), 120)}`, args };
+  private toolStart(id: string, name: string, args: string, target: string | undefined): void {
+    const tool: Tool = { itemId: newId(), name, title: target === undefined ? name : `${name} ${clip(target, MAX_TOOL_TARGET)}`, args };
     this.tools.set(id, tool);
     this.item(tool.itemId, "tool", tool.title, `arguments:\n${args}`, false, name);
   }

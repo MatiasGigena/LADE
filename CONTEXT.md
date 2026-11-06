@@ -37,8 +37,8 @@ A developer-defined outcome that LADE helps pursue and whose activity and result
 _Avoid_: Prompt, ticket, chat
 
 **Agent Session**:
-A persistent pi interaction context through which work proceeds on an Objective. It includes conversation and tool activity but is not itself the resulting work.
-_Avoid_: Chat, agent
+A persistent pi interaction context through which work proceeds on an Objective. It includes conversation and tool activity but is not itself the resulting work. The code that controls it (session commands, dialogs, model and thinking selection) is named after it, for example the `service/agent_session` module.
+_Avoid_: Chat, agent, "compat" (for the pi integration code)
 
 **Change Set**:
 The reviewable net repository changes for an Objective relative to its Integration Target, presented together with their intent and verification evidence. They include any inherited changes not already present in that target.

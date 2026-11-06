@@ -8,29 +8,31 @@ pub enum Contract {
     Worker,
 }
 
-static CLIENT: LazyLock<Value> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../../contracts/v1/schema.json"))
-        .expect("checked-in schema")
-});
-static WORKER: LazyLock<Value> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../../contracts/v1/worker-schema.json"))
-        .expect("checked-in worker schema")
+// The checked-in schemas are compiled in. Should one ever fail to parse, every frame of that
+// contract is refused rather than accepted unchecked; the tests below keep that from shipping.
+static CLIENT: LazyLock<Option<Value>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("../../../contracts/v1/schema.json")).ok());
+static WORKER: LazyLock<Option<Value>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../contracts/v1/worker-schema.json")).ok()
 });
 
 pub fn validate(value: &Value, contract: Contract) -> Result<(), WireError> {
-    let root: &Value = match contract {
-        Contract::Client => &CLIENT,
-        Contract::Worker => &WORKER,
+    let root = match contract {
+        Contract::Client => CLIENT.as_ref(),
+        Contract::Worker => WORKER.as_ref(),
     };
-    if matches(value, root, root) {
+    if root.is_some_and(|root| matches(value, root, root)) {
         Ok(())
     } else {
-        Err(WireError("invalid_schema"))
+        Err(WireError::InvalidSchema)
     }
 }
 
 fn length(schema: &Value, key: &str) -> Option<usize> {
-    schema.get(key).and_then(Value::as_u64).map(|n| n as usize)
+    schema
+        .get(key)
+        .and_then(Value::as_u64)
+        .and_then(|n| usize::try_from(n).ok())
 }
 
 fn matches(value: &Value, schema: &Value, root: &Value) -> bool {
@@ -53,8 +55,12 @@ fn matches(value: &Value, schema: &Value, root: &Value) -> bool {
             let Some(obj) = value.as_object() else {
                 return false;
             };
-            let props = schema["properties"].as_object().expect("schema properties");
-            let required = schema["required"].as_array().expect("schema required");
+            let (Some(props), Some(required)) = (
+                schema["properties"].as_object(),
+                schema["required"].as_array(),
+            ) else {
+                return false;
+            };
             required
                 .iter()
                 .all(|k| k.as_str().is_some_and(|k| obj.contains_key(k)))
@@ -113,7 +119,11 @@ pub(crate) fn timestamp_parts(s: &str) -> Option<[u32; 7]> {
     }) {
         return None;
     }
-    let n = |range: std::ops::Range<usize>| s[range].parse::<u32>().expect("digits");
+    let n = |range: std::ops::Range<usize>| {
+        b[range]
+            .iter()
+            .fold(0, |number, digit| number * 10 + u32::from(digit - b'0'))
+    };
     let parts = [
         n(0..4),
         n(5..7),
@@ -170,5 +180,50 @@ pub(crate) fn format(s: &str, kind: &str) -> bool {
         "path-b64" => crate::base64::decode(s)
             .is_some_and(|b| (1..=crate::types::MAX_PATH_BYTES).contains(&b.len())),
         _ => false,
+    }
+}
+
+/// Whether `value` matches the definition at `pointer` (such as `/$defs/Reply`) of `contract`.
+#[cfg(test)]
+pub(crate) fn conforms(value: &Value, contract: Contract, pointer: &str) -> bool {
+    let root = match contract {
+        Contract::Client => CLIENT.as_ref(),
+        Contract::Worker => WORKER.as_ref(),
+    };
+    root.and_then(|root| {
+        root.pointer(pointer)
+            .map(|schema| matches(value, schema, root))
+    })
+    .unwrap_or(false)
+}
+
+/// The closed value list of the `enum` at `pointer` in the client contract.
+#[cfg(test)]
+pub(crate) fn client_enum(pointer: &str) -> Value {
+    CLIENT
+        .as_ref()
+        .and_then(|root| root.pointer(pointer))
+        .and_then(|schema| schema.get("enum"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_schemas_parse() {
+        assert!(CLIENT.is_some(), "contracts/v1/schema.json");
+        assert!(WORKER.is_some(), "contracts/v1/worker-schema.json");
+    }
+
+    #[test]
+    fn timestamp_parts_read_every_field() {
+        assert_eq!(
+            timestamp_parts("2026-10-10T12:34:56.789Z"),
+            Some([2026, 10, 10, 12, 34, 56, 789])
+        );
+        assert_eq!(timestamp_parts("2026-1O-10T12:34:56.789Z"), None);
     }
 }

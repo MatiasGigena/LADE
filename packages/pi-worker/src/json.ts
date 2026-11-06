@@ -2,7 +2,7 @@ export const MAX_FRAME = 1024 * 1024;
 
 export const MAX_STRING = 256 * 1024;
 
-export const MAX_DEPTH = 32;
+const MAX_DEPTH = 32;
 
 export const MAX_NODES = 16_384;
 
@@ -12,38 +12,67 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 
+/**
+ * Rejection codes of the bounded parser, the frame codecs and the conformance corpus (`contracts/v1/fixtures.json`);
+ * the same wire codes as the Rust `lade_protocol::WireError`.
+ */
+export type WireCode = "closed" | "truncated_frame" | "frame_size" | "invalid_utf8" | "invalid_json" | "duplicate_key" | "invalid_schema" | "version_mismatch" | "limit_reached" | "stale_execution" | "chunk_order" | "chunk_length" | "chunk_checksum" | "duplicate_conflict";
+
 export class WireError extends Error {
-  readonly code: string;
-  constructor(code: string) { super(code); this.code = code; }
+  readonly name = "WireError";
+  readonly code: WireCode;
+  constructor(code: WireCode) { super(code); this.code = code; }
 }
 
-export function boundedJson(bytes: Uint8Array): JsonValue {
-  if (bytes.length === 0 || bytes.length > MAX_FRAME) throw new WireError("frame_size");
-  let text: string;
+/** Orders strings by UTF-16 code unit: the order of `Array.prototype.sort` without a comparator. */
+export function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
 
-  try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
-  catch { throw new WireError("invalid_utf8"); }
+const UTF8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
-  let pos = 0;
-  let nodes = 0;
+const WHITESPACE = /[\x20\t\r\n]/;
 
-  function whitespace(): void { while (/[\x20\t\r\n]/.test(text[pos] ?? "X")) pos++; }
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
-  function string(): string {
-    const start = pos++;
+const INTEGER = /^-?(?:0|[1-9][0-9]*)/;
 
-    while (pos < text.length) {
-      const c = text[pos++];
+const LITERALS = [["true", true], ["false", false], ["null", null]] as const;
 
-      if (c === "\\") { pos++; continue; }
+class Parser {
+  private readonly text: string;
+  private pos = 0;
+  private nodes = 0;
+  constructor(text: string) { this.text = text; }
+
+  document(): JsonValue {
+    const result = this.value(0);
+    this.whitespace();
+
+    if (this.pos !== this.text.length) throw new WireError("invalid_json");
+
+    return result;
+  }
+
+  private whitespace(): void {
+    while (WHITESPACE.test(this.text[this.pos] ?? "X")) this.pos++;
+  }
+
+  private string(): string {
+    const start = this.pos++;
+
+    while (this.pos < this.text.length) {
+      const c = this.text[this.pos++];
+
+      if (c === "\\") { this.pos++; continue; }
 
       if (c !== '"') continue;
       let value: string;
 
-      try { value = JSON.parse(text.slice(start, pos)); }
+      try { value = JSON.parse(this.text.slice(start, this.pos)); }
       catch { throw new WireError("invalid_json"); }
 
-      if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value)) throw new WireError("invalid_json");
+      if (LONE_SURROGATE.test(value)) throw new WireError("invalid_json");
 
       if (Buffer.byteLength(value) > MAX_STRING) throw new WireError("limit_reached");
 
@@ -53,89 +82,115 @@ export function boundedJson(bytes: Uint8Array): JsonValue {
     throw new WireError("invalid_json");
   }
 
-  function value(depth: number): JsonValue {
-    whitespace();
+  private value(depth: number): JsonValue {
+    this.whitespace();
 
-    if (++nodes > MAX_NODES) throw new WireError("limit_reached");
-    const c = text[pos];
+    if (++this.nodes > MAX_NODES) throw new WireError("limit_reached");
+    const c = this.text[this.pos];
 
-    if (c === '"') return string();
+    if (c === '"') return this.string();
 
-    if (c === "[" || c === "{") {
-      if (depth >= MAX_DEPTH) throw new WireError("limit_reached");
-      const array = c === "[";
-      const close = array ? "]" : "}";
-      const list: JsonValue[] = [];
-      const object: JsonObject = Object.create(null);
-      let count = 0;
-      pos++; whitespace();
+    if (c !== "[" && c !== "{") return this.scalar();
 
-      if (text[pos] === close) {
-        pos++;
+    if (depth >= MAX_DEPTH) throw new WireError("limit_reached");
+    this.pos++; this.whitespace();
 
-        return array ? list : object;
-      }
+    return c === "[" ? this.array(depth) : this.object(depth);
+  }
 
-      while (pos < text.length) {
-        if (array) {
-          const item = value(depth + 1);
+  /** Consumes `close` when it is the next character, ending an empty container. */
+  private empty(close: string): boolean {
+    if (this.text[this.pos] !== close) return false;
+    this.pos++;
 
-          if (count === MAX_ENTRIES) throw new WireError("limit_reached");
-          list.push(item);
-        } else {
-          whitespace();
+    return true;
+  }
 
-          if (text[pos] !== '"') throw new WireError("invalid_json");
-          const key = string();
+  /** Consumes the separator after a member: true at `close`, false at a comma. */
+  private closes(close: string): boolean {
+    this.whitespace();
+    const next = this.text[this.pos++];
 
-          if (count === MAX_ENTRIES) throw new WireError("limit_reached");
+    if (next === close) return true;
 
-          if (Object.hasOwn(object, key)) throw new WireError("duplicate_key");
-          whitespace();
+    if (next !== ",") throw new WireError("invalid_json");
 
-          if (text[pos++] !== ":") throw new WireError("invalid_json");
-          object[key] = value(depth + 1);
-        }
+    return false;
+  }
 
-        count++; whitespace();
-        const next = text[pos++];
+  private array(depth: number): JsonValue[] {
+    const list: JsonValue[] = [];
 
-        if (next === close) return array ? list : object;
+    if (this.empty("]")) return list;
 
-        if (next !== ",") throw new WireError("invalid_json");
+    while (this.pos < this.text.length) {
+      const item = this.value(depth + 1);
 
-        if (array) {
-          whitespace();
+      if (list.length === MAX_ENTRIES) throw new WireError("limit_reached");
+      list.push(item);
 
-          if (pos >= text.length || text[pos] === close) throw new WireError("invalid_json");
-        }
-      }
+      if (this.closes("]")) return list;
+      this.whitespace();
 
-      throw new WireError("invalid_json");
+      if (this.text[this.pos] === "]") throw new WireError("invalid_json");
     }
 
-    for (const [token, result] of [["true", true], ["false", false], ["null", null]] as const) {
-      if (text.startsWith(token, pos)) {
-        pos += token.length;
+    throw new WireError("invalid_json");
+  }
+
+  private object(depth: number): JsonObject {
+    const object: JsonObject = Object.create(null);
+    let count = 0;
+
+    if (this.empty("}")) return object;
+
+    while (this.pos < this.text.length) {
+      this.whitespace();
+
+      if (this.text[this.pos] !== '"') throw new WireError("invalid_json");
+      const key = this.string();
+
+      if (count === MAX_ENTRIES) throw new WireError("limit_reached");
+
+      if (Object.hasOwn(object, key)) throw new WireError("duplicate_key");
+      this.whitespace();
+
+      if (this.text[this.pos++] !== ":") throw new WireError("invalid_json");
+      object[key] = this.value(depth + 1);
+      count++;
+
+      if (this.closes("}")) return object;
+    }
+
+    throw new WireError("invalid_json");
+  }
+
+  private scalar(): JsonValue {
+    for (const [token, result] of LITERALS) {
+      if (this.text.startsWith(token, this.pos)) {
+        this.pos += token.length;
 
         return result;
       }
     }
 
-    const number = /^-?(?:0|[1-9][0-9]*)/.exec(text.slice(pos))?.[0];
+    const number = INTEGER.exec(this.text.slice(this.pos))?.[0];
 
     if (!number || number === "-0") throw new WireError("invalid_json");
-    pos += number.length;
+    this.pos += number.length;
 
     if (!Number.isSafeInteger(Number(number))) throw new WireError("invalid_json");
 
     return Number(number);
   }
+}
 
-  const result = value(0);
-  whitespace();
+export function boundedJson(bytes: Uint8Array): JsonValue {
+  if (bytes.length === 0 || bytes.length > MAX_FRAME) throw new WireError("frame_size");
+  let text: string;
 
-  if (pos !== text.length) throw new WireError("invalid_json");
+  try { text = UTF8.decode(bytes); }
+  catch { throw new WireError("invalid_utf8"); }
 
-  return result;
+  return new Parser(text).document();
 }

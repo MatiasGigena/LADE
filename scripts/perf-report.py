@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Summarises a `scripts/e2e-perf` run: presentation latencies from the client's opt-in trace
-(LADE_DESKTOP_TRACE, crates/lade-desktop/src/views/trace.rs) and the memory/CPU samples.
+(LADE_DESKTOP_TRACE, crates/lade-desktop/src/views/platform/trace.rs) and the memory/CPU samples.
 
     scripts/perf-report.py TRACE MEMORY_CSV CPU_TXT > report.txt
 

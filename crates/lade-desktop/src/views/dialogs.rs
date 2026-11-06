@@ -1,3 +1,6 @@
+//! The window's modal dialogs: confirmations, new Objective and intent forms, approval and
+//! clean-up choices, feedback submission, opening a workspace and the help dialogs.
+
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -7,14 +10,14 @@ use gtk::prelude::*;
 use gtk4 as gtk;
 
 use super::widgets::{self, Dialog, LimitedInput, label, set_accessible_label, space, vbox};
+use crate::presentation::controller::intents::StartPoint;
 use crate::presentation::controller::{
     Controller, FeedbackBatch, MAX_FEEDBACK_BATCH, UnsavedDraft,
 };
-use crate::presentation::format;
-use crate::presentation::intents::StartPoint;
 use crate::presentation::keys::{self, AppAction, Keymap};
-use crate::presentation::model::Intent as ObjectiveIntent;
-use crate::presentation::text_bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
+use crate::presentation::state::model::Intent as ObjectiveIntent;
+use crate::presentation::text::bound::{OVERRIDE_REASON_LIMIT, TEXT_LIMIT};
+use crate::presentation::text::format;
 
 fn labelled(name: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let unit = vbox(space::TIGHT);
@@ -326,8 +329,12 @@ pub fn new_objective(opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>
     let refs: Vec<&str> = branches.iter().map(String::as_str).collect();
     let target = widgets::dropdown_or(&refs, "No branches found in this repository");
     target.set_hexpand(false);
-    if let Some(index) = branches.iter().position(|b| b == &default_branch) {
-        target.set_selected(index as u32);
+    if let Some(index) = branches
+        .iter()
+        .position(|b| b == &default_branch)
+        .and_then(|i| u32::try_from(i).ok())
+    {
+        target.set_selected(index);
     }
     set_accessible_label(&target, "Integration target branch");
     dialog.body.append(&labelled(
@@ -527,17 +534,9 @@ pub fn costs_and_data(opener: &impl IsA<gtk::Widget>) {
     close.grab_focus();
 }
 
-pub fn shortcuts(
-    opener: &impl IsA<gtk::Widget>,
-    controller: &Rc<Controller>,
-    path: Option<PathBuf>,
-) {
-    let keymap = controller.store.state().ui.keymap.clone();
-    let dialog = Dialog::new(opener, "Keyboard shortcuts", 620);
-    dialog.body.append(&label(
-        "Each action keeps its default or takes a function key F1–F35, optionally with Shift, Control or Alt (GTK syntax, for example <Control>F8). Other combinations stay with text fields for typing, editing, selection, clipboard and undo. Tab and Shift+Tab move within a region; arrows, Home/End and Enter work in lists.",
-        &["secondary"],
-    ));
+/// One row per keybinding: its description beside an entry for its shortcut, or its fixed
+/// shortcut and the reason it is fixed. Returns the grid and the entries by action.
+fn shortcut_grid(keymap: &Keymap) -> (gtk::Grid, Vec<(AppAction, gtk::Entry)>) {
     let grid = gtk::Grid::new();
     grid.set_row_spacing(space::ITEM.unsigned_abs());
     grid.set_column_spacing(space::SECTION.unsigned_abs());
@@ -572,6 +571,21 @@ pub fn shortcuts(
             entries.push((binding.action, entry));
         }
     }
+    (grid, entries)
+}
+
+pub fn shortcuts(
+    opener: &impl IsA<gtk::Widget>,
+    controller: &Rc<Controller>,
+    path: Option<PathBuf>,
+) {
+    let keymap = controller.store.state().ui.keymap.clone();
+    let dialog = Dialog::new(opener, "Keyboard shortcuts", 620);
+    dialog.body.append(&label(
+        "Each action keeps its default or takes a function key F1–F35, optionally with Shift, Control or Alt (GTK syntax, for example <Control>F8). Other combinations stay with text fields for typing, editing, selection, clipboard and undo. Tab and Shift+Tab move within a region; arrows, Home/End and Enter work in lists.",
+        &["secondary"],
+    ));
+    let (grid, entries) = shortcut_grid(&keymap);
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .propagate_natural_height(true)

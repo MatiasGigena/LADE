@@ -12,6 +12,7 @@ pub struct WorkerEnvelope {
     pub body: WorkerBody,
 }
 impl WorkerEnvelope {
+    #[must_use]
     pub fn new(body: WorkerBody) -> Self {
         Self {
             protocol: crate::VERSION,
@@ -228,6 +229,7 @@ pub struct LoadedResource {
     pub message: Option<String>,
 }
 impl WorkerBody {
+    #[must_use]
     pub fn is_from_worker(&self) -> bool {
         !matches!(
             self,
@@ -239,4 +241,37 @@ impl WorkerBody {
                 | Self::UiRespond { .. }
         )
     }
+}
+
+/// The model catalogue a worker in catalogue mode (`src/catalog.ts`) writes to its output
+/// file. It is not a frame and is not schema-checked: fields default when absent so the service can
+/// skip incomplete entries, and it applies its own caps.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Catalog {
+    pub sdk_version: String,
+    pub providers: Vec<CatalogProvider>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CatalogProvider {
+    pub id: String,
+    pub name: String,
+    pub api_key: bool,
+    pub oauth: Option<String>,
+    pub subscription: bool,
+    pub base_url: Option<String>,
+    pub models: Vec<CatalogModel>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CatalogModel {
+    pub id: String,
+    pub name: String,
+    pub reasoning: bool,
+    /// pi thinking level names; levels this build does not know are skipped by the reader.
+    pub thinking: Vec<String>,
 }

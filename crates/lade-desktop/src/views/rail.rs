@@ -1,3 +1,5 @@
+//! The Objectives rail: Objectives grouped by attention, and the archive of closed ones.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -6,10 +8,10 @@ use gtk4 as gtk;
 
 use super::widgets::{self, hbox, label, set_accessible_label, set_focus_key, space, vbox};
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
-use crate::presentation::model::{ObjectiveId, ObjectiveSummary};
-use crate::presentation::panel;
-use crate::presentation::store::Change;
+use crate::presentation::state::model::{ObjectiveId, ObjectiveSummary};
+use crate::presentation::state::store::Change;
+use crate::presentation::text::format;
+use crate::presentation::text::objective;
 
 pub type ButtonHandler = Rc<dyn Fn(&gtk::Button)>;
 
@@ -85,7 +87,7 @@ impl Rail {
         }
     }
 
-    fn row(&self, objective: &ObjectiveSummary) -> gtk::ListBoxRow {
+    fn row(objective: &ObjectiveSummary) -> gtk::ListBoxRow {
         let row = gtk::ListBoxRow::new();
         row.add_css_class("objective-row");
         set_focus_key(
@@ -97,7 +99,7 @@ impl Rail {
         title.set_lines(2);
         title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         content.append(&title);
-        if let Some(line) = panel::objective_row_line(objective) {
+        if let Some(line) = objective::objective_row_line(objective) {
             content.append(&widgets::line_label(
                 &line,
                 &["meta", "objective-status"],
@@ -121,13 +123,13 @@ impl Rail {
         row
     }
 
-    fn list(&self, objectives: &[&ObjectiveSummary], name: &str) -> gtk::ListBox {
+    fn list(objectives: &[&ObjectiveSummary], name: &str) -> gtk::ListBox {
         let list = gtk::ListBox::new();
         list.add_css_class("objective-list");
         list.set_selection_mode(gtk::SelectionMode::Single);
         set_accessible_label(&list, name);
         for objective in objectives {
-            list.append(&self.row(objective));
+            list.append(&Self::row(objective));
         }
         list
     }
@@ -162,7 +164,7 @@ impl Rail {
             let name = format::attention_label(*attention);
             let heading = widgets::heading(name, "group-heading");
             group.append(&heading);
-            let list = self.list(objectives, name);
+            let list = Self::list(objectives, name);
             group.append(&list);
             self.content.append(&group);
             lists.push((
@@ -174,7 +176,7 @@ impl Rail {
             ));
         }
         if !board.archive.is_empty() {
-            let list = self.list(&board.archive, "Completed and discarded");
+            let list = Self::list(&board.archive, "Completed and discarded");
             let controller = self.controller.clone();
             let archive = widgets::disclosure(
                 &format!("Completed and discarded ({})", board.archive.len()),

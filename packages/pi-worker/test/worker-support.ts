@@ -6,14 +6,19 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { boundedJson } from "../src/json.ts";
+import { boundedJson, compareCodeUnits } from "../src/json.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
 import { FIXTURE_SWITCH } from "../src/worker/fixture.ts";
-import { WORKER_BUNDLE, WORKER_PROTOCOL } from "../src/worker/wire.ts";
+import { piEnvironment } from "../src/worker/paths.ts";
+import { BUNDLE, isRecord, VERSION } from "../src/schema.ts";
 
 export const WORKER = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "worker.ts");
 
 export const TIMEOUT_MS = 20_000;
+
+const POLL_MS = 200;
+
+const STDERR_EXCERPT = 2_000;
 
 export interface Sandbox { root: string; home: string; sessionDir: string; cwd: string }
 
@@ -29,10 +34,6 @@ export function cleanup(box: Sandbox): void {
   rmSync(box.root, { recursive: true, force: true });
 }
 
-function isRecord(value: JsonValue | undefined): value is JsonObject {
-  return value !== null && value !== undefined && !Array.isArray(value) && value === Object(value);
-}
-
 export function record(value: JsonValue | undefined): JsonObject {
   assert.ok(isRecord(value), "frame value must be an object");
 
@@ -46,7 +47,7 @@ export function text(value: JsonValue | undefined): string {
 }
 
 export function envelope(body: JsonObject): string {
-  return `${JSON.stringify({ protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body })}\n`;
+  return `${JSON.stringify({ protocol: VERSION, bundle: BUNDLE, body })}\n`;
 }
 
 export function startBody(box: Sandbox, resume: boolean): JsonObject {
@@ -76,7 +77,7 @@ export class Worker {
   constructor(box: Sandbox, env: Record<string, string> = {}) {
     this.child = spawn(process.execPath, [WORKER], {
       cwd: box.cwd,
-      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, LANG: "C.UTF-8", TERM: "dumb", [FIXTURE_SWITCH]: "1", ...env },
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, LANG: "C.UTF-8", TERM: "dumb", [FIXTURE_SWITCH]: "1", ...Object.fromEntries(piEnvironment(box.sessionDir)), ...env },
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child.stdout.setEncoding("utf8");
@@ -87,9 +88,9 @@ export class Worker {
       for (let end = this.pending.indexOf("\n"); end >= 0; end = this.pending.indexOf("\n")) {
         const frame = record(boundedJson(Buffer.from(this.pending.slice(0, end))));
         this.pending = this.pending.slice(end + 1);
-        assert.deepEqual(Object.keys(frame).sort(), ["body", "bundle", "protocol"]);
-        assert.equal(frame.protocol, WORKER_PROTOCOL);
-        assert.equal(frame.bundle, WORKER_BUNDLE);
+        assert.deepEqual(Object.keys(frame).sort(compareCodeUnits), ["body", "bundle", "protocol"]);
+        assert.equal(frame.protocol, VERSION);
+        assert.equal(frame.bundle, BUNDLE);
         this.frames.push(record(frame.body));
       }
 
@@ -119,17 +120,17 @@ export class Worker {
 
       if (found) return found;
 
-      if (this.child.exitCode !== null) assert.fail(`worker exited (${this.child.exitCode}) before the expected frame; stderr: ${this.stderr.slice(0, 2000)}`);
+      if (this.child.exitCode !== null) assert.fail(`worker exited (${this.child.exitCode}) before the expected frame; stderr: ${this.stderr.slice(0, STDERR_EXCERPT)}`);
 
       if (Date.now() > deadline) assert.fail(`timed out waiting for a frame; got ${JSON.stringify(this.frames.map(frame => frame.kind))}`);
       await new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, 200);
+        const timer = setTimeout(resolve, POLL_MS);
         this.wake = () => { clearTimeout(timer); resolve(); };
       });
     }
   }
 
-  idle(from: number): Promise<JsonObject> {
+  waitForIdle(from: number): Promise<JsonObject> {
     return this.waitFor(frame => frame.kind === "turn.state" && frame.state === "idle", from);
   }
 

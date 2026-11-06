@@ -13,10 +13,12 @@ pub struct Worktree {
 }
 
 impl Worktree {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn admin_dir(&self) -> &Path {
         &self.admin_dir
     }
@@ -37,9 +39,16 @@ pub(crate) struct WorktreeEntry {
 }
 
 impl Repository {
+    /// Creates a linked work tree at `path` on a new `branch` that starts at `start`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`], [`GitError::InvalidId`] or [`GitError::InvalidArgument`]
+    /// for an invalid branch name, start id or relative path, or a command error when
+    /// `git worktree add` fails (for example because the branch exists).
     pub fn worktree_add(&self, branch: &str, start: &GitId, path: &Path) -> Result<Worktree> {
         validate_branch_name(branch)?;
-        if start.format() != self.object_format() {
+        if start.algorithm() != self.object_format() {
             return Err(GitError::InvalidId);
         }
         if !path.is_absolute() {
@@ -55,6 +64,12 @@ impl Repository {
         self.open_worktree(path)
     }
 
+    /// The main or linked work tree of this repository at `path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::WorktreeNotFound`] when `path` does not exist or is not one of the
+    /// repository's work trees, or a command error when the work tree list cannot be read.
     pub fn open_worktree(&self, path: &Path) -> Result<Worktree> {
         let path = path
             .canonicalize()
@@ -80,7 +95,7 @@ impl Repository {
     pub(crate) fn linked_admin_dir(&self, path: &Path) -> Option<PathBuf> {
         let entries = fs::read_dir(self.common_dir().join("worktrees")).ok()?;
         entries.flatten().map(|e| e.path()).find(|admin| {
-            fs::read(admin.join("gitdir")).ok().is_some_and(|content| {
+            fs::read(admin.join("gitdir")).is_ok_and(|content| {
                 let target = PathBuf::from(OsString::from_vec(
                     content.strip_suffix(b"\n").unwrap_or(&content).to_vec(),
                 ));
@@ -93,6 +108,13 @@ impl Repository {
         })
     }
 
+    /// Removes a linked work tree (only pruning its record when its directory is gone);
+    /// `force` also discards uncommitted changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidArgument`] for the main work tree, [`GitError::WorktreeDirty`] when
+    /// it has changes and `force` is not set, or a command error.
     pub fn worktree_remove(&self, worktree: &Worktree, force: bool) -> Result<()> {
         if worktree.admin_dir() == self.common_dir() {
             return Err(GitError::InvalidArgument {
@@ -124,6 +146,13 @@ impl Repository {
         }
     }
 
+    /// Points a linked work tree's `HEAD` at `branch` and resets its index to `commit` after
+    /// LADE moved the branch, leaving the files as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidRefName`] or [`GitError::InvalidArgument`] for an invalid branch or
+    /// the main work tree, [`GitError::StaleRef`] when `branch` is not at `commit`, or a command error.
     pub fn sync_worktree_index(
         &self,
         worktree: &Worktree,
@@ -225,4 +254,52 @@ fn restore_gitfile(worktree: &Worktree) -> Result<()> {
         Err(_) => {}
     }
     fs::write(&gitfile, expected).map_err(io)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::super::fixtures::{head, objective};
+    use super::*;
+    use crate::adapters_support::{TempDir, init_repo};
+
+    #[test]
+    fn worktree_add_open_and_remove() {
+        let tmp = TempDir::new("worktree");
+        let repo = Repository::open(&init_repo(tmp.path(), "sha1")).unwrap();
+        let wt = objective(&repo, tmp.path(), "obj-1");
+        assert!(wt.path().join("README").is_file());
+        assert!(
+            wt.admin_dir()
+                .starts_with(repo.common_dir().join("worktrees"))
+        );
+        assert_eq!(repo.open_worktree(wt.path()).unwrap(), wt);
+        assert!(repo.resolve_ref("refs/heads/lade/obj-1").unwrap().is_some());
+        assert!(matches!(
+            repo.worktree_add(
+                "lade/obj-1",
+                &head(&repo, repo.work_tree()),
+                &tmp.path().join("again")
+            ),
+            Err(GitError::Failed { .. })
+        ));
+
+        fs::write(wt.path().join("scratch.txt"), "dirty").unwrap();
+        fs::write(wt.path().join(".git"), "gitdir: /nonexistent\n").unwrap();
+        assert!(matches!(
+            repo.worktree_remove(&wt, false),
+            Err(GitError::WorktreeDirty)
+        ));
+        repo.worktree_remove(&wt, true).expect("forced remove");
+        assert!(!wt.path().exists());
+        assert!(matches!(
+            repo.open_worktree(wt.path()),
+            Err(GitError::WorktreeNotFound)
+        ));
+
+        let clean = objective(&repo, tmp.path(), "obj-2");
+        repo.worktree_remove(&clean, false).expect("clean remove");
+        assert!(!clean.path().exists());
+    }
 }

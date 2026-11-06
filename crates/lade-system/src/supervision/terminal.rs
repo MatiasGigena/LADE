@@ -1,12 +1,10 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, Read};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::process::Stdio;
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,10 +12,12 @@ use std::time::{Duration, Instant};
 use rustix::pty::{OpenptFlags, grantpt, ioctl_tiocgptpeer, openpt, unlockpt};
 use rustix::termios::{Winsize, tcsetwinsize};
 
-use super::sweep::{PidRecord, kill_record, record_sandbox, sandbox_marker};
-pub use crate::adapters::sandbox::TERMINAL_LIMITS;
+use super::child::{SandboxedChild, lock};
+use super::input::InputQueue;
+use super::safe_id;
+use super::sweep::sandbox_marker;
 use crate::adapters::sandbox::{
-    CgroupLeaf, Limits, SandboxCgroups, SandboxTools, TerminalLaunch, terminal_spec,
+    Limits, SandboxCgroups, SandboxTools, TerminalLaunch, terminal_spec,
 };
 
 pub const RING_BYTES: usize = 1 << 20;
@@ -26,8 +26,8 @@ pub const INPUT_QUEUE_BYTES: usize = 256 << 10;
 const INPUT_QUEUE_FRAMES: usize = 256;
 pub const MAX_COLS: u16 = 500;
 pub const MAX_ROWS: u16 = 200;
-const KILL_WAIT: Duration = Duration::from_secs(10);
-const POLL: Duration = Duration::from_millis(20);
+/// How long a shell whose output closed may take to exit on its own before it is killed.
+const EOF_GRACE: Duration = Duration::from_secs(10);
 const SHELLS: &[&str] = &["/usr/bin/bash", "/bin/bash", "/usr/bin/sh", "/bin/sh"];
 const SETSID: &[&str] = &["/usr/bin/setsid", "/bin/setsid"];
 
@@ -65,58 +65,12 @@ struct Ring {
 }
 
 struct Shared {
-    child: Mutex<Child>,
-    status: Mutex<Option<ExitStatus>>,
-    init: Mutex<Option<PidRecord>>,
+    child: SandboxedChild,
     ring: Mutex<Ring>,
     space: Condvar,
-    leaf: Mutex<Option<CgroupLeaf>>,
-    pidfile: PathBuf,
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Shared {
-    fn poll_exit(&self) -> Option<ExitStatus> {
-        if let Some(status) = *lock(&self.status) {
-            return Some(status);
-        }
-        let status = lock(&self.child).try_wait().ok().flatten()?;
-        *lock(&self.status) = Some(status);
-        Some(status)
-    }
-
-    fn wait_exit(&self, timeout: Duration) -> Option<ExitStatus> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(status) = self.poll_exit() {
-                return Some(status);
-            }
-            if Instant::now() >= deadline {
-                return None;
-            }
-            thread::sleep(POLL);
-        }
-    }
-
-    fn kill(&self) {
-        let mut child = lock(&self.child);
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
-        }
-        if let Some(init) = *lock(&self.init) {
-            kill_record(&init);
-        }
-        let _ = child.kill();
-    }
-
-    fn release(&self) {
-        drop(lock(&self.leaf).take());
-        let _ = std::fs::remove_file(&self.pidfile);
-    }
-
     fn push(&self, data: &[u8]) {
         let mut ring = lock(&self.ring);
         let deadline = Instant::now() + FULL_WAIT;
@@ -148,10 +102,6 @@ fn first_existing(candidates: &[&str]) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-fn safe_id(id: &str) -> bool {
-    (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-}
-
 fn invalid(what: &'static str) -> io::Error {
     io::Error::new(ErrorKind::InvalidInput, what)
 }
@@ -171,21 +121,25 @@ fn winsize(cols: u16, rows: u16) -> io::Result<Winsize> {
 pub struct Terminal {
     shared: Arc<Shared>,
     controller: File,
-    input: Option<SyncSender<Vec<u8>>>,
-    queued: Arc<AtomicUsize>,
-    link_failed: Arc<AtomicBool>,
+    input: Option<InputQueue>,
     killed: bool,
 }
 
 impl fmt::Debug for Terminal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Terminal")
-            .field("pidfile", &self.shared.pidfile)
+            .field("pidfile", &self.shared.child.pidfile())
             .finish_non_exhaustive()
     }
 }
 
 impl Terminal {
+    /// Opens a sandboxed interactive shell on a pseudo-terminal, as `request` describes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` for an unsafe identity, size or missing shell, or the operating system's
+    /// error when the pseudo-terminal, the sandbox or its I/O threads cannot be set up.
     pub fn open(tools: &SandboxTools, request: &TerminalRequest) -> io::Result<Self> {
         if !safe_id(&request.objective_id) || !safe_id(&request.terminal_id) {
             return Err(invalid("terminal identity"));
@@ -193,9 +147,6 @@ impl Terminal {
         let size = winsize(request.cols, request.rows)?;
         let shell =
             first_existing(SHELLS).ok_or_else(|| invalid("no shell in /usr/bin or /bin"))?;
-        let spec_error = |e: crate::adapters::sandbox::SandboxError| {
-            io::Error::new(ErrorKind::InvalidInput, e.to_string())
-        };
         let mut spec = terminal_spec(&TerminalLaunch {
             shell,
             setsid: first_existing(SETSID),
@@ -203,10 +154,8 @@ impl Terminal {
             repo_common_dir: request.repo_common_dir.clone(),
             writable: request.writable,
             limits: request.limits,
-        })
-        .map_err(spec_error)?;
-        spec.marker(&sandbox_marker(&request.run_dir))
-            .map_err(spec_error)?;
+        })?;
+        spec.marker(&sandbox_marker(&request.run_dir))?;
         let leaf = match &request.cgroups {
             Some(cgroups) => Some(cgroups.leaf(
                 &request.objective_id,
@@ -221,48 +170,29 @@ impl Terminal {
         unlockpt(&controller)?;
         tcsetwinsize(&controller, size)?;
         let user = ioctl_tiocgptpeer(&controller, flags)?;
-        let mut cmd = spec.command(tools).map_err(spec_error)?;
+        let mut cmd = spec.command(tools)?;
         cmd.command_mut()
             .stdin(Stdio::from(user.try_clone()?))
             .stdout(Stdio::from(user.try_clone()?))
             .stderr(Stdio::from(user))
             .process_group(0);
-        let (child, mut gate) = cmd.spawn()?;
-        let pid = child.id();
         let pidfile = request.run_dir.join(format!(
             "terminal-{}-{}.pid",
             request.objective_id, request.terminal_id
         ));
+        let (child, _) = SandboxedChild::spawn(cmd, pidfile, leaf)?;
         let shared = Arc::new(Shared {
-            child: Mutex::new(child),
-            status: Mutex::new(None),
-            init: Mutex::new(None),
+            child,
             ring: Mutex::new(Ring::default()),
             space: Condvar::new(),
-            leaf: Mutex::new(None),
-            pidfile,
         });
         let controller = File::from(controller);
         let mut terminal = Self {
             shared: Arc::clone(&shared),
             controller: controller.try_clone()?,
             input: None,
-            queued: Arc::new(AtomicUsize::new(0)),
-            link_failed: Arc::new(AtomicBool::new(false)),
             killed: false,
         };
-        let recorded = record_sandbox(&shared.pidfile, pid, leaf.as_ref(), || {
-            shared.poll_exit().is_some()
-        })
-        .and_then(|init| {
-            *lock(&shared.init) = init;
-            *lock(&shared.leaf) = leaf;
-            gate.open()
-        });
-        if let Err(e) = recorded {
-            terminal.kill();
-            return Err(e);
-        }
         let reader = controller.try_clone()?;
         let reader_shared = Arc::clone(&shared);
         if let Err(e) = thread::Builder::new()
@@ -272,61 +202,51 @@ impl Terminal {
             terminal.kill();
             return Err(e);
         }
-        let (tx, rx) = sync_channel::<Vec<u8>>(INPUT_QUEUE_FRAMES);
-        let queued = Arc::clone(&terminal.queued);
-        let failed = Arc::clone(&terminal.link_failed);
-        let mut writer = controller;
-        let spawned = thread::Builder::new()
-            .name("lade-terminal-write".into())
-            .spawn(move || {
-                for chunk in rx {
-                    let written = writer.write_all(&chunk).and_then(|()| writer.flush());
-                    queued.fetch_sub(chunk.len(), Ordering::SeqCst);
-                    if written.is_err() {
-                        failed.store(true, Ordering::SeqCst);
-                        break;
-                    }
-                }
-            });
-        if let Err(e) = spawned {
-            terminal.kill();
-            return Err(e);
-        }
-        terminal.input = Some(tx);
+        let input = InputQueue::start(
+            "lade-terminal-write",
+            controller,
+            INPUT_QUEUE_FRAMES,
+            INPUT_QUEUE_BYTES,
+            "terminal_input_full",
+        );
+        let input = match input {
+            Ok(input) => input,
+            Err(e) => {
+                terminal.kill();
+                return Err(e);
+            }
+        };
+        terminal.input = Some(input);
         Ok(terminal)
     }
 
+    /// Queues `data` as terminal input.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrokenPipe` when the terminal was closed or exited, or `WouldBlock` when its input
+    /// queue is full.
     pub fn write(&self, data: &[u8]) -> io::Result<()> {
         let gone = || io::Error::new(ErrorKind::BrokenPipe, "terminal_closed");
-        let Some(tx) = self.input.as_ref() else {
+        let Some(input) = self.input.as_ref() else {
             return Err(gone());
         };
-        if self.killed || self.link_failed.load(Ordering::SeqCst) || self.exit().is_some() {
+        if self.killed || input.failed() || self.exit().is_some() {
             return Err(gone());
         }
-        let len = data.len();
-        let full = || io::Error::new(ErrorKind::WouldBlock, "terminal_input_full");
-        if self.queued.fetch_add(len, Ordering::SeqCst) + len > INPUT_QUEUE_BYTES {
-            self.queued.fetch_sub(len, Ordering::SeqCst);
-            return Err(full());
-        }
-        match tx.try_send(data.to_vec()) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(full())
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.queued.fetch_sub(len, Ordering::SeqCst);
-                Err(gone())
-            }
-        }
+        input.push(data.to_vec(), gone)
     }
 
+    /// Sets the terminal's size.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidInput` for a zero or oversized size, or the error from setting the window size.
     pub fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
         tcsetwinsize(&self.controller, winsize(cols, rows)?).map_err(io::Error::from)
     }
 
+    #[must_use]
     pub fn drain(&self, max: usize) -> Drained {
         let mut ring = lock(&self.shared.ring);
         let n = ring.bytes.len().min(max);
@@ -339,19 +259,22 @@ impl Terminal {
         drained
     }
 
+    #[must_use]
     pub fn pending(&self) -> bool {
         let ring = lock(&self.shared.ring);
         !ring.bytes.is_empty() || ring.dropped > 0
     }
 
+    #[must_use]
     pub fn exit(&self) -> Option<TerminalExit> {
-        let status = self.shared.poll_exit()?;
+        let status = self.shared.child.poll_exit()?;
         Some(TerminalExit {
             code: status.code(),
             signal: status.signal(),
         })
     }
 
+    #[must_use]
     pub fn finished(&self) -> Option<TerminalExit> {
         let eof = lock(&self.shared.ring).eof;
         let exit = self.exit()?;
@@ -364,23 +287,18 @@ impl Terminal {
         }
         self.killed = true;
         self.input = None;
-        self.shared.kill();
-        loop {
-            if self.shared.wait_exit(KILL_WAIT).is_some() {
-                self.shared.release();
-                break;
-            }
-            self.shared.kill();
-        }
+        self.shared.child.terminate();
         self.shared.space.notify_all();
     }
 
+    #[must_use]
     pub fn pidfile(&self) -> &Path {
-        &self.shared.pidfile
+        self.shared.child.pidfile()
     }
 
+    #[must_use]
     pub fn namespace_init(&self) -> Option<u32> {
-        lock(&self.shared.init).map(|record| record.pid)
+        self.shared.child.namespace_init()
     }
 }
 
@@ -402,12 +320,8 @@ fn read_output(shared: &Shared, mut controller: File) {
     }
     drop(controller);
     lock(&shared.ring).eof = true;
-    if shared.wait_exit(KILL_WAIT).is_none() {
-        shared.kill();
-    }
-    if shared.wait_exit(KILL_WAIT).is_some() {
-        shared.release();
-    }
+    shared.child.wait_exit(EOF_GRACE);
+    shared.child.terminate();
 }
 
 #[cfg(test)]

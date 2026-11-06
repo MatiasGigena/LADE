@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::OwnedFd;
@@ -7,8 +8,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use crate::service::convert::{now_ms, wire_ts};
-use crate::storage::backup;
+use crate::storage::{SCHEMA_VERSION, backup};
+use crate::support::fs::{ensure_private_dir, service_uid};
+use crate::support::{now_ms, wire_ts};
 
 pub const LOG_DIR: &str = "logs";
 pub const LOG_FILE: &str = "laded.log";
@@ -140,6 +142,7 @@ fn replace_home(line: &str, home: &str) -> String {
     out
 }
 
+#[must_use]
 pub fn redact(line: &str, home: Option<&str>) -> String {
     let clean: String = line
         .chars()
@@ -168,6 +171,7 @@ pub fn redact(line: &str, home: Option<&str>) -> String {
     out
 }
 
+#[must_use]
 pub fn home() -> Option<String> {
     std::env::var("HOME").ok().filter(|h| h.starts_with('/'))
 }
@@ -180,6 +184,7 @@ pub struct RotatingLog {
 }
 
 impl RotatingLog {
+    #[must_use]
     pub fn new(dir: PathBuf, file_bytes: u64, files: usize) -> Self {
         Self {
             dir,
@@ -198,20 +203,20 @@ impl RotatingLog {
     }
 
     fn open_current(&mut self) -> io::Result<&mut (File, u64)> {
-        if self.current.is_none() {
-            crate::transport::prepare_private_dir(&self.dir)
-                .map_err(|e| io::Error::other(e.to_string()))?;
-            let path = self.path(0);
+        let current = if let Some(current) = self.current.take() {
+            current
+        } else {
+            ensure_private_dir(&self.dir)?;
             let file = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .mode(0o600)
-                .open(&path)?;
+                .open(self.path(0))?;
             file.set_permissions(fs::Permissions::from_mode(0o600))?;
             let len = file.metadata()?.len();
-            self.current = Some((file, len));
-        }
-        Ok(self.current.as_mut().expect("opened above"))
+            (file, len)
+        };
+        Ok(self.current.insert(current))
     }
 
     fn rotate(&mut self) -> io::Result<()> {
@@ -232,6 +237,13 @@ impl RotatingLog {
         Ok(())
     }
 
+    /// Appends one record (cut to fit a file) as a line, rotating the files first when it
+    /// would not fit in the current one.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operating system's error when the log directory is unsafe or a file cannot be
+    /// opened, rotated or written.
     pub fn append(&mut self, record: &str) -> io::Result<()> {
         let limit = usize::try_from(self.file_bytes)
             .unwrap_or(usize::MAX)
@@ -261,6 +273,7 @@ fn source_of(line: &str) -> &str {
     }
 }
 
+#[must_use]
 pub fn record(line: &str) -> String {
     serde_json::json!({
         "ts": wire_ts(now_ms()).as_str(),
@@ -271,10 +284,12 @@ pub fn record(line: &str) -> String {
     .to_string()
 }
 
+/// The group and other permission bits, none of which a private directory may have.
+const GROUP_OTHER_BITS: u32 = 0o077;
+
 fn state_is_private(state: &Path) -> bool {
-    fs::symlink_metadata(state).is_ok_and(|m| {
-        m.is_dir() && m.uid() == rustix::process::getuid().as_raw() && m.mode() & 0o077 == 0
-    })
+    fs::symlink_metadata(state)
+        .is_ok_and(|m| m.is_dir() && m.uid() == service_uid() && m.mode() & GROUP_OTHER_BITS == 0)
 }
 
 pub struct StderrCapture {
@@ -316,6 +331,13 @@ fn read_bounded_line(reader: &mut impl BufRead, buf: &mut Vec<u8>, max: usize) -
     true
 }
 
+/// Redirects the process's stderr through a thread that redacts each line, copies it to
+/// the original stderr and appends it to the rotating log under `state`.
+///
+/// # Errors
+///
+/// Returns the operating system's error when stderr cannot be duplicated or redirected, the pipe
+/// cannot be created, or the thread cannot be spawned.
 pub fn capture_stderr(state: PathBuf) -> io::Result<StderrCapture> {
     let original = rustix::io::fcntl_dupfd_cloexec(io::stderr(), 3)?;
     let (read, write) = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC)?;
@@ -381,6 +403,13 @@ fn read_lines_lossy(path: &Path) -> io::Result<Option<Vec<String>>> {
     ))
 }
 
+/// Writes a redacted diagnostics bundle (logs, versions, migration journal) to the new
+/// file `out`.
+///
+/// # Errors
+///
+/// Returns [`ExportError::Exists`] when `out` already exists, or [`ExportError::Io`] naming the step
+/// that failed; a partly written file is removed.
 pub fn export(state: &Path, out: &Path) -> Result<ExportSummary, ExportError> {
     let home = home();
     let mut file = OpenOptions::new()
@@ -418,17 +447,19 @@ fn write_export(
     let kernel = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
     let mut text = String::new();
     text.push_str("LADE diagnostics export (redacted; review before sharing)\n");
-    text.push_str(&format!("created={}\n", wire_ts(now_ms()).as_str()));
-    text.push_str(&format!(
-        "laded={} protocol={}\n",
+    let _ = writeln!(text, "created={}", wire_ts(now_ms()).as_str());
+    let _ = writeln!(
+        text,
+        "laded={} protocol={}",
         lade_protocol::BUNDLE,
         lade_protocol::VERSION
-    ));
-    text.push_str(&format!(
-        "supported_schema={} database_schema={database}\n",
-        crate::storage::SCHEMA_VERSION
-    ));
-    text.push_str(&format!("kernel={}\n", kernel.trim()));
+    );
+    let _ = writeln!(
+        text,
+        "supported_schema={} database_schema={database}",
+        SCHEMA_VERSION
+    );
+    let _ = writeln!(text, "kernel={}", kernel.trim());
     text.push_str(
         "included: service logs (already redacted, redacted again), migration journal\n\
          excluded: database contents, prompts, source, tool output, terminal output, \
@@ -454,7 +485,7 @@ fn write_export(
         let Some(lines) = read_lines_lossy(&path).map_err(read_err)? else {
             continue;
         };
-        text.push_str(&format!("\n=== {section} ({} lines) ===\n", lines.len()));
+        let _ = writeln!(text, "\n=== {section} ({} lines) ===", lines.len());
         for line in &lines {
             text.push_str(&redact(line, home));
             text.push('\n');

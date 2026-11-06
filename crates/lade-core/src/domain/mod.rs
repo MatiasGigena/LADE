@@ -3,4 +3,5 @@ pub mod feedback;
 pub mod ids;
 pub mod inspection;
 pub mod objectives;
+pub mod recovery;
 pub mod review;

@@ -1,8 +1,15 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use std::fs;
 use std::os::unix::process::ExitStatusExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -111,15 +118,9 @@ fn refs(repo: &Path, prefix: &str) -> Vec<String> {
         .collect()
 }
 
-#[test]
-fn review_path_recovers_at_every_crash_window() {
-    if !sandbox_works() {
-        eprintln!("skipping: bubblewrap sandbox unavailable");
-        return;
-    }
-    let env = Env::new("crash-review");
-    let main_before = git(&env.repo, &["rev-parse", "main"]);
-
+/// Crashes after the first capture is retained, leaving an orphan retention ref. Returns the
+/// Objective and its orphan refs.
+fn crash_after_capture(env: &Env) -> (Id, Vec<String>) {
     let mut daemon = env.spawn_laded(Some("capture.retained"), &[]);
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
@@ -133,25 +134,30 @@ fn review_path_recovers_at_every_crash_window() {
     crashed(&mut daemon, client, "capture.retained");
     let orphans = refs(&env.repo, "refs/lade/retain/");
     assert_eq!(orphans.len(), 1, "{orphans:?}");
+    (objective, orphans)
+}
 
+/// Recovers the interrupted execution, then crashes once the freeze has moved the branch.
+/// Returns the freeze operation, the Objective's branch and its worktree.
+fn crash_while_freezing(env: &Env, objective: &Id, orphans: &[String]) -> (Id, String, PathBuf) {
     let mut daemon = env.spawn_laded(Some("freeze.branch_moved"), &[]);
     let mut client = env.connect();
-    let recovered = detail(&mut client, &objective);
+    let recovered = detail(&mut client, objective);
     assert!(
         recovered.badges.contains(&Badge::Interrupted),
         "{recovered:?}"
     );
     assert_eq!(recovered.lifecycle, Lifecycle::Active);
-    resume(&mut client, &objective);
-    let wt = worktree(&env, &objective);
+    resume(&mut client, objective);
+    let wt = worktree(env, objective);
     if !wt.join("a.txt").exists() {
         client
-            .call(message("lade-fixture: write a.txt A", &objective))
+            .call(message("lade-fixture: write a.txt A", objective))
             .unwrap();
         wait_path(&wt.join("a.txt"));
     }
-    wait_state(&mut client, &objective, ExecutionState::Idle);
-    let list = changes(&mut client, &objective, Basis::Working);
+    wait_state(&mut client, objective, ExecutionState::Idle);
+    let list = changes(&mut client, objective, Basis::Working);
     assert_eq!(list.files.len(), 1);
     let capture = list.capture_id.clone().unwrap();
     assert!(
@@ -168,12 +174,17 @@ fn review_path_recovers_at_every_crash_window() {
     crashed(&mut daemon, client, "freeze.branch_moved");
     let moved = git(&env.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
     assert_ne!(moved, recovered.start_commit.hex());
+    (freeze_op, branch, wt)
+}
 
+/// The freeze crashed before it was recorded, so it is uncertain and undone; freezes again and
+/// crashes once that freeze is recorded. Returns the second freeze operation.
+fn crash_after_recording_freeze(env: &Env, objective: &Id, freeze_op: &Id) -> Id {
     let mut daemon = env.spawn_laded(Some("freeze.recorded"), &[]);
     let mut client = env.connect();
-    let status = operation(&mut client, &freeze_op);
+    let status = operation(&mut client, freeze_op);
     assert_eq!(status.state, OperationState::Uncertain, "{status:?}");
-    let after = detail(&mut client, &objective);
+    let after = detail(&mut client, objective);
     assert_eq!(after.lifecycle, Lifecycle::Active);
     assert!(after.candidates.is_empty());
     let freeze_op = send_op(
@@ -183,16 +194,20 @@ fn review_path_recovers_at_every_crash_window() {
         }),
     );
     crashed(&mut daemon, client, "freeze.recorded");
+    freeze_op
+}
 
+/// The recorded freeze completed; crashes while a check copies the candidate.
+fn crash_while_verifying(env: &Env, objective: &Id, freeze_op: &Id, branch: &str) {
     let mut daemon = env.spawn_laded(Some("verify.copy"), &[]);
     let mut client = env.connect();
-    let status = operation(&mut client, &freeze_op);
+    let status = operation(&mut client, freeze_op);
     assert_eq!(status.state, OperationState::Completed, "{status:?}");
     assert!(matches!(
         status.outcome,
         Some(lade_protocol::client::Outcome::Ok(_))
     ));
-    let frozen = detail(&mut client, &objective);
+    let frozen = detail(&mut client, objective);
     assert_eq!(frozen.lifecycle, Lifecycle::Frozen);
     let current = frozen
         .candidates
@@ -214,10 +229,14 @@ fn review_path_recovers_at_every_crash_window() {
     }
     crashed(&mut daemon, client, "verify.copy");
     assert_eq!(refs(&env.repo, "refs/heads/lade/verify/").len(), 1);
+}
 
+/// The interrupted check is cleaned away; crashes after the integration intent and again once
+/// the target ref moved.
+fn crash_while_integrating(env: &Env, objective: &Id, main_before: &str) {
     let mut daemon = env.spawn_laded(Some("integrate.intent"), &[]);
     let mut client = env.connect();
-    let verified = detail(&mut client, &objective);
+    let verified = detail(&mut client, objective);
     assert_eq!(
         verified.verifications[0].state,
         VerificationState::Interrupted
@@ -229,8 +248,8 @@ fn review_path_recovers_at_every_crash_window() {
             .count(),
         0
     );
-    let approval = approve(&mut client, &objective);
-    let intent_op = send_op(&mut client, integrate_request(&objective, approval));
+    let approval = approve(&mut client, objective);
+    let intent_op = send_op(&mut client, integrate_request(objective, approval));
     crashed(&mut daemon, client, "integrate.intent");
     assert_eq!(git(&env.repo, &["rev-parse", "main"]), main_before);
 
@@ -240,7 +259,7 @@ fn review_path_recovers_at_every_crash_window() {
         operation(&mut client, &intent_op).state,
         OperationState::Uncertain
     );
-    let aborted = detail(&mut client, &objective);
+    let aborted = detail(&mut client, objective);
     assert_eq!(
         aborted.lifecycle,
         Lifecycle::Frozen,
@@ -252,14 +271,30 @@ fn review_path_recovers_at_every_crash_window() {
     );
     assert_eq!(git(&env.repo, &["rev-parse", "main"]), main_before);
     assert!(!env.repo.join("a.txt").exists());
-    let approval = approve(&mut client, &objective);
-    send_op(&mut client, integrate_request(&objective, approval));
+    let approval = approve(&mut client, objective);
+    send_op(&mut client, integrate_request(objective, approval));
     crashed(&mut daemon, client, "integrate.ref_moved");
     assert_ne!(git(&env.repo, &["rev-parse", "main"]), main_before);
     assert!(
         !env.repo.join("a.txt").exists(),
         "the crash left the checkout behind its ref"
     );
+}
+
+#[test]
+fn review_path_recovers_at_every_crash_window() {
+    if !sandbox_works() {
+        eprintln!("skipping: bubblewrap sandbox unavailable");
+        return;
+    }
+    let env = Env::new("crash-review");
+    let main_before = git(&env.repo, &["rev-parse", "main"]);
+
+    let (objective, orphans) = crash_after_capture(&env);
+    let (freeze_op, branch, wt) = crash_while_freezing(&env, &objective, &orphans);
+    let freeze_op = crash_after_recording_freeze(&env, &objective, &freeze_op);
+    crash_while_verifying(&env, &objective, &freeze_op, &branch);
+    crash_while_integrating(&env, &objective, &main_before);
 
     let mut daemon = env.spawn_laded(Some("cleanup.removed"), &[]);
     let mut client = env.connect();
@@ -297,14 +332,8 @@ fn review_path_recovers_at_every_crash_window() {
     assert!(!refs(&env.repo, "refs/lade/retain/").is_empty());
 }
 
-#[test]
-fn input_and_launch_windows_recover_without_replay() {
-    if !sandbox_works() {
-        eprintln!("skipping: bubblewrap sandbox unavailable");
-        return;
-    }
-    let env = Env::new("crash-input");
-
+/// Crashes once the first launch provisioned its worktree. Returns the Objective and worktree.
+fn crash_while_launching(env: &Env) -> (Id, PathBuf) {
     let mut daemon = env.spawn_laded(Some("launch.provisioned"), &[]);
     let mut client = env.connect();
     let ws = open_workspace(&mut client, &env.repo);
@@ -321,17 +350,22 @@ fn input_and_launch_windows_recover_without_replay() {
         }),
     );
     crashed(&mut daemon, client, "launch.provisioned");
-    let wt = worktree(&env, &objective);
+    let wt = worktree(env, &objective);
     assert!(wt.is_dir());
+    (objective, wt)
+}
 
+/// Resumes into the adopted worktree and crashes once an input's dispatch is recorded. Returns
+/// the input's operation.
+fn crash_after_dispatch(env: &Env, objective: &Id) -> Id {
     let mut daemon = env.spawn_laded(Some("dispatch.recorded"), &[]);
     let mut client = env.connect();
-    let recovered = detail(&mut client, &objective);
+    let recovered = detail(&mut client, objective);
     assert!(
         recovered.badges.contains(&Badge::Interrupted),
         "{recovered:?}"
     );
-    resume(&mut client, &objective);
+    resume(&mut client, objective);
     assert_eq!(
         refs(&env.repo, "refs/heads/lade/").len(),
         1,
@@ -339,9 +373,22 @@ fn input_and_launch_windows_recover_without_replay() {
     );
     let dispatched_op = send_op(
         &mut client,
-        message("lade-fixture: write b.txt B", &objective),
+        message("lade-fixture: write b.txt B", objective),
     );
     crashed(&mut daemon, client, "dispatch.recorded");
+    dispatched_op
+}
+
+#[test]
+fn input_and_launch_windows_recover_without_replay() {
+    if !sandbox_works() {
+        eprintln!("skipping: bubblewrap sandbox unavailable");
+        return;
+    }
+    let env = Env::new("crash-input");
+
+    let (objective, wt) = crash_while_launching(&env);
+    let dispatched_op = crash_after_dispatch(&env, &objective);
 
     let mut daemon = env.spawn_laded(Some("input.accepted"), &[]);
     let mut client = env.connect();
@@ -383,7 +430,13 @@ fn input_and_launch_windows_recover_without_replay() {
     resume(&mut client, &objective);
     wait_path(&wt.join("c.txt"));
     wait_state(&mut client, &objective, ExecutionState::Idle);
-    thread::sleep(Duration::from_secs(1));
+    // A later input completes only after any resend of the uncertain one would have.
+    send_op(
+        &mut client,
+        message("lade-fixture: write d.txt D", &objective),
+    );
+    wait_path(&wt.join("d.txt"));
+    wait_state(&mut client, &objective, ExecutionState::Idle);
     assert!(
         !wt.join("b.txt").exists(),
         "uncertain input is never resent"

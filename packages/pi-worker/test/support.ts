@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import fixtures from "../../../contracts/v1/fixtures.json" with { type: "json" };
-import { boundedJson, WireError } from "../src/json.ts";
-import { BUNDLE, decode, decodeWorkerFrame } from "../src/protocol.ts";
-import { Decoder, encode, encodeWorker } from "../src/framing.ts";
-import type { Framing } from "../src/framing.ts";
-import { Reassembler } from "../src/chunks.ts";
-import { RequestHistory } from "../src/history.ts";
-import type { ReplyResult } from "../src/history.ts";
+import { boundedJson, MAX_ENTRIES, MAX_NODES, WireError } from "../src/json.ts";
+import type { WireCode } from "../src/json.ts";
+import { BUNDLE } from "../src/schema.ts";
+import { decodeWorkerFrame } from "../src/worker/contract.ts";
+import { decode } from "./reference/protocol.ts";
+import { decoder, encode, encodeWorker, framed } from "./reference/framing.ts";
+import type { Framing } from "./reference/framing.ts";
+import { Reassembler } from "./reference/chunks.ts";
+import { RequestHistory } from "./reference/history.ts";
+import type { ReplyResult } from "./reference/history.ts";
 import type { Envelope, WorkerEnvelope } from "../src/dto.ts";
 
 interface Source { value?: unknown; text?: string; hex?: string; depth?: number; array?: number; string?: number; nodes?: boolean; padding?: number; steps?: unknown[] }
@@ -23,6 +26,9 @@ const workerCodec: Codec<WorkerEnvelope> = { decode: decodeWorkerFrame, encode: 
 
 export const corpus: Fixture[] = fixtures;
 
+/** A read size that splits frames across a 64 KiB boundary. */
+const LARGE_STRIDE = 64 * 1024 + 1;
+
 export function source(s: Source): Buffer {
   if (s.value !== undefined) return Buffer.from(JSON.stringify(s.value));
 
@@ -36,20 +42,15 @@ export function source(s: Source): Buffer {
 
   if (s.string !== undefined) return Buffer.from(JSON.stringify("a".repeat(s.string)));
 
-  if (s.nodes) return Buffer.from(JSON.stringify(Array.from({ length: 16 }, () => Array(1024).fill(0))));
+  if (s.nodes) return Buffer.from(JSON.stringify(Array.from({ length: MAX_NODES / MAX_ENTRIES }, () => Array(MAX_ENTRIES).fill(0))));
 
   if (s.padding !== undefined) return Buffer.from("{}" + " ".repeat(s.padding - 2));
   throw new Error("unknown fixture recipe");
 }
 
-function framed(bytes: Buffer, framing: Framing): Buffer {
-  if (framing === "worker") return Buffer.concat([bytes, Buffer.from("\n")]);
-  const head = Buffer.alloc(4); head.writeUInt32BE(bytes.length);
+type Outcome = WireCode | "ok";
 
-  return Buffer.concat([head, bytes]);
-}
-
-function outcome(action: () => void): string {
+function outcome(action: () => void): Outcome {
   try {
     action();
 
@@ -84,16 +85,16 @@ function reassemblyContext(fixture: Fixture) {
   return { owner: envelope.body.owner, generation: envelope.body.execution_generation };
 }
 
-function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): string {
-  const decoder = new Decoder(framing, codec.decode);
+function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, stride: number, expectedCount: number): Outcome {
+  const frames = decoder(framing, codec.decode);
   let count = 0;
 
   return outcome(() => {
     for (let pos = 0; pos < bytes.length; pos += stride) {
       try {
-        decoder.push(bytes.subarray(pos, pos + stride), message => {
+        frames.push(bytes.subarray(pos, pos + stride), message => {
           count++;
-          const other = new Decoder(framing, codec.decode);
+          const other = decoder(framing, codec.decode);
           other.push(codec.encode(message, framing), decoded => assert.deepEqual(decoded, message));
           other.finish();
         });
@@ -101,25 +102,25 @@ function stream<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing, str
         assert.ok(error instanceof WireError, "invalid bytes must produce a protocol rejection");
         assert.equal(count, 0, "invalid input must not emit a command");
         const valid = framed(codec.valid, framing);
-        assert.equal(outcome(() => decoder.push(valid, () => { count++; })), "closed");
-        assert.equal(outcome(() => decoder.finish()), "closed");
+        assert.equal(outcome(() => frames.push(valid, () => { count++; })), "closed");
+        assert.equal(outcome(() => frames.finish()), "closed");
         assert.equal(count, 0, "a failed connection must not deliver later valid messages");
         throw error;
       }
     }
 
-    decoder.finish();
+    frames.finish();
     assert.equal(count, expectedCount);
   });
 }
 
-function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
+function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): Outcome {
   let previous = outcome(() => assert.deepEqual(codec.decode(bytes), boundedJson(bytes)));
 
   for (const framing of ["client", "worker"] as const) {
     const wire = Buffer.concat([framed(bytes, framing), framed(bytes, framing), framed(codec.valid, framing)]);
 
-    for (const stride of [1, 2, 3, 7, 65537, wire.length]) {
+    for (const stride of [1, 2, 3, 7, LARGE_STRIDE, wire.length]) {
       const result = stream(codec, wire, framing, stride, 3);
       assert.equal(result, previous);
       previous = result;
@@ -129,82 +130,73 @@ function frameCase<Frame>(codec: Codec<Frame>, bytes: Buffer): string {
   return previous;
 }
 
-function transportCase<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing): string {
-  let previous: string | undefined;
+function transportCase<Frame>(codec: Codec<Frame>, bytes: Buffer, framing: Framing): Outcome {
+  const [first, ...others] = [1, 3, LARGE_STRIDE, bytes.length].map(stride => stream(codec, bytes, framing, stride, 0));
 
-  for (const stride of [1, 3, 65537, bytes.length]) {
-    const result = stream(codec, bytes, framing, stride, 0);
+  for (const result of others) assert.equal(result, first);
 
-    if (previous !== undefined) assert.equal(result, previous);
-    previous = result;
-  }
-
-  return previous ?? "missing_result";
+  return first ?? assert.fail("no transport stride ran");
 }
 
 function rejected(code: "interrupted" | "durability_failure"): ReplyResult {
   return { status: "rejected", code, action: "query_operation", detail: "fixture" };
 }
 
-export function run(c: Fixture): string {
-  return outcome(() => {
-    switch (c.mode) {
-      case "json":
-        boundedJson(source(c.source));
+function frameMode(c: Fixture): void {
+  const result = c.contract === "worker" ? frameCase(workerCodec, source(c.source)) : frameCase(clientCodec, source(c.source));
 
-        return;
-      case "frame": {
-        const result = c.contract === "worker" ? frameCase(workerCodec, source(c.source)) : frameCase(clientCodec, source(c.source));
+  if (result !== "ok") throw new WireError(result);
+}
 
-        if (result !== "ok") throw new WireError(result);
+function transportMode(c: Fixture): void {
+  const result = c.contract === "worker" ? transportCase(workerCodec, source(c.source), transportFraming(c)) : transportCase(clientCodec, source(c.source), transportFraming(c));
 
-        return;
-      }
+  if (result !== "ok") throw new WireError(result);
+}
 
-      case "transport": {
-        const result = c.contract === "worker" ? transportCase(workerCodec, source(c.source), transportFraming(c)) : transportCase(clientCodec, source(c.source), transportFraming(c));
+function chunksMode(c: Fixture): void {
+  const context = reassemblyContext(c);
+  const chunks = new Reassembler(context.owner, context.generation);
+  const output: Buffer[] = [];
 
-        if (result !== "ok") throw new WireError(result);
+  for (const step of c.source.steps ?? []) {
+    const message = decode(Buffer.from(JSON.stringify(step)));
 
-        return;
-      }
+    try {
+      const bytes = chunks.accept(message.body);
 
-      case "chunks": {
-        const context = reassemblyContext(c);
-        const chunks = new Reassembler(context.owner, context.generation);
-        const output: Buffer[] = [];
-
-        for (const step of c.source.steps ?? []) {
-          const message = decode(Buffer.from(JSON.stringify(step)));
-
-          try {
-            const bytes = chunks.accept(message.body);
-
-            if (bytes) output.push(bytes);
-          } catch (error) {
-            assert.throws(() => chunks.accept(message.body), { code: "closed" });
-            throw error;
-          }
-        }
-
-        assert.equal(Buffer.concat(output).toString("hex"), c.output_hex);
-        chunks.close();
-
-        return;
-      }
-
-      case "history": {
-        const history = new RequestHistory();
-
-        for (const [index, step] of (c.source.steps ?? []).entries()) {
-          const message = decode(Buffer.from(JSON.stringify(step)));
-          assert.deepEqual(history.observe(message.body, rejected(index === 0 ? "interrupted" : "durability_failure")), rejected("interrupted"));
-        }
-
-        return;
-      }
-
-      default: throw new Error("unknown fixture mode");
+      if (bytes) output.push(bytes);
+    } catch (error) {
+      assert.throws(() => chunks.accept(message.body), { code: "closed" });
+      throw error;
     }
-  });
+  }
+
+  assert.equal(Buffer.concat(output).toString("hex"), c.output_hex);
+  chunks.close();
+}
+
+function historyMode(c: Fixture): void {
+  const history = new RequestHistory();
+
+  for (const [index, step] of (c.source.steps ?? []).entries()) {
+    const message = decode(Buffer.from(JSON.stringify(step)));
+    assert.deepEqual(history.observe(message.body, rejected(index === 0 ? "interrupted" : "durability_failure")), rejected("interrupted"));
+  }
+}
+
+const MODES = new Map<string, (c: Fixture) => void>([
+  ["json", c => { boundedJson(source(c.source)); }],
+  ["frame", frameMode],
+  ["transport", transportMode],
+  ["chunks", chunksMode],
+  ["history", historyMode],
+]);
+
+export function run(c: Fixture): Outcome {
+  const mode = MODES.get(c.mode);
+
+  if (mode === undefined) throw new Error("unknown fixture mode");
+
+  return outcome(() => mode(c));
 }

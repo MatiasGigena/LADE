@@ -4,7 +4,7 @@
     "package": "@earendil-works/pi-coding-agent",
     "version": "1.5.0"
   },
-  "generated_from": "node packages/pi-worker/src/worker/catalog.ts (provider ids and auth facts of the pinned SDK catalogue) and the reviewed tables in crates/lade-system/src/supervision/{credentials,gateway,providers}.rs",
+  "generated_from": "node packages/pi-worker/src/catalog.ts (provider ids and auth facts of the pinned SDK catalogue) and the reviewed tables in crates/lade-system/src/supervision/{credentials,gateway,providers}.rs",
   "providers": [
     {
       "id": "amazon-bedrock",

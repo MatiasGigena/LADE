@@ -1,33 +1,62 @@
 import { once } from "node:events";
 import type { EventEmitter } from "node:events";
 import type { Readable } from "node:stream";
-import { encodeOutbound, LineDecoder } from "./wire.ts";
-import type { InboundBody, OutboundBody, WorkerChannel } from "./wire.ts";
+import type { ServiceToWorker, WorkerToService } from "../dto.ts";
+import { WireError } from "../json.ts";
+import type { WireCode } from "../json.ts";
+import { encodeOutbound, LineDecoder, parseInbound } from "./wire.ts";
 
-export const DELTA_BUDGET = 4 * 1024 * 1024;
+const DELTA_BUDGET = 4 * 1024 * 1024;
 
 const MAX_COALESCED_DELTA = 64 * 1024;
 
-function weight(body: OutboundBody): number {
-  switch (body.kind) {
-    case "activity.item": return Buffer.byteLength(body.text) + 256;
-    case "activity.delta": return Buffer.byteLength(body.append_text) + 128;
-    default: return 256;
+/** Estimated bytes of a queued frame's envelope and fixed fields, beyond its text. */
+const FRAME_OVERHEAD = 256;
+
+const DELTA_OVERHEAD = 128;
+
+/** A service frame the decoder rejected: a protocol violation, unlike a `WireError` raised for the worker's own frames. */
+export class InboundError extends Error {
+  readonly name = "InboundError";
+  readonly code: WireCode;
+  constructor(code: WireCode) { super(`rejected inbound frame (${code})`); this.code = code; }
+}
+
+/** Runs one decoder step; a `WireError` it throws becomes an `InboundError`, a protocol violation of the service's frame. */
+function asInbound(step: () => void): void {
+  try {
+    step();
+  } catch (error) {
+    throw error instanceof WireError ? new InboundError(error.code) : error;
   }
 }
 
-export class StdioChannel implements WorkerChannel {
+function weight(body: WorkerToService): number {
+  switch (body.kind) {
+    case "activity.item": return Buffer.byteLength(body.text) + FRAME_OVERHEAD;
+    case "activity.delta": return Buffer.byteLength(body.append_text) + DELTA_OVERHEAD;
+    default: return FRAME_OVERHEAD;
+  }
+}
+
+export class StdioChannel {
   private readonly input: Readable;
   private readonly write: (frame: Buffer) => boolean;
   private readonly drains: EventEmitter;
-  private readonly queue: OutboundBody[] = [];
+  private readonly queue: WorkerToService[] = [];
   private queued = 0;
   private flushing: Promise<void> | undefined;
   constructor(input: Readable, write: (frame: Buffer) => boolean, drains: EventEmitter) {
     this.input = input; this.write = write; this.drains = drains;
   }
 
-  send(body: OutboundBody): Promise<void> {
+  /**
+   * Queues a frame and resolves once the queue is written. Every frame is kept except `activity.delta`, which is
+   * best-effort: consecutive deltas of one item coalesce, and above DELTA_BUDGET of queued output a delta that cannot
+   * coalesce is dropped. Nothing is lost by the drop, because the `activity.item` that ends every streamed block
+   * carries its complete bounded text and replaces what was streamed.
+   */
+  send(body: WorkerToService): Promise<void> {
     const last = this.queue.at(-1);
 
     if (body.kind === "activity.delta") {
@@ -61,16 +90,16 @@ export class StdioChannel implements WorkerChannel {
     this.queued = 0;
   }
 
-  async *incoming(): AsyncGenerator<InboundBody> {
-    const decoder = new LineDecoder();
-    const frames: InboundBody[] = [];
+  async *incoming(): AsyncGenerator<ServiceToWorker> {
+    const decoder = new LineDecoder(parseInbound);
+    const frames: ServiceToWorker[] = [];
 
     for await (const chunk of this.input) {
-      decoder.push(Buffer.from(chunk), frame => { frames.push(frame); });
+      asInbound(() => decoder.push(Buffer.from(chunk), frame => { frames.push(frame); }));
 
       for (let frame = frames.shift(); frame !== undefined; frame = frames.shift()) yield frame;
     }
 
-    decoder.finish();
+    asInbound(() => decoder.finish());
   }
 }

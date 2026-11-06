@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -10,17 +17,17 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::TempDir;
+use adapters_support::{TempDir, skip_without_sandbox};
 use lade_system::adapters::sandbox::{
-    Limits, RunOutcome, SandboxCommand, SandboxSpec, SandboxTools, VerificationLaunch,
-    WorkerLaunch, run_bounded, sandbox_available, verification_spec, worker_spec,
+    Limits, RunOutcome, SandboxSpec, SandboxTools, VerificationLaunch, WorkerLaunch, run_bounded,
+    sandbox_available, verification_spec, worker_spec,
 };
 
 fn tools() -> Option<SandboxTools> {
     match SandboxTools::locate() {
         Ok(tools) => Some(tools),
         Err(e) => {
-            eprintln!("skipping sandbox test: {e} (bubblewrap/prlimit not installed)");
+            skip_without_sandbox(e);
             None
         }
     }
@@ -211,7 +218,10 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     let (mut child, mut gate) = cmd.spawn().unwrap();
-    thread::sleep(Duration::from_millis(500));
+    assert!(
+        wait_until(Duration::from_secs(10), || blocked_at_gate(child.id())),
+        "the sandbox never reached its gate"
+    );
     assert!(!started.exists(), "the program ran before the gate opened");
     gate.open().unwrap();
     assert_eq!(child.wait().unwrap().code(), Some(0));
@@ -226,6 +236,40 @@ fn the_program_waits_for_the_gate_and_a_lost_gate_runs_nothing() {
     drop(gate);
     assert_eq!(child.wait().unwrap().code(), Some(125));
     assert!(!started.exists(), "the program ran without the gate");
+}
+
+/// Whether the gate script below `outer` sleeps: the read of its gate is the only place it
+/// blocks before it runs the program.
+fn blocked_at_gate(outer: u32) -> bool {
+    let stat = |pid: u32| fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+    let field = |stat: &str, n: usize| {
+        stat.rsplit(") ")
+            .next()?
+            .split(' ')
+            .nth(n)
+            .map(str::to_owned)
+    };
+    let descends = |mut pid: u32| {
+        while pid > 1 {
+            if pid == outer {
+                return true;
+            }
+            match stat(pid).and_then(|s| field(&s, 1)?.parse().ok()) {
+                Some(parent) => pid = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    fs::read_dir("/proc")
+        .unwrap()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            fs::read(format!("/proc/{pid}/cmdline"))
+                .is_ok_and(|c| c.split(|b| *b == 0).any(|arg| arg == b"lade-gate"))
+        })
+        .any(|pid| descends(pid) && stat(pid).and_then(|s| field(&s, 0)).as_deref() == Some("S"))
 }
 
 fn processes_with(marker: &str) -> Vec<u32> {
@@ -287,12 +331,12 @@ impl Drop for ExtraThreads {
 #[test]
 fn probe_succeeds_while_the_user_runs_more_processes_than_the_limit() {
     let Some(tools) = tools() else { return };
-    let busy = ExtraThreads::spawn(Limits::WORKER.processes as usize + 64);
+    let busy = ExtraThreads::spawn(usize::try_from(Limits::WORKER.processes).unwrap() + 64);
     sandbox_available(&tools).expect("sandbox available");
     drop(busy);
     let spec = SandboxSpec::new(vec!["/bin/true".into()], Path::new("/"), Limits::WORKER).unwrap();
     let command = spec.command(&tools).unwrap();
-    let args: Vec<_> = command.get_command().get_args().collect();
+    let args: Vec<_> = command.command().get_args().collect();
     assert!(
         !args
             .iter()
@@ -597,14 +641,18 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
     let marker = "4444.0723";
     let script = format!("setsid nohup sleep {marker} >/dev/null 2>&1 & sleep 1000");
     let cmd = sh_spec(&script, tmp.path()).command(&tools).unwrap();
-    let mut supervisor = Command::new("/bin/sh");
-    supervisor
-        .arg("-c")
-        .arg(format!("{} & wait", shell_line(&cmd)))
-        .env_clear()
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let (mut supervisor, mut gate) = cmd.spawn_via(supervisor).unwrap();
+    let (mut supervisor, mut gate) = cmd
+        .spawn_via(|sandbox| {
+            let mut supervisor = Command::new("/bin/sh");
+            supervisor
+                .arg("-c")
+                .arg(format!("{} & wait", shell_line(sandbox)))
+                .env_clear()
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            supervisor
+        })
+        .unwrap();
     gate.open().unwrap();
     assert!(wait_until(Duration::from_secs(10), || !processes_with(
         marker
@@ -618,8 +666,7 @@ fn killing_the_sandbox_or_its_supervisor_kills_descendants() {
     );
 }
 
-fn shell_line(cmd: &SandboxCommand) -> String {
-    let cmd = cmd.get_command();
+fn shell_line(cmd: &Command) -> String {
     let mut line = shell_quote(cmd.get_program().as_encoded_bytes());
     for arg in cmd.get_args() {
         line.push(' ');
@@ -673,11 +720,30 @@ fn node() -> Option<PathBuf> {
     .find(|p| p.exists())
 }
 
+/// A worker that reports its environment, what it may read and write, and greets the gateway.
+const WORKER_PROBE: &str = r"
+const fs = require('node:fs');
+const net = require('node:net');
+const report = {
+  home: process.env.HOME,
+  term: process.env.TERM,
+  pi: process.env.PI_CODING_AGENT_DIR,
+  key: process.env.FIXTURE_API_KEY,
+  envKeys: Object.keys(process.env).sort(),
+  root: fs.existsSync('/root'),
+  headReadable: fs.readFileSync(process.argv[2] + '/HEAD', 'utf8').startsWith('ref:'),
+};
+try { fs.writeFileSync(process.argv[2] + '/HEAD', 'x'); report.repoWritable = true; } catch { report.repoWritable = false; }
+try { fs.writeFileSync('./edited.txt', 'worker edit'); report.worktreeWritable = true; } catch { report.worktreeWritable = false; }
+const sock = net.connect(process.env.LADE_GATEWAY_SOCKET, () => sock.end('hello gateway'));
+sock.on('close', () => console.log(JSON.stringify(report)));
+";
+
 #[test]
 fn worker_sandbox_runs_node_with_gateway_socket_only() {
     let Some(tools) = tools() else { return };
     let Some(node) = node() else {
-        eprintln!("skipping worker sandbox test: node not installed");
+        skip_without_sandbox("node is not installed");
         return;
     };
     let tmp = TempDir::new("sbx-worker");
@@ -701,27 +767,7 @@ fn worker_sandbox_runs_node_with_gateway_socket_only() {
         received
     });
     let entry = worker.join("worker.js");
-    fs::write(
-        &entry,
-        r#"
-const fs = require('node:fs');
-const net = require('node:net');
-const report = {
-  home: process.env.HOME,
-  term: process.env.TERM,
-  pi: process.env.PI_CODING_AGENT_DIR,
-  key: process.env.FIXTURE_API_KEY,
-  envKeys: Object.keys(process.env).sort(),
-  root: fs.existsSync('/root'),
-  headReadable: fs.readFileSync(process.argv[2] + '/HEAD', 'utf8').startsWith('ref:'),
-};
-try { fs.writeFileSync(process.argv[2] + '/HEAD', 'x'); report.repoWritable = true; } catch { report.repoWritable = false; }
-try { fs.writeFileSync('./edited.txt', 'worker edit'); report.worktreeWritable = true; } catch { report.worktreeWritable = false; }
-const sock = net.connect(process.env.LADE_GATEWAY_SOCKET, () => sock.end('hello gateway'));
-sock.on('close', () => console.log(JSON.stringify(report)));
-"#,
-    )
-    .unwrap();
+    fs::write(&entry, WORKER_PROBE).unwrap();
     let spec = worker_spec(&WorkerLaunch {
         node,
         worker_dir: worker.clone(),

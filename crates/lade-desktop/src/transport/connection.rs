@@ -1,3 +1,6 @@
+//! The service connection: finding and admitting to the control socket, starting `laded` when
+//! allowed, and the driver thread that reconnects and feeds the protocol core.
+
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 use std::net::Shutdown;
@@ -11,17 +14,16 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use lade_protocol::client::{ClientBody, ClientEnvelope, ErrorCode, Event, Rejection, SafeAction};
-use lade_protocol::types::{Capability, Id};
-use lade_protocol::{FrameReader, FrameWriter, Framing, TransportError};
+use lade_protocol::client::{
+    ClientBody, ClientEnvelope, ErrorCode, Event, NoticeCode, Rejection, SafeAction,
+};
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Capability, Id};
+use lade_protocol::{FrameIoError, FrameReader, FrameWriter, Framing, WireError};
 
 use super::core::{Core, Step};
-use crate::presentation::intents::Intent;
-use crate::presentation::model::ConnectionState;
-use crate::presentation::store::StoreUpdate;
-
-pub const SOCKET_NAME: &str = "control.sock";
-pub const CAPABILITY_NAME: &str = "control.cap";
+use crate::presentation::controller::intents::Intent;
+use crate::presentation::state::model::ConnectionState;
+use crate::presentation::state::store::StoreUpdate;
 
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 const START_WINDOW: Duration = Duration::from_secs(5);
@@ -82,7 +84,11 @@ pub fn sibling_service() -> Option<PathBuf> {
 
 static FALLBACK: AtomicU64 = AtomicU64::new(0);
 
-pub fn random_id() -> Id {
+/// A fresh id for a request or operation, or for a test's scratch name. Those ids only
+/// correlate replies and recognise resends, so they must be unique but need not be secret:
+/// when `/dev/urandom` cannot be read, a mix of the time, process id and a counter stands in.
+/// That fallback is unique within the process but not random.
+pub fn unique_id() -> Id {
     let mut bytes = [0u8; 16];
     let read = File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut bytes));
     if read.is_err() {
@@ -90,9 +96,10 @@ pub fn random_id() -> Id {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
         let count = FALLBACK.fetch_add(1, Ordering::Relaxed);
-        bytes[..8].copy_from_slice(&(nanos as u64).to_le_bytes());
+        // Only the low bits vary between calls; keeping them is the intent.
+        bytes[..8].copy_from_slice(&nanos.to_le_bytes()[..8]);
         bytes[8..12].copy_from_slice(&std::process::id().to_le_bytes());
-        bytes[12..].copy_from_slice(&(count as u32).to_le_bytes());
+        bytes[12..].copy_from_slice(&count.to_le_bytes()[..4]);
     }
     Id::from_random_bytes(bytes)
 }
@@ -126,7 +133,7 @@ pub fn read_capability(dir: &Path) -> Result<Capability, ConnectError> {
     if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
         return Err(unsafe_dir());
     }
-    let path = dir.join(CAPABILITY_NAME);
+    let path = dir.join(CONTROL_CAPABILITY_NAME);
     let meta = fs::symlink_metadata(&path).map_err(|e| match e.kind() {
         ErrorKind::NotFound => ConnectError::NotRunning,
         _ => ConnectError::Unsafe("the capability file cannot be inspected".into()),
@@ -152,7 +159,7 @@ pub struct Link {
 }
 
 pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
-    let socket = dir.join(SOCKET_NAME);
+    let socket = dir.join(CONTROL_SOCKET_NAME);
     match fs::symlink_metadata(&socket) {
         Ok(meta) if meta.file_type().is_socket() => {}
         Ok(_) => {
@@ -182,7 +189,7 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
             body: ClientBody::Hello,
             ..
         })) => {}
-        Err(TransportError::Wire(e)) if e.0 == "version_mismatch" => {
+        Err(FrameIoError::Wire(WireError::VersionMismatch)) => {
             return Err(ConnectError::Protocol(
                 "the service speaks a different LADE version".into(),
             ));
@@ -198,14 +205,16 @@ pub fn connect(dir: &Path) -> Result<Link, ConnectError> {
         .map_err(|_| ConnectError::Refused)?;
     let welcome = match reader.read::<ClientEnvelope>() {
         Ok(Some(envelope)) => envelope.body,
-        Ok(None) | Err(TransportError::Io(_)) => return Err(ConnectError::Refused),
-        Err(TransportError::Wire(e)) => return Err(ConnectError::Protocol(e.to_string())),
+        Ok(None) | Err(FrameIoError::Io(_)) => return Err(ConnectError::Refused),
+        Err(FrameIoError::Wire(e)) => return Err(ConnectError::Protocol(e.to_string())),
     };
     let service_epoch = match welcome {
         ClientBody::Welcome { service_epoch, .. } => service_epoch,
         ClientBody::Event(frame) => {
             return Err(match frame.event {
-                Event::ServiceNotice(n) if n.code == "unauthorized" => ConnectError::LeaseHeld,
+                Event::ServiceNotice(n) if n.code == NoticeCode::LeaseHeld => {
+                    ConnectError::LeaseHeld
+                }
                 _ => ConnectError::Protocol("unexpected event before welcome".into()),
             });
         }
@@ -247,13 +256,20 @@ pub enum Input {
     Shutdown,
 }
 
+/// Whether this connection attempt has started `laded`, when the window may start it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spawn {
+    NotTried,
+    Started,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Phase {
     Connecting {
         started: Instant,
         attempt: u32,
         next: Instant,
-        spawned: bool,
+        spawn: Spawn,
         after_loss: bool,
     },
     Connected,
@@ -267,7 +283,7 @@ impl Phase {
             started: now,
             attempt: 0,
             next: now + delay,
-            spawned: false,
+            spawn: Spawn::NotTried,
             after_loss,
         }
     }
@@ -309,7 +325,7 @@ pub fn spawn_driver<S: UpdateSink>(
     thread::Builder::new()
         .name("lade-transport".into())
         .spawn(move || {
-            let core = Core::new(random_id, config.open.clone());
+            let core = Core::new(unique_id, config.open.clone());
             let mut driver = Driver {
                 config,
                 sink,
@@ -379,7 +395,7 @@ impl<S: UpdateSink> Driver<S> {
             started,
             attempt,
             next,
-            spawned,
+            spawn,
             after_loss,
         } = self.phase
         else {
@@ -403,23 +419,30 @@ impl<S: UpdateSink> Driver<S> {
             START_WINDOW
         };
         let in_window = started.elapsed() < window;
-        let mut spawned_now = spawned;
+        let mut spawn = spawn;
         let failure: Option<String> = match connect(&self.config.runtime_dir) {
             Ok(link) => return self.connected(link),
-            Err(ConnectError::NotRunning) => {
-                let mut why = "LADE could not reach the local service.".to_owned();
-                match &self.config.spawn {
-                    Some(spawn) if !spawned => {
-                        spawned_now = true;
-                        if spawn_service(spawn, &self.config.runtime_dir).is_err() {
-                            why = "LADE could not start the local service (laded).".into();
+            Err(ConnectError::NotRunning) => match (&self.config.spawn, spawn) {
+                // Waiting for it again would not help, so a failed start is reported at once.
+                (Some(service), Spawn::NotTried) => {
+                    match spawn_service(service, &self.config.runtime_dir) {
+                        Ok(()) => {
+                            spawn = Spawn::Started;
+                            None
                         }
+                        Err(e) => Some(format!(
+                            "LADE could not start the local service ({}): {e}.",
+                            service.program.display()
+                        )),
                     }
-                    Some(_) => {}
-                    None => why.push_str(" Start it with “laded serve”, then retry."),
                 }
-                (!in_window).then_some(why)
-            }
+                (Some(_), Spawn::Started) => (!in_window)
+                    .then(|| "LADE started the local service but could not reach it.".to_owned()),
+                (None, _) => (!in_window).then(|| {
+                    "LADE could not reach the local service. Start it with “laded serve”, then retry."
+                        .to_owned()
+                }),
+            },
             Err(ConnectError::Refused) if attempt < 3 => None,
             Err(ConnectError::Refused) => Some(
                 "The service refused this window's credentials. If it was just restarted, retry."
@@ -437,7 +460,7 @@ impl<S: UpdateSink> Driver<S> {
                     started,
                     attempt,
                     next: Instant::now() + backoff(attempt, after_loss),
-                    spawned: spawned_now,
+                    spawn,
                     after_loss,
                 };
                 true
@@ -551,8 +574,8 @@ impl<S: UpdateSink> Driver<S> {
                 .write(&ClientEnvelope::new(ClientBody::Request(frame)))
             {
                 Ok(()) => {}
-                Err(TransportError::Io(_)) => self.fail_link(),
-                Err(TransportError::Wire(e)) => {
+                Err(FrameIoError::Io(_)) => self.fail_link(),
+                Err(FrameIoError::Wire(e)) => {
                     let rejection = Rejection::new(
                         ErrorCode::LimitReached,
                         SafeAction::None,
@@ -567,5 +590,30 @@ impl<S: UpdateSink> Driver<S> {
             .into_iter()
             .chain(followups.updates)
             .all(|update| self.sink.deliver(update))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reconnect_backoff_doubles_up_to_its_cap() {
+        let first: Vec<u64> = (0..6)
+            .map(|attempt| u64::try_from(backoff(attempt, false).as_millis()).unwrap())
+            .collect();
+        assert_eq!(first, [100, 200, 400, 800, 1_000, 1_000]);
+        assert_eq!(backoff(0, true), Duration::from_millis(250));
+        assert_eq!(backoff(4, true), Duration::from_millis(4_000));
+        assert_eq!(backoff(u32::MAX, true), Duration::from_millis(5_000));
+    }
+
+    #[test]
+    fn unique_ids_are_distinct_version_4_uuids() {
+        let a = unique_id();
+        let b = unique_id();
+        assert_ne!(a, b);
+        assert!(Id::parse(a.as_str()).is_ok());
+        assert_eq!(a.as_str().as_bytes()[14], b'4');
     }
 }

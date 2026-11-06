@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::net::Shutdown;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -12,13 +12,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use lade_protocol::client::{ClientBody, ClientEnvelope, RequestFrame};
-use lade_protocol::types::Id;
+use lade_protocol::types::{CONTROL_CAPABILITY_NAME, CONTROL_SOCKET_NAME, Id};
 use lade_protocol::{FrameReader, Framing, decode_client_frame, encode};
 
-use crate::service::convert::{constant_time_eq, hex, random_fill};
+use crate::support::fs::service_uid;
+use crate::support::{constant_time_eq, hex, random_fill};
 
-pub const SOCKET_NAME: &str = "control.sock";
-pub const CAPABILITY_NAME: &str = "control.cap";
 pub const MAX_OUTBOUND_FRAMES: usize = 256;
 pub const MAX_OUTBOUND_BYTES: usize = 8 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -27,7 +26,7 @@ const MAX_PENDING_HANDSHAKES: usize = 8;
 
 #[derive(Debug)]
 pub enum TransportError {
-    UnsafeRuntimeDir(&'static str),
+    UnsafeSocketPath,
     AlreadyRunning,
     Io(&'static str, io::ErrorKind),
 }
@@ -35,7 +34,7 @@ pub enum TransportError {
 impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsafeRuntimeDir(why) => write!(f, "unsafe runtime directory: {why}"),
+            Self::UnsafeSocketPath => f.write_str("control socket path is not a socket"),
             Self::AlreadyRunning => {
                 f.write_str("another service is listening on the control socket")
             }
@@ -50,46 +49,17 @@ fn io_err(stage: &'static str) -> impl Fn(io::Error) -> TransportError {
     move |e| TransportError::Io(stage, e.kind())
 }
 
-pub fn service_uid() -> u32 {
-    rustix::process::getuid().as_raw()
-}
-
-pub fn prepare_private_dir(dir: &Path) -> Result<(), TransportError> {
-    match fs::symlink_metadata(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if let Some(parent) = dir.parent() {
-                fs::create_dir_all(parent).map_err(io_err("create runtime parent"))?;
-            }
-            fs::DirBuilder::new()
-                .mode(0o700)
-                .create(dir)
-                .map_err(io_err("create runtime dir"))?;
-        }
-        Err(e) => return Err(TransportError::Io("inspect runtime dir", e.kind())),
-        Ok(_) => {}
-    }
-    let meta = fs::symlink_metadata(dir).map_err(io_err("inspect runtime dir"))?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err(TransportError::UnsafeRuntimeDir("not a directory"));
-    }
-    if meta.uid() != service_uid() {
-        return Err(TransportError::UnsafeRuntimeDir(
-            "not owned by the service user",
-        ));
-    }
-    if meta.permissions().mode() & 0o077 != 0 {
-        return Err(TransportError::UnsafeRuntimeDir(
-            "group or other permissions are set",
-        ));
-    }
-    Ok(())
-}
-
+/// Mints a fresh admission capability and atomically publishes it, mode 0600, in `dir`.
+///
+/// # Errors
+///
+/// Returns [`TransportError::Io`] naming the step (randomness, creating, writing, publishing,
+/// syncing) that failed.
 pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
     let mut secret = [0u8; 32];
     random_fill(&mut secret).map_err(io_err("random"))?;
     let capability = hex(&secret);
-    let tmp = dir.join(format!("{CAPABILITY_NAME}.tmp"));
+    let tmp = dir.join(format!("{CONTROL_CAPABILITY_NAME}.tmp"));
     let _ = fs::remove_file(&tmp);
     let mut file = OpenOptions::new()
         .write(true)
@@ -101,15 +71,20 @@ pub fn write_capability(dir: &Path) -> Result<String, TransportError> {
         .and_then(|()| file.sync_all())
         .map_err(io_err("write capability"))?;
     drop(file);
-    fs::rename(&tmp, dir.join(CAPABILITY_NAME)).map_err(io_err("publish capability"))?;
+    fs::rename(&tmp, dir.join(CONTROL_CAPABILITY_NAME)).map_err(io_err("publish capability"))?;
     fs::File::open(dir)
         .and_then(|d| d.sync_all())
         .map_err(io_err("sync runtime dir"))?;
     Ok(capability)
 }
 
+/// Checks that no service answers on the control socket in `dir`.
+///
+/// # Errors
+///
+/// Returns [`TransportError::AlreadyRunning`] when one does.
 pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
-    let path = dir.join(SOCKET_NAME);
+    let path = dir.join(CONTROL_SOCKET_NAME);
     let socket = fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_socket());
     if socket && UnixStream::connect(&path).is_ok() {
         return Err(TransportError::AlreadyRunning);
@@ -117,13 +92,19 @@ pub fn ensure_not_running(dir: &Path) -> Result<(), TransportError> {
     Ok(())
 }
 
+/// Binds the control socket in `dir`, mode 0600, replacing a stale socket nobody answers
+/// on.
+///
+/// # Errors
+///
+/// Returns [`TransportError::UnsafeSocketPath`] when something other than a socket is at the path,
+/// [`TransportError::AlreadyRunning`] when a service answers on it, or [`TransportError::Io`] when
+/// removing, binding or restricting it fails.
 pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
-    let path = dir.join(SOCKET_NAME);
+    let path = dir.join(CONTROL_SOCKET_NAME);
     if let Ok(meta) = fs::symlink_metadata(&path) {
         if !meta.file_type().is_socket() {
-            return Err(TransportError::UnsafeRuntimeDir(
-                "control socket path is not a socket",
-            ));
+            return Err(TransportError::UnsafeSocketPath);
         }
         if UnixStream::connect(&path).is_ok() {
             return Err(TransportError::AlreadyRunning);
@@ -135,8 +116,12 @@ pub fn bind_socket(dir: &Path) -> Result<UnixListener, TransportError> {
     Ok(listener)
 }
 
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "requests dominate the inbound queue; boxing them would allocate per request to \
+              shrink the once-per-link attach and detach messages"
+)]
 pub enum Inbound {
     Attach { conn: u64, out: Outbound },
     Request { conn: u64, frame: RequestFrame },
@@ -167,12 +152,18 @@ impl std::fmt::Debug for Outbound {
 pub struct Overflow;
 
 impl Outbound {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             shared: Arc::new((Mutex::new(OutState::default()), Condvar::new())),
         }
     }
 
+    /// Queues `frame` for the link's writer; frames pushed after close are dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Overflow`] when the queue already holds [`MAX_OUTBOUND_FRAMES`] frames or would exceed
+    /// [`MAX_OUTBOUND_BYTES`]; the caller then drops the link.
     pub fn push(&self, frame: Vec<u8>) -> Result<(), Overflow> {
         let (lock, wake) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -223,6 +214,15 @@ impl Outbound {
         }
     }
 
+    /// Takes every queued frame without waiting, as a link writer would.
+    #[cfg(test)]
+    pub(crate) fn drain(&self) -> Vec<Vec<u8>> {
+        let (lock, _) = &*self.shared;
+        let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        state.bytes = 0;
+        state.frames.drain(..).collect()
+    }
+
     fn mark_dead(&self) {
         let (lock, _) = &*self.shared;
         let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
@@ -232,39 +232,83 @@ impl Outbound {
     }
 }
 
+/// Counts link writer threads that may still be flushing frames to a client.
+#[derive(Default)]
+struct Writers {
+    running: Mutex<usize>,
+    finished: Condvar,
+}
+
+impl Writers {
+    fn started(&self) {
+        *self.running.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+    }
+
+    fn finished(&self) {
+        let mut running = self.running.lock().unwrap_or_else(PoisonError::into_inner);
+        *running = running.saturating_sub(1);
+        self.finished.notify_all();
+    }
+}
+
 pub struct Listener {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
     thread: Option<JoinHandle<()>>,
+    writers: Arc<Writers>,
 }
 
 impl Listener {
-    pub fn stop(mut self) {
+    /// Stops accepting connections. Links already admitted keep running.
+    pub fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
         let _ = UnixStream::connect(&self.socket);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = thread.join();
+    }
+
+    /// Waits, at most `timeout`, until every link writer has flushed its closed queue, so the
+    /// last frames (a stop reply, a final notice) reach clients before the service exits.
+    pub fn drain(&self, timeout: Duration) {
+        let running = self
+            .writers
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _ = self
+            .writers
+            .finished
+            .wait_timeout_while(running, timeout, |running| *running > 0);
     }
 }
 
+/// Accepts client links on `listener` on its own thread, admitting each by `capability`
+/// and forwarding its messages to `tx`.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the accept thread cannot be spawned.
 pub fn serve<T: From<Inbound> + Send + 'static>(
     listener: UnixListener,
     socket: PathBuf,
     capability: String,
     tx: SyncSender<T>,
-) -> Listener {
+) -> io::Result<Listener> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
+    let writers = Arc::new(Writers::default());
+    let link_writers = Arc::clone(&writers);
     let thread = thread::Builder::new()
         .name("laded-accept".into())
-        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx))
-        .expect("spawn accept thread");
-    Listener {
+        .spawn(move || accept_loop(&listener, &capability, &stop_flag, &tx, &link_writers))?;
+    Ok(Listener {
         stop,
         socket,
         thread: Some(thread),
-    }
+        writers,
+    })
 }
 
 fn accept_loop<T: From<Inbound> + Send + 'static>(
@@ -272,6 +316,7 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
     capability: &str,
     stop: &AtomicBool,
     tx: &SyncSender<T>,
+    writers: &Arc<Writers>,
 ) {
     static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
     let pending = Arc::new(AtomicUsize::new(0));
@@ -295,9 +340,10 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
         let capability = capability.to_owned();
         let tx = tx.clone();
         let pending = Arc::clone(&pending);
+        let writers = Arc::clone(writers);
         let spawned = thread::Builder::new()
             .name(format!("laded-conn-{conn}"))
-            .spawn(move || run_link(conn, stream, &capability, &tx, &pending));
+            .spawn(move || run_link(conn, &stream, &capability, &tx, &pending, &writers));
         if spawned.is_err() {
             eprintln!("laded: could not start link thread");
         }
@@ -306,18 +352,18 @@ fn accept_loop<T: From<Inbound> + Send + 'static>(
 
 fn write_now(stream: &mut UnixStream, body: ClientBody) -> bool {
     encode(&ClientEnvelope::new(body), Framing::Client)
-        .ok()
-        .is_some_and(|bytes| stream.write_all(&bytes).is_ok())
+        .is_ok_and(|bytes| stream.write_all(&bytes).is_ok())
 }
 
 fn run_link<T: From<Inbound>>(
     conn: u64,
-    stream: UnixStream,
+    stream: &UnixStream,
     capability: &str,
     tx: &SyncSender<T>,
     pending: &AtomicUsize,
+    writers: &Arc<Writers>,
 ) {
-    let admitted = handshake(&stream, capability);
+    let admitted = handshake(stream, capability);
     pending.fetch_sub(1, Ordering::SeqCst);
     let Some(mut reader) = admitted else {
         let _ = stream.shutdown(Shutdown::Both);
@@ -330,20 +376,30 @@ fn run_link<T: From<Inbound>>(
     };
     let _ = write_half.set_write_timeout(Some(WRITE_STALL_TIMEOUT));
     let writer_out = out.clone();
+    writers.started();
+    let writer_done = Arc::clone(writers);
     let writer = thread::Builder::new()
         .name(format!("laded-write-{conn}"))
-        .spawn(move || write_loop(write_half, &writer_out));
-    if writer.is_err()
-        || tx
-            .send(
-                Inbound::Attach {
-                    conn,
-                    out: out.clone(),
-                }
-                .into(),
-            )
-            .is_err()
+        .spawn(move || {
+            write_loop(write_half, &writer_out);
+            writer_done.finished();
+        });
+    if writer.is_err() {
+        writers.finished();
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
+    if tx
+        .send(
+            Inbound::Attach {
+                conn,
+                out: out.clone(),
+            }
+            .into(),
+        )
+        .is_err()
     {
+        out.close();
         let _ = stream.shutdown(Shutdown::Both);
         return;
     }
@@ -400,3 +456,6 @@ fn write_loop(mut stream: UnixStream, out: &Outbound) {
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Both);
 }
+
+#[cfg(test)]
+mod tests;

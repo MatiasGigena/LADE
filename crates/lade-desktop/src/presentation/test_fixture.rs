@@ -1,12 +1,13 @@
-use super::model::{
+use super::state::model::{
     ActionName, ApprovalId, ArtifactDigest, Attention, AvailableAction, Badge, CandidateId,
-    CandidateStatus, CandidateSummary, ChangeCounts, DeliveryMode, DeliveryState, Draft, DraftId,
-    DraftState, Execution, ExecutionState, GitId, InputId, InputSummary, Intent as ObjectiveIntent,
-    Lifecycle, ModelRef, ObjectiveDetail, ObjectiveId, ObjectiveSummary, OperationId, Provenance,
-    Reference, ReferenceVersion, RepoPath, SessionId, SessionInfo, Settings, Side, TargetRef,
-    Timestamp, VerificationId, VerificationState, VerificationSummary, Workspace, WorkspaceId,
+    CandidateStatus, CandidateSummary, ChangeCounts, ConnectionState, DeliveryMode, DeliveryState,
+    Draft, DraftId, DraftState, Execution, ExecutionState, GitId, InputId, InputSummary,
+    Intent as ObjectiveIntent, Lifecycle, ModelRef, ObjectiveDetail, ObjectiveId, ObjectiveSummary,
+    OperationId, Provenance, Reference, ReferenceVersion, RepoPath, SessionId, SessionInfo,
+    Settings, Side, TargetRef, Timestamp, VerificationId, VerificationState, VerificationSummary,
+    Workspace, WorkspaceId,
 };
-use super::store::StoreUpdate;
+use super::state::store::{PresentationState, StoreUpdate};
 
 pub const MAIN_OBJECTIVE: &str = "7d0c2a3e-5b1f-4c8e-9a62-0f4f1b7c2d11";
 pub const SECOND_OBJECTIVE: &str = "a41f9c07-2e6d-4b3a-8f15-6c9e0d2b7a22";
@@ -14,7 +15,7 @@ pub const SAVED_DRAFT: &str = "d1000000-0000-4000-8000-000000000001";
 const WORKSPACE: &str = "5e3b1d2c-0a9f-4e7d-b6c5-1f2e3d4c5b6a";
 const SESSION: &str = "c3d4e5f6-0718-4293-a4b5-c6d7e8f90a1b";
 const CANDIDATE_1: &str = "b0000001-1111-4111-8111-111111111111";
-const CANDIDATE_2: &str = "b0000002-2222-4222-8222-222222222222";
+pub const CANDIDATE_2: &str = "b0000002-2222-4222-8222-222222222222";
 
 fn model() -> ModelRef {
     ModelRef::new("test-provider", "test-model")
@@ -193,6 +194,72 @@ fn verification(
     }
 }
 
+/// The main Objective's current Candidate 2, with `counts` files, additions and removals, and
+/// the historical Candidate 1.
+fn main_candidates(
+    now: Timestamp,
+    (files, added, removed): (u64, u64, u64),
+) -> Vec<CandidateSummary> {
+    vec![
+        CandidateSummary {
+            candidate_id: CandidateId::new(CANDIDATE_2),
+            ordinal: 2,
+            commit: commit("e1f2a3b4c5d6e7f80912a3b4c5d6e7f809123456"),
+            base_target_commit: target().commit,
+            status: CandidateStatus::Current,
+            files,
+            added,
+            removed,
+            created_at: minutes(now, 14),
+        },
+        CandidateSummary {
+            candidate_id: CandidateId::new(CANDIDATE_1),
+            ordinal: 1,
+            commit: commit("0aa1bb2cc3dd4ee5ff60718293a4b5c6d7e8f901"),
+            base_target_commit: target().commit,
+            status: CandidateStatus::Historical,
+            files: 3,
+            added: 31,
+            removed: 6,
+            created_at: minutes(now, 58),
+        },
+    ]
+}
+
+/// The main Objective's checks: one passed and one failed on Candidate 2, one interrupted on
+/// Candidate 1.
+fn main_verifications(now: Timestamp) -> Vec<VerificationSummary> {
+    vec![
+        verification(
+            "e0000001-0000-4000-8000-000000000001",
+            CANDIDATE_2,
+            &["git", "diff", "--check"],
+            (VerificationState::Passed, Some(0)),
+            (minutes(now, 13), 412),
+            "",
+            false,
+        ),
+        verification(
+            "e0000002-0000-4000-8000-000000000002",
+            CANDIDATE_2,
+            &["npm", "test", "--", "--runInBand"],
+            (VerificationState::Failed, Some(1)),
+            (minutes(now, 13), 48_300),
+            "  ● reports a timeout distinctly — “délai dépassé” is not a failure\n\n    expect(received).rejects.toBeInstanceOf(expected)\n\n    Expected constructor: TimeoutError\n    Received constructor: NetworkError\n\n      at Object.<anonymous> (tests/network/retry.test.ts:9:3)\n\nTest Suites: 1 failed, 3 passed, 4 total\nTests:       1 failed, 17 passed, 18 total",
+            true,
+        ),
+        verification(
+            "e0000003-0000-4000-8000-000000000003",
+            CANDIDATE_1,
+            &["npm", "test"],
+            (VerificationState::Interrupted, None),
+            (minutes(now, 57), 9_000),
+            "Interrupted: the candidate was returned for revision while the check ran.",
+            false,
+        ),
+    ]
+}
+
 fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetail {
     let (files, added, removed) = (6, 58, 14);
     ObjectiveDetail {
@@ -207,67 +274,16 @@ fn main_detail(now: Timestamp, summaries: &[ObjectiveSummary]) -> ObjectiveDetai
         start_commit: commit("9a8b7c6d5e4f30211234567890abcdef12345678"),
         branch: "lade/7d0c2a3e".into(),
         session: Some(session(3)),
-        candidates: vec![
-            CandidateSummary {
-                candidate_id: CandidateId::new(CANDIDATE_2),
-                ordinal: 2,
-                commit: commit("e1f2a3b4c5d6e7f80912a3b4c5d6e7f809123456"),
-                base_target_commit: target().commit,
-                status: CandidateStatus::Current,
-                files,
-                added,
-                removed,
-                created_at: minutes(now, 14),
-            },
-            CandidateSummary {
-                candidate_id: CandidateId::new(CANDIDATE_1),
-                ordinal: 1,
-                commit: commit("0aa1bb2cc3dd4ee5ff60718293a4b5c6d7e8f901"),
-                base_target_commit: target().commit,
-                status: CandidateStatus::Historical,
-                files: 3,
-                added: 31,
-                removed: 6,
-                created_at: minutes(now, 58),
-            },
-        ],
+        candidates: main_candidates(now, (files, added, removed)),
         approval: None,
-        verifications: vec![
-            verification(
-                "e0000001-0000-4000-8000-000000000001",
-                CANDIDATE_2,
-                &["git", "diff", "--check"],
-                (VerificationState::Passed, Some(0)),
-                (minutes(now, 13), 412),
-                "",
-                false,
-            ),
-            verification(
-                "e0000002-0000-4000-8000-000000000002",
-                CANDIDATE_2,
-                &["npm", "test", "--", "--runInBand"],
-                (VerificationState::Failed, Some(1)),
-                (minutes(now, 13), 48_300),
-                "  ● reports a timeout distinctly — “délai dépassé” is not a failure\n\n    expect(received).rejects.toBeInstanceOf(expected)\n\n    Expected constructor: TimeoutError\n    Received constructor: NetworkError\n\n      at Object.<anonymous> (tests/network/retry.test.ts:9:3)\n\nTest Suites: 1 failed, 3 passed, 4 total\nTests:       1 failed, 17 passed, 18 total",
-                true,
-            ),
-            verification(
-                "e0000003-0000-4000-8000-000000000003",
-                CANDIDATE_1,
-                &["npm", "test"],
-                (VerificationState::Interrupted, None),
-                (minutes(now, 57), 9_000),
-                "Interrupted: the candidate was returned for revision while the check ran.",
-                false,
-            ),
-        ],
+        verifications: main_verifications(now),
         change_counts: ChangeCounts {
             files,
             added,
             removed,
         },
         unsent_drafts: 5,
-        terminal_open: Some(super::model::TerminalOpenAction {
+        terminal_open: Some(super::state::model::TerminalOpenAction {
             enabled: true,
             reason: None,
         }),
@@ -365,12 +381,12 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
             Vec::new()
         },
         approval: (summary.lifecycle == Lifecycle::Approved).then(|| {
-            super::model::ApprovalSummary {
+            super::state::model::ApprovalSummary {
                 approval_id: ApprovalId::new("a0000003-0000-4000-8000-000000000003"),
                 candidate_id: CandidateId::new("b0000003-3333-4333-8333-333333333333"),
                 target_commit: target().commit,
                 override_reason: None,
-                state: super::model::ApprovalState::Valid,
+                state: super::state::model::ApprovalState::Valid,
             }
         }),
         verifications: Vec::new(),
@@ -381,7 +397,7 @@ fn simple_detail(summary: &ObjectiveSummary, now: Timestamp) -> ObjectiveDetail 
         },
         unsent_drafts: 0,
         available_actions: actions,
-        terminal_open: Some(super::model::TerminalOpenAction {
+        terminal_open: Some(super::state::model::TerminalOpenAction {
             enabled: !summary.lifecycle.is_archived(),
             reason: summary.lifecycle.is_archived().then(|| {
                 "Terminals open only while the Objective is in progress or under review.".to_owned()
@@ -406,7 +422,7 @@ fn reference(path: &str, version: ReferenceVersion, needle: &str, side: Side) ->
 
 fn draft(n: u8, reference: Reference, body: &str, revision: u64, stale: bool) -> Draft {
     Draft {
-        draft_id: DraftId::new(format!("d1000000-0000-4000-8000-00000000000{n}")),
+        id: DraftId::new(format!("d1000000-0000-4000-8000-00000000000{n}")),
         objective_id: id(MAIN_OBJECTIVE),
         destination_session_id: SessionId::new(SESSION),
         reference,
@@ -550,7 +566,7 @@ fn settings() -> Settings {
 
 fn workspace() -> Workspace {
     Workspace {
-        workspace_id: WorkspaceId::new(WORKSPACE),
+        id: WorkspaceId::new(WORKSPACE),
         path: RepoPath::utf8("/tmp/lade-sample"),
         name: "lade-sample".into(),
         default_branch: Some("main".into()),
@@ -582,17 +598,18 @@ pub fn fixture_updates_at(now: Timestamp) -> Vec<StoreUpdate> {
         objective_id: id(MAIN_OBJECTIVE),
         inputs: inputs(now),
     });
-    updates.extend(compat_fixture());
+    updates.extend(agent_session_fixture());
     updates
 }
 
-fn compat_fixture() -> Vec<StoreUpdate> {
-    use super::compat::{
-        Catalog, CompatUpdate, Inventory, ModelView, ProviderStatus, ProviderView, ResourceKind,
-        ResourceState, ResourceView, SessionView, ThinkingLevel,
+fn agent_session_fixture() -> Vec<StoreUpdate> {
+    use super::state::agent_session::{
+        AgentSessionUpdate, Catalog, Inventory, ModelInfo, ProviderInfo, ProviderStatus,
+        ResourceEntry, ResourceKind, ResourceState, SessionChangeReason, SessionState,
+        ThinkingLevel,
     };
     let provider =
-        |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderView {
+        |id: &str, name: &str, status, reason: Option<&str>, auth: &[&str]| ProviderInfo {
             id: id.into(),
             name: name.into(),
             auth: auth.iter().map(|a| (*a).to_owned()).collect(),
@@ -602,7 +619,7 @@ fn compat_fixture() -> Vec<StoreUpdate> {
             models: 1,
         };
     vec![
-        StoreUpdate::Compat(CompatUpdate::Catalog(Catalog {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
             sdk_version: "1.5.0".into(),
             providers: vec![
                 provider(
@@ -629,9 +646,9 @@ fn compat_fixture() -> Vec<StoreUpdate> {
             ],
             error: None,
         })),
-        StoreUpdate::Compat(CompatUpdate::Models {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Models {
             provider: "test-provider".into(),
-            models: vec![ModelView {
+            models: vec![ModelInfo {
                 provider: "test-provider".into(),
                 id: "test-model".into(),
                 name: "Test model".into(),
@@ -639,11 +656,11 @@ fn compat_fixture() -> Vec<StoreUpdate> {
                 thinking: vec![ThinkingLevel::Off],
             }],
         }),
-        StoreUpdate::Compat(CompatUpdate::Session {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Session {
             objective_id: id(MAIN_OBJECTIVE),
-            session: SessionView {
+            session: SessionState {
                 generation: 2,
-                reason: "reloaded".into(),
+                reason: SessionChangeReason::Reload,
                 model: model(),
                 thinking: ThinkingLevel::Off,
                 association_revision: Some(2),
@@ -651,17 +668,17 @@ fn compat_fixture() -> Vec<StoreUpdate> {
                 leaf_id: None,
             },
         }),
-        StoreUpdate::Compat(CompatUpdate::Inventory(Inventory {
+        StoreUpdate::AgentSession(AgentSessionUpdate::Inventory(Inventory {
             profile_dir: "~/.local/state/lade/profile".into(),
             entries: vec![
-                ResourceView {
+                ResourceEntry {
                     kind: ResourceKind::Context,
                     name: "AGENTS.md".into(),
                     state: ResourceState::Active,
                     sha256: None,
                     reason: None,
                 },
-                ResourceView {
+                ResourceEntry {
                     kind: ResourceKind::Extension,
                     name: "ask.js".into(),
                     state: ResourceState::PendingApproval,
@@ -678,4 +695,19 @@ fn compat_fixture() -> Vec<StoreUpdate> {
 
 pub fn fixture_updates() -> Vec<StoreUpdate> {
     fixture_updates_at(Timestamp(1_790_000_000_000))
+}
+
+/// The loaded details of every fixture Objective.
+pub fn details() -> Vec<ObjectiveDetail> {
+    let mut state = PresentationState::new(ConnectionState::Connected);
+    for update in fixture_updates() {
+        state.apply(update);
+    }
+    let details: Vec<ObjectiveDetail> = state
+        .details
+        .values()
+        .filter_map(|d| d.loaded().cloned())
+        .collect();
+    assert!(details.len() > 1, "the test data has several Objectives");
+    details
 }

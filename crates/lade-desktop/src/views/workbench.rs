@@ -1,4 +1,8 @@
+//! The Workbench region: the selected Objective's journey and status, its Change Set and the
+//! empty states shown before there is one.
+
 use std::cell::{Cell, RefCell};
+use std::fmt::Write as _;
 use std::rc::Rc;
 
 use gtk::prelude::*;
@@ -11,10 +15,13 @@ use super::widgets::{
     vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::format::{self, JOURNEY_STEPS, StepState};
-use crate::presentation::model::{Basis, ChangedFile, Load, RepoPath};
-use crate::presentation::panel;
-use crate::presentation::store::{Change, PresentationState};
+use crate::presentation::state::model::{
+    Basis, ChangeList, ChangedFile, Load, ObjectiveDetail, ObjectiveId, RepoPath,
+};
+use crate::presentation::state::store::{Change, PresentationState};
+use crate::presentation::text::format::file_status;
+use crate::presentation::text::format::{self, JOURNEY_STEPS, StepState};
+use crate::presentation::text::objective;
 
 /// The work area's state for a Workspace without Objectives: one instruction and the New
 /// Objective action (the same dialog as the Objectives list's). The inspector stays blank.
@@ -205,7 +212,7 @@ impl Workbench {
 
     pub fn refresh(&self, changes: &[Change]) {
         let selected = self.controller.store.state().ui.selected.clone();
-        let mine = |id: &crate::presentation::model::ObjectiveId| Some(id) == selected.as_ref();
+        let mine = |id: &ObjectiveId| Some(id) == selected.as_ref();
         let mut heading = false;
         let mut change_set = false;
         for change in changes {
@@ -342,7 +349,7 @@ impl Workbench {
         text.append(&title);
         *self.title_label.borrow_mut() = Some(title);
         self.heading.append(&text);
-        let (sign, status_text) = panel::status_line(&summary);
+        let (sign, status_text) = objective::status_line(&summary);
         let status = widgets::sign_text(sign, &status_text);
         status.add_css_class("meta");
         set_accessible_label(&status, &format!("Status: {status_text}"));
@@ -449,8 +456,12 @@ impl Workbench {
         self.updating.set(true);
         let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
         self.basis.set_model(Some(&gtk::StringList::new(&refs)));
-        if let Some(index) = bases.iter().position(|b| b == &current) {
-            self.basis.set_selected(index as u32);
+        if let Some(index) = bases
+            .iter()
+            .position(|b| b == &current)
+            .and_then(|i| u32::try_from(i).ok())
+        {
+            self.basis.set_selected(index);
         }
         *self.bases.borrow_mut() = bases;
         self.updating.set(false);
@@ -519,55 +530,7 @@ impl Workbench {
             self.change_heading.append(&summary);
         }
 
-        let status = match &ui.basis {
-            Basis::Candidate { candidate_id } => detail
-                .as_ref()
-                .and_then(|d| {
-                    d.candidates
-                        .iter()
-                        .find(|c| &c.candidate_id == candidate_id)
-                })
-                .map(|c| c.status),
-            _ => None,
-        };
-        let (short, full) =
-            format::version_line(&ui.basis, &list.basis_label, status, &list.target);
-        let version_label = label(&short, &["meta", "version-label"]);
-        version_label.set_hexpand(true);
-        version_label.set_tooltip_text(Some(&full));
-        set_accessible_label(&version_label, &format!("Inspected version: {full}"));
-        self.version.append(&version_label);
-        if matches!(ui.basis, Basis::Since { .. }) {
-            self.version.append(&label(
-                "The revision delta may include target refresh effects; it does not attribute lines to feedback.",
-                &["meta"],
-            ));
-        }
-        if working_updated && ui.basis == Basis::Working {
-            let row = hbox(space::GROUP);
-            let message = inline_message(
-                MessageKind::Warning,
-                "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
-                None,
-            );
-            message.set_hexpand(true);
-            row.append(&message);
-            let refresh = widgets::button("Refresh", &[]);
-            refresh.set_valign(gtk::Align::Center);
-            let controller = self.controller.clone();
-            refresh.connect_clicked(move |_| controller.refresh_changes());
-            row.append(&refresh);
-            self.version.append(&row);
-        }
-
-        for notice in &list.notices {
-            let text = match &notice.path {
-                Some(path) => format!("{}: {}", path.display, notice.message),
-                None => notice.message.clone(),
-            };
-            self.version
-                .append(&inline_message(MessageKind::Warning, &text, None));
-        }
+        self.render_version(&list, &ui.basis, detail.as_ref(), working_updated);
         if list.files.is_empty() {
             // One empty state in place of the file list and the viewer (no toolbar, no frame).
             let (title, body) = match ui.basis {
@@ -596,6 +559,63 @@ impl Workbench {
         self.sync_file_selection();
     }
 
+    /// The inspected version line, the notes on it and the Change Set's notices.
+    fn render_version(
+        &self,
+        list: &ChangeList,
+        basis: &Basis,
+        detail: Option<&ObjectiveDetail>,
+        working_updated: bool,
+    ) {
+        let status = match basis {
+            Basis::Candidate { candidate_id } => detail
+                .and_then(|d| {
+                    d.candidates
+                        .iter()
+                        .find(|c| &c.candidate_id == candidate_id)
+                })
+                .map(|c| c.status),
+            _ => None,
+        };
+        let (short, full) = format::version_line(basis, &list.basis_label, status, &list.target);
+        let version_label = label(&short, &["meta", "version-label"]);
+        version_label.set_hexpand(true);
+        version_label.set_tooltip_text(Some(&full));
+        set_accessible_label(&version_label, &format!("Inspected version: {full}"));
+        self.version.append(&version_label);
+        if matches!(basis, Basis::Since { .. }) {
+            self.version.append(&label(
+                "The revision delta may include target refresh effects; it does not attribute lines to feedback.",
+                &["meta"],
+            ));
+        }
+        if working_updated && *basis == Basis::Working {
+            let row = hbox(space::GROUP);
+            let message = inline_message(
+                MessageKind::Warning,
+                "The worktree changed after this capture. Your selection and drafts stay on the inspected version.",
+                None,
+            );
+            message.set_hexpand(true);
+            row.append(&message);
+            let refresh = widgets::button("Refresh", &[]);
+            refresh.set_valign(gtk::Align::Center);
+            let controller = self.controller.clone();
+            refresh.connect_clicked(move |_| controller.refresh_changes());
+            row.append(&refresh);
+            self.version.append(&row);
+        }
+
+        for notice in &list.notices {
+            let text = match &notice.path {
+                Some(path) => format!("{}: {}", path.display, notice.message),
+                None => notice.message.clone(),
+            };
+            self.version
+                .append(&inline_message(MessageKind::Warning, &text, None));
+        }
+    }
+
     fn sync_file_selection(&self) {
         let selected = self
             .controller
@@ -618,7 +638,7 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     row.add_css_class("file-row");
     set_focus_key(&row, &format!("file:{}", file.path.display));
     let content = hbox(space::ITEM);
-    let (symbol, status) = crate::presentation::format::file_status(file.status);
+    let (symbol, status) = file_status(file.status);
     let symbol_label = gtk::Label::new(Some(symbol));
     symbol_label.add_css_class("file-status");
     symbol_label.add_css_class("mono");
@@ -655,12 +675,12 @@ fn file_row(file: &ChangedFile) -> gtk::ListBoxRow {
     row.set_child(Some(&content));
     let mut spoken = format!("{}, {status}", file.path.display);
     if let Some(old) = &file.old_path {
-        spoken.push_str(&format!(", from {}", old.display));
+        let _ = write!(spoken, ", from {}", old.display);
     }
     if file.binary {
         spoken.push_str(", binary");
     } else {
-        spoken.push_str(&format!(", {} added, {} removed", file.added, file.removed));
+        let _ = write!(spoken, ", {} added, {} removed", file.added, file.removed);
     }
     if file.filtered {
         spoken.push_str(", filtered content compared as raw bytes, unsupported");

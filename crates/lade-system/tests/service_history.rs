@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use lade_protocol::client::{
@@ -140,7 +147,7 @@ fn large_saved_drafts_remain_readable_through_the_service() {
     }
     drop(client);
     service.shutdown();
-    let conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let conn = env.db();
     conn.execute("UPDATE drafts SET created_at = 1700000000000", [])
         .unwrap();
     drop(conn);
@@ -235,7 +242,7 @@ fn large_accepted_input_history_remains_readable_through_the_service() {
     );
     drop(client);
     service.shutdown();
-    let mut conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let mut conn = env.db();
     let tx = conn.transaction().unwrap();
     let first_seq: i64 = tx
         .query_row("SELECT MAX(seq) FROM accepted_inputs", [], |row| row.get(0))

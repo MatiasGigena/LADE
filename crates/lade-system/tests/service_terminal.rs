@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use std::fs;
@@ -119,6 +126,20 @@ fn started_objective(env: &Env, client: &mut Client, title: &str) -> Id {
     objective
 }
 
+/// Without a sandbox, opening a terminal is refused and the action carries the same reason.
+fn assert_terminal_refused_without_sandbox(client: &mut Client, objective: &Id) {
+    let refused = client.call(open_command(objective)).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
+    let projected = detail(client, objective)
+        .available_actions
+        .into_iter()
+        .find(|a| a.action == ActionName::TerminalOpen)
+        .unwrap();
+    assert!(!projected.enabled);
+    assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
+    eprintln!("note: sandbox unavailable; terminal refused as expected");
+}
+
 #[test]
 fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     let env = Env::new("svc-term-scope");
@@ -126,16 +147,7 @@ fn terminal_writes_only_in_scope_and_freeze_excludes_it() {
     let mut client = env.connect();
     let objective = started_objective(&env, &mut client, "Terminal scope");
     if !sandbox_works() {
-        let refused = client.call(open_command(&objective)).unwrap_err();
-        assert_eq!(refused.code, ErrorCode::ExecutionUnavailable);
-        let projected = detail(&mut client, &objective)
-            .available_actions
-            .into_iter()
-            .find(|a| a.action == ActionName::TerminalOpen)
-            .unwrap();
-        assert!(!projected.enabled);
-        assert_eq!(projected.reason.as_deref(), Some(refused.detail.as_str()));
-        eprintln!("note: sandbox unavailable; terminal refused as expected");
+        assert_terminal_refused_without_sandbox(&mut client, &objective);
         return;
     }
     let refused = client
@@ -334,7 +346,7 @@ fn flood_output_is_bounded_and_rate_limited() {
     let ceiling = (elapsed + 0.5) * 10.0 * f64::from(64u32 << 10) + f64::from(1u32 << 20);
     assert!(total > 64 << 10, "the flood made progress: {total}");
     assert!(
-        (total as f64) <= ceiling,
+        f64::from(u32::try_from(total).unwrap()) <= ceiling,
         "rate is bounded: {total} bytes in {elapsed:.1}s"
     );
     match client.call(Request::TerminalClose(TerminalSelector {
@@ -347,7 +359,10 @@ fn flood_output_is_bounded_and_rate_limited() {
         closed(&mut client, &term.terminal_id),
         TerminalCloseReason::Closed
     );
-    assert!(detail(&mut client, &objective).execution.state == ExecutionState::Idle);
+    assert_eq!(
+        detail(&mut client, &objective).execution.state,
+        ExecutionState::Idle
+    );
 }
 
 #[test]

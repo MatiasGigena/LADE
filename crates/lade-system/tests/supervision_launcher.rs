@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod adapters_support;
 
 use std::ffi::OsString;
@@ -9,15 +16,13 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use adapters_support::{TempDir, git, init_repo};
+use adapters_support::{TempDir, git, init_repo, skip_without_sandbox};
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use lade_protocol::worker::{TurnState, WorkerBody};
-use lade_system::adapters::sandbox::SandboxTools;
+use lade_system::adapters::sandbox::{SandboxTools, WORKER_LIMITS};
 use lade_system::supervision::credentials::{CredentialSource, FIXTURE_REFUSED};
 use lade_system::supervision::gateway::{EgressPolicy, EgressRule, default_policies};
-use lade_system::supervision::launcher::{
-    NODE_ARGS, WORKER_LIMITS, default_worker_dir, resolve_node, worker_dir_from,
-};
+use lade_system::supervision::launcher::{NODE_ARGS, resolve_node, worker_dir_from};
 use lade_system::supervision::sweep::read_pidfile;
 use lade_system::supervision::{
     LaunchBinding, LaunchError, LaunchRequest, LauncherConfig, SupervisorEvent, WorkerEvent,
@@ -29,13 +34,13 @@ const WAIT: Duration = Duration::from_secs(90);
 
 fn prerequisites() -> Option<PathBuf> {
     if let Err(e) = SandboxTools::locate() {
-        eprintln!("skipping launcher test: {e}");
+        skip_without_sandbox(e);
         return None;
     }
-    match resolve_node(None) {
+    match resolve_node(std::env::var_os("LADE_NODE").map(PathBuf::from)) {
         Ok(node) => Some(node),
         Err(e) => {
-            eprintln!("skipping launcher test: {e:?}");
+            skip_without_sandbox(e.detail());
             None
         }
     }
@@ -77,7 +82,11 @@ impl Fixture {
     }
 
     fn config(&self, node: PathBuf) -> LauncherConfig {
-        let worker_dir = default_worker_dir().unwrap();
+        let worker_dir = worker_dir_from(
+            std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
+            std::env::current_exe().ok().as_deref(),
+        )
+        .unwrap();
         LauncherConfig {
             node,
             entry: worker_dir.join("src/worker.ts"),
@@ -223,7 +232,7 @@ fn real_worker_writes_file_with_fixture_model_and_terminates_cleanly() {
     for event in &seen {
         match event {
             WorkerEvent::Body(WorkerBody::Received { input_id: got }) => {
-                received = *got == input_id
+                received = *got == input_id;
             }
             WorkerEvent::Body(WorkerBody::TurnState {
                 state: TurnState::Running,
@@ -331,7 +340,7 @@ fn gateway_socket_names_are_short() {
     );
 }
 
-const PROBE: &str = r#"
+const PROBE: &str = r"
 const fs = require('node:fs');
 const net = require('node:net');
 const crypto = require('node:crypto');
@@ -392,7 +401,7 @@ async function start() {
   };
   out({ kind: 'activity.item', item_id: crypto.randomUUID(), role: 'system', title: 'probe', text: JSON.stringify(report), is_error: false, truncated: false });
 }
-"#;
+";
 
 fn echo_server() -> (u16, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -487,13 +496,13 @@ fn probe_sees_only_allowlisted_env_files_and_network() {
     );
 }
 
-const VIOLATOR: &str = r#"
+const VIOLATOR: &str = r"
 process.stdin.once('data', () => {
   process.stdout.write(JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.ready', pi_session_id: 'p', session_file: '/p' } }) + '\n');
   process.stdout.write(__FRAME__ + '\n');
   setInterval(() => {}, 1000);
 });
-"#;
+";
 
 fn violation(frame: &str) -> (Vec<WorkerEvent>, Vec<u32>, Fixture) {
     let node = prerequisites().expect("checked by caller");
@@ -520,7 +529,7 @@ fn service_body_from_worker_is_a_violation_and_kills_the_sandbox() {
         return;
     }
     let frame =
-        r#"JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.shutdown' } })"#;
+        r"JSON.stringify({ protocol: 1, bundle: '0.2.0', body: { kind: 'worker.shutdown' } })";
     let (seen, pids, fx) = violation(frame);
     assert!(
         matches!(seen[0], WorkerEvent::Body(WorkerBody::Ready { .. })),

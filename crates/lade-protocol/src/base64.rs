@@ -1,3 +1,6 @@
+//! Standard (RFC 4648) padded base64, used by the wire path encoding and shared with the service
+//! for the stored path shape and the upstream proxy credentials.
+
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn encode(bytes: &[u8]) -> String {
@@ -42,21 +45,21 @@ pub fn decode(text: &str) -> Option<Vec<u8>> {
     let quads = s.len() / 4;
     for (index, quad) in s.chunks(4).enumerate() {
         let last = index + 1 == quads;
-        let pad = match (quad[2], quad[3]) {
+        let pad: u8 = match (quad[2], quad[3]) {
             (b'=', b'=') if last => 2,
             (_, b'=') if last => 1,
             _ => 0,
         };
         let mut v = 0u32;
-        for &c in &quad[..4 - pad] {
+        for &c in &quad[..4 - usize::from(pad)] {
             v = (v << 6) | value(c)?;
         }
-        v <<= 6 * pad as u32;
-        let bytes = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
-        if (pad == 1 && bytes[2] != 0) || (pad == 2 && bytes[1] != 0) {
+        v <<= 6 * u32::from(pad);
+        let [_, b0, b1, b2] = v.to_be_bytes();
+        if (pad == 1 && b2 != 0) || (pad == 2 && b1 != 0) {
             return None;
         }
-        out.extend_from_slice(&bytes[..3 - pad]);
+        out.extend_from_slice(&[b0, b1, b2][..3 - usize::from(pad)]);
     }
     Some(out)
 }

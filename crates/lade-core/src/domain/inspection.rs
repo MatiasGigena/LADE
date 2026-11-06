@@ -9,6 +9,11 @@ pub const MAX_TEXT_BYTES: usize = 256 * 1024;
 pub struct ArtifactDigest(String);
 
 impl ArtifactDigest {
+    /// Parses a SHA-256 artifact digest.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` unless `hex` is 64 lowercase hex digits.
     pub fn parse(hex: &str) -> Result<Self, DomainError> {
         if !is_lower_hex(hex, 64) {
             return Err(DomainError::InvalidRequest(
@@ -18,6 +23,7 @@ impl ArtifactDigest {
         Ok(Self(hex.to_string()))
     }
 
+    #[must_use]
     pub fn hex(&self) -> &str {
         &self.0
     }
@@ -35,6 +41,12 @@ pub struct RepoPath(Vec<u8>);
 pub const MAX_PATH_BYTES: usize = 4096;
 
 impl RepoPath {
+    /// A normalized repository-relative path.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` for an empty, oversized or NUL-containing path, or one with
+    /// empty, `.` or `..` components.
     pub fn new(bytes: Vec<u8>) -> Result<Self, DomainError> {
         let valid = !bytes.is_empty()
             && bytes.len() <= MAX_PATH_BYTES
@@ -50,10 +62,12 @@ impl RepoPath {
         Ok(Self(bytes))
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
+    #[must_use]
     pub fn display(&self) -> String {
         String::from_utf8_lossy(&self.0).into_owned()
     }
@@ -66,6 +80,7 @@ pub enum InspectedVersion {
 }
 
 impl InspectedVersion {
+    #[must_use]
     pub fn label(self) -> String {
         match self {
             Self::Working { capture_id } => {
@@ -85,6 +100,7 @@ pub enum Side {
 }
 
 impl Side {
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::Old => "old",
@@ -100,6 +116,11 @@ pub struct ByteRange {
 }
 
 impl ByteRange {
+    /// The half-open byte range `start..end`.
+    ///
+    /// # Errors
+    ///
+    /// `DomainError::InvalidRequest` unless `start < end`.
     pub fn new(start: u64, end: u64) -> Result<Self, DomainError> {
         if start >= end {
             return Err(DomainError::InvalidRequest(
@@ -109,14 +130,17 @@ impl ByteRange {
         Ok(Self { start, end })
     }
 
+    #[must_use]
     pub const fn start(self) -> u64 {
         self.start
     }
 
+    #[must_use]
     pub const fn end(self) -> u64 {
         self.end
     }
 
+    #[must_use]
     pub const fn byte_len(self) -> u64 {
         self.end - self.start
     }
@@ -140,6 +164,11 @@ pub struct Reference {
 }
 
 impl Reference {
+    /// # Errors
+    ///
+    /// - `DomainError::InvalidRequest` when the selected text's length differs from the byte range
+    ///   or `line_hint` is 0.
+    /// - `DomainError::LimitReached` when the selected text is over `MAX_TEXT_BYTES`.
     pub fn new(
         artifact_digest: ArtifactDigest,
         path: RepoPath,
@@ -171,34 +200,42 @@ impl Reference {
         })
     }
 
+    #[must_use]
     pub fn artifact_digest(&self) -> &ArtifactDigest {
         &self.artifact_digest
     }
 
+    #[must_use]
     pub fn path(&self) -> &RepoPath {
         &self.path
     }
 
+    #[must_use]
     pub const fn version(&self) -> InspectedVersion {
         self.version
     }
 
+    #[must_use]
     pub const fn side(&self) -> Side {
         self.side
     }
 
+    #[must_use]
     pub const fn byte_range(&self) -> ByteRange {
         self.byte_range
     }
 
+    #[must_use]
     pub fn selected_text(&self) -> &str {
         &self.selected_text
     }
 
+    #[must_use]
     pub const fn line_hint(&self) -> u32 {
         self.line_hint
     }
 
+    #[must_use]
     pub fn staleness(&self, current: CurrentContent<'_>) -> Staleness {
         match current {
             CurrentContent::Missing => Staleness::Missing,
@@ -233,6 +270,7 @@ pub enum Staleness {
 }
 
 impl Staleness {
+    #[must_use]
     pub const fn is_stale(self) -> bool {
         !matches!(self, Self::Fresh)
     }

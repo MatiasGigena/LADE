@@ -1,3 +1,6 @@
+//! Agent Session controls: the model picker, session status and tree, profile resources, and
+//! the host for extension dialogs.
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -9,12 +12,13 @@ use gtk4 as gtk;
 use super::widgets::{
     self, Dialog, MessageKind, field, hbox, label, set_accessible_label, set_focus_key, space, vbox,
 };
-use crate::presentation::compat::{
-    ForkPosition, ModelChoice, ProviderStatus, Readiness, ResourceKind, ResourceState,
-    ThinkingLevel, UiAnswerView, UiDialog, UiPromptView,
+use crate::presentation::controller::{Controller, SessionUse};
+use crate::presentation::state::agent_session::{
+    ForkPosition, ModelChoice, ModelInfo, ModelPicker, ModelRow, PickerChoices, ProviderInfo,
+    ProviderStatus, Readiness, ResourceKind, ResourceState, SessionState, SessionTree,
+    ThinkingLevel, TreeEntryKind, UiAnswer, UiDialog, UiPrompt,
 };
-use crate::presentation::controller::Controller;
-use crate::presentation::model::{ActionAvailability, ExecutionState, ObjectiveDetail};
+use crate::presentation::state::model::{ActionAvailability, ObjectiveDetail};
 
 const TREE_ROWS: usize = 60;
 
@@ -51,70 +55,55 @@ fn import_profile_dialog(opener: &gtk::Button, controller: &Rc<Controller>) {
 const IMPORT_PROFILE: &str = "Import a pi profile…";
 const IMPORT_PROFILE_TOOLTIP: &str = "Copies AGENTS.md, skills, prompts, extensions and a valid models.json; the source is never changed";
 
-pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
+fn select(dropdown: &gtk::DropDown, index: Option<usize>) {
+    if let Some(index) = index.and_then(|i| u32::try_from(i).ok()) {
+        dropdown.set_selected(index);
+    }
+}
+
+fn no_providers(controller: &Rc<Controller>, error: Option<&str>) -> gtk::Box {
     let block = vbox(space::GROUP);
-    let state = controller.store.state();
-    let compat = &state.compat;
-    let Some(catalog) = compat.catalog.clone() else {
-        block.append(&label("Loading the available models…", &["meta"]));
-        return block;
+    let sentence = match error {
+        Some(_) => "LADE can't load models right now.",
+        None => "No model providers are available.",
     };
-    let readiness = compat.readiness();
-    let choice = compat.choice.clone();
-    let models = compat.chosen_models().to_vec();
-    drop(state);
+    block.append(&widgets::inline_message(
+        MessageKind::Warning,
+        sentence,
+        error,
+    ));
+    let actions = hbox(space::ITEM);
+    let retry = widgets::button("Retry loading models", &[]);
+    let c = controller.clone();
+    retry.connect_clicked(move |_| c.load_models(None));
+    actions.append(&retry);
+    let import = widgets::button(IMPORT_PROFILE, &[]);
+    import.set_tooltip_text(Some(IMPORT_PROFILE_TOOLTIP));
+    let c = controller.clone();
+    import.connect_clicked(move |b| import_profile_dialog(b, &c));
+    actions.append(&import);
+    block.append(&actions);
+    block
+}
 
-    if catalog.providers.is_empty() {
-        let sentence = match &catalog.error {
-            Some(_) => "LADE can't load models right now.",
-            None => "No model providers are available.",
-        };
-        block.append(&widgets::inline_message(
-            MessageKind::Warning,
-            sentence,
-            catalog.error.as_deref(),
-        ));
-        let actions = hbox(space::ITEM);
-        let retry = widgets::button("Retry loading models", &[]);
-        let c = controller.clone();
-        retry.connect_clicked(move |_| c.load_models(None));
-        actions.append(&retry);
-        let import = widgets::button(IMPORT_PROFILE, &[]);
-        import.set_tooltip_text(Some(IMPORT_PROFILE_TOOLTIP));
-        let c = controller.clone();
-        import.connect_clicked(move |b| import_profile_dialog(b, &c));
-        actions.append(&import);
-        block.append(&actions);
-        return block;
-    }
-    if let Some(error) = &catalog.error {
-        block.append(&widgets::inline_message(
-            MessageKind::Warning,
-            "Some model providers may be missing.",
-            Some(error),
-        ));
-    }
-
-    let names: Vec<String> = catalog.providers.iter().map(|p| p.picker_label()).collect();
+fn provider_field(controller: &Rc<Controller>, picker: &PickerChoices) -> gtk::Box {
+    let names: Vec<String> = picker
+        .providers
+        .iter()
+        .map(ProviderInfo::picker_label)
+        .collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
     let providers = widgets::dropdown_or(&refs, "No model providers are available");
     set_accessible_label(&providers, "Provider for the agent");
     set_focus_key(&providers, "agent:provider");
-    if let Some(index) = choice
-        .provider
-        .as_ref()
-        .and_then(|p| catalog.providers.iter().position(|v| &v.id == p))
-        .and_then(|i| u32::try_from(i).ok())
-    {
-        providers.set_selected(index);
-    }
-    let provider_field = picker_field("Provider", &providers);
-    if let Some(provider) = choice.provider.as_ref().and_then(|p| catalog.provider(p)) {
+    select(&providers, picker.selected_provider);
+    let field = picker_field("Provider", &providers);
+    if let Some(provider) = picker.provider() {
         let subtitle = provider.subtitle();
-        provider_field.append(&label(&subtitle, &["meta"]));
+        field.append(&label(&subtitle, &["meta"]));
         widgets::set_accessible_description(&providers, &subtitle);
         if let Some(reason) = &provider.reason {
-            provider_field.append(&match provider.status {
+            field.append(&match provider.status {
                 ProviderStatus::Available => label(reason, &["meta"]).upcast::<gtk::Widget>(),
                 _ => widgets::inline_message(
                     MessageKind::Warning,
@@ -131,145 +120,169 @@ pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
             set_focus_key(&check, "agent:check-credentials");
             let (c, id) = (controller.clone(), provider.id.clone());
             check.connect_clicked(move |_| c.load_models(Some(id.clone())));
-            provider_field.append(&check);
+            field.append(&check);
         }
     }
-    block.append(&provider_field);
-    let catalog_for_providers = catalog.clone();
-    let controller_for_providers = controller.clone();
-    let thinking_now = choice.thinking;
-    providers.connect_selected_notify(move |d| {
-        if let Some(provider) = catalog_for_providers.providers.get(d.selected() as usize) {
-            controller_for_providers.choose_model(ModelChoice {
-                provider: Some(provider.id.clone()),
-                model: None,
-                thinking: thinking_now,
-            });
-        }
-    });
-
-    let model_names: Vec<String> = models
-        .iter()
-        .map(|m| {
-            if m.reasoning {
-                format!("{} (reasoning)", m.name)
-            } else {
-                m.name.clone()
-            }
-        })
-        .collect();
-    let model_refs: Vec<&str> = model_names.iter().map(String::as_str).collect();
-    let model_choice = widgets::dropdown_or(&model_refs, "No models available");
-    set_accessible_label(&model_choice, "Model for the agent");
-    set_focus_key(&model_choice, "agent:model");
-    if let Some(index) = choice
-        .model
-        .as_ref()
-        .and_then(|id| models.iter().position(|m| &m.id == id))
-        .and_then(|i| u32::try_from(i).ok())
-    {
-        model_choice.set_selected(index);
-    }
-    let ready_model = match &readiness {
-        Readiness::Ready { model, .. } => Some(model.clone()),
-        _ => None,
-    };
-    let provider_problem = matches!(
-        readiness,
-        Readiness::NeedsCredentials { .. } | Readiness::Restricted { .. }
+    let (c, ids) = (
+        controller.clone(),
+        picker
+            .providers
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>(),
     );
-    match (&ready_model, readiness.problem()) {
-        (Some(_), _) => block.append(&picker_field("Model", &model_choice)),
-        (None, Some(_)) if provider_problem => {}
-        (None, Some(problem)) => {
-            block.append(&picker_field("Model", &label(&problem, &["secondary"])));
-        }
-        (None, None) => {}
-    }
-    let thinking_levels: Vec<ThinkingLevel> = ready_model
-        .as_ref()
-        .map(|m| m.thinking.clone())
-        .filter(|levels| !levels.is_empty())
-        .unwrap_or_else(|| ThinkingLevel::ALL.to_vec());
-    let thinking_names: Vec<&str> = thinking_levels.iter().map(|l| l.label()).collect();
-    let thinking = widgets::dropdown_or(&thinking_names, "No thinking levels");
-    set_accessible_label(&thinking, "Thinking level");
-    set_focus_key(&thinking, "agent:thinking");
-    if let Some(index) = thinking_levels
-        .iter()
-        .position(|l| *l == choice.thinking)
-        .and_then(|i| u32::try_from(i).ok())
-    {
-        thinking.set_selected(index);
-    }
-    if ready_model.is_some() {
-        block.append(&picker_field("Thinking", &thinking));
-    }
-
-    let models_for_choice = models.clone();
-    let controller_for_models = controller.clone();
-    let provider_now = choice.provider.clone();
-    model_choice.connect_selected_notify(move |d| {
-        if let Some(model) = models_for_choice.get(d.selected() as usize) {
-            controller_for_models.choose_model(ModelChoice {
-                provider: provider_now.clone(),
-                model: Some(model.id.clone()),
-                thinking: thinking_now,
+    let thinking = picker.choice.thinking;
+    providers.connect_selected_notify(move |d| {
+        if let Some(id) = ids.get(d.selected() as usize) {
+            c.choose_model(ModelChoice {
+                provider: Some(id.clone()),
+                model: None,
+                thinking,
             });
         }
     });
-    let controller_for_thinking = controller.clone();
-    thinking.connect_selected_notify(move |d| {
-        if let Some(level) = thinking_levels.get(d.selected() as usize) {
-            let mut choice = controller_for_thinking.store.state().compat.choice.clone();
-            choice.thinking = *level;
-            controller_for_thinking.choose_model(choice);
-        }
-    });
-    block
+    field
 }
 
-fn availability(detail: &ObjectiveDetail, allow_running: bool) -> ActionAvailability {
-    match detail.summary.execution.state {
-        _ if detail.session.is_none() => ActionAvailability::NotOffered,
-        ExecutionState::Idle => ActionAvailability::Enabled,
-        ExecutionState::Running if allow_running => ActionAvailability::Enabled,
-        ExecutionState::Running => ActionAvailability::Disabled {
-            reason: "Wait until the current turn has finished".into(),
-        },
-        _ => ActionAvailability::Disabled {
-            reason: "Start or resume the agent first".into(),
-        },
+fn model_dropdown(
+    controller: &Rc<Controller>,
+    picker: &PickerChoices,
+    selected: Option<usize>,
+) -> gtk::DropDown {
+    let names: Vec<String> = picker.models.iter().map(ModelInfo::picker_label).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let models = widgets::dropdown_or(&refs, "No models available");
+    set_accessible_label(&models, "Model for the agent");
+    set_focus_key(&models, "agent:model");
+    select(&models, selected);
+    let (c, ids) = (
+        controller.clone(),
+        picker
+            .models
+            .iter()
+            .map(|m| m.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    let (provider, thinking) = (picker.choice.provider.clone(), picker.choice.thinking);
+    models.connect_selected_notify(move |d| {
+        if let Some(id) = ids.get(d.selected() as usize) {
+            c.choose_model(ModelChoice {
+                provider: provider.clone(),
+                model: Some(id.clone()),
+                thinking,
+            });
+        }
+    });
+    models
+}
+
+fn thinking_dropdown(
+    controller: &Rc<Controller>,
+    levels: Vec<ThinkingLevel>,
+    selected: Option<usize>,
+) -> gtk::DropDown {
+    let names: Vec<&str> = levels.iter().map(|l| l.label()).collect();
+    let thinking = widgets::dropdown_or(&names, "No thinking levels");
+    set_accessible_label(&thinking, "Thinking level");
+    set_focus_key(&thinking, "agent:thinking");
+    select(&thinking, selected);
+    let c = controller.clone();
+    thinking.connect_selected_notify(move |d| {
+        if let Some(level) = levels.get(d.selected() as usize) {
+            let mut choice = c.store.state().agent_session.choice.clone();
+            choice.thinking = *level;
+            c.choose_model(choice);
+        }
+    });
+    thinking
+}
+
+/// Builds the provider, model and thinking controls from the decisions in
+/// [`AgentSessionState::model_picker`](crate::presentation::state::agent_session::AgentSessionState::model_picker).
+pub fn model_picker(controller: &Rc<Controller>) -> gtk::Box {
+    let picker = controller.store.state().agent_session.model_picker();
+    let picker = match picker {
+        ModelPicker::Loading => {
+            let block = vbox(space::GROUP);
+            block.append(&label("Loading the available models…", &["meta"]));
+            return block;
+        }
+        ModelPicker::NoProviders { error } => return no_providers(controller, error.as_deref()),
+        ModelPicker::Choices(picker) => picker,
+    };
+    let block = vbox(space::GROUP);
+    if let Some(error) = &picker.catalog_error {
+        block.append(&widgets::inline_message(
+            MessageKind::Warning,
+            "Some model providers may be missing.",
+            Some(error),
+        ));
     }
+    block.append(&provider_field(controller, &picker));
+    match &picker.model_row {
+        ModelRow::Ready {
+            selected_model,
+            thinking,
+            selected_thinking,
+        } => {
+            let models = model_dropdown(controller, &picker, *selected_model);
+            block.append(&picker_field("Model", &models));
+            let thinking = thinking_dropdown(controller, thinking.clone(), *selected_thinking);
+            block.append(&picker_field("Thinking", &thinking));
+        }
+        ModelRow::Hidden => {}
+        ModelRow::Problem(problem) => {
+            block.append(&picker_field("Model", &label(problem, &["secondary"])));
+        }
+    }
+    block
 }
 
 pub fn session_section(
     controller: &Rc<Controller>,
     detail: &ObjectiveDetail,
-    report: Rc<dyn Fn(Result<(), String>)>,
+    report: &Rc<dyn Fn(Result<(), String>)>,
 ) -> gtk::Box {
     let s = section("Agent Session (pi)");
     let objective = detail.summary.objective_id.clone();
     let (session, tree, export) = {
         let state = controller.store.state();
         (
-            state.compat.sessions.get(&objective).cloned(),
-            state.compat.trees.get(&objective).cloned(),
-            state.compat.exports.get(&objective).cloned(),
+            state.agent_session.sessions.get(&objective).cloned(),
+            state.agent_session.trees.get(&objective).cloned(),
+            state.agent_session.exports.get(&objective).cloned(),
         )
     };
-    match &session {
-        Some(view) => {
+    session_status(&s, session.as_ref(), export.as_deref());
+    s.append(&session_tools(controller, report));
+    s.append(&label(
+        "Fork, clone and import start a new pi session; feedback addressed to the previous one is \
+         refused. Moving in the tree changes only the conversation, never files. Imports keep the \
+         conversation and never restore approvals or Git state.",
+        &["meta"],
+    ));
+
+    if let Some(tree) = tree {
+        s.append(&session_tree(controller, &tree, report));
+    }
+    s
+}
+
+/// The session's model, thinking level and pi id, or a note until it reports them, and the last
+/// export.
+fn session_status(s: &gtk::Box, session: Option<&SessionState>, export: Option<&str>) {
+    match session {
+        Some(reported) => {
             s.append(&label(
                 &format!(
                     "Model {} · thinking {} · this generation: {}",
-                    view.model.label(),
-                    view.thinking.label(),
-                    view.reason
+                    reported.model.label(),
+                    reported.thinking.label(),
+                    reported.reason.label()
                 ),
                 &[],
             ));
-            if let Some(pi) = &view.pi_session_id {
+            if let Some(pi) = &reported.pi_session_id {
                 let id =
                     widgets::line_label(pi, &["mono", "meta"], gtk::pango::EllipsizeMode::Middle);
                 id.set_tooltip_text(Some(pi));
@@ -281,18 +294,21 @@ pub fn session_section(
             &["meta"],
         )),
     }
-    if let Some(path) = &export {
+    if let Some(path) = export {
         let line = widgets::line_label(path, &["mono", "meta"], gtk::pango::EllipsizeMode::Start);
         line.set_tooltip_text(Some(path));
         s.append(&field("Last export", &line));
     }
+}
 
+/// The session commands, each enabled when the session allows it.
+fn session_tools(controller: &Rc<Controller>, report: &Rc<dyn Fn(Result<(), String>)>) -> gtk::Box {
     let tools = vbox(space::TIGHT);
-    let button = |text: &str, allow_running: bool, run: Rc<dyn Fn() -> Result<(), String>>| {
-        let report = report.clone();
+    let button = |text: &str, when: SessionUse, run: Rc<dyn Fn() -> Result<(), String>>| {
+        let report = Rc::clone(report);
         widgets::list_action_row(
             text,
-            &availability(detail, allow_running),
+            &controller.session_availability(when),
             false,
             move |_| {
                 report(run());
@@ -302,37 +318,37 @@ pub fn session_section(
     let c = controller.clone();
     tools.append(&button(
         "Show session tree",
-        true,
+        SessionUse::Running,
         Rc::new(move || c.load_session_tree()),
     ));
     let c = controller.clone();
     tools.append(&button(
         "Apply model and thinking",
-        false,
+        SessionUse::OutsideTurn,
         Rc::new(move || c.configure_session()),
     ));
     let c = controller.clone();
     tools.append(&button(
         "Compact context",
-        false,
+        SessionUse::BetweenTurns,
         Rc::new(move || c.compact_session()),
     ));
     let c = controller.clone();
     tools.append(&button(
         "Reload session resources",
-        false,
+        SessionUse::BetweenTurns,
         Rc::new(move || c.reload_session()),
     ));
     let c = controller.clone();
     tools.append(&button(
         "Export session",
-        true,
+        SessionUse::Running,
         Rc::new(move || c.export_session()),
     ));
-    let c = controller.clone();
+    let (c, r) = (controller.clone(), Rc::clone(report));
     let import = widgets::list_action_row(
         "Import session…",
-        &availability(detail, false),
+        &controller.session_availability(SessionUse::BetweenTurns),
         false,
         move |b| {
             let Some(window) = b.root().and_downcast::<gtk::Window>() else {
@@ -343,80 +359,79 @@ pub fn session_section(
                 .accept_label("Import")
                 .modal(true)
                 .build();
-            let controller = c.clone();
+            let (controller, report) = (c.clone(), r.clone());
             dialog.open(Some(&window), None::<&gio::Cancellable>, move |result| {
                 if let Ok(Some(path)) = result.map(|f| f.path()) {
-                    let _ = controller.import_session(path);
+                    report(controller.import_session(path));
                 }
             });
         },
     );
     tools.append(&import);
-    s.append(&tools);
-    s.append(&label(
-        "Fork, clone and import start a new pi session; feedback addressed to the previous one is \
-         refused. Moving in the tree changes only the conversation, never files. Imports keep the \
-         conversation and never restore approvals or Git state.",
-        &["meta"],
-    ));
+    tools
+}
 
-    if let Some(tree) = tree {
-        let list = vbox(space::TIGHT);
-        list.append(&widgets::section_title("Session tree"));
-        if tree.truncated {
-            list.append(&label("Older entries are not shown.", &["meta"]));
-        }
-        let start = tree.entries.len().saturating_sub(TREE_ROWS);
-        for node in &tree.entries[start..] {
-            let row = hbox(space::ITEM);
-            let current = tree.leaf_id.as_deref() == Some(node.entry_id.as_str());
-            let text = format!(
-                "{}{}{}: {}{}",
-                "  ".repeat(node.depth.min(12)),
-                if current { "● " } else { "" },
-                node.kind,
-                node.label,
-                node.bookmark
-                    .as_ref()
-                    .map(|b| format!(" [{b}]"))
-                    .unwrap_or_default()
-            );
-            let entry = label(&text, if current { &[] } else { &["meta"] });
-            entry.set_hexpand(true);
-            row.append(&entry);
-            let enabled = availability(detail, false) == ActionAvailability::Enabled;
-            let go = widgets::button("Go here", &[]);
-            go.set_sensitive(enabled);
-            set_accessible_label(&go, &format!("Go to {}", node.label));
-            let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-            go.connect_clicked(move |_| r(c.navigate_session(&id)));
-            row.append(&go);
-            if node.user {
-                let fork = widgets::button("Fork", &[]);
-                fork.set_sensitive(enabled);
-                fork.set_tooltip_text(Some("New session with the history before this message"));
-                let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-                fork.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::Before)));
-                row.append(&fork);
-            }
-            let clone = widgets::button("Clone", &[]);
-            clone.set_sensitive(enabled);
-            clone.set_tooltip_text(Some("New session with the history up to here"));
-            let (c, id, r) = (controller.clone(), node.entry_id.clone(), report.clone());
-            clone.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::At)));
-            row.append(&clone);
-            list.append(&row);
-        }
-        s.append(&list);
+/// The newest entries of the session tree, each with the moves it allows.
+fn session_tree(
+    controller: &Rc<Controller>,
+    tree: &SessionTree,
+    report: &Rc<dyn Fn(Result<(), String>)>,
+) -> gtk::Box {
+    let between_turns = controller.session_availability(SessionUse::BetweenTurns);
+    let list = vbox(space::TIGHT);
+    list.append(&widgets::section_title("Session tree"));
+    if tree.truncated {
+        list.append(&label("Older entries are not shown.", &["meta"]));
     }
-    s
+    let start = tree.entries.len().saturating_sub(TREE_ROWS);
+    for node in &tree.entries[start..] {
+        let row = hbox(space::ITEM);
+        let current = tree.leaf_id.as_deref() == Some(node.entry_id.as_str());
+        let text = format!(
+            "{}{}{}: {}{}",
+            "  ".repeat(node.depth.min(12)),
+            if current { "● " } else { "" },
+            node.kind.label(),
+            node.label,
+            node.bookmark
+                .as_ref()
+                .map(|b| format!(" [{b}]"))
+                .unwrap_or_default()
+        );
+        let entry = label(&text, if current { &[] } else { &["meta"] });
+        entry.set_hexpand(true);
+        row.append(&entry);
+        let enabled = between_turns == ActionAvailability::Enabled;
+        let go = widgets::button("Go here", &[]);
+        go.set_sensitive(enabled);
+        set_accessible_label(&go, &format!("Go to {}", node.label));
+        let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+        go.connect_clicked(move |_| r(c.navigate_session(&id)));
+        row.append(&go);
+        if node.kind == TreeEntryKind::User {
+            let fork = widgets::button("Fork", &[]);
+            fork.set_sensitive(enabled);
+            fork.set_tooltip_text(Some("New session with the history before this message"));
+            let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+            fork.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::Before)));
+            row.append(&fork);
+        }
+        let clone = widgets::button("Clone", &[]);
+        clone.set_sensitive(enabled);
+        clone.set_tooltip_text(Some("New session with the history up to here"));
+        let (c, id, r) = (controller.clone(), node.entry_id.clone(), Rc::clone(report));
+        clone.connect_clicked(move |_| r(c.fork_session(&id, ForkPosition::At)));
+        row.append(&clone);
+        list.append(&row);
+    }
+    list
 }
 
 pub const RESOURCES_TITLE: &str = "LADE profile resources";
 
 pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     let s = vbox(space::GROUP);
-    let Some(inventory) = controller.store.state().compat.inventory.clone() else {
+    let Some(inventory) = controller.store.state().agent_session.inventory.clone() else {
         s.append(&label("Loading the LADE profile…", &["meta"]));
         return s;
     };
@@ -497,7 +512,7 @@ pub fn resources_section(controller: &Rc<Controller>) -> gtk::Box {
     }
     let actions = hbox(space::ITEM);
     let no_providers = matches!(
-        controller.store.state().compat.readiness(),
+        controller.store.state().agent_session.readiness(),
         Readiness::NoProviders { .. }
     );
     if !no_providers {
@@ -522,7 +537,7 @@ pub struct DialogHost {
 
 impl DialogHost {
     pub fn sync(&self, opener: &impl IsA<gtk::Widget>, controller: &Rc<Controller>) {
-        let dialogs = controller.store.state().compat.dialogs.clone();
+        let dialogs = controller.store.state().agent_session.dialogs.clone();
         let stale: Vec<String> = self
             .open
             .borrow()
@@ -564,18 +579,18 @@ fn present(
         let ui_id = dialog.ui_id.clone();
         let answered = answered.clone();
         let window = shell.window.clone();
-        Rc::new(move |answer: UiAnswerView| {
+        Rc::new(move |answer: UiAnswer| {
             answered.set(true);
             let _ = controller.answer_dialog(&ui_id, answer);
             window.close();
         })
     };
-    let value: Rc<dyn Fn() -> UiAnswerView> = match &dialog.prompt {
-        UiPromptView::Confirm { message, .. } => {
+    let value: Rc<dyn Fn() -> UiAnswer> = match &dialog.prompt {
+        UiPrompt::Confirm { message, .. } => {
             shell.body.append(&label(message, &[]));
-            Rc::new(|| UiAnswerView::Confirm(true))
+            Rc::new(|| UiAnswer::Confirm(true))
         }
-        UiPromptView::Select { options, .. } => {
+        UiPrompt::Select { options, .. } => {
             let refs: Vec<&str> = options.iter().map(String::as_str).collect();
             let choice = widgets::dropdown_or(&refs, "The extension offered no choices");
             set_accessible_label(&choice, "Choice");
@@ -585,23 +600,23 @@ fn present(
                 options
                     .get(choice.selected() as usize)
                     .cloned()
-                    .map_or(UiAnswerView::Cancel, UiAnswerView::Value)
+                    .map_or(UiAnswer::Cancel, UiAnswer::Value)
             })
         }
-        UiPromptView::Input { placeholder, .. } => {
+        UiPrompt::Input { placeholder, .. } => {
             let entry = gtk::Entry::builder().placeholder_text(placeholder).build();
             set_accessible_label(&entry, "Answer");
             shell.body.append(&entry);
-            Rc::new(move || UiAnswerView::Value(entry.text().to_string()))
+            Rc::new(move || UiAnswer::Value(entry.text().to_string()))
         }
-        UiPromptView::Editor { prefill, .. } => {
+        UiPrompt::Editor { prefill, .. } => {
             let view = gtk::TextView::new();
             view.buffer().set_text(prefill);
             set_accessible_label(&view, "Answer");
             shell.body.append(&widgets::bounded_text(&view, 120, 320));
             Rc::new(move || {
                 let buffer = view.buffer();
-                UiAnswerView::Value(
+                UiAnswer::Value(
                     buffer
                         .text(&buffer.start_iter(), &buffer.end_iter(), false)
                         .to_string(),
@@ -609,14 +624,14 @@ fn present(
             })
         }
     };
-    let confirm = matches!(dialog.prompt, UiPromptView::Confirm { .. });
+    let confirm = matches!(dialog.prompt, UiPrompt::Confirm { .. });
     let deny = shell.add_button(if confirm { "Deny" } else { "Cancel" }, &[]);
     let s = send.clone();
     deny.connect_clicked(move |_| {
         s(if confirm {
-            UiAnswerView::Confirm(false)
+            UiAnswer::Confirm(false)
         } else {
-            UiAnswerView::Cancel
+            UiAnswer::Cancel
         });
     });
     let ok = shell.add_button(if confirm { "Allow" } else { "Answer" }, &["primary"]);
@@ -625,7 +640,7 @@ fn present(
     let (controller, ui_id) = (controller.clone(), dialog.ui_id.clone());
     shell.window.connect_close_request(move |_| {
         if !answered.replace(true) {
-            let _ = controller.answer_dialog(&ui_id, UiAnswerView::Cancel);
+            let _ = controller.answer_dialog(&ui_id, UiAnswer::Cancel);
         }
         gtk::glib::Propagation::Proceed
     });

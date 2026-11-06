@@ -1,16 +1,24 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 
 use lade_protocol::client::{
     ActionName, ApprovalState, Basis, ContentNoticeKind, DiffGetQuery, DiffLineKind, DraftRevision,
     DraftSaveCommand, ErrorCode, ExecutionState, FeedbackSubmitCommand, FileEncoding,
-    FileReadQuery, Lifecycle, ObjectiveCleanupCommand, ObjectiveHistoryDeleteCommand,
+    FileReadQuery, Lifecycle, ObjectiveCleanupCommand, ObjectiveDeleteHistoryCommand,
     ObjectiveSelector, Reference, ReferenceVersion, ReplyData, Request, ReviewApproveCommand,
     ReviewIntegrateCommand, SearchQuery, SearchScope, Side,
 };
-use lade_protocol::types::{Counter, DeliveryMode, Id, PageLimit, ReadLimit, WirePath};
+use lade_protocol::types::{Counter, DeliveryMode, Digest, Id, PageLimit, ReadLimit, WirePath};
 use service_support::*;
 use sha2::{Digest as _, Sha256};
 
@@ -135,7 +143,8 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
     };
     assert_eq!(found.results.len(), 1);
     let hit = &found.results[0];
-    let start = text.find("Needle").unwrap() as u64;
+    let needle = text.find("Needle").unwrap();
+    let start = needle as u64;
     assert_eq!(hit.line.as_ref().map(Counter::value), Some(3));
     assert_eq!(hit.byte_start.as_ref().map(Counter::value), Some(start));
     assert_eq!(hit.byte_end.as_ref().map(Counter::value), Some(start + 6));
@@ -144,7 +153,7 @@ fn content_search_returns_exact_byte_ranges_of_the_retained_bytes() {
 
     let file = read_file(&mut client, &objective, Basis::Working, "notes.txt");
     let retained = file.text.unwrap().into_bytes();
-    assert_eq!(&retained[start as usize..start as usize + 6], b"Needle");
+    assert_eq!(&retained[needle..needle + 6], b"Needle");
     drop(client);
     service.shutdown();
 }
@@ -246,6 +255,68 @@ fn diff_lines_distinguish_final_bare_cr_from_crlf() {
     service.shutdown();
 }
 
+/// Reads `large.txt`, repeated `line`s making up `content`, as bounded pages from the start,
+/// the next page and the tail, and refuses an offset inside a character. Returns the file's
+/// artifact digest.
+fn assert_read_in_chunks(client: &mut Client, objective: &Id, content: &str, line: &str) -> Digest {
+    let first = match read_at(client, objective, "large.txt", 0) {
+        ReplyData::FileRead(page) => page,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(first.chunked, Some(true));
+    assert_eq!(first.encoding, FileEncoding::Utf8);
+    assert_eq!(first.total_bytes.value(), content.len() as u64);
+    assert!(!first.eof);
+    let length = first.length.value();
+    assert!(length > 0 && length <= 262_144, "{length}");
+    let text = first.text.unwrap();
+    assert_eq!(text.len() as u64, length);
+    assert_eq!(
+        text.as_bytes(),
+        &content.as_bytes()[..usize::try_from(length).unwrap()]
+    );
+    let digest = Sha256::digest(content.as_bytes())
+        .iter()
+        .fold(String::new(), |mut hex, b| {
+            let _ = write!(hex, "{b:02x}");
+            hex
+        });
+    assert_eq!(first.artifact_digest.as_str(), digest);
+
+    let next = match read_at(client, objective, "large.txt", length) {
+        ReplyData::FileRead(page) => page,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(next.offset.value(), length);
+    assert_eq!(next.artifact_digest.as_str(), digest);
+    let at = usize::try_from(next.offset.value()).unwrap();
+    let len = usize::try_from(next.length.value()).unwrap();
+    assert_eq!(
+        next.text.unwrap().as_bytes(),
+        &content.as_bytes()[at..at + len]
+    );
+    let tail_offset = content.len() as u64 - line.len() as u64;
+    let last = match read_at(client, objective, "large.txt", tail_offset) {
+        ReplyData::FileRead(page) => page,
+        other => panic!("{other:?}"),
+    };
+    assert!(last.eof);
+    assert_eq!(last.text.as_deref(), Some(line));
+    let inside = content.find('Ä').unwrap() as u64 + 1;
+    let refused = client
+        .call(Request::FileRead(FileReadQuery {
+            objective_id: objective.clone(),
+            basis: Basis::Working,
+            path: WirePath::from_bytes(b"large.txt".to_vec()).unwrap(),
+            side: Side::New,
+            offset: Counter::new(inside),
+            limit: ReadLimit::parse("1024").unwrap(),
+        }))
+        .unwrap_err();
+    assert_eq!(refused.code, ErrorCode::InvalidRequest);
+    first.artifact_digest
+}
+
 #[test]
 fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
     let env = Env::new("svc-large");
@@ -266,55 +337,7 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
         .capture_id
         .unwrap();
 
-    let first = match read_at(&mut client, &objective, "large.txt", 0) {
-        ReplyData::FileRead(page) => page,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(first.chunked, Some(true));
-    assert_eq!(first.encoding, FileEncoding::Utf8);
-    assert_eq!(first.total_bytes.value(), content.len() as u64);
-    assert!(!first.eof);
-    let length = first.length.value();
-    assert!(length > 0 && length <= 262_144, "{length}");
-    let text = first.text.unwrap();
-    assert_eq!(text.len() as u64, length);
-    assert_eq!(text.as_bytes(), &content.as_bytes()[..length as usize]);
-    let digest: String = Sha256::digest(content.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    assert_eq!(first.artifact_digest.as_str(), digest);
-
-    let next = match read_at(&mut client, &objective, "large.txt", length) {
-        ReplyData::FileRead(page) => page,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(next.offset.value(), length);
-    assert_eq!(next.artifact_digest.as_str(), digest);
-    let at = next.offset.value() as usize;
-    assert_eq!(
-        next.text.unwrap().as_bytes(),
-        &content.as_bytes()[at..at + next.length.value() as usize]
-    );
-    let tail_offset = content.len() as u64 - line.len() as u64;
-    let last = match read_at(&mut client, &objective, "large.txt", tail_offset) {
-        ReplyData::FileRead(page) => page,
-        other => panic!("{other:?}"),
-    };
-    assert!(last.eof);
-    assert_eq!(last.text.as_deref(), Some(line));
-    let inside = content.find('Ä').unwrap() as u64 + 1;
-    let refused = client
-        .call(Request::FileRead(FileReadQuery {
-            objective_id: objective.clone(),
-            basis: Basis::Working,
-            path: WirePath::from_bytes(b"large.txt".to_vec()).unwrap(),
-            side: Side::New,
-            offset: Counter::new(inside),
-            limit: ReadLimit::parse("1024").unwrap(),
-        }))
-        .unwrap_err();
-    assert_eq!(refused.code, ErrorCode::InvalidRequest);
+    let first_digest = assert_read_in_chunks(&mut client, &objective, &content, line);
 
     let session = detail(&mut client, &objective).session.unwrap();
     let save = |client: &mut Client, draft: &Id| {
@@ -324,7 +347,7 @@ fn files_above_the_whole_file_bound_are_read_in_bounded_chunks() {
                 objective_id: objective.clone(),
                 expected_revision: Counter::new(0),
                 reference: Reference {
-                    artifact_digest: first.artifact_digest.clone(),
+                    artifact_digest: first_digest.clone(),
                     path: WirePath::from_bytes(b"large.txt".to_vec()).unwrap(),
                     version: ReferenceVersion::Working {
                         capture_id: capture.clone(),
@@ -460,7 +483,7 @@ fn history_is_deleted_only_on_explicit_confirmation_after_cleanup() {
     let branch = detail(&mut client, &objective).branch;
     let delete = |client: &mut Client, confirm: bool| {
         client.call(Request::ObjectiveDeleteHistory(
-            ObjectiveHistoryDeleteCommand {
+            ObjectiveDeleteHistoryCommand {
                 objective_id: objective.clone(),
                 confirm_history_loss: confirm,
             },

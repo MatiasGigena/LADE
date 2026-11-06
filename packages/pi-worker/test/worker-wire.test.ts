@@ -3,19 +3,32 @@ import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { test } from "node:test";
 import type { AssistantMessage } from "../src/worker/pi-ai.ts";
-import { ActivityMapper, boundText, MAX_ITEM_BYTES, safeMessage } from "../src/worker/activity.ts";
+import { ActivityMapper, boundText } from "../src/worker/activity.ts";
 import { StdioChannel } from "../src/worker/channel.ts";
-import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/session.ts";
+import { isInside } from "../src/worker/paths.ts";
+import { safeMessage } from "../src/worker/text.ts";
+import { MAX_TREE_ENTRIES, treeEntry, treePage } from "../src/worker/tree.ts";
 import { UiBridge } from "../src/worker/ui.ts";
 import { encodeOutbound, LineDecoder, parseInbound } from "../src/worker/wire.ts";
-import type { InboundBody, OutboundBody } from "../src/worker/wire.ts";
+import type { ServiceToWorker, WorkerToService } from "../src/dto.ts";
+import { MAX_FRAME, MAX_STRING } from "../src/json.ts";
 import type { JsonObject } from "../src/json.ts";
-import { decodeWorkerFrame, newId, parseId } from "../src/protocol.ts";
+import { MAX_ITEM_TEXT_BYTES, newId, parseId } from "../src/schema.ts";
+import { decodeWorkerFrame } from "../src/worker/contract.ts";
 
 const ID = parseId("00000000-0000-4000-8000-000000000001");
 
 function frame(body: JsonObject, bundle = "0.2.0"): Buffer {
   return Buffer.from(JSON.stringify({ protocol: 1, bundle, body }));
+}
+
+/** A frame writer that records each frame and reports a full pipe while `full()` holds. */
+function recording(written: string[], full: () => boolean): (frame: Buffer) => boolean {
+  return frame => {
+    written.push(frame.toString());
+
+    return !full();
+  };
 }
 
 test("inbound bodies are closed and exactly typed", () => {
@@ -31,18 +44,18 @@ test("inbound bodies are closed and exactly typed", () => {
 
 test("LF framing survives byte fragmentation and poisons after an error", () => {
   const wire = Buffer.concat([frame({ kind: "session.abort" }), Buffer.from("\n"), frame({ kind: "worker.shutdown" }), Buffer.from("\n")]);
-  const decoder = new LineDecoder();
-  const seen: InboundBody[] = [];
+  const decoder = new LineDecoder(parseInbound);
+  const seen: ServiceToWorker[] = [];
 
   for (let pos = 0; pos < wire.length; pos++) decoder.push(wire.subarray(pos, pos + 1), body => seen.push(body));
   decoder.finish();
   assert.deepEqual(seen.map(body => body.kind), ["session.abort", "worker.shutdown"]);
 
-  const broken = new LineDecoder();
+  const broken = new LineDecoder(parseInbound);
   assert.throws(() => broken.push(Buffer.from("{oops}\n"), () => {}), { code: "invalid_json" });
   assert.throws(() => broken.push(Buffer.concat([frame({ kind: "session.abort" }), Buffer.from("\n")]), () => {}), { code: "closed" });
 
-  const partial = new LineDecoder();
+  const partial = new LineDecoder(parseInbound);
   partial.push(frame({ kind: "session.abort" }), () => {});
   assert.throws(() => partial.finish(), { code: "truncated_frame" });
 });
@@ -50,18 +63,18 @@ test("LF framing survives byte fragmentation and poisons after an error", () => 
 test("outbound frames are bounded before they are written", () => {
   assert.match(encodeOutbound({ kind: "turn.state", state: "idle" }).toString(), /^\{"protocol":1,"bundle":"0\.2\.0","body":\{"kind":"turn.state","state":"idle"\}\}\n$/);
   assert.throws(() => encodeOutbound({ kind: "worker.error", code: "internal", message: "m".repeat(513) }), { code: "invalid_schema" });
-  assert.throws(() => encodeOutbound({ kind: "activity.delta", item_id: ID, append_text: "a".repeat(300 * 1024) }), { code: "limit_reached" });
+  assert.throws(() => encodeOutbound({ kind: "activity.delta", item_id: ID, append_text: "a".repeat(MAX_STRING + 1) }), { code: "limit_reached" });
 });
 
 test("item text is bounded by bytes, UTF-8 boundaries and the encoded frame size", () => {
-  const wide = boundText("é".repeat(MAX_ITEM_BYTES));
+  const wide = boundText("é".repeat(MAX_ITEM_TEXT_BYTES));
   assert.equal(wide.truncated, true);
-  assert.ok(Buffer.byteLength(wide.text) <= MAX_ITEM_BYTES);
+  assert.ok(Buffer.byteLength(wide.text) <= MAX_ITEM_TEXT_BYTES);
   assert.equal(wide.text.includes("�"), false);
 
-  const control = boundText("\u0001".repeat(MAX_ITEM_BYTES));
+  const control = boundText("\u0001".repeat(MAX_ITEM_TEXT_BYTES));
   assert.equal(control.truncated, true);
-  assert.ok(encodeOutbound({ kind: "activity.item", item_id: ID, role: "tool", title: "t", text: control.text, is_error: false, truncated: true }).length < 1024 * 1024);
+  assert.ok(encodeOutbound({ kind: "activity.item", item_id: ID, role: "tool", title: "t", text: control.text, is_error: false, truncated: true }).length < MAX_FRAME);
   assert.equal(boundText("\uD800").text, "�", "lone surrogates are normalised before JSON encoding");
   assert.equal(safeMessage(`401: key sk-${"a".repeat(40)}\nrest`), "401: key [redacted] rest");
 });
@@ -72,8 +85,8 @@ test("streamed text is normalized and bounded before frame encoding", () => {
     usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   };
 
-  for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_BYTES)]) {
-    const sent: OutboundBody[] = [];
+  for (const delta of ["\uD800a", "\u0001".repeat(MAX_ITEM_TEXT_BYTES)]) {
+    const sent: WorkerToService[] = [];
     const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
     assert.doesNotThrow(() => mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } }));
     const streamed = sent.find(body => body.kind === "activity.delta");
@@ -81,7 +94,7 @@ test("streamed text is normalized and bounded before frame encoding", () => {
     assert.equal(streamed.append_text, boundText(delta).text);
   }
 
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const mapper = new ActivityMapper(body => { encodeOutbound(body); sent.push(body); });
 
   for (const delta of ["before \uD83D", "\uDE00 after"]) mapper.handle({ type: "message_update", message, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial: message } });
@@ -100,9 +113,7 @@ test("delta coalescing keeps control-heavy text within the frame bound", async (
   const written: string[] = [];
   let full = true;
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return !full; }, drains);
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => full), drains);
 
   const running = channel.send({ kind: "turn.state", state: "running" });
   const first = channel.send({ kind: "activity.delta", item_id: ID, append_text: "\u0001".repeat(60 * 1024) });
@@ -146,9 +157,7 @@ test("outbound writes wait for drain and coalesce deltas", async () => {
   const written: string[] = [];
   let full = true;
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return !full; }, drains);
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => full), drains);
 
   void channel.send({ kind: "turn.state", state: "running" });
   void channel.send({ kind: "activity.delta", item_id: ID, append_text: "a" });
@@ -165,9 +174,7 @@ test("outbound writes wait for drain and coalesce deltas", async () => {
 test("frames queued while a drain settles are still written", async () => {
   const written: string[] = [];
 
-  const channel = new StdioChannel(Readable.from([]), bytes => { written.push(bytes.toString());
-
- return true; }, new EventEmitter());
+  const channel = new StdioChannel(Readable.from([]), recording(written, () => false), new EventEmitter());
 
   void channel.send({ kind: "turn.state", state: "running" });
   void channel.send({ kind: "turn.state", state: "idle" });
@@ -177,7 +184,7 @@ test("frames queued while a drain settles are still written", async () => {
 
 test("character-bounded titles, labels and messages never end in half a surrogate pair", async () => {
   const emoji = "\u{1F600}";
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const mapper = new ActivityMapper(body => { sent.push(body); });
   mapper.handle({ type: "tool_execution_start", toolCallId: "call-1", toolName: "bash", args: { command: emoji.repeat(100) } });
   mapper.system(emoji.repeat(150), "text", false);
@@ -196,7 +203,7 @@ test("character-bounded titles, labels and messages never end in half a surrogat
 });
 
 test("select answers map back to the full option and an empty choice is refused", async () => {
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const ui = new UiBridge(body => { sent.push(body); }, () => {});
   const long = `${"o".repeat(600)}`;
   const chosen = ui.context().select("pick", ["short", long]);
@@ -210,7 +217,7 @@ test("select answers map back to the full option and an empty choice is refused"
 });
 
 test("select options that share a clipped prefix remain separately selectable", async () => {
-  const sent: OutboundBody[] = [];
+  const sent: WorkerToService[] = [];
   const ui = new UiBridge(body => { sent.push(body); }, () => {});
   const common = "o".repeat(600);
   const options = [`${common} first`, `${common} second`];
@@ -236,4 +243,12 @@ test("a tree page of long labelled entries still fits one session.result frame",
   assert.equal(page.entries.at(-1)?.entry_id, `e${MAX_TREE_ENTRIES - 1}`, "the newest entries are kept, oldest first");
   assert.doesNotThrow(() => encodeOutbound({ kind: "session.result", command_id: ID, ok: true, message: "", entries: page.entries, truncated: true, leaf_id: "e1023" }));
   assert.deepEqual(treePage(entries.slice(0, 3), () => undefined), { entries: entries.slice(0, 3).map(entry => treeEntry(entry, undefined)), truncated: false });
+});
+
+test("path containment compares whole segments", () => {
+  assert.equal(isInside("/s/imports", "/s/imports/..backup.jsonl"), true, "a name that begins with .. is inside");
+  assert.equal(isInside("/s/imports", "/s/imports/a/b.jsonl"), true);
+  assert.equal(isInside("/s/imports", "/s/imports/../b.jsonl"), false);
+  assert.equal(isInside("/s/imports", "/s/imports"), false, "the parent itself is not inside");
+  assert.equal(isInside("/s/imports", "/s/imports-other/b.jsonl"), false);
 });

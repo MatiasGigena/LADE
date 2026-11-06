@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed on unreviewed dependency edges or platform imports in the domain."""
+"""Fail closed on unreviewed dependency edges, platform imports in the domain, or layer imports inside a crate."""
 import json
 from pathlib import Path
 import re
@@ -41,22 +41,33 @@ for path in (root/'crates/lade-core/src').rglob('*.rs'):
     text = path.read_text()
     if re.search(r'\b(?:std|gtk4|rusqlite|sqlx|lade_protocol|lade_system)\s*::|\b(?:extern\s+crate|include!|include_str!|include_bytes!)', text):
         errors.append(f'platform/import boundary: {path.relative_to(root)}')
+system_src = root/'crates/lade-system/src'
+for layer in ('storage', 'supervision', 'adapters', 'transport', 'support'):
+    for path in (system_src/layer).rglob('*.rs'):
+        if re.search(r'\bcrate::(?:service\b|\{[^}]*\bservice\b)', path.read_text()):
+            errors.append(f'layer boundary (imports service): {path.relative_to(root)}')
+for path in (root/'crates/lade-desktop/src/presentation').rglob('*.rs'):
+    if re.search(r'\b(?:gtk4|gtk|glib|gio|sourceview5)\s*::|\buse\s+(?:gtk4|gtk|glib|gio|sourceview5)\b|\bcrate::(?:views|transport)\b|\bcrate::\{[^}]*\b(?:views|transport)\b', path.read_text()):
+        errors.append(f'layer boundary (presentation imports GTK, views or transport): {path.relative_to(root)}')
+for path in (root/'crates').glob('*/src/**/*.rs'):
+    if path.with_suffix('').is_dir():
+        errors.append(f'module root outside mod.rs (use {path.stem}/mod.rs): {path.relative_to(root)}')
 worker_src = root/'packages/pi-worker/src'
 worker_packages = {'@earendil-works/pi-coding-agent', 'undici'}
 pi_ai = root/'packages/pi-worker/node_modules/@earendil-works/pi-ai/dist/index.js'
-worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:tls'}
+worker_builtins = {'node:console', 'node:crypto', 'node:events', 'node:fs', 'node:http', 'node:https', 'node:net', 'node:path', 'node:stream', 'node:timers/promises', 'node:tls'}
 for path in worker_src.rglob('*.ts'):
     text = path.read_text()
     if re.search(r'\bany\b|import\s*\(', text):
         errors.append(f'unreviewed TS escape: {path.relative_to(root)}')
     imports = re.findall(r'(?:from|import)\s+["\']([^"\']+)["\']', text)
-    is_worker = path == worker_src/'worker.ts' or worker_src/'worker' in path.parents
+    is_worker = path in (worker_src/'worker.ts', worker_src/'catalog.ts') or worker_src/'worker' in path.parents
     def reviewed(x):
         if x.startswith(('./', '../')):
             target = (path.parent/x).resolve()
             if path == worker_src/'worker/pi-ai.ts' and target == pi_ai:
                 return True
-            return target in (root/'contracts/v1/schema.json', root/'contracts/v1/worker-schema.json') or worker_src in target.parents
+            return worker_src in target.parents
         return x == 'node:crypto' or (is_worker and (x in worker_packages or x in worker_builtins))
     if not all(reviewed(x) for x in imports):
         errors.append(f'unreviewed worker dependency: {path.relative_to(root)}')

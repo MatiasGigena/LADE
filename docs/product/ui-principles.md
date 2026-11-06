@@ -112,7 +112,7 @@ Appended record of what the native client implements; it does not change the app
 | Type | meta | 13px, 400, metadata ink (600 for group headings) | Secondary text, reasons, identities |
 | Type | mono | 13px monospace | Code, paths, ids, commands |
 
-Shared components (`crates/lade-desktop/src/views/widgets.rs`), used instead of one-off layouts:
+Shared components (`crates/lade-desktop/src/views/widgets/mod.rs` and its `input` and `dialog` submodules), used instead of one-off layouts:
 
 | Component | What it is | Used for |
 | --- | --- | --- |
@@ -126,4 +126,4 @@ Shared components (`crates/lade-desktop/src/views/widgets.rs`), used instead of 
 
 A refused command is shown once, on the surface that issued it (`PresentationState::last_refusal` per Objective and `ActionSurface`), as an `inline_message` in plain words; it clears when that surface's command succeeds or the Objective changes. Refusals no Objective surface can show are the only global notices.
 
-Presentation rules applied with these tokens: every fact and action has one home surface (`presentation::panel::home`), other surfaces get at most a one-line pointer with a jump. Status is a sign plus text (no pill box) in the Objectives list; the right panel's Overview shows the approval state, the one next review action the service enables for the lifecycle step (its reason in one line when blocked), then *More actions* (destructive actions last, separated) and *Details*, both collapsed; Activity owns Agent Session control (state, Start/Cancel/Resume, accepted inputs and delivery, model and thinking, session tools, profile resources): before the first start a *Set up the agent* card with Start agent stands in the transcript's place; afterwards the header shows the one agent action that applies and *Agent settings* (collapsed) holds the rest. Disabled actions keep their visible reason where they are shown, plus tooltip and accessible description.
+Presentation rules applied with these tokens: every fact and action has one home surface (`presentation::objective_actions::home`), other surfaces get at most a one-line pointer with a jump. Status is a sign plus text (no pill box) in the Objectives list; the right panel's Overview shows the approval state, the one next review action the service enables for the lifecycle step (its reason in one line when blocked), then *More actions* (destructive actions last, separated) and *Details*, both collapsed; Activity owns Agent Session control (state, Start/Cancel/Resume, accepted inputs and delivery, model and thinking, session tools, profile resources): before the first start a *Set up the agent* card with Start agent stands in the transcript's place; afterwards the header shows the one agent action that applies and *Agent settings* (collapsed) holds the rest. Disabled actions keep their visible reason where they are shown, plus tooltip and accessible description.

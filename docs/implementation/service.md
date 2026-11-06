@@ -43,6 +43,12 @@ handlers) — workers and terminals die with their sandbox (`--die-with-parent`)
 | `$RUNTIME/control.cap`, `control.sock` | admission capability and control socket (0600, directory 0700) |
 | `$RUNTIME/g/<12 hex>-<gen>.sock` | per-launch gateway sockets (0600, directory 0700; swept on start) |
 
+The state and runtime directories, the directories the service creates under them (`worktrees/`, `sessions/` and each
+session directory, `verify/`, `run/`, `tmp/`, `artifacts/`, `profile/`, `backups/`, `logs/`, `g/`) are created
+through one check (`support::fs::ensure_private_dir`): created 0700 if missing, then refused unless it is a real
+directory (not a symbolic link) owned by the service's effective user with no group or other permission bits. An
+existing directory that fails the check is reported, never repaired.
+
 Unix socket paths hold at most 107 bytes. Gateway sockets therefore live under the runtime directory with short
 names, so any state directory length works; at startup `laded` refuses (exit 78, before creating anything) a runtime
 directory whose `control.sock` or widest gateway socket path (generation up to 9,999,999) would not fit, naming the
@@ -155,7 +161,7 @@ Per connection: the peer uid from `SO_PEERCRED` must equal the service uid; at m
 10 s timeout. The first frame must be `hello` (answered with `hello`), the second `auth`; the capability is compared in
 constant time. Anything else, or a wrong capability, closes the link without a reply. The authenticated link is
 handed to the service, which grants the single controlling lease (`welcome {service_epoch, lease_id}`) or — when a
-lease is held — sends one `service.notice {level: error, code: "unauthorized"}` event (sequence `0`) and closes the
+lease is held — sends one `service.notice {level: error, code: "lease_held"}` event (sequence `0`) and closes the
 link. The lease frees when its link closes; the next client re-queries `snapshot`.
 
 After admission, frames are decoded with `decode_client_frame`: a schema-invalid request with a readable
@@ -267,6 +273,10 @@ a reused `request_id` with different content is `duplicate_conflict`):
   `$STATE/worktrees/<id>`; never the shared checkout) and calls the launcher with `worker.start`. Launch failure →
   execution `failed` with the reason, notice and a system activity item. Resume re-queues input blocked only by the
   stopped execution (`blocked: execution_unavailable`) of the same association — never uncertain input.
+- Checks and terminals use the service's own sandbox probe, run once while the service starts. A passing probe is
+  kept; a failing one is logged with its cause (once per distinct cause) and retried off the service thread every
+  storage check (5 s). Until it passes, `review.verify` and `terminal.open` are refused with `execution_unavailable`
+  and their actions are disabled; when it passes, every Objective is projected again. Projection never runs a probe.
 - `execution.cancel`: core `request_stop` (Stopping), `session.abort` to the worker, then `terminate` on the pool; the
   observed exit moves the execution to `cancelled`.
 - `message.send`: durable acceptance (`accept_message`) then ordered dispatch.
@@ -444,7 +454,7 @@ freeze exclusion, read-only review terminal, lease loss, bounded flood rate, `se
 
 A second client never gets authority: the window application is single-instance on the session bus (a second
 launch activates the existing window), and the service refuses any second link while the lease is held (one
-`service.notice {code: unauthorized}`, then the link closes).
+`service.notice {code: lease_held}`, then the link closes).
 
 ## Diagnostics
 
@@ -576,7 +586,7 @@ worker launch, which register the provider only with it. Without the switch, at 
 
 With the switch the provider is an ordinary catalogue entry (no special badge or label in the client). The Rust
 integration tests (`tests/service_support`), the worker tests, `tests/load.rs` and `scripts/e2e-gui`,
-`e2e-terminal`, `e2e-resilience` and `e2e-perf` turn it on; `tests/service_compat.rs` and
+`e2e-terminal`, `e2e-resilience` and `e2e-perf` turn it on; `tests/service_pi_integration.rs` and
 `tests/supervision_launcher.rs` check that it is absent and refused without it.
 
 ## Tests

@@ -7,6 +7,17 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Reports a test skipped because a sandbox prerequisite (bubblewrap, prlimit, working user
+/// namespaces, or the node runtime of the worker tests) is missing. With `LADE_REQUIRE_SANDBOX=1`,
+/// as CI sets it, the missing prerequisite fails the test instead of skipping it.
+pub fn skip_without_sandbox(why: impl std::fmt::Display) {
+    assert!(
+        std::env::var_os("LADE_REQUIRE_SANDBOX").is_none_or(|v| v != "1"),
+        "LADE_REQUIRE_SANDBOX=1, but the sandbox prerequisites are missing: {why}"
+    );
+    eprintln!("skipping: sandbox prerequisites missing ({why})");
+}
+
 pub struct TempDir(PathBuf);
 
 impl TempDir {
@@ -14,8 +25,7 @@ impl TempDir {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
+            .map_or(0, |d| d.subsec_nanos());
         let path = std::env::temp_dir().join(format!(
             "lade-test-{tag}-{}-{}-{nanos}",
             std::process::id(),
@@ -53,7 +63,7 @@ pub fn git_os<S: AsRef<OsStr>>(dir: &Path, args: &[S]) -> Vec<u8> {
     assert!(
         out.status.success(),
         "git {:?} failed: {}",
-        args.iter().map(|a| a.as_ref()).collect::<Vec<_>>(),
+        args.iter().map(AsRef::as_ref).collect::<Vec<_>>(),
         String::from_utf8_lossy(&out.stderr)
     );
     out.stdout

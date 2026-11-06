@@ -1,0 +1,5 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+# Transitive duplicates from the gtk-rs dependency tree; no direct dependency pins either version.
+allowed-duplicate-crates = ["hashbrown", "syn"]

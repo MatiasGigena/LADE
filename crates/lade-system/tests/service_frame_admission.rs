@@ -1,14 +1,25 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
+
+use std::path::Path;
 
 use lade_core::domain::ids::{ObjectiveId, Uuid, WorkspaceId};
 use lade_core::domain::objectives::{BranchName, Intent as CoreIntent, Objective};
 use lade_protocol::client::{
     Basis, ClientBody, ClientEnvelope, Empty, ErrorCode, ExecutionState, Intent,
-    ObjectiveCreateCommand, ObjectiveSelector, OperationGetQuery, Outcome, ReplyData, Request,
-    RequestFrame, ReviewVerifyCommand, Settings, SettingsUpdateCommand, Start, UpdateIntentCommand,
+    ObjectiveCreateCommand, ObjectiveSelector, ObjectiveUpdateIntentCommand, OperationGetQuery,
+    Outcome, ReplyData, Request, RequestFrame, ReviewVerifyCommand, Settings,
+    SettingsUpdateCommand, Start,
 };
+use lade_protocol::types::ActivityRole;
 use lade_protocol::{Framing, MAX_FRAME, encode};
-use lade_system::storage::{self, Store, WorkspaceRow};
+use lade_system::storage::{self, WorkspaceRow};
 use service_support::*;
 
 fn sized_intent(mut request: Request, slack: usize) -> Request {
@@ -55,7 +66,7 @@ fn an_unrepresentable_objective_is_refused_before_creation() {
     let result = client.call_op(operation, request);
     drop(client);
     service.shutdown();
-    let conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let conn = env.db();
     let stored: i64 = conn
         .query_row("SELECT COUNT(*) FROM objectives", [], |row| row.get(0))
         .unwrap();
@@ -78,7 +89,7 @@ fn an_unrepresentable_intent_update_preserves_the_prior_durable_intent() {
         .call_op(
             operation.clone(),
             sized_intent(
-                Request::ObjectiveUpdateIntent(UpdateIntentCommand {
+                Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
                     objective_id: objective.objective_id.clone(),
                     expected_intent_revision: objective.intent_revision.clone(),
                     intent: Intent {
@@ -96,7 +107,7 @@ fn an_unrepresentable_intent_update_preserves_the_prior_durable_intent() {
     }));
     drop(client);
     service.shutdown();
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert!(
         storage::load_objectives(store.conn()).unwrap()[0]
             .objective
@@ -188,7 +199,7 @@ fn large_intent_stays_readable_when_session_and_review_history_grow() {
     assert!(
         matches!(recorded.outcome, Some(Outcome::Ok(data)) if matches!(*data, ReplyData::ObjectiveCreate(ref detail) if detail.intent == objective.intent))
     );
-    let conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let conn = env.db();
     let (argv, tail): (String, String) = conn
         .query_row(
             "SELECT argv,output_tail FROM verifications LIMIT 1",
@@ -203,7 +214,7 @@ fn large_intent_stays_readable_when_session_and_review_history_grow() {
 }
 
 fn seed_review_history(env: &Env, objective: &lade_protocol::types::Id, count: i64) {
-    let mut conn = rusqlite::Connection::open(env.root.path().join("state/lade.db")).unwrap();
+    let mut conn = env.db();
     let tx = conn.transaction().unwrap();
     let template: String = tx
         .query_row(
@@ -234,7 +245,7 @@ fn seed_review_history(env: &Env, objective: &lade_protocol::types::Id, count: i
 }
 
 fn seed_objectives(env: &Env, count: usize, outcome: &str) {
-    let mut store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let mut store = env.store();
     let mut template = storage::load_objectives(store.conn()).unwrap().remove(0);
     let mut record = template.objective.clone().into_record();
     record.intent = CoreIntent::new(outcome, "", "").unwrap();
@@ -253,9 +264,9 @@ fn seed_objectives(env: &Env, count: usize, outcome: &str) {
     tx.commit().unwrap();
 }
 
-fn dense_settings(commands: usize, args: usize) -> Settings {
+fn dense_settings(commands: usize, words: usize) -> Settings {
     let mut argv = vec!["true".to_string()];
-    argv.extend(std::iter::repeat_n("a".into(), args - 1));
+    argv.extend(std::iter::repeat_n("a".into(), words - 1));
     Settings {
         verification_commands: vec![argv; commands],
         default_model: None,
@@ -304,7 +315,7 @@ fn snapshot_byte_budget_preserves_all_objectives_and_exact_settings() {
             .all(|row| !row.outcome.is_empty() && row.outcome.len() < 512)
     );
     assert_eq!(refused.unwrap_err().code, ErrorCode::LimitReached);
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert_eq!(
         storage::load_settings(store.conn()).unwrap(),
         Some(settings)
@@ -317,16 +328,23 @@ fn snapshot_byte_budget_preserves_all_objectives_and_exact_settings() {
     );
 }
 
-#[test]
-fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
-    let env = Env::new("svc-snapshot-nodes");
-    let service = env.start(FakeLauncher::shared());
-    let mut client = env.connect();
-    let ws = open_workspace(&mut client, &env.repo);
-    create_objective(&mut client, &ws.workspace_id, "Snapshot record");
-    drop(client);
-    service.shutdown();
-    seed_objectives(&env, 400, "x");
+/// A detached worktree of `repo` at `path`, which the service sees as one more repository.
+fn add_detached_worktree(repo: &Path, path: &Path) {
+    git(
+        repo,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            "-q",
+            path.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+}
+
+/// 64 branches in the fixture repository and 63 more workspaces, one per detached worktree.
+fn seed_branches_and_workspaces(env: &Env) {
     for index in 0..64 {
         git(
             &env.repo,
@@ -337,20 +355,10 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
             ],
         );
     }
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     for index in 1..64 {
         let path = env.root.path().join(format!("repository-{index}"));
-        git(
-            &env.repo,
-            &[
-                "worktree",
-                "add",
-                "--detach",
-                "-q",
-                path.to_str().unwrap(),
-                "HEAD",
-            ],
-        );
+        add_detached_worktree(&env.repo, &path);
         storage::insert_workspace(
             store.conn(),
             &WorkspaceRow {
@@ -363,7 +371,21 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
         )
         .unwrap();
     }
+}
+
+#[test]
+fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
+    let env = Env::new("svc-snapshot-nodes");
+    let service = env.start(FakeLauncher::shared());
+    let mut client = env.connect();
+    let ws = open_workspace(&mut client, &env.repo);
+    create_objective(&mut client, &ws.workspace_id, "Snapshot record");
+    drop(client);
+    service.shutdown();
+    seed_objectives(&env, 400, "x");
+    seed_branches_and_workspaces(&env);
     let settings = dense_settings(32, 256);
+    let store = env.store();
     storage::save_settings(store.conn(), &settings).unwrap();
     drop(store);
     let service = env.start(FakeLauncher::shared());
@@ -381,17 +403,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
         start: Start::Target,
     }));
     let new_repo = env.root.path().join("another-repository");
-    git(
-        &env.repo,
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            "-q",
-            new_repo.to_str().unwrap(),
-            "HEAD",
-        ],
-    );
+    add_detached_worktree(&env.repo, &new_repo);
     let open = client.call(Request::WorkspaceOpen(
         lade_protocol::client::WorkspaceOpenCommand {
             path: lade_protocol::types::WirePath::from_os_str(new_repo.as_os_str()).unwrap(),
@@ -419,7 +431,7 @@ fn snapshot_node_budget_keeps_rows_and_refuses_unrepresentable_growth() {
     );
     assert_eq!(create.unwrap_err().code, ErrorCode::LimitReached);
     assert_eq!(open.unwrap_err().code, ErrorCode::LimitReached);
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     assert_eq!(storage::load_objectives(store.conn()).unwrap().len(), 400);
     assert_eq!(storage::load_workspaces(store.conn()).unwrap().len(), 64);
 }
@@ -505,7 +517,7 @@ fn a_wire_sized_verification_command_has_bounded_reply_event_and_recovery_previe
     assert!(
         matches!(recovered.unwrap(), ReplyData::OperationGet(recorded) if matches!(&recorded.outcome, Some(Outcome::Ok(data)) if matches!(data.as_ref(), ReplyData::ReviewVerify(row) if row.truncated)))
     );
-    let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let store = env.store();
     let review = storage::load_review(
         store.conn(),
         ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap()),
@@ -525,14 +537,14 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
     wait_state(&mut client, &objective, ExecutionState::Idle);
     drop(client);
     service.shutdown();
-    let mut store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+    let mut store = env.store();
     let tx = store.begin().unwrap();
     let oid = ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap());
     for seq in 1..=200 {
         let item_id = new_id();
         let body = lade_protocol::worker::WorkerBody::ActivityItem {
             item_id: item_id.clone(),
-            role: lade_protocol::types::ActivityRole::Tool,
+            role: ActivityRole::Tool,
             title: "Tool output".into(),
             text: "x".repeat(3600),
             is_error: false,
@@ -548,10 +560,10 @@ fn activity_pages_account_for_escaped_tool_names_and_retain_the_whole_history() 
             &tx,
             oid,
             &storage::ActivityRow {
-                item_id: item_id.as_str().into(),
+                item_id: item_id.clone(),
                 seq,
-                at: 1700000000000,
-                role: "tool".into(),
+                at: 1_700_000_000_000,
+                role: ActivityRole::Tool,
                 title: "Tool output".into(),
                 text: "x".repeat(3600),
                 tool_name: Some("\u{1}".repeat(256)),
@@ -626,7 +638,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
         if fits {
             let body = lade_protocol::worker::WorkerBody::ActivityItem {
                 item_id: item_id.clone(),
-                role: lade_protocol::types::ActivityRole::Assistant,
+                role: ActivityRole::Assistant,
                 title: "Assistant".into(),
                 text: text.clone(),
                 is_error: false,
@@ -651,15 +663,15 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
                 .expect("streamed chunks can assemble a raw192KiB item");
             }
         }
-        let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+        let store = env.store();
         storage::upsert_activity(
             store.conn(),
             ObjectiveId::new(Uuid::parse(objective.as_str()).unwrap()),
             &storage::ActivityRow {
-                item_id: item_id.as_str().into(),
+                item_id: item_id.clone(),
                 seq: 1,
-                at: 1700000000000,
-                role: "assistant".into(),
+                at: 1_700_000_000_000,
+                role: ActivityRole::Assistant,
                 title: "Assistant".into(),
                 text: text.clone(),
                 tool_name: None,
@@ -694,7 +706,7 @@ fn a_large_activity_item_makes_progress_or_reports_an_explicit_hard_limit() {
         } else {
             assert_eq!(result.unwrap_err().code, ErrorCode::LimitReached);
         }
-        let store = Store::open(&env.root.path().join("state/lade.db")).unwrap();
+        let store = env.store();
         let saved: String = store
             .conn()
             .query_row(

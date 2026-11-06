@@ -12,6 +12,7 @@ use rustix::process::{Pid, Signal, kill_process_group};
 
 use super::credentials::Secret;
 use crate::adapters::sandbox::find_program;
+use crate::support::process::wait_until;
 
 pub const SERVICE: &str = "lade";
 pub const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -19,7 +20,6 @@ pub const STORE_TIMEOUT: Duration = Duration::from_secs(60);
 pub const MAX_SECRET_BYTES: usize = 64 << 10;
 const MAX_STDERR_BYTES: usize = 4 << 10;
 const MAX_REASON_CHARS: usize = 200;
-const POLL: Duration = Duration::from_millis(10);
 const PASSED_ENV: &[&str] = &[
     "HOME",
     "XDG_RUNTIME_DIR",
@@ -76,12 +76,14 @@ struct Ran {
     stderr: Vec<u8>,
 }
 
+#[derive(Clone, Copy)]
 enum RunError {
     Spawn(io::ErrorKind),
     TimedOut,
 }
 
 impl SecretService {
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             state: State::Disabled,
@@ -89,6 +91,7 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn new(program: PathBuf, env: Vec<(OsString, OsString)>) -> Self {
         Self {
             state: State::Ready { program, env },
@@ -96,11 +99,13 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
+    #[must_use]
     pub fn from_env() -> Self {
         Self::detect(find_program("secret-tool"), |name| std::env::var_os(name))
     }
@@ -138,10 +143,12 @@ impl SecretService {
         Self::new(program, env)
     }
 
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         !matches!(self.state, State::Disabled)
     }
 
+    #[must_use]
     pub fn unavailable_reason(&self) -> Option<&str> {
         match &self.state {
             State::Unavailable(reason) => Some(reason),
@@ -149,10 +156,12 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
+    #[must_use]
     pub fn lookup(&self, provider: &str, variable: &str, deadline: Instant) -> Lookup {
         let args = [
             "lookup", "service", SERVICE, "provider", provider, "variable", variable,
@@ -184,6 +193,7 @@ impl SecretService {
         }
     }
 
+    #[must_use]
     pub fn locked(&self, provider: &str, deadline: Instant) -> Option<String> {
         let args = ["search", "service", SERVICE, "provider", provider];
         let ran = self.run(&args, None, false, deadline).ok()?;
@@ -192,6 +202,12 @@ impl SecretService {
             .then(|| "the keyring holding LADE's keys is locked; unlock it and try again".into())
     }
 
+    /// Stores `secret` as `variable` of `provider` in the Secret Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason the developer can read when `secret-tool` cannot run, times out, or refuses
+    /// the item (for example a locked keyring).
     pub fn store(&self, provider: &str, variable: &str, secret: &[u8]) -> Result<(), String> {
         let label = format!("LADE {provider} {variable}");
         let args = [
@@ -209,6 +225,13 @@ impl SecretService {
             .unwrap_or_else(|| format!("secret-tool store failed ({})", ran.status)))
     }
 
+    /// Deletes the stored `variable` of `provider` (all of its variables when `None`);
+    /// `false` when nothing was stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reason the developer can read when `secret-tool` cannot run, times out, or reports an
+    /// error.
     pub fn clear(&self, provider: &str, variable: Option<&str>) -> Result<bool, String> {
         let mut args = vec!["clear", "service", SERVICE, "provider", provider];
         if let Some(variable) = variable {
@@ -271,7 +294,7 @@ impl SecretService {
             .stderr
             .take()
             .map(|pipe| thread::spawn(move || read_capped(pipe, MAX_STDERR_BYTES)));
-        let status = wait_until(&mut child, deadline);
+        let status = wait_or_kill(&mut child, deadline);
         if let Some(writer) = writer {
             let _ = writer.join();
         }
@@ -298,13 +321,11 @@ fn run_error(error: RunError, bound: Duration) -> String {
     }
 }
 
-fn wait_until(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
-            _ => break,
-        }
+/// Waits for `child` until `deadline`; a child still running then (or one whose status cannot
+/// be read) is killed with its process group.
+fn wait_or_kill(child: &mut Child, deadline: Instant) -> Option<ExitStatus> {
+    if let Ok(Some(status)) = wait_until(child, deadline) {
+        return Some(status);
     }
     if let Some(group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
         let _ = kill_process_group(group, Signal::KILL);
@@ -345,6 +366,7 @@ fn reason_of(stderr: &[u8]) -> Option<String> {
     )
 }
 
+#[must_use]
 pub fn valid_provider_id(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id

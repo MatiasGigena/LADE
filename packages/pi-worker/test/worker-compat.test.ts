@@ -7,9 +7,11 @@ import { test } from "node:test";
 import { FIXTURE_PROVIDER, FIXTURE_SWITCH } from "../src/worker/fixture.ts";
 import { extensionHash } from "../src/worker/resources.ts";
 import type { JsonObject, JsonValue } from "../src/json.ts";
-import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, Worker, WORKER } from "./worker-support.ts";
+import { cleanup, deliverBody, envelope, record, sandbox, startBody, text, TIMEOUT_MS, Worker, WORKER } from "./worker-support.ts";
 import type { Sandbox } from "./worker-support.ts";
 
+// The input handler's dialog waits as long as the test does, so a slow host cannot time it out before the answer;
+// the timeout close itself is covered by `/ask quick`.
 const EXTENSION = `export default function (pi) {
   pi.registerCommand("ask", {
     description: "LADE fixture confirmation",
@@ -34,11 +36,14 @@ const EXTENSION = `export default function (pi) {
   });
   pi.on("input", async (event, ctx) => {
     if (event.text !== "confirm-input") return { action: "continue" };
-    const ok = await ctx.ui.confirm("Accept input?", "Confirm before the turn starts", { timeout: 750 });
+    const ok = await ctx.ui.confirm("Accept input?", "Confirm before the turn starts", { timeout: ${TIMEOUT_MS} });
     return { action: "transform", text: "lade-fixture: echo confirmed=" + ok };
   });
 }
 `;
+
+/** A long turn, so that several of them leave the session something to compact. */
+const LONG_TURN = "context ".repeat(4_000);
 
 interface Profile { dir: string; extension: string }
 
@@ -76,12 +81,12 @@ function assistant(worker: Worker, from: number): string[] {
 async function prompt(worker: Worker, body: string): Promise<number> {
   const mark = worker.frames.length;
   worker.send(deliverBody("prompt", body));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
 
   return mark;
 }
 
-async function command(worker: Worker, payload: JsonObject): Promise<JsonObject> {
+function command(worker: Worker, payload: JsonObject): Promise<JsonObject> {
   const id = randomUUID();
   const mark = worker.frames.length;
   worker.send({ kind: "session.command", command_id: id, command: payload });
@@ -196,7 +201,7 @@ test("a dialog opened by an input handler can receive its answer before prefligh
   worker.send(deliverBody("prompt", "confirm-input"));
   const request = await worker.waitFor(frame => frame.kind === "ui.request", mark);
   worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   assert.ok(assistant(worker, mark).some(line => line.includes("confirmed=true")), "the answer must reach the input handler while it is waiting");
   assert.equal(worker.kinds("ui.closed").some(frame => frame.ui_id === request.ui_id && frame.reason === "timeout"), false);
 }));
@@ -209,7 +214,7 @@ test("inputs delivered while preflight waits for a dialog retain their order", (
   worker.send(deliverBody("prompt", "later input", later));
   await worker.waitFor(frame => frame.kind === "input.received" && frame.input_id === later, mark);
   worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   const users = worker.items(mark).filter(item => item.role === "user").map(item => text(item.text));
   assert.deepEqual(users, ["lade-fixture: echo confirmed=true", "later input"]);
   assert.equal(worker.kinds("worker.error").length, 0);
@@ -222,7 +227,7 @@ test("abort closes a preflight dialog and discards its queued input", () => with
   worker.send(deliverBody("prompt", "queued before abort"));
   worker.send({ kind: "session.abort" });
   worker.send(deliverBody("prompt", "after abort"));
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   const users = worker.items(mark).filter(item => item.role === "user").map(item => text(item.text));
   assert.deepEqual(users, ["after abort"]);
   assert.equal(worker.kinds("ui.closed").some(frame => frame.ui_id === request.ui_id && frame.reason === "aborted"), true);
@@ -236,7 +241,7 @@ test("session replacement is refused during input preflight and works after its 
   assert.equal(waiting.ok, false);
   assert.match(text(waiting.message), /input delivery is in progress/);
   worker.send({ kind: "ui.respond", ui_id: text(request.ui_id), generation: text(request.generation), answer: { kind: "confirm", confirmed: true } });
-  await worker.idle(mark);
+  await worker.waitForIdle(mark);
   assert.ok(assistant(worker, mark).some(line => line.includes("confirmed=true")));
   const reloaded = await command(worker, { op: "reload", resources: resources(found) });
   assert.equal(reloaded.ok, true, text(reloaded.message));
@@ -355,7 +360,7 @@ test("export writes the current branch; import restores conversation metadata on
 }));
 
 test("manual compaction, model/thinking configuration and retries surface as activity", () => withProfile(async worker => {
-  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${"context ".repeat(4_000)}`);
+  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${LONG_TURN}`);
   const mark = worker.frames.length;
   const compacted = await command(worker, { op: "compact", instructions: "keep it short" });
 
@@ -380,7 +385,7 @@ test("a second command while one runs fails at once; a foreign profile path is r
   const outside = await command(worker, { op: "reload", resources: { profile_dir: "/", extensions: [] } });
   assert.equal(outside.ok, false, "a profile outside the session dir is refused");
 
-  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${"context ".repeat(4_000)}`);
+  for (const turn of ["one", "two", "three", "four"]) await prompt(worker, `${turn} ${LONG_TURN}`);
   const first = randomUUID();
   const second = randomUUID();
   const mark = worker.frames.length;
@@ -394,7 +399,7 @@ test("a second command while one runs fails at once; a foreign profile path is r
 
 function runCatalog(box: Sandbox, name: string, env: Record<string, string>): JsonObject {
   const out = join(box.root, name);
-  execFileSync(process.execPath, [join(dirname(WORKER), "worker", "catalog.ts"), out], { stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, ...env } });
+  execFileSync(process.execPath, [join(dirname(WORKER), "catalog.ts"), out], { stdio: "ignore", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: box.home, ...env } });
 
   return record(JSON.parse(readFileSync(out, "utf8")));
 }

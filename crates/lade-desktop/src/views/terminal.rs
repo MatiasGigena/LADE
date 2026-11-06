@@ -1,3 +1,6 @@
+//! The terminal pane: the contained terminal of the selected Objective, its keyboard and paste
+//! input, and its open, refused and ended states.
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,13 +15,13 @@ use super::widgets::{
 use super::workbench;
 use crate::presentation::controller::Controller;
 use crate::presentation::keys::{AppAction, Keymap};
-use crate::presentation::model::{
+use crate::presentation::state::model::{
     ActionAvailability, ActionSurface, ObjectiveDetail, ObjectiveId, Refusal,
 };
-use crate::presentation::store::{Change, MainView, StoreUpdate};
+use crate::presentation::state::store::{Change, MainView, StoreUpdate};
 use crate::presentation::terminal::{
-    MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalStatus,
-    awaits_first_start, encode_key, paste_text,
+    MAX_COLS, MAX_ROWS, MIN_COLS, MIN_ROWS, Mods, TermKey, TerminalMode, TerminalSession,
+    TerminalStatus, awaits_first_start, encode_key, paste_text,
 };
 
 const SCOPE_LINE: &str =
@@ -238,17 +241,14 @@ impl TerminalPane {
         let Some(bytes) = encode_key(term, mods, application_cursor.unwrap_or(false)) else {
             return glib::Propagation::Proceed;
         };
-        if self.controller.terminal_input(&bytes) {
+        if self.controller.terminal_input(&bytes).is_ok() {
             glib::Propagation::Stop
         } else {
             glib::Propagation::Proceed
         }
     }
 
-    fn with_session<T>(
-        &self,
-        f: impl FnOnce(&crate::presentation::terminal::TerminalSession) -> T,
-    ) -> Option<T> {
+    fn with_session<T>(&self, f: impl FnOnce(&TerminalSession) -> T) -> Option<T> {
         let state = self.controller.store.state();
         let id = state.ui.selected.as_ref()?;
         state.terminal_for(id).map(f)
@@ -269,11 +269,11 @@ impl TerminalPane {
                 &message,
                 gtk::AccessibleAnnouncementPriority::Medium,
             ),
-        };
+        }
     }
 
     pub fn focus(&self) {
-        let open = self.with_session(|s| s.is_open()).unwrap_or(false);
+        let open = self.with_session(TerminalSession::is_open).unwrap_or(false);
         let usable = |b: &gtk::Button| b.is_mapped() && b.is_sensitive();
         if open {
             self.view.grab_focus();
@@ -314,18 +314,13 @@ impl TerminalPane {
                 let bracketed = pane
                     .with_session(|s| s.screen.bracketed_paste)
                     .unwrap_or(false);
-                match paste_text(&text, bracketed) {
-                    Ok(data) => {
-                        pane.controller.terminal_input(&data);
-                    }
-                    Err(message) => {
-                        if let Some(objective_id) = pane.selected() {
-                            pane.controller.store.apply(StoreUpdate::TerminalProblem {
-                                objective_id,
-                                message,
-                            });
-                        }
-                    }
+                let pasted = paste_text(&text, bracketed)
+                    .and_then(|data| pane.controller.terminal_input(&data));
+                if let (Err(message), Some(objective_id)) = (pasted, pane.selected()) {
+                    pane.controller.store.apply(StoreUpdate::TerminalProblem {
+                        objective_id,
+                        message,
+                    });
                 }
             });
     }
@@ -514,7 +509,7 @@ impl TerminalPane {
         };
         self.title
             .set_text(&format!("Terminal — {}", summary.title));
-        let open = session.as_ref().is_some_and(|s| s.is_open());
+        let open = session.as_ref().is_some_and(TerminalSession::is_open);
         let opening = session
             .as_ref()
             .is_some_and(|s| s.status == TerminalStatus::Opening);
@@ -568,10 +563,12 @@ impl TerminalPane {
                 None => "Terminal output".to_owned(),
             },
         );
-        let (text, cursor) = session
-            .as_ref()
-            .map(|s| s.screen.render())
-            .unwrap_or_default();
+        self.show_screen(session.as_ref(), open);
+    }
+
+    /// Shows the session's screen and, while it is open, keeps its cursor in view.
+    fn show_screen(&self, session: Option<&TerminalSession>, open: bool) {
+        let (text, cursor) = session.map(|s| s.screen.render()).unwrap_or_default();
         self.set_text(&text);
         if open {
             let buffer = self.view.buffer();

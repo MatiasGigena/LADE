@@ -17,8 +17,9 @@ compatibility manifest matches the SDK catalogue": SDK version and every catalog
 equal what this build's egress and credential tables decide).
 
 Test locations: **W** = `packages/pi-worker/test/worker-compat.test.ts`, **S** =
-`crates/lade-system/tests/service_compat.rs`, **D** = `crates/lade-desktop` unit tests
-(`presentation/compat.rs`, `presentation/controller_compat.rs`, `transport/requests/tests.rs`).
+`crates/lade-system/tests/service_pi_integration.rs`, **D** = `crates/lade-desktop` unit tests
+(`presentation/state/agent_session.rs`, `presentation/controller/agent_session.rs`,
+`transport/requests/tests.rs`).
 
 ## Profile separation
 
@@ -39,7 +40,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| Resume the Objective's session | Supported | `worker.start` carries the recorded `session_file` of the current association, so resume reopens exactly that pi session (also after a fork or import) | `worker.test.ts` resume; S `tree_fork_export_import_…` [integrated] |
+| Resume the Objective's session | Supported | `worker.start` carries the recorded `session_file` of the current association, so resume reopens exactly that pi session (also after a fork or import); a `session_file` outside `<session_dir>/sessions/` fails the start with `startup_failed` | `worker.test.ts` resume; S `tree_fork_export_import_…` [integrated] |
 | Session tree inspection | Supported | `session.tree` → the last 1024 entries (`message`, `compaction`, `branch_summary`, `model_change`, `thinking_change`, `label`, `custom`, …) with leaf and `truncated` | W "tree navigation …"; S [integrated] |
 | Tree navigation ("go here") | Supported | `session.navigate` moves pi's leaf only (`navigateTree`, no summary). **Files in the worktree are never rewound**; the Change Set is unaffected. Needs an idle session | W asserts the worktree file is unchanged after navigating [integrated] |
 | Fork / clone | Supported | `session.fork {entry_id, position: before|at}` → pi `AgentSessionRuntime.fork`. The service **rebinds** the Objective to a new LADE session id (association revision + 1): input or feedback addressed to the old session is refused as `stale_association`; a system item says no approval, verification or Git state was carried over | W; S (`stale_association` after fork) [integrated] |
@@ -55,7 +56,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (40 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/worker/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D |
+| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (40 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D |
 | Model and thinking selection | Supported | Picker with the model's supported thinking levels (pi-ai `getSupportedThinkingLevels`). `execution.start` takes an optional `thinking`; `session.configure` changes model and thinking of an idle live session (pi `setModel`, `setThinkingLevel`, clamped by pi) or, when stopped, persists them for the next start/resume. Persisted per Objective (model on the Objective, thinking in `session_preferences`) | W "manual compaction, model/thinking configuration …"; S `model_and_thinking_selection_is_persisted_per_objective` [integrated] |
 | Changing the **provider** of a live session | Restricted | A launch releases one provider's credentials and egress policy; changing provider needs stop → configure → resume (explicit error otherwise) | S [integrated] |
 | Model cycling shortcuts | Restricted | Replaced by the explicit picker (no TUI cycling keys) | — |
@@ -122,14 +123,14 @@ provider's reviewed host.
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `providers.rs` tests, S [integrated]; **no live provider run** |
-| Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `providers.rs` tests [fixture]; **no live run** |
-| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT subscription login for `openai` and the legacy `openai-codex`, GitHub Copilot, xAI, OpenRouter OAuth, Kimi Code, Meta (Muse), Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `providers.rs` tests |
+| API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `supervision/provider_access.rs` tests, S [integrated]; **no live provider run** |
+| Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `supervision/provider_access.rs` tests [fixture]; **no live run** |
+| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT subscription login for `openai` and the legacy `openai-codex`, GitHub Copilot, xAI, OpenRouter OAuth, Kimi Code, Meta (Muse), Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `supervision/provider_access.rs` tests |
 | WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 1.5.0, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
 | Cloud credentials (Bedrock, Vertex) | Restricted | AWS profiles/keys and ADC files are not released; the Bedrock SDK's `node:http` transport bypasses the gateway | manifest |
 | Account-specific endpoints (Azure, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
-| Other catalogue providers without a reviewed policy (ant-ling, baseten, meta, minimax, minimax-cn, moonshotai-cn, qwen token plans, typesafe (classifier models only), xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway.rs`/`credentials.rs`) | manifest |
-| Custom providers (`models.json`) | Supported with trust rules | LADE profile `models.json`: https, or http only to local hosts; credentials only as one whole `$LADE_PROVIDER_*` variable (literal keys only for local endpoints); no `!command` values or other interpolation; no `oauth`; no redefinition of a built-in provider; egress to exactly the declared host:port (private addresses only for local endpoints) | `profile.rs` tests, S catalogue test [integrated] |
+| Other catalogue providers without a reviewed policy (ant-ling, baseten, meta, minimax, minimax-cn, moonshotai-cn, qwen token plans, typesafe (classifier models only), xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway/policy.rs`/`credentials.rs`) | manifest |
+| Custom providers (`models.json`) | Supported with trust rules | LADE profile `models.json`: https, or http only to local hosts; credentials only as one whole `$LADE_PROVIDER_*` variable (literal keys only for local endpoints); no `!command` values or other interpolation; no `oauth`; no redefinition of a built-in provider; egress to exactly the declared host:port (private addresses only for local endpoints) | `adapters/profile` tests, S catalogue test [integrated] |
 | Graphical login / logout | Restricted | Follows from the OAuth restriction; keys are stored with `laded credentials set` (Secret Service) or in `credentials.env` | — |
 
 ### Other pi compatibility areas

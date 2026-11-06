@@ -1,18 +1,12 @@
-pub mod attention;
-pub mod compat;
+//! GTK-free presentation: the state store, the controller, text formatting and the layout,
+//! keybinding and terminal rules views apply.
+
 pub mod controller;
-mod controller_compat;
-pub mod drafts;
-pub mod format;
-pub mod intents;
 pub mod keys;
 pub mod layout;
-pub mod model;
-pub mod panel;
-pub mod store;
-pub mod syntax;
+pub mod objective_actions;
+pub mod state;
 pub mod terminal;
 #[cfg(test)]
 pub mod test_fixture;
-pub mod text_bound;
-pub mod text_map;
+pub mod text;

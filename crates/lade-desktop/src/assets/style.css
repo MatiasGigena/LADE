@@ -305,7 +305,6 @@ label.text-placeholder { color: @ink_metadata; padding: 8px; margin: 1px; }
 .notice-bar.notice-error { background-color: @del_fill; color: @del_ink; }
 
 .region-bar { padding: 0 8px 8px 8px; }
-.region-bar .segmented { margin: 0 auto 0 0; }
 .compact .centre-page, .compact .activity { padding: 16px; }
 .compact .inspector-page { padding: 16px; }
 

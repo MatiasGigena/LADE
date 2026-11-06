@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { compareCodeUnits } from "../src/json.ts";
 import type { JsonObject } from "../src/json.ts";
 import { FIXTURE_MODEL, FIXTURE_PROVIDER, fixtureProvider } from "../src/worker/fixture.ts";
 import { createAssistantMessageEventStream, normalizeContext } from "../src/worker/pi-ai.ts";
@@ -69,7 +70,7 @@ function closure(locked: JsonObject, root: string): string[] {
     }
   }
 
-  return [...seen].sort();
+  return [...seen].sort(compareCodeUnits);
 }
 
 test("the worker installs exactly one pi-ai: the copy every pi package resolves", () => {
@@ -137,7 +138,7 @@ test("the installed SDK is the pinned narrow-fork distribution and resolves exac
   const lock = json(join(PACKAGE, "package-lock.json"));
   const locked = record(lock.packages);
   const distribution = record(record(manifest.npm_distribution).packages);
-  assert.deepEqual(Object.keys(distribution).sort(), Object.keys(record(record(locked[""]).dependencies)).sort(), "every direct dependency is recorded");
+  assert.deepEqual(Object.keys(distribution).sort(compareCodeUnits), Object.keys(record(record(locked[""]).dependencies)).sort(compareCodeUnits), "every direct dependency is recorded");
 
   for (const [name, entry] of Object.entries(distribution)) {
     const pinned = record(entry);
@@ -171,10 +172,10 @@ test("the installed SDK is the pinned narrow-fork distribution and resolves exac
   }
 
   const tree = closure(locked, SDK_PATH);
-  const production = Object.keys(locked).filter(path => path.length > 0 && record(locked[path]).dev !== true).sort();
+  const production = Object.keys(locked).filter(path => path.length > 0 && record(locked[path]).dev !== true).sort(compareCodeUnits);
   assert.deepEqual(production, tree, "every production package is in the SDK's dependency closure");
   const actual = tree.map(path => `${nameOf(path)}@${text(record(locked[path]).version)}`);
-  assert.deepEqual(actual.sort(), keys.sort(), "the SDK's locked closure is exactly upstream's install lock");
+  assert.deepEqual(actual.sort(compareCodeUnits), keys.sort(compareCodeUnits), "the SDK's locked closure is exactly upstream's install lock");
 
   for (const path of tree) {
     const installed = record(locked[path]);
@@ -185,5 +186,17 @@ test("the installed SDK is the pinned narrow-fork distribution and resolves exac
 
     if (pinned.integrity !== undefined) assert.equal(installed.integrity, pinned.integrity, path);
     else assert.ok(nameOf(path).startsWith("@earendil-works/pi-") && installed.version === manifest.version, `${path}: only pi's lockstep packages lack upstream integrity`);
+  }
+});
+
+test("every entry script imports stdio.ts before any other module", () => {
+  // stdio.ts moves console and stdout output to stderr when it is evaluated; an import above it
+  // (an SDK module above all) could write to the protocol stdout first.
+  const source = dirname(WORKER);
+
+  for (const entry of ["worker.ts", "catalog.ts"]) {
+    const first = readFileSync(join(source, entry), "utf8").split("\n").find(line => /^import\b/.test(line));
+
+    assert.match(first ?? "", /^import (?:\{[^}]*\} from |)"\.\/worker\/stdio\.ts";$/, `${entry}: ${first ?? "no import"}`);
   }
 });

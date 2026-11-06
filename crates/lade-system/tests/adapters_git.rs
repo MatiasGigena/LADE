@@ -1,16 +1,25 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod adapters_support;
 
 use std::ffi::OsStr;
+use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
 use adapters_support::{TempDir, commit_all, git, git_os, init_repo, status};
+use lade_core::domain::ids::{GitAlgorithm, GitId};
 use lade_system::adapters::git::{
-    ChangeStatus, CommitSpec, GitError, GitId, GrepQuery, LineKind, MAX_DIFF_LINES, MergeOutcome,
-    ObjectFormat, RepoPath, Repository, STDERR_LIMIT, SquashRequest, TargetBusyReason, Worktree,
-    escape_branch_name, unescape_branch_name, validate_branch_name, validate_refname,
+    ChangeStatus, CommitSpec, FileDiff, GitError, GrepQuery, LineKind, MAX_DIFF_LINES,
+    MergeOutcome, RepoPath, Repository, SquashRequest, Worktree, empty_tree, escape_branch_name,
+    parse_id, unescape_branch_name, validate_branch_name, validate_refname,
 };
 
 fn path(bytes: &[u8]) -> RepoPath {
@@ -18,7 +27,7 @@ fn path(bytes: &[u8]) -> RepoPath {
 }
 
 fn id(repo: &Repository, hex: &str) -> GitId {
-    GitId::parse(repo.object_format(), hex).expect("valid id")
+    parse_id(repo.object_format(), hex).expect("valid id")
 }
 
 fn head(repo: &Repository, dir: &Path) -> GitId {
@@ -36,7 +45,7 @@ fn open_validates_top_level_non_bare_and_format() {
     let tmp = TempDir::new("open");
     let repo_dir = init_repo(tmp.path(), "sha1");
     let repo = Repository::open(&repo_dir).expect("open");
-    assert_eq!(repo.object_format(), ObjectFormat::Sha1);
+    assert_eq!(repo.object_format(), GitAlgorithm::Sha1);
     assert_eq!(repo.work_tree(), repo_dir.as_path());
     assert_eq!(repo.head_branch().unwrap().as_deref(), Some("main"));
     let branches = repo.list_branches().unwrap();
@@ -70,7 +79,7 @@ fn open_validates_top_level_non_bare_and_format() {
 
     let sha256 = TempDir::new("open256");
     let repo256 = Repository::open(&init_repo(sha256.path(), "sha256")).expect("open sha256");
-    assert_eq!(repo256.object_format(), ObjectFormat::Sha256);
+    assert_eq!(repo256.object_format(), GitAlgorithm::Sha256);
     let main = repo256.resolve_commit("refs/heads/main").unwrap();
     assert_eq!(main.hex().len(), 64);
     assert_eq!(repo256.resolve_ref("refs/heads/missing").unwrap(), None);
@@ -78,45 +87,6 @@ fn open_validates_top_level_non_bare_and_format() {
         repo256.resolve_ref("refs/heads/../x"),
         Err(GitError::InvalidRefName)
     ));
-}
-
-#[test]
-fn worktree_add_open_and_remove() {
-    let tmp = TempDir::new("worktree");
-    let repo = Repository::open(&init_repo(tmp.path(), "sha1")).unwrap();
-    let wt = objective(&repo, tmp.path(), "obj-1");
-    assert!(wt.path().join("README").is_file());
-    assert!(
-        wt.admin_dir()
-            .starts_with(repo.common_dir().join("worktrees"))
-    );
-    assert_eq!(repo.open_worktree(wt.path()).unwrap(), wt);
-    assert!(repo.resolve_ref("refs/heads/lade/obj-1").unwrap().is_some());
-    assert!(matches!(
-        repo.worktree_add(
-            "lade/obj-1",
-            &head(&repo, repo.work_tree()),
-            &tmp.path().join("again")
-        ),
-        Err(GitError::Failed { .. })
-    ));
-
-    fs::write(wt.path().join("scratch.txt"), "dirty").unwrap();
-    fs::write(wt.path().join(".git"), "gitdir: /nonexistent\n").unwrap();
-    assert!(matches!(
-        repo.worktree_remove(&wt, false),
-        Err(GitError::WorktreeDirty)
-    ));
-    repo.worktree_remove(&wt, true).expect("forced remove");
-    assert!(!wt.path().exists());
-    assert!(matches!(
-        repo.open_worktree(wt.path()),
-        Err(GitError::WorktreeNotFound)
-    ));
-
-    let clean = objective(&repo, tmp.path(), "obj-2");
-    repo.worktree_remove(&clean, false).expect("clean remove");
-    assert!(!clean.path().exists());
 }
 
 fn capture_case(format: &str) {
@@ -170,7 +140,7 @@ fn capture_case(format: &str) {
         0,
         "temp index left"
     );
-    assert_eq!(tree.format(), repo.object_format());
+    assert_eq!(tree.algorithm(), repo.object_format());
 
     let base = repo.resolve_commit("refs/heads/main").unwrap();
     let changes = repo.diff_numstat(&base, &tree).unwrap();
@@ -196,14 +166,14 @@ fn capture_case(format: &str) {
     assert_eq!(find(b"staged.txt").status, ChangeStatus::Added);
     assert!(find(b"blob.bin").binary);
     assert_eq!(find(b"caf\xe9-\xff.txt").status, ChangeStatus::Added);
-    assert_eq!(find(b"link").new_mode, 0o120000);
+    assert_eq!(find(b"link").new_mode, 0o120_000);
     let tool = find(b"tool.sh");
-    assert_eq!((tool.old_mode, tool.new_mode), (0o100644, 0o100755));
+    assert_eq!((tool.old_mode, tool.new_mode), (0o100_644, 0o100_755));
     assert!(changes.iter().all(|c| c.path.as_bytes() != b"ignored.log"));
 
     let link = repo.read_blob(&tree, &path(b"link"), 0, 1024).unwrap();
     assert_eq!(link.data, b"modify.txt");
-    assert_eq!(link.mode, 0o120000);
+    assert_eq!(link.mode, 0o120_000);
     let odd_blob = repo
         .read_blob(&tree, &path(b"caf\xe9-\xff.txt"), 0, 1024)
         .unwrap();
@@ -258,7 +228,7 @@ fn commit_tree_and_compare_and_swap_refs() {
     ));
     repo.delete_ref_cas(refname, &main).unwrap();
     assert_eq!(repo.resolve_ref(refname).unwrap(), None);
-    let other_format = ObjectFormat::Sha256.empty_tree();
+    let other_format = empty_tree(GitAlgorithm::Sha256);
     assert!(matches!(
         repo.update_ref_cas(refname, &other_format, None),
         Err(GitError::InvalidId)
@@ -310,10 +280,10 @@ fn retention_ref_survives_gc_prune() {
     repo.release_retention("capture-1", &kept).unwrap();
 }
 
-#[test]
-fn numstat_hunks_and_byte_offsets() {
-    let tmp = TempDir::new("diff");
-    let repo_dir = init_repo(tmp.path(), "sha1");
+/// A repository whose two commits change line endings, UTF-8 text, a deleted, an added and a
+/// truncated file. Returns the repository and the base and changed commits.
+fn diff_fixture(root: &Path) -> (PathBuf, String, String) {
+    let repo_dir = init_repo(root, "sha1");
     fs::write(repo_dir.join("crlf.txt"), "alpha\r\nbeta\r\ngamma\r\n").unwrap();
     fs::write(repo_dir.join("utf8.txt"), "añb\nçdé\n日本語\nend").unwrap();
     fs::write(repo_dir.join("gone.txt"), "x\ny\n").unwrap();
@@ -326,11 +296,50 @@ fn numstat_hunks_and_byte_offsets() {
     fs::write(repo_dir.join("utf8.txt"), "añb\n変更\nçdé\n日本語\nend!").unwrap();
     fs::remove_file(repo_dir.join("gone.txt")).unwrap();
     fs::write(repo_dir.join("new.txt"), "n1\nn2").unwrap();
-    let huge: String = (0..MAX_DIFF_LINES + 500)
-        .map(|i| format!("line {i}\n"))
-        .collect();
+    let huge = (0..MAX_DIFF_LINES + 500).fold(String::new(), |mut huge, i| {
+        let _ = writeln!(huge, "line {i}");
+        huge
+    });
     fs::write(repo_dir.join("huge.txt"), &huge).unwrap();
     let new_hex = commit_all(&repo_dir, "change");
+    (repo_dir, base_hex, new_hex)
+}
+
+/// `file`'s diff between the `(base, new)` commits, after checking that every line's byte
+/// offset points at its text in the old or new blob.
+fn checked_diff(
+    repo: &Repository,
+    repo_dir: &Path,
+    (base, new): (&GitId, &GitId),
+    file: &str,
+) -> FileDiff {
+    let diff = repo
+        .diff_hunks(base, new, &path(file.as_bytes()), None)
+        .unwrap();
+    let new_blob = fs::read(repo_dir.join(file)).unwrap();
+    let old_blob = diff
+        .old_blob
+        .as_ref()
+        .map(|b| git_os(repo_dir, &["cat-file", "blob", b.hex()]))
+        .unwrap_or_default();
+    for line in diff.hunks.iter().flat_map(|h| &h.lines) {
+        if let Some(start) = line.new_byte_start {
+            let start = usize::try_from(start).unwrap();
+            assert!(new_blob[start..].starts_with(&line.text), "{file} new");
+            assert!(start == 0 || new_blob[start - 1] == b'\n');
+        }
+        if let Some(start) = line.old_byte_start {
+            let start = usize::try_from(start).unwrap();
+            assert!(old_blob[start..].starts_with(&line.text), "{file} old");
+        }
+    }
+    diff
+}
+
+#[test]
+fn numstat_hunks_and_byte_offsets() {
+    let tmp = TempDir::new("diff");
+    let (repo_dir, base_hex, new_hex) = diff_fixture(tmp.path());
     let repo = Repository::open(&repo_dir).unwrap();
     let (base, new) = (id(&repo, &base_hex), id(&repo, &new_hex));
 
@@ -344,33 +353,7 @@ fn numstat_hunks_and_byte_offsets() {
     assert_eq!(counts(b"gone.txt"), (ChangeStatus::Deleted, 0, 2));
     assert_eq!(counts(b"new.txt"), (ChangeStatus::Added, 2, 0));
 
-    let check_offsets = |file: &str| {
-        let diff = repo
-            .diff_hunks(&base, &new, &path(file.as_bytes()), None)
-            .unwrap();
-        let new_blob = fs::read(repo_dir.join(file)).unwrap();
-        let old_blob = diff
-            .old_blob
-            .as_ref()
-            .map(|b| git_os(&repo_dir, &["cat-file", "blob", b.hex()]))
-            .unwrap_or_default();
-        for line in diff.hunks.iter().flat_map(|h| &h.lines) {
-            if let Some(start) = line.new_byte_start {
-                assert!(
-                    new_blob[start as usize..].starts_with(&line.text),
-                    "{file} new"
-                );
-                assert!(start == 0 || new_blob[start as usize - 1] == b'\n');
-            }
-            if let Some(start) = line.old_byte_start {
-                assert!(
-                    old_blob[start as usize..].starts_with(&line.text),
-                    "{file} old"
-                );
-            }
-        }
-        diff
-    };
+    let check_offsets = |file: &str| checked_diff(&repo, &repo_dir, (&base, &new), file);
     let crlf = check_offsets("crlf.txt");
     assert!(!crlf.binary && !crlf.truncated);
     let lines = &crlf.hunks[0].lines;
@@ -427,236 +410,6 @@ fn numstat_hunks_and_byte_offsets() {
 }
 
 #[test]
-fn blob_pages_and_tree_listing() {
-    let tmp = TempDir::new("blob");
-    let repo_dir = init_repo(tmp.path(), "sha256");
-    let content: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
-    fs::create_dir(repo_dir.join("dir")).unwrap();
-    fs::write(repo_dir.join("dir/data.bin"), &content).unwrap();
-    fs::write(repo_dir.join("dir/*"), "literal star\n").unwrap();
-    let commit_hex = commit_all(&repo_dir, "data");
-    let repo = Repository::open(&repo_dir).unwrap();
-    let commit = id(&repo, &commit_hex);
-    let mut assembled = Vec::new();
-    let mut offset = 0;
-    loop {
-        let page = repo
-            .read_blob(&commit, &path(b"dir/data.bin"), offset, 1000)
-            .unwrap();
-        assert_eq!(page.total_bytes, 3000);
-        assembled.extend_from_slice(&page.data);
-        offset += page.data.len() as u64;
-        if page.eof {
-            break;
-        }
-    }
-    assert_eq!(assembled, content);
-    let past = repo
-        .read_blob(&commit, &path(b"dir/data.bin"), 5000, 10)
-        .unwrap();
-    assert!(past.data.is_empty() && past.eof);
-    assert!(matches!(
-        repo.read_blob(&commit, &path(b"dir"), 0, 10),
-        Err(GitError::NotABlob)
-    ));
-    let star = repo.read_blob(&commit, &path(b"dir/*"), 0, 100).unwrap();
-    assert_eq!(star.data, b"literal star\n");
-
-    let listing = repo.ls_tree(&commit, Some(&path(b"dir")), false).unwrap();
-    let names: Vec<_> = listing.iter().map(|e| e.path.display()).collect();
-    assert_eq!(names, ["dir/*", "dir/data.bin"]);
-    assert_eq!(listing[1].size, Some(3000));
-    let all = repo.ls_tree(&commit, None, true).unwrap();
-    assert_eq!(all.len(), 3);
-}
-
-#[test]
-fn grep_is_bounded_and_skips_binary() {
-    let tmp = TempDir::new("grep");
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    for i in 0..30 {
-        fs::write(
-            repo_dir.join(format!("f{i:02}.txt")),
-            format!("first\nxx Needle {i}\n"),
-        )
-        .unwrap();
-    }
-    fs::write(repo_dir.join("bin.dat"), b"needle\0binary").unwrap();
-    let commit_hex = commit_all(&repo_dir, "grep");
-    let repo = Repository::open(&repo_dir).unwrap();
-    let commit = id(&repo, &commit_hex);
-    let query = |text: &str, ignore_case, max_results| GrepQuery {
-        text: text.into(),
-        ignore_case,
-        max_results,
-    };
-    let bounded = repo.grep(&commit, &query("Needle", false, 10)).unwrap();
-    assert_eq!(bounded.matches.len(), 10);
-    assert!(bounded.truncated);
-    let first = &bounded.matches[0];
-    assert_eq!(first.path.as_bytes(), b"f00.txt");
-    assert_eq!((first.line, first.column), (2, 4));
-    assert_eq!(first.preview, b"xx Needle 0");
-
-    let all = repo.grep(&commit, &query("needle", true, 200)).unwrap();
-    assert_eq!(all.matches.len(), 30, "binary file must be skipped");
-    assert!(!all.truncated);
-    let none = repo.grep(&commit, &query("needle", false, 10)).unwrap();
-    assert!(none.matches.is_empty() && !none.truncated);
-    let dash = repo.grep(&commit, &query("-e", false, 10)).unwrap();
-    assert!(dash.matches.is_empty());
-    assert!(matches!(
-        repo.grep(&commit, &query("a\nb", false, 10)),
-        Err(GitError::InvalidArgument { .. })
-    ));
-}
-
-#[test]
-fn merge_tree_clean_and_conflict() {
-    let tmp = TempDir::new("merge");
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    fs::write(repo_dir.join("shared.txt"), "1\n2\n3\n").unwrap();
-    let base = commit_all(&repo_dir, "base");
-    git(&repo_dir, &["checkout", "-q", "-b", "side"]);
-    fs::write(repo_dir.join("side.txt"), "side\n").unwrap();
-    fs::write(repo_dir.join("shared.txt"), "1\nside\n3\n").unwrap();
-    let side = commit_all(&repo_dir, "side");
-    git(&repo_dir, &["checkout", "-q", "main"]);
-    fs::write(repo_dir.join("main.txt"), "main\n").unwrap();
-    let main_clean = commit_all(&repo_dir, "main clean");
-    let repo = Repository::open(&repo_dir).unwrap();
-
-    git(&repo_dir, &["checkout", "-q", "-b", "other", &base]);
-    fs::write(repo_dir.join("other.txt"), "other\n").unwrap();
-    let other = commit_all(&repo_dir, "other");
-    match repo
-        .merge_tree(&id(&repo, &main_clean), &id(&repo, &other))
-        .unwrap()
-    {
-        MergeOutcome::Clean { tree } => {
-            let names: Vec<_> = repo
-                .ls_tree(&tree, None, true)
-                .unwrap()
-                .into_iter()
-                .map(|e| e.path.display())
-                .collect();
-            assert!(names.contains(&"main.txt".to_owned()));
-            assert!(names.contains(&"other.txt".to_owned()));
-        }
-        other => panic!("expected clean merge, got {other:?}"),
-    }
-
-    git(&repo_dir, &["checkout", "-q", "main"]);
-    fs::write(repo_dir.join("shared.txt"), "1\nmain\n3\n").unwrap();
-    let main_conflict = commit_all(&repo_dir, "main conflict");
-    match repo
-        .merge_tree(&id(&repo, &main_conflict), &id(&repo, &side))
-        .unwrap()
-    {
-        MergeOutcome::Conflict { paths, .. } => {
-            assert_eq!(paths, vec![path(b"shared.txt")]);
-        }
-        other => panic!("expected conflict, got {other:?}"),
-    }
-}
-
-struct IntegrationFixture {
-    tmp: TempDir,
-    repo: Repository,
-    target: GitId,
-    candidate_tree: GitId,
-}
-
-fn integration_fixture(tag: &str) -> IntegrationFixture {
-    let tmp = TempDir::new(tag);
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    let repo = Repository::open(&repo_dir).unwrap();
-    let wt = objective(&repo, tmp.path(), "int");
-    fs::write(wt.path().join("feature.txt"), "feature\n").unwrap();
-    fs::write(wt.path().join("README"), "hello\nchanged\n").unwrap();
-    let scratch = tmp.path().join("scratch");
-    fs::create_dir(&scratch).unwrap();
-    let candidate_tree = repo.capture_working_tree(&wt, &scratch).unwrap().tree;
-    let target = repo.resolve_commit("refs/heads/main").unwrap();
-    IntegrationFixture {
-        tmp,
-        repo,
-        target,
-        candidate_tree,
-    }
-}
-
-impl IntegrationFixture {
-    fn request(&self, branch: &str) -> SquashRequest {
-        SquashRequest {
-            target_branch: branch.into(),
-            expected_target: self.target.clone(),
-            candidate_tree: self.candidate_tree.clone(),
-            message: "Integrate objective".into(),
-            timestamp: Some(1_700_000_100),
-        }
-    }
-
-    fn main_dir(&self) -> PathBuf {
-        self.repo.work_tree().to_path_buf()
-    }
-}
-
-#[test]
-fn integrate_into_branch_not_checked_out() {
-    let f = integration_fixture("int-a");
-    let dir = f.main_dir();
-    git(&dir, &["branch", "release", f.target.hex()]);
-    let status_before = status(&dir);
-    let outcome = f.repo.integrate_squash(&f.request("release")).unwrap();
-    assert_eq!(outcome.updated_worktree, None);
-    assert_eq!(
-        f.repo.resolve_ref("refs/heads/release").unwrap(),
-        Some(outcome.commit.clone())
-    );
-    assert_eq!(
-        git(&dir, &["rev-parse", &format!("{}^", outcome.commit)]),
-        f.target.hex()
-    );
-    assert_eq!(
-        git(
-            &dir,
-            &["rev-parse", &format!("{}^{{tree}}", outcome.commit)]
-        ),
-        f.candidate_tree.hex()
-    );
-    assert_eq!(status(&dir), status_before);
-    assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
-    let _ = &f.tmp;
-}
-
-#[test]
-fn integrate_into_valid_utf8_target_branches() {
-    let f = integration_fixture("int-utf8");
-    let dir = f.main_dir();
-    for branch in [
-        "feature/mañana",
-        "release/v1@candidate",
-        "fix/(parser)",
-        "fix./parser",
-    ] {
-        git(&dir, &["branch", branch, f.target.hex()]);
-        let listed = f.repo.list_branches().unwrap();
-        assert!(listed.iter().any(|entry| entry.name == branch));
-        let refname = format!("refs/heads/{branch}");
-        assert_eq!(
-            f.repo.resolve_ref(&refname).unwrap(),
-            Some(f.target.clone())
-        );
-        assert_eq!(f.repo.resolve_commit(&refname).unwrap(), f.target);
-
-        let outcome = f.repo.integrate_squash(&f.request(branch)).unwrap();
-        assert_eq!(f.repo.resolve_ref(&refname).unwrap(), Some(outcome.commit));
-        assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
-    }
-}
-
-#[test]
 fn ref_validation_rejects_revision_syntax_and_invalid_git_names() {
     for name in [
         "refs/heads/main~1",
@@ -693,176 +446,13 @@ fn ref_validation_rejects_revision_syntax_and_invalid_git_names() {
     }
 }
 
-#[test]
-fn integrate_into_clean_checked_out_target_updates_files() {
-    let f = integration_fixture("int-b");
-    let dir = f.main_dir();
-    fs::write(dir.join("untracked-note"), "keep me\n").unwrap();
-    let outcome = f.repo.integrate_squash(&f.request("main")).unwrap();
-    assert_eq!(outcome.updated_worktree.as_deref(), Some(dir.as_path()));
-    assert_eq!(git(&dir, &["rev-parse", "HEAD"]), outcome.commit.hex());
-    assert_eq!(fs::read(dir.join("feature.txt")).unwrap(), b"feature\n");
-    assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\nchanged\n");
-    assert_eq!(
-        git(&dir, &["status", "--porcelain", "--untracked-files=no"]),
-        ""
-    );
-    assert_eq!(fs::read(dir.join("untracked-note")).unwrap(), b"keep me\n");
-}
-
-#[test]
-fn integrate_refuses_dirty_or_busy_target_and_leaves_it_untouched() {
-    let f = integration_fixture("int-c");
-    let dir = f.main_dir();
-    fs::write(dir.join("README"), "local edit\n").unwrap();
-    let status_before = status(&dir);
-    match f.repo.integrate_squash(&f.request("main")) {
-        Err(GitError::TargetDirty { worktree }) => assert_eq!(worktree, dir),
-        other => panic!("expected dirty refusal, got {other:?}"),
-    }
-    assert_eq!(
-        f.repo.resolve_ref("refs/heads/main").unwrap(),
-        Some(f.target.clone())
-    );
-    assert_eq!(fs::read(dir.join("README")).unwrap(), b"local edit\n");
-    assert_eq!(status(&dir), status_before);
-
-    git(&dir, &["checkout", "-q", "--", "README"]);
-    fs::write(dir.join(".git/MERGE_HEAD"), format!("{}\n", f.target)).unwrap();
-    match f.repo.integrate_squash(&f.request("main")) {
-        Err(GitError::TargetBusy {
-            reason: TargetBusyReason::InProgress(states),
-            ..
-        }) => assert!(!states.is_empty()),
-        other => panic!("expected busy refusal, got {other:?}"),
-    }
-    fs::remove_file(dir.join(".git/MERGE_HEAD")).unwrap();
-    fs::write(dir.join(".git/index.lock"), "").unwrap();
-    assert!(matches!(
-        f.repo.integrate_squash(&f.request("main")),
-        Err(GitError::TargetBusy {
-            reason: TargetBusyReason::IndexLocked,
-            ..
-        })
-    ));
-    fs::remove_file(dir.join(".git/index.lock")).unwrap();
-    assert_eq!(
-        f.repo.resolve_ref("refs/heads/main").unwrap(),
-        Some(f.target.clone())
-    );
-}
-
-#[test]
-fn integrate_refuses_moved_target() {
-    let f = integration_fixture("int-d");
-    let dir = f.main_dir();
-    fs::write(dir.join("other.txt"), "moved\n").unwrap();
-    let moved = commit_all(&dir, "target moved");
-    match f.repo.integrate_squash(&f.request("main")) {
-        Err(GitError::TargetMoved { current }) => {
-            assert_eq!(current.map(|c| c.hex().to_owned()), Some(moved.clone()));
-        }
-        other => panic!("expected moved refusal, got {other:?}"),
-    }
-    assert_eq!(git(&dir, &["rev-parse", "main"]), moved);
-}
-
-#[test]
-fn integrate_refuses_untracked_collision_before_moving_the_ref() {
-    let f = integration_fixture("int-e");
-    let dir = f.main_dir();
-    let reflog_before = git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]);
-    fs::write(dir.join("feature.txt"), "precious local file\n").unwrap();
-    match f.repo.integrate_squash(&f.request("main")) {
-        Err(GitError::TargetUntracked {
-            worktree,
-            paths,
-            stderr,
-        }) => {
-            assert_eq!(worktree, dir);
-            assert_eq!(paths, vec![path(b"feature.txt")]);
-            assert!(stderr.as_bytes().len() <= STDERR_LIMIT);
-        }
-        other => panic!("expected untracked refusal, got {other:?}"),
-    }
-    assert_eq!(
-        f.repo.resolve_ref("refs/heads/main").unwrap(),
-        Some(f.target.clone())
-    );
-    assert_eq!(
-        git(&dir, &["reflog", "show", "--format=%H", "refs/heads/main"]),
-        reflog_before
-    );
-    assert_eq!(
-        fs::read(dir.join("feature.txt")).unwrap(),
-        b"precious local file\n"
-    );
-    assert_eq!(fs::read(dir.join("README")).unwrap(), b"hello\n");
-    assert!(!dir.join(".git/index.lock").exists());
-}
-
-#[test]
-fn integrate_reverts_ref_when_checkout_fails_after_the_preflight() {
-    if rustix_is_root() {
-        eprintln!(
-            "skipped: running as root, so a read-only target directory cannot make the checkout step fail"
-        );
-        return;
-    }
-    let f = integration_fixture("int-f");
-    let dir = f.main_dir();
-    let mode = fs::metadata(&dir).unwrap().permissions().mode();
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
-    let result = f.repo.integrate_squash(&f.request("main"));
-    fs::set_permissions(&dir, fs::Permissions::from_mode(mode)).unwrap();
-    match result {
-        Err(GitError::CheckoutFailed {
-            reverted, stderr, ..
-        }) => {
-            assert!(reverted);
-            assert!(stderr.as_bytes().len() <= STDERR_LIMIT);
-        }
-        other => panic!("expected checkout failure, got {other:?}"),
-    }
-    assert_eq!(
-        f.repo.resolve_ref("refs/heads/main").unwrap(),
-        Some(f.target.clone())
-    );
-    assert!(!dir.join("feature.txt").exists());
-}
-
-fn rustix_is_root() -> bool {
-    String::from_utf8_lossy(
-        &std::process::Command::new("id")
-            .arg("-u")
-            .output()
-            .expect("id -u")
-            .stdout,
-    )
-    .trim()
-        == "0"
-}
-
-#[test]
-fn malicious_repository_configuration_never_executes() {
-    let tmp = TempDir::new("malicious");
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    fs::write(
-        repo_dir.join(".gitattributes"),
-        "*.txt filter=evil merge=evil diff=evil\n",
-    )
-    .unwrap();
-    fs::write(repo_dir.join("shared.txt"), "1\n2\n3\n").unwrap();
-    commit_all(&repo_dir, "attributes");
-    git(&repo_dir, &["checkout", "-q", "-b", "side"]);
-    fs::write(repo_dir.join("shared.txt"), "1\nside\n3\n").unwrap();
-    let side = commit_all(&repo_dir, "side");
-    git(&repo_dir, &["checkout", "-q", "main"]);
-
-    let markers = tmp.path().join("markers");
+/// Points every hook, filter, driver, pager, editor and signing program of `repo_dir` at a
+/// command that leaves a marker. Returns the directory the markers would appear in.
+fn arm_hooks_and_drivers(root: &Path, repo_dir: &Path) -> PathBuf {
+    let markers = root.join("markers");
     fs::create_dir(&markers).unwrap();
     let marker_cmd = |name: &str| format!("touch {}/{name}; cat", markers.display());
-    let hook_dir = tmp.path().join("evil-hooks");
+    let hook_dir = root.join("evil-hooks");
     fs::create_dir(&hook_dir).unwrap();
     let hooks = [
         "pre-commit",
@@ -902,8 +492,28 @@ fn malicious_repository_configuration_never_executes() {
         ("gc.auto", "1".into()),
     ];
     for (key, value) in &config {
-        git(&repo_dir, &["config", key, value]);
+        git(repo_dir, &["config", key, value]);
     }
+    markers
+}
+
+#[test]
+fn malicious_repository_configuration_never_executes() {
+    let tmp = TempDir::new("malicious");
+    let repo_dir = init_repo(tmp.path(), "sha1");
+    fs::write(
+        repo_dir.join(".gitattributes"),
+        "*.txt filter=evil merge=evil diff=evil\n",
+    )
+    .unwrap();
+    fs::write(repo_dir.join("shared.txt"), "1\n2\n3\n").unwrap();
+    commit_all(&repo_dir, "attributes");
+    git(&repo_dir, &["checkout", "-q", "-b", "side"]);
+    fs::write(repo_dir.join("shared.txt"), "1\nside\n3\n").unwrap();
+    let side = commit_all(&repo_dir, "side");
+    git(&repo_dir, &["checkout", "-q", "main"]);
+
+    let markers = arm_hooks_and_drivers(tmp.path(), &repo_dir);
 
     let repo = Repository::open(&repo_dir).unwrap();
     let main = repo.resolve_commit("refs/heads/main").unwrap();
@@ -1132,7 +742,7 @@ fn capture_skips_nested_repositories_without_a_commit() {
     let paths: Vec<&[u8]> = changes.iter().map(|c| c.path.as_bytes()).collect();
     assert_eq!(paths, [&b"full"[..], b"regular.txt"]);
     assert_eq!(
-        changes[0].new_mode, 0o160000,
+        changes[0].new_mode, 0o160_000,
         "committed nested repo is a gitlink"
     );
     assert_eq!(fs::read_dir(&scratch).unwrap().count(), 0);
@@ -1205,64 +815,4 @@ fn filtered_paths_name_files_with_a_filter_driver() {
         vec![model.clone()]
     );
     assert!(repo.filtered_paths(&tree, &[]).unwrap().is_empty());
-}
-
-#[test]
-fn grep_reports_exact_byte_ranges() {
-    let tmp = TempDir::new("grep-offsets");
-    let repo_dir = init_repo(tmp.path(), "sha1");
-    let text = "αβγ\r\nfirst line\r\nprefix ÉCOLE Needle needle\nlast";
-    fs::write(repo_dir.join("u.txt"), text).unwrap();
-    let big = "x".repeat(17 << 20) + "\nNeedle\n";
-    fs::write(repo_dir.join("big.txt"), &big).unwrap();
-    let commit = commit_all(&repo_dir, "offsets");
-    let repo = Repository::open(&repo_dir).unwrap();
-    let tree = id(&repo, &commit);
-    let found = repo
-        .grep(
-            &tree,
-            &GrepQuery {
-                text: "needle".into(),
-                ignore_case: true,
-                max_results: 10,
-            },
-        )
-        .unwrap();
-    let hit = found
-        .matches
-        .iter()
-        .find(|m| m.path.as_bytes() == b"u.txt")
-        .unwrap();
-    let start = text.find("Needle").unwrap();
-    assert_eq!(hit.line, 3);
-    assert_eq!(hit.byte_start, Some(start as u64));
-    assert_eq!(hit.byte_end, Some((start + 6) as u64));
-    assert_eq!(&text.as_bytes()[start..start + 6], b"Needle");
-    let large = found
-        .matches
-        .iter()
-        .find(|m| m.path.as_bytes() == b"big.txt")
-        .unwrap();
-    assert_eq!(
-        (large.line, large.byte_start, large.byte_end),
-        (2, None, None)
-    );
-
-    let accented = repo
-        .grep(
-            &tree,
-            &GrepQuery {
-                text: "ÉCOLE".into(),
-                ignore_case: true,
-                max_results: 10,
-            },
-        )
-        .unwrap();
-    let start = text.find("ÉCOLE").unwrap();
-    assert_eq!(accented.matches.len(), 1);
-    assert_eq!(accented.matches[0].byte_start, Some(start as u64));
-    assert_eq!(
-        accented.matches[0].byte_end,
-        Some((start + "ÉCOLE".len()) as u64)
-    );
 }

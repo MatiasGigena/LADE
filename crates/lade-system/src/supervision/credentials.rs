@@ -8,68 +8,42 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use super::secret_service::{Lookup, SecretService};
+use crate::adapters::profile::CUSTOM_VAR_PREFIX;
+use crate::adapters::providers::{BUILT_IN_PROVIDERS, built_in_provider};
+use crate::adapters::sandbox::FIXTURE_SWITCH;
+use crate::support::fs::service_uid;
 
 const MAX_FILE_BYTES: u64 = 64 << 10;
-
-pub const FIXTURE_PROVIDER: &str = "lade-fixture";
-
-pub use crate::adapters::sandbox::FIXTURE_SWITCH;
 
 pub const FIXTURE_REFUSED: &str = "lade-fixture is an offline test provider; it is available only \
      when laded runs with LADE_TEST_FIXTURE_PROVIDER=1 (test harnesses only)";
 
+#[must_use]
 pub fn fixture_switch_on() -> bool {
     std::env::var_os(FIXTURE_SWITCH).is_some_and(|v| v == "1")
 }
 
-const PROVIDER_VARS: &[(&str, &[&str])] = &[
-    (FIXTURE_PROVIDER, &[]),
-    (
-        "anthropic",
-        &[
-            "ANTHROPIC_API_KEY",
-            "ANTHROPIC_OAUTH_TOKEN",
-            "ANTHROPIC_AUTH_TOKEN",
-        ],
-    ),
-    ("openai", &["OPENAI_API_KEY"]),
-    ("google", &["GEMINI_API_KEY"]),
-    ("openrouter", &["OPENROUTER_API_KEY"]),
-    ("mistral", &["MISTRAL_API_KEY"]),
-    ("groq", &["GROQ_API_KEY"]),
-    ("xai", &["XAI_API_KEY"]),
-    ("deepseek", &["DEEPSEEK_API_KEY"]),
-    ("cerebras", &["CEREBRAS_API_KEY"]),
-    ("together", &["TOGETHER_API_KEY"]),
-    ("fireworks", &["FIREWORKS_API_KEY"]),
-    ("moonshotai", &["MOONSHOT_API_KEY"]),
-    ("huggingface", &["HF_TOKEN"]),
-    ("nvidia", &["NVIDIA_API_KEY"]),
-    ("zai", &["ZAI_API_KEY"]),
-    ("vercel-ai-gateway", &["AI_GATEWAY_API_KEY"]),
-    ("kimi-coding", &["KIMI_API_KEY"]),
-];
-
+#[must_use]
 pub fn provider_env_vars(provider: &str) -> Option<&'static [&'static str]> {
-    PROVIDER_VARS
-        .iter()
-        .find(|(id, _)| *id == provider)
-        .map(|(_, vars)| *vars)
+    built_in_provider(provider).map(|p| p.env_vars)
 }
 
 fn known_var(name: &str) -> bool {
-    PROVIDER_VARS.iter().any(|(_, vars)| vars.contains(&name)) || custom_var(name)
+    BUILT_IN_PROVIDERS
+        .iter()
+        .any(|p| p.env_vars.contains(&name))
+        || custom_var(name)
 }
 
+#[must_use]
 pub fn custom_var(name: &str) -> bool {
-    name.strip_prefix(crate::adapters::profile::CUSTOM_VAR_PREFIX)
-        .is_some_and(|rest| {
-            !rest.is_empty()
-                && name.len() <= 128
-                && rest
-                    .bytes()
-                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-        })
+    name.strip_prefix(CUSTOM_VAR_PREFIX).is_some_and(|rest| {
+        !rest.is_empty()
+            && name.len() <= 128
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+    })
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -80,6 +54,7 @@ impl Secret {
         Self(value)
     }
 
+    #[must_use]
     pub fn expose(&self) -> &OsStr {
         &self.0
     }
@@ -97,6 +72,7 @@ pub struct ReleasedCredentials {
 }
 
 impl ReleasedCredentials {
+    #[must_use]
     pub fn names(&self) -> Vec<&str> {
         self.vars.iter().map(|(k, _)| k.as_str()).collect()
     }
@@ -140,7 +116,7 @@ impl fmt::Display for CredentialError {
                      Secret Service (laded credentials set {provider}) or the credentials file",
                     vars.join(" or ")
                 )?;
-                unavailable_note(f, secret_service)
+                unavailable_note(f, secret_service.as_deref())
             }
             Self::MissingCustom {
                 provider,
@@ -154,7 +130,7 @@ impl fmt::Display for CredentialError {
                      NAME) or the credentials file",
                     vars.join(" and ")
                 )?;
-                unavailable_note(f, secret_service)
+                unavailable_note(f, secret_service.as_deref())
             }
             Self::InsecureFile { path, reason } => {
                 write!(f, "credentials file {} refused: {reason}", path.display())
@@ -168,7 +144,7 @@ impl fmt::Display for CredentialError {
 
 impl std::error::Error for CredentialError {}
 
-fn unavailable_note(f: &mut fmt::Formatter<'_>, reason: &Option<String>) -> fmt::Result {
+fn unavailable_note(f: &mut fmt::Formatter<'_>, reason: Option<&str>) -> fmt::Result {
     match reason {
         Some(reason) => write!(f, " (Secret Service unavailable: {reason})"),
         None => Ok(()),
@@ -213,24 +189,37 @@ impl CredentialSource {
         }
     }
 
+    #[must_use]
     pub fn with_secret_service(mut self, secret_service: SecretService) -> Self {
         self.secret_service = secret_service;
         self
     }
 
+    #[must_use]
     pub fn from_process() -> Self {
         Self::new(std::env::vars_os(), default_file())
             .with_secret_service(SecretService::from_env())
     }
 
+    #[must_use]
     pub fn empty() -> Self {
         Self::new(Vec::new(), None)
     }
 
+    #[must_use]
     pub fn file(&self) -> Option<&Path> {
         self.file.as_deref()
     }
 
+    /// The credentials released to a worker for built-in `provider`, from the laded
+    /// environment, the credentials file or the Secret Service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialError::UnknownProvider`] for a provider without a credential mapping,
+    /// [`CredentialError::Missing`] when no source holds any of its variables, or
+    /// [`CredentialError::InsecureFile`] or [`CredentialError::Io`] when the credentials file is unsafe
+    /// or unreadable.
     pub fn resolve(&self, provider: &str) -> Result<ReleasedCredentials, CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -250,6 +239,13 @@ impl CredentialSource {
         })
     }
 
+    /// The credentials released for custom `provider`, which needs every variable in `vars`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CredentialError::UnknownProvider`] when a variable is not a `LADE_PROVIDER_` name,
+    /// [`CredentialError::MissingCustom`] naming the variables no source holds, or the credentials
+    /// file errors of [`CredentialSource::resolve`].
     pub fn resolve_custom(
         &self,
         provider: &str,
@@ -275,6 +271,12 @@ impl CredentialSource {
         })
     }
 
+    /// Checks that `provider` can be given credentials, asking the Secret Service only when
+    /// the environment and the credentials file hold none.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`CredentialSource::resolve`] does.
     pub fn check(&self, provider: &str) -> Result<(), CredentialError> {
         let vars = provider_env_vars(provider)
             .ok_or_else(|| CredentialError::UnknownProvider(provider.to_owned()))?;
@@ -284,6 +286,11 @@ impl CredentialSource {
         self.resolve(provider).map(drop)
     }
 
+    /// Checks that custom `provider` can be given every variable in `vars`.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`CredentialSource::resolve_custom`] does.
     pub fn check_custom(&self, provider: &str, vars: &[String]) -> Result<(), CredentialError> {
         let names: Vec<&str> = vars.iter().map(String::as_str).collect();
         if vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true)? {
@@ -292,6 +299,7 @@ impl CredentialSource {
         self.resolve_custom(provider, vars).map(drop)
     }
 
+    #[must_use]
     pub fn is_available(&self, provider: &str) -> bool {
         provider_env_vars(provider).is_some_and(|vars| {
             vars.is_empty() || self.plain_sources_have(vars, false).unwrap_or(false)
@@ -303,6 +311,7 @@ impl CredentialSource {
         vars.iter().all(|v| custom_var(v)) && self.plain_sources_have(&names, true).unwrap_or(false)
     }
 
+    #[must_use]
     pub fn secret_service(&self) -> &SecretService {
         &self.secret_service
     }
@@ -395,10 +404,6 @@ fn default_file() -> Option<PathBuf> {
     Some(base.join("lade").join("credentials.env"))
 }
 
-pub(crate) fn current_uid() -> io::Result<u32> {
-    fs::metadata("/proc/self").map(|m| m.uid())
-}
-
 fn read_file(path: &Path) -> Result<Vec<(String, OsString)>, CredentialError> {
     let io_err = |e: io::Error| CredentialError::Io {
         path: path.to_path_buf(),
@@ -421,7 +426,7 @@ fn read_file(path: &Path) -> Result<Vec<(String, OsString)>, CredentialError> {
     if meta.dev() != link.dev() || meta.ino() != link.ino() {
         return Err(insecure("replaced while opening"));
     }
-    if meta.uid() != current_uid().map_err(io_err)? {
+    if meta.uid() != service_uid() {
         return Err(insecure("not owned by the service user"));
     }
     if meta.mode() & 0o077 != 0 {

@@ -26,6 +26,7 @@ pub enum DomainError {
 }
 
 impl DomainError {
+    #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
@@ -50,26 +51,34 @@ impl DomainError {
         }
     }
 
+    /// Human-readable reason, empty when the code says it all. Structured data such as the
+    /// stale draft ids stays on the variant.
+    #[must_use]
     pub fn detail(&self) -> String {
         match self {
-            Self::StaleReference { drafts } => {
-                let ids: Vec<String> = drafts.iter().map(ToString::to_string).collect();
-                format!("stale drafts: {}", ids.join(","))
-            }
+            Self::StaleReference { drafts } => match drafts.len() {
+                1 => "a feedback draft refers to code that changed".to_owned(),
+                n => format!("{n} feedback drafts refer to code that changed"),
+            },
+            Self::NotFound(what) => format!("{what} not found"),
             Self::InvalidLifecycle(reason)
             | Self::DurabilityFailure(reason)
             | Self::LimitReached(reason)
-            | Self::NotFound(reason)
             | Self::InvalidRequest(reason)
-            | Self::Conflict(reason) => (*reason).to_string(),
-            other => other.code().to_string(),
+            | Self::Conflict(reason) => (*reason).to_owned(),
+            _ => String::new(),
         }
     }
 }
 
 impl fmt::Display for DomainError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.code(), self.detail())
+        let detail = self.detail();
+        if detail.is_empty() {
+            formatter.write_str(self.code())
+        } else {
+            write!(formatter, "{}: {detail}", self.code())
+        }
     }
 }
 
@@ -131,14 +140,18 @@ mod tests {
     }
 
     #[test]
-    fn stale_reference_detail_names_drafts() {
+    fn details_are_prose_and_never_repeat_codes_or_ids() {
         let error = DomainError::StaleReference {
             drafts: vec![draft_id(1), draft_id(2)],
         };
-        let detail = error.detail();
-        assert!(detail.starts_with("stale drafts: "));
-        assert!(detail.contains(&draft_id(1).to_string()));
-        assert!(detail.contains(&draft_id(2).to_string()));
+        assert_eq!(
+            error.detail(),
+            "2 feedback drafts refer to code that changed"
+        );
+        assert!(!error.detail().contains(&draft_id(1).to_string()));
+        assert_eq!(DomainError::NotFound("draft").detail(), "draft not found");
+        assert_eq!(DomainError::StaleTarget.detail(), "");
+        assert_eq!(DomainError::StaleTarget.to_string(), "stale_target");
         assert_eq!(
             DomainError::Conflict("revision mismatch").to_string(),
             "conflict: revision mismatch"

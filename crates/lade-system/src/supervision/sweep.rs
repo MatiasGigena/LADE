@@ -10,6 +10,17 @@ use rustix::process::{Pid, Signal};
 use sha2::{Digest, Sha256};
 
 use crate::adapters::sandbox::{CgroupLeaf, find_program};
+use crate::support::hex;
+
+/// How often namespace-init discovery re-reads `/proc` for the sandbox's first child. Linux
+/// gives no notification when a process forks, so discovery polls until `INIT_DISCOVERY`.
+const INIT_POLL: Duration = Duration::from_millis(5);
+/// How long the startup sweep keeps killing processes that carry the sandbox marker, and how
+/// long it waits for killed pidfile records to disappear.
+const SWEEP_WAIT: Duration = Duration::from_secs(3);
+/// How often the sweep re-scans `/proc` while it waits: killed processes are not this
+/// service's children, so there is no exit status to wait on.
+const SWEEP_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PidRecord {
@@ -18,11 +29,13 @@ pub struct PidRecord {
 }
 
 impl PidRecord {
+    #[must_use]
     pub fn of(pid: u32) -> Option<Self> {
         let (state, start_time) = proc_stat(pid)?;
         (state != 'Z' && state != 'X').then_some(Self { pid, start_time })
     }
 
+    #[must_use]
     pub fn is_alive(&self) -> bool {
         Self::of(self.pid).is_some_and(|now| now == *self)
     }
@@ -54,6 +67,12 @@ pub(crate) fn children_of(pid: u32) -> Vec<u32> {
         .collect()
 }
 
+/// Atomically replaces the pidfile at `path` with `records`, mode 0600.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the temporary file cannot be written or synced, or
+/// the rename fails.
 pub fn write_pidfile(path: &Path, records: &[PidRecord]) -> io::Result<()> {
     let tmp = path.with_extension("pid.tmp");
     let mut file = fs::OpenOptions::new()
@@ -91,6 +110,12 @@ pub(crate) fn record_sandbox(
     Ok(Some(init))
 }
 
+/// Moves a sandbox and its namespace init into `leaf` once the init appears.
+///
+/// # Errors
+///
+/// Returns `TimedOut` when the namespace init does not appear in time, or the operating system's
+/// error when the processes cannot be placed in the cgroup.
 pub fn place_sandbox(pid: u32, leaf: &CgroupLeaf, ended: impl Fn() -> bool) -> io::Result<()> {
     match discover_init(pid, &ended)? {
         Some(init) => place(leaf, pid, init.pid),
@@ -113,7 +138,7 @@ fn discover_init(pid: u32, ended: &impl Fn() -> bool) -> io::Result<Option<PidRe
                 "sandbox namespace init not found",
             ));
         }
-        thread::sleep(Duration::from_millis(5));
+        thread::sleep(INIT_POLL);
     }
 }
 
@@ -129,6 +154,11 @@ fn place(leaf: &CgroupLeaf, outer: u32, init: u32) -> io::Result<()> {
     }
 }
 
+/// The records in the pidfile at `path`; malformed lines are skipped.
+///
+/// # Errors
+///
+/// Returns the operating system's error when the file cannot be read.
 pub fn read_pidfile(path: &Path) -> io::Result<Vec<PidRecord>> {
     let text = fs::read_to_string(path)?;
     Ok(text
@@ -161,11 +191,11 @@ pub(crate) fn kill_record(record: &PidRecord) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+#[must_use]
 pub fn sandbox_marker(run_dir: &Path) -> String {
     let canonical = fs::canonicalize(run_dir).unwrap_or_else(|_| run_dir.to_path_buf());
     let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes());
-    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
-    format!("LADE_SANDBOX_{hex}")
+    format!("LADE_SANDBOX_{}", hex(&digest[..8]))
 }
 
 fn marked(marker: &str) -> Vec<u32> {
@@ -188,7 +218,7 @@ fn marked(marker: &str) -> Vec<u32> {
 
 pub fn kill_marked(marker: &str) -> Vec<u32> {
     let mut killed = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + SWEEP_WAIT;
     loop {
         let found = marked(marker);
         if found.is_empty() || Instant::now() >= deadline {
@@ -203,7 +233,7 @@ pub fn kill_marked(marker: &str) -> Vec<u32> {
                 killed.push(pid);
             }
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(SWEEP_POLL);
     }
 }
 
@@ -215,6 +245,16 @@ pub struct SweepReport {
     pub removed_sockets: usize,
 }
 
+/// Kills the sandboxes a previous service left behind (found by marker and by pidfile)
+/// and removes their pidfiles and gateway sockets.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `run_dir` exists but cannot be listed.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "the pidfile and socket names are the exact names this service writes"
+)]
 pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     let mut report = SweepReport::default();
     let entries = match fs::read_dir(run_dir) {
@@ -248,9 +288,9 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
             }
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = Instant::now() + SWEEP_WAIT;
     while killed.iter().any(PidRecord::is_alive) && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(SWEEP_POLL);
     }
     for path in pidfiles {
         if fs::remove_file(path).is_ok() {
@@ -265,6 +305,11 @@ pub fn sweep_stale(run_dir: &Path) -> io::Result<SweepReport> {
     Ok(report)
 }
 
+/// Removes the stale gateway sockets in `socket_dir`, returning how many it removed.
+///
+/// # Errors
+///
+/// Returns the operating system's error when `socket_dir` exists but cannot be listed.
 pub fn sweep_sockets(socket_dir: &Path) -> io::Result<usize> {
     let entries = match fs::read_dir(socket_dir) {
         Ok(entries) => entries,

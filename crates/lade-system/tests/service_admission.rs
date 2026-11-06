@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use std::fs;
@@ -18,7 +25,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
         runtime_dir: env.root.path().join("run"),
         ..env.config()
     };
-    let running = lade_system::service::start(config, FakeLauncher::shared()).expect("starts");
+    let running = lade_system::service::start(&config, FakeLauncher::shared()).expect("starts");
     running.shutdown();
     let long_runtime = env.root.path().join("r".repeat(100));
     let config = lade_system::service::ServiceConfig {
@@ -26,7 +33,7 @@ fn long_runtime_dir_is_refused_with_a_clear_error_and_long_state_dir_is_fine() {
         runtime_dir: long_runtime.clone(),
         ..env.config()
     };
-    let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
+    let Err(error) = lade_system::service::start(&config, FakeLauncher::shared()) else {
         panic!("service started with an unbindable socket path");
     };
     assert!(
@@ -129,7 +136,7 @@ fn second_client_is_refused_and_lease_frees_on_disconnect() {
     let refused = Client::connect(&env.socket(), &env.capability())
         .err()
         .expect("second client refused");
-    assert!(refused.contains("unauthorized"), "{refused}");
+    assert!(refused.contains("LeaseHeld"), "{refused}");
     assert!(first.call(Request::Snapshot(Empty {})).is_ok());
     drop(first);
     let mut again = service_support::eventually("lease released", || {
@@ -190,7 +197,7 @@ fn second_service_on_the_same_runtime_dir_leaves_admission_intact() {
         state_dir: env.root.path().join("other-state"),
         ..env.config()
     };
-    let Err(error) = lade_system::service::start(config, FakeLauncher::shared()) else {
+    let Err(error) = lade_system::service::start(&config, FakeLauncher::shared()) else {
         panic!("a second service started on the same runtime directory");
     };
     assert!(
@@ -220,7 +227,7 @@ fn serde_json_frame(request_id: &lade_protocol::types::Id) -> Vec<u8> {
         request_id,
         new_id()
     );
-    let mut frame = (body.len() as u32).to_be_bytes().to_vec();
+    let mut frame = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
     frame.extend_from_slice(body.as_bytes());
     frame
 }

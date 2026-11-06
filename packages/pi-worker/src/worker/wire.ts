@@ -1,71 +1,57 @@
-import { boundedJson, MAX_FRAME, WireError } from "../json.ts";
-import type { ServiceToWorker, WorkerBody, WorkerToService } from "../dto.ts";
+import { MAX_FRAME, WireError } from "../json.ts";
+import type { ServiceToWorker, WorkerErrorCode, WorkerToService } from "../dto.ts";
 import { BUNDLE, isServiceToWorker, isWorkerToService, VERSION } from "../schema.ts";
-import { validateWorker } from "./contract.ts";
+import { decodeWorkerFrame } from "./contract.ts";
+import { safeMessage } from "./text.ts";
 
-export type { ActivityRole, DeliveryMode, Model as ModelRef, SessionCommand, ThinkingLevel, TreeEntry, UiAnswer, UiPrompt, WorkerResources } from "../dto.ts";
+export type StartBody = Extract<ServiceToWorker, { kind: "worker.start" }>;
 
-export const WORKER_PROTOCOL = VERSION;
+export type DeliverBody = Extract<ServiceToWorker, { kind: "input.deliver" }>;
 
-export const WORKER_BUNDLE = BUNDLE;
+export type CommandBody = Extract<ServiceToWorker, { kind: "session.command" }>;
 
-export type InboundBody = ServiceToWorker;
+export type RespondBody = Extract<ServiceToWorker, { kind: "ui.respond" }>;
 
-export type OutboundBody = WorkerToService;
+export type ActivityItemBody = Extract<WorkerToService, { kind: "activity.item" }>;
 
-export type StartBody = Extract<InboundBody, { kind: "worker.start" }>;
+export type ResultBody = Extract<WorkerToService, { kind: "session.result" }>;
 
-export type DeliverBody = Extract<InboundBody, { kind: "input.deliver" }>;
+export type ChangedBody = Extract<WorkerToService, { kind: "session.changed" }>;
 
-export type CommandBody = Extract<InboundBody, { kind: "session.command" }>;
+export type TurnState = Extract<WorkerToService, { kind: "turn.state" }>["state"];
 
-export type RespondBody = Extract<InboundBody, { kind: "ui.respond" }>;
-
-export type ActivityItemBody = Extract<OutboundBody, { kind: "activity.item" }>;
-
-export type ResultBody = Extract<OutboundBody, { kind: "session.result" }>;
-
-export type LoadedResource = Extract<OutboundBody, { kind: "resources.loaded" }>["resources"][number];
-
-export type TurnState = Extract<OutboundBody, { kind: "turn.state" }>["state"];
-
-export interface WorkerChannel {
-  send(body: OutboundBody): Promise<void>;
-  incoming(): AsyncIterable<InboundBody>;
+/** A `worker.error` whose message is made safe to leave the worker. */
+export function workerError(code: WorkerErrorCode, message: string): WorkerToService {
+  return { kind: "worker.error", code, message: safeMessage(message) };
 }
 
-export const MAX_ERROR_MESSAGE = 512;
-
-export function parseInbound(bytes: Uint8Array): InboundBody {
-  const value = boundedJson(bytes);
-  validateWorker(value);
-  const body: WorkerBody = value.body;
+export function parseInbound(bytes: Uint8Array): ServiceToWorker {
+  const { body } = decodeWorkerFrame(bytes);
 
   if (!isServiceToWorker(body)) throw new WireError("invalid_schema");
 
   return body;
 }
 
-export function encodeOutbound(body: OutboundBody): Buffer {
-  const envelope = { protocol: WORKER_PROTOCOL, bundle: WORKER_BUNDLE, body };
-  const text = JSON.stringify(envelope);
+export function encodeOutbound(body: WorkerToService): Buffer {
+  const text = JSON.stringify({ protocol: VERSION, bundle: BUNDLE, body });
 
   if (Buffer.byteLength(text) > MAX_FRAME) throw new WireError("frame_size");
   const bytes = Buffer.from(text);
-  const decoded = boundedJson(bytes);
-  validateWorker(decoded);
 
-  if (!isWorkerToService(decoded.body)) throw new WireError("invalid_schema");
+  if (!isWorkerToService(decodeWorkerFrame(bytes).body)) throw new WireError("invalid_schema");
 
   return Buffer.concat([bytes, Buffer.from("\n")]);
 }
 
-export class LineDecoder {
+export class LineDecoder<Frame> {
+  private readonly decode: (bytes: Uint8Array) => Frame;
   private body = Buffer.alloc(0);
   private size = 0;
   private failed = false;
+  constructor(decode: (bytes: Uint8Array) => Frame) { this.decode = decode; }
 
-  push(input: Buffer, emit: (frame: InboundBody) => void): void {
+  push(input: Buffer, emit: (frame: Frame) => void): void {
     if (this.failed) throw new WireError("closed");
 
     try {
@@ -87,7 +73,7 @@ export class LineDecoder {
         this.size += n; pos = stop;
 
         if (end >= 0) {
-          const frame = parseInbound(this.body.subarray(0, this.size));
+          const frame = this.decode(this.body.subarray(0, this.size));
           this.size = 0; pos++; emit(frame);
         }
       }

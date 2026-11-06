@@ -1,3 +1,6 @@
+//! The file viewer: a diff or a full file of the selected Change Set entry, with its version line
+//! and the selection that feedback drafts anchor to.
+
 use std::cell::{Cell, RefCell};
 use std::fs::DirBuilder;
 use std::os::unix::fs::DirBuilderExt;
@@ -12,11 +15,11 @@ use super::widgets::{
     set_accessible_label, space, vbox,
 };
 use crate::presentation::controller::Controller;
-use crate::presentation::format;
-use crate::presentation::model::{FileEncoding, Load, Side};
-use crate::presentation::store::{Change, ViewerContent, ViewerMode};
-use crate::presentation::syntax::{self, Highlight};
-use crate::presentation::text_map::{self, TextPos, ViewLine, ViewLineKind};
+use crate::presentation::state::model::{FileContent, FileDiff, FileEncoding, Load, Side};
+use crate::presentation::state::store::{Change, ViewerContent, ViewerKey, ViewerMode};
+use crate::presentation::text::format;
+use crate::presentation::text::map::{self, TextPos, ViewLine, ViewLineKind};
+use crate::presentation::text::syntax::{self, Highlight};
 
 const CODE_SCHEME: &str = include_str!("../assets/code-scheme.xml");
 const SELECTION_HINT: &str = "Select text in the viewer to add feedback on exact bytes.";
@@ -124,6 +127,55 @@ fn sign_renderer(lines: &Rc<RefCell<Vec<ViewLine>>>) -> sourceview5::GutterRende
     renderer
 }
 
+/// The read-only code buffer, with the added, deleted and separator line tags.
+fn code_buffer() -> sourceview5::Buffer {
+    let buffer = sourceview5::Buffer::new(None);
+    buffer.set_highlight_syntax(false);
+    buffer.set_highlight_matching_brackets(false);
+    buffer.set_style_scheme(code_scheme().as_ref());
+    let table = buffer.tag_table();
+    for (name, fill) in [("add", "add_fill"), ("del", "del_fill")] {
+        table.add(
+            &gtk::TextTag::builder()
+                .name(name)
+                .paragraph_background(token(fill))
+                .build(),
+        );
+    }
+    table.add(
+        &gtk::TextTag::builder()
+            .name("sep")
+            .foreground(token("ink_metadata"))
+            .build(),
+    );
+    buffer.connect_highlight_updated(|buffer, _, _| {
+        let table = buffer.tag_table();
+        if let Some(sep) = table.lookup("sep")
+            && sep.priority() < table.size() - 1
+        {
+            sep.set_priority(table.size() - 1);
+        }
+    });
+    buffer
+}
+
+/// The monospace, read-only view over `buffer`.
+fn code_view(buffer: &sourceview5::Buffer) -> sourceview5::View {
+    let view = sourceview5::View::with_buffer(buffer);
+    view.set_editable(false);
+    view.set_cursor_visible(true);
+    view.set_monospace(true);
+    view.set_show_line_numbers(false);
+    view.set_highlight_current_line(false);
+    view.set_tab_width(4);
+    view.set_pixels_above_lines(3);
+    view.set_pixels_below_lines(3);
+    view.set_left_margin(8);
+    view.set_wrap_mode(gtk::WrapMode::None);
+    view.add_css_class("code-view");
+    view
+}
+
 impl Viewer {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = vbox(0);
@@ -155,45 +207,8 @@ impl Viewer {
         toolbar.append(&add_feedback);
         root.append(&toolbar);
 
-        let buffer = sourceview5::Buffer::new(None);
-        buffer.set_highlight_syntax(false);
-        buffer.set_highlight_matching_brackets(false);
-        buffer.set_style_scheme(code_scheme().as_ref());
-        let table = buffer.tag_table();
-        for (name, fill) in [("add", "add_fill"), ("del", "del_fill")] {
-            table.add(
-                &gtk::TextTag::builder()
-                    .name(name)
-                    .paragraph_background(token(fill))
-                    .build(),
-            );
-        }
-        table.add(
-            &gtk::TextTag::builder()
-                .name("sep")
-                .foreground(token("ink_metadata"))
-                .build(),
-        );
-        buffer.connect_highlight_updated(|buffer, _, _| {
-            let table = buffer.tag_table();
-            if let Some(sep) = table.lookup("sep")
-                && sep.priority() < table.size() - 1
-            {
-                sep.set_priority(table.size() - 1);
-            }
-        });
-        let view = sourceview5::View::with_buffer(&buffer);
-        view.set_editable(false);
-        view.set_cursor_visible(true);
-        view.set_monospace(true);
-        view.set_show_line_numbers(false);
-        view.set_highlight_current_line(false);
-        view.set_tab_width(4);
-        view.set_pixels_above_lines(3);
-        view.set_pixels_below_lines(3);
-        view.set_left_margin(8);
-        view.set_wrap_mode(gtk::WrapMode::None);
-        view.add_css_class("code-view");
+        let buffer = code_buffer();
+        let view = code_view(&buffer);
         let lines: Rc<RefCell<Vec<ViewLine>>> = Rc::new(RefCell::new(Vec::new()));
         let gutter = sourceview5::prelude::ViewExt::gutter(&view, gtk::TextWindowType::Left);
         let old_numbers = number_renderer(&lines, Side::Old);
@@ -309,7 +324,7 @@ impl Viewer {
                     usize::try_from(i.line_offset()).unwrap_or(0),
                 )
             };
-            text_map::map_selection(&self.lines.borrow(), pos(&a), pos(&b))
+            map::map_selection(&self.lines.borrow(), pos(&a), pos(&b))
         });
         self.controller.set_viewer_selection(mapped);
     }
@@ -369,12 +384,16 @@ impl Viewer {
                 ViewLineKind::Separator => "sep",
                 _ => continue,
             };
-            let Some(start) = self.buffer.iter_at_line(index as i32) else {
+            // GTK addresses lines with i32; a line past that range has no iterator either.
+            let Ok(index) = i32::try_from(index) else {
+                break;
+            };
+            let Some(start) = self.buffer.iter_at_line(index) else {
                 continue;
             };
             let end = self
                 .buffer
-                .iter_at_line(index as i32 + 1)
+                .iter_at_line(index + 1)
                 .unwrap_or_else(|| self.buffer.end_iter());
             self.buffer.apply_tag_by_name(tag, &start, &end);
         }
@@ -403,21 +422,8 @@ impl Viewer {
         }
         self.updating.set(false);
         let Some(key) = key.filter(|k| Some(&k.objective_id) == state.ui.selected.as_ref()) else {
-            self.path_label.set_text("");
-            widgets::clear(&self.counts);
-            self.root.set_sensitive(true);
             drop(state);
-            self.toolbar.set_visible(false);
-            self.selection_label.set_visible(false);
-            widgets::clear(&self.message);
-            self.message.set_valign(gtk::Align::Fill);
-            self.message.append(&widgets::empty_state(
-                "Select a file to inspect",
-                "Choose a file from the Change Set to see its diff or full content.",
-                None,
-                None,
-            ));
-            self.stack.set_visible_child_name("message");
+            self.render_no_file();
             return;
         };
         self.toolbar.set_visible(true);
@@ -443,133 +449,155 @@ impl Viewer {
             ViewerContent::Empty | ViewerContent::Loading => {
                 self.show_message("Loading…", &format!("{} · {basis}", key.path.display));
             }
-            ViewerContent::Failed(message) => {
-                widgets::clear(&self.message);
-                self.message.set_valign(gtk::Align::Start);
-                self.message
-                    .append(&inline_message(MessageKind::Error, &message, None));
-                self.stack.set_visible_child_name("message");
-                let retry = widgets::button("Retry", &[]);
-                let controller = self.controller.clone();
-                retry.connect_clicked(move |_| controller.refresh_changes());
-                self.message.append(&retry);
-            }
-            ViewerContent::Diff(diff) => {
-                if diff.binary {
-                    self.show_message(
-                        "Binary file — not shown as text",
-                        "LADE does not render binary content. Its retained identity is listed in Evidence; open it outside LADE if you need to inspect it.",
-                    );
-                } else if diff.hunks.is_empty() {
-                    self.show_message(
-                        "No textual changes",
-                        "Only the mode, type or name changed. Switch to Full file to read the content.",
-                    );
-                } else {
-                    self.set_lines(
-                        text_map::diff_lines(&diff),
-                        ViewerMode::Diff,
-                        Side::New,
-                        &key.path.display,
-                    );
-                    self.show_highlight_note();
-                    if diff.truncated {
-                        let note = inline_message(
-                            MessageKind::Warning,
-                            "The service truncated this diff. Open Full file to page through every byte.",
-                            None,
-                        );
-                        note.set_hexpand(true);
-                        self.footer.append(&note);
-                        self.footer.set_visible(true);
-                    }
-                }
-            }
-            ViewerContent::File(content) => {
-                if content.encoding == FileEncoding::Binary {
-                    self.show_message(
-                        &format!(
-                            "Binary file — {} bytes, not shown as text",
-                            content.total_bytes
-                        ),
-                        &content.version_label,
-                    );
-                } else {
-                    let value = self
-                        .stack
-                        .child_by_name("text")
-                        .and_downcast::<gtk::ScrolledWindow>()
-                        .map(|s| s.vadjustment().value());
-                    self.set_lines(
-                        text_map::file_lines(&content),
-                        ViewerMode::FullFile,
-                        content.side,
-                        &key.path.display,
-                    );
-                    let shown = label(
-                        &format!(
-                            "{} · {} of {} bytes shown{}",
-                            content.version_label,
-                            content.loaded_bytes,
-                            content.total_bytes,
-                            if content.eof { " — complete" } else { "" }
-                        ),
-                        &["meta"],
-                    );
-                    shown.set_hexpand(true);
-                    self.footer.append(&shown);
-                    if let Some(note) = self.highlight.get().note() {
-                        self.footer.append(&label(&note, &["meta"]));
-                    }
-                    if content.chunked && !content.eof {
-                        self.footer.append(&label(
-                            &format!(
-                                "Large file ({}) — shown in bounded chunks",
-                                crate::presentation::format::byte_size(content.total_bytes)
-                            ),
-                            &["meta"],
-                        ));
-                    }
-                    if !content.eof {
-                        let more = widgets::button("Load more", &[]);
-                        widgets::set_focus_key(&more, "viewer:load-more");
-                        let controller = self.controller.clone();
-                        more.connect_clicked(move |_| controller.load_more());
-                        self.footer.append(&more);
-                    }
-                    self.footer.set_visible(true);
-                    if let (Some(value), Some(scroll)) = (
-                        value,
-                        self.stack
-                            .child_by_name("text")
-                            .and_downcast::<gtk::ScrolledWindow>(),
-                    ) {
-                        glib::idle_add_local_once(move || scroll.vadjustment().set_value(value));
-                    }
-                    if let Some((start, end)) =
-                        self.controller.take_reveal(&key, content.loaded_bytes)
-                    {
-                        let (view, buffer, lines) =
-                            (self.view.clone(), self.buffer.clone(), self.lines.clone());
-                        let side = content.side;
-                        glib::idle_add_local_once(move || {
-                            let lines = lines.borrow();
-                            let iter = |byte| {
-                                let pos = text_map::position_at(&lines, side, byte)?;
-                                buffer.iter_at_line_offset(
-                                    i32::try_from(pos.line).ok()?,
-                                    i32::try_from(pos.char_offset).ok()?,
-                                )
-                            };
-                            if let (Some(from), Some(to)) = (iter(start), iter(end)) {
-                                buffer.select_range(&from, &to);
-                                view.scroll_to_mark(&buffer.get_insert(), 0.1, true, 0.0, 0.3);
-                            }
-                        });
-                    }
-                }
-            }
+            ViewerContent::Failed(message) => self.render_failed(&message),
+            ViewerContent::Diff(diff) => self.render_diff(&key, &diff),
+            ViewerContent::File(content) => self.render_file(&key, &content),
         }
+    }
+
+    fn render_no_file(&self) {
+        self.path_label.set_text("");
+        widgets::clear(&self.counts);
+        self.root.set_sensitive(true);
+        self.toolbar.set_visible(false);
+        self.selection_label.set_visible(false);
+        widgets::clear(&self.message);
+        self.message.set_valign(gtk::Align::Fill);
+        self.message.append(&widgets::empty_state(
+            "Select a file to inspect",
+            "Choose a file from the Change Set to see its diff or full content.",
+            None,
+            None,
+        ));
+        self.stack.set_visible_child_name("message");
+    }
+
+    fn render_failed(&self, message: &str) {
+        widgets::clear(&self.message);
+        self.message.set_valign(gtk::Align::Start);
+        self.message
+            .append(&inline_message(MessageKind::Error, message, None));
+        self.stack.set_visible_child_name("message");
+        let retry = widgets::button("Retry", &[]);
+        let controller = self.controller.clone();
+        retry.connect_clicked(move |_| controller.refresh_changes());
+        self.message.append(&retry);
+    }
+
+    fn render_diff(&self, key: &ViewerKey, diff: &FileDiff) {
+        if diff.binary {
+            self.show_message(
+                "Binary file — not shown as text",
+                "LADE does not render binary content. Its retained identity is listed in Evidence; open it outside LADE if you need to inspect it.",
+            );
+            return;
+        }
+        if diff.hunks.is_empty() {
+            self.show_message(
+                "No textual changes",
+                "Only the mode, type or name changed. Switch to Full file to read the content.",
+            );
+            return;
+        }
+        self.set_lines(
+            map::diff_lines(diff),
+            ViewerMode::Diff,
+            Side::New,
+            &key.path.display,
+        );
+        self.show_highlight_note();
+        if diff.truncated {
+            let note = inline_message(
+                MessageKind::Warning,
+                "The service truncated this diff. Open Full file to page through every byte.",
+                None,
+            );
+            note.set_hexpand(true);
+            self.footer.append(&note);
+            self.footer.set_visible(true);
+        }
+    }
+
+    fn render_file(&self, key: &ViewerKey, content: &FileContent) {
+        if content.encoding == FileEncoding::Binary {
+            self.show_message(
+                &format!(
+                    "Binary file — {} bytes, not shown as text",
+                    content.total_bytes
+                ),
+                &content.version_label,
+            );
+            return;
+        }
+        let scroll = self
+            .stack
+            .child_by_name("text")
+            .and_downcast::<gtk::ScrolledWindow>();
+        let position = scroll.as_ref().map(|s| s.vadjustment().value());
+        self.set_lines(
+            map::file_lines(content),
+            ViewerMode::FullFile,
+            content.side,
+            &key.path.display,
+        );
+        let shown = label(
+            &format!(
+                "{} · {} of {} bytes shown{}",
+                content.version_label,
+                content.loaded_bytes,
+                content.total_bytes,
+                if content.eof { " — complete" } else { "" }
+            ),
+            &["meta"],
+        );
+        shown.set_hexpand(true);
+        self.footer.append(&shown);
+        self.show_highlight_note();
+        if content.chunked && !content.eof {
+            self.footer.append(&label(
+                &format!(
+                    "Large file ({}) — shown in bounded chunks",
+                    format::byte_size(content.total_bytes)
+                ),
+                &["meta"],
+            ));
+        }
+        if !content.eof {
+            let more = widgets::button("Load more", &[]);
+            widgets::set_focus_key(&more, "viewer:load-more");
+            let controller = self.controller.clone();
+            more.connect_clicked(move |_| controller.load_more());
+            self.footer.append(&more);
+        }
+        self.footer.set_visible(true);
+        if let (Some(position), Some(scroll)) = (position, scroll) {
+            glib::idle_add_local_once(move || scroll.vadjustment().set_value(position));
+        }
+        self.schedule_reveal(key, content);
+    }
+
+    /// Selects and scrolls to the byte range the controller asked to reveal in this file, once
+    /// the new lines are laid out.
+    fn schedule_reveal(&self, key: &ViewerKey, content: &FileContent) {
+        let Some((start, end)) = self.controller.take_reveal(key, content.loaded_bytes) else {
+            return;
+        };
+        let (view, buffer, lines) = (self.view.clone(), self.buffer.clone(), self.lines.clone());
+        let side = content.side;
+        glib::idle_add_local_once(move || {
+            let lines = lines.borrow();
+            let iter = |byte| {
+                let pos = map::position_at(&lines, side, byte)?;
+                buffer.iter_at_line_offset(
+                    i32::try_from(pos.line).ok()?,
+                    i32::try_from(pos.char_offset).ok()?,
+                )
+            };
+            if let (Some(from), Some(to)) = (iter(start), iter(end)) {
+                buffer.select_range(&from, &to);
+                view.scroll_to_mark(&buffer.get_insert(), 0.1, true, 0.0, 0.3);
+            }
+        });
     }
 
     fn show_highlight_note(&self) {

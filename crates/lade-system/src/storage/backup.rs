@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use sha2::{Digest as _, Sha256};
 
-use crate::service::convert::{hex, now_ms};
+use crate::support::fs::ensure_private_dir;
+use crate::support::{hex, now_ms};
 
 pub const BACKUP_DIR: &str = "backups";
 pub const JOURNAL: &str = "migrations.journal";
@@ -58,12 +59,14 @@ impl std::fmt::Display for BackupError {
 
 impl std::error::Error for BackupError {}
 
-fn io_err(what: &'static str) -> impl Fn(io::Error) -> BackupError {
-    move |e| BackupError::Io(what, e.kind())
+impl From<rusqlite::Error> for BackupError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sql(error.to_string())
+    }
 }
 
-fn sql_err(e: rusqlite::Error) -> BackupError {
-    BackupError::Sql(e.to_string())
+fn io_err(what: &'static str) -> impl Fn(io::Error) -> BackupError {
+    move |e| BackupError::Io(what, e.kind())
 }
 
 fn backup_dir(state: &Path) -> PathBuf {
@@ -72,8 +75,7 @@ fn backup_dir(state: &Path) -> PathBuf {
 
 fn private_backup_dir(state: &Path) -> Result<PathBuf, BackupError> {
     let dir = backup_dir(state);
-    crate::transport::prepare_private_dir(&dir)
-        .map_err(|e| BackupError::Invalid(format!("backup directory: {e}")))?;
+    ensure_private_dir(&dir).map_err(|e| BackupError::Invalid(format!("backup directory: {e}")))?;
     Ok(dir)
 }
 
@@ -110,6 +112,11 @@ fn sha256_file(path: &Path) -> Result<String, BackupError> {
     Ok(hex(&hasher.finalize()))
 }
 
+/// The pre-migration backups the migration journal lists and has not pruned.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Io`] when the journal exists but cannot be read.
 pub fn backups(state: &Path) -> Result<Vec<Backup>, BackupError> {
     let journal = match fs::read_to_string(backup_dir(state).join(JOURNAL)) {
         Ok(text) => text,
@@ -160,7 +167,7 @@ pub(crate) fn before_migration(
             "VACUUM INTO CAST(?1 AS TEXT)",
             [path.as_os_str().as_encoded_bytes()],
         )
-        .map_err(sql_err)
+        .map_err(BackupError::from)
         .and_then(|_| {
             File::open(&path)
                 .and_then(|f| f.sync_all())
@@ -209,6 +216,11 @@ fn prune(state: &Path, dir: &Path) -> Result<(), BackupError> {
     Ok(())
 }
 
+/// The schema version of the database at `path`, or `None` when there is no database.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Sql`] when the database cannot be opened or queried.
 pub fn database_schema(path: &Path) -> Result<Option<i64>, BackupError> {
     if !path.exists() {
         return Ok(None);
@@ -216,19 +228,16 @@ pub fn database_schema(path: &Path) -> Result<Option<i64>, BackupError> {
     let conn = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(sql_err)?;
+    )?;
     schema_of(&conn).map(Some)
 }
 
 fn schema_of(conn: &Connection) -> Result<i64, BackupError> {
-    let has_table: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
+    let has_table: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+        [],
+        |row| row.get(0),
+    )?;
     if has_table == 0 {
         return Ok(0);
     }
@@ -237,7 +246,7 @@ fn schema_of(conn: &Connection) -> Result<i64, BackupError> {
         [],
         |row| row.get(0),
     )
-    .map_err(sql_err)
+    .map_err(BackupError::from)
 }
 
 #[derive(Debug)]
@@ -247,8 +256,21 @@ pub struct Restored {
     pub kept: PathBuf,
 }
 
+/// Restores the newest intact backup taken before schema `schema` was migrated, keeping
+/// the newer database beside the backups.
+///
+/// # Errors
+///
+/// Returns [`BackupError::Busy`] when a service holds the state lock, [`BackupError::NotNeeded`]
+/// when the database is not newer than `schema`, [`BackupError::NoBackup`] when no backup of
+/// `schema` matches its recorded digest, [`BackupError::Invalid`] when there is no database or the
+/// backup fails its integrity or schema check, and [`BackupError::Io`] or [`BackupError::Sql`] when
+/// a step of the swap fails.
 pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
-    let _lock = crate::service::lock_state(state).map_err(|_| BackupError::Busy)?;
+    let _lock = super::lock_state(state).map_err(|e| match e.kind() {
+        io::ErrorKind::WouldBlock => BackupError::Busy,
+        kind => BackupError::Io("lock state directory", kind),
+    })?;
     let db = state.join(DATABASE);
     let database_schema = database_schema(&db)?.ok_or(BackupError::Invalid(
         "no database in the state directory".into(),
@@ -271,11 +293,8 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
         .ok_or(BackupError::NoBackup(schema))?;
     let source = dir.join(&backup.file);
     {
-        let conn = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(sql_err)?;
-        let check: String = conn
-            .query_row("PRAGMA quick_check", [], |row| row.get(0))
-            .map_err(sql_err)?;
+        let conn = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if check != "ok" {
             return Err(BackupError::Invalid("integrity check failed".into()));
         }
@@ -286,10 +305,8 @@ pub fn restore(state: &Path, schema: i64) -> Result<Restored, BackupError> {
     }
 
     {
-        let conn =
-            Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(sql_err)?;
-        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
-            .map_err(sql_err)?;
+        let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
     }
     let staged = state.join(format!("{DATABASE}.restore.tmp"));
     let _ = fs::remove_file(&staged);

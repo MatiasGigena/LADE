@@ -1,6 +1,8 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { createAssistantMessageEventStream, getCurrentSystemPrompt } from "./pi-ai.ts";
 import type { Api, AssistantMessage, AssistantMessageEventStream, Message, Model, SimpleStreamOptions, TextContent, ToolCall, TranscriptContext } from "./pi-ai.ts";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { compareCodeUnits } from "../json.ts";
 
 export const FIXTURE_PROVIDER = "lade-fixture";
 
@@ -8,11 +10,11 @@ export const FIXTURE_SWITCH = "LADE_TEST_FIXTURE_PROVIDER";
 
 export const FIXTURE_MODEL = "scripted";
 
-export const FIXTURE_API = "lade-fixture-scripted";
+const FIXTURE_API = "lade-fixture-scripted";
 
-export const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
+const FIXTURE_FAILURE = "lade-fixture: scripted provider failure";
 
-export const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
+const FIXTURE_TRANSIENT = "lade-fixture: overloaded (scripted transient failure)";
 
 const MARKER = /LADE-MARKER:[A-Za-z0-9_.-]+/g;
 
@@ -24,9 +26,27 @@ interface Directives { writes: Array<{ path: string; content: string }>; fail: b
 
 const DIRECTIVE = /^\s*lade-fixture:\s*([a-z]+)(?:[ \t]+(.*))?$/;
 
+const MAX_DELAY_MS = 2_000;
+
 function unescape(text: string): string {
   return text.replace(/\\(\\|n|t)/g, (_match, code: string) => code === "n" ? "\n" : code === "t" ? "\t" : "\\");
 }
+
+function addWrite(found: Directives, rest: string): void {
+  const space = rest.search(/[ \t]/);
+  const path = space < 0 ? rest : rest.slice(0, space);
+
+  if (path.length > 0) found.writes.push({ path, content: unescape(space < 0 ? "" : rest.slice(space + 1)) });
+}
+
+const VERBS = new Map<string, (found: Directives, rest: string) => void>([
+  ["fail", found => { found.fail = true; }],
+  ["echo", found => { found.echo = true; }],
+  ["system", found => { found.system = true; }],
+  ["transient", found => { found.transient = true; }],
+  ["delay", (found, rest) => { found.delayMs = Math.min(MAX_DELAY_MS, Math.max(0, Number.parseInt(rest, 10) || 0)); }],
+  ["write", addWrite],
+]);
 
 function directives(text: string): Directives {
   const found: Directives = { writes: [], fail: false, delayMs: 0, echo: false, system: false, transient: false };
@@ -34,21 +54,7 @@ function directives(text: string): Directives {
   for (const line of text.split("\n")) {
     const match = DIRECTIVE.exec(line.replace(/\r$/, ""));
 
-    if (!match) continue;
-    const verb = match[1];
-    const rest = match[2] ?? "";
-
-    if (verb === "fail") found.fail = true;
-    else if (verb === "echo") found.echo = true;
-    else if (verb === "system") found.system = true;
-    else if (verb === "transient") found.transient = true;
-    else if (verb === "delay") found.delayMs = Math.min(2_000, Math.max(0, Number.parseInt(rest, 10) || 0));
-    else if (verb === "write") {
-      const space = rest.search(/[ \t]/);
-      const path = space < 0 ? rest : rest.slice(0, space);
-
-      if (path.length > 0) found.writes.push({ path, content: unescape(space < 0 ? "" : rest.slice(space + 1)) });
-    }
+    if (match) VERBS.get(match[1] ?? "")?.(found, match[2] ?? "");
   }
 
   return found;
@@ -62,26 +68,14 @@ function userText(message: Message): string {
   return message.content;
 }
 
-function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("aborted"));
+/** True the first time a transient directive is seen for this user message, so its retry succeeds. */
+function firstTransientAttempt(message: Message | undefined, transientFailed: Set<string>): boolean {
+  const key = message ? `${message.timestamp}:${userText(message)}` : "";
 
-      return;
-    }
+  if (transientFailed.has(key)) return false;
+  transientFailed.add(key);
 
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
-
-    function onAbort(): void { clearTimeout(timer); reject(new Error("aborted")); }
-
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-const transientFailed = new Set<string>();
-
-function transientKey(message: Message | undefined): string {
-  return message ? `${message.timestamp}:${userText(message)}` : "";
+  return true;
 }
 
 function chunks(text: string): string[] {
@@ -94,61 +88,64 @@ function chunks(text: string): string[] {
   return out;
 }
 
-function plan(context: TranscriptContext): Script {
-  const messages = context.messages;
-  let lastUser = -1;
+type Reply = Omit<Script, "delayMs">;
 
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "user") { lastUser = i; break; }
-  }
+function textReply(text: string): Reply {
+  return { text, calls: [], fail: false };
+}
 
-  const latest = messages[lastUser];
-  const script = directives(latest ? userText(latest) : "");
-  const results = messages.slice(lastUser + 1).flatMap(message => message.role === "toolResult" ? [message] : []);
-  const users = messages.filter(message => message.role === "user").length;
+function toolSummary(results: ReadonlyArray<{ isError: boolean }>): Reply {
+  const failed = results.filter(result => result.isError).length;
 
-  if (results.length > 0) {
-    const failed = results.filter(result => result.isError).length;
+  return textReply(`lade-fixture: ${results.length - failed} of ${results.length} tool call(s) succeeded. Done.`);
+}
 
-    return {
-      text: `lade-fixture: ${results.length - failed} of ${results.length} tool call(s) succeeded. Done.`,
-      calls: [], fail: false, delayMs: script.delayMs,
-    };
-  }
+function systemMarkers(context: TranscriptContext): Reply {
+  const markers = [...new Set(getCurrentSystemPrompt(context.messages).match(MARKER) ?? [])].sort(compareCodeUnits);
 
-  if (script.fail) return { text: "", calls: [], fail: true, delayMs: script.delayMs };
+  return textReply(`lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`);
+}
 
-  if (script.transient && !transientFailed.has(transientKey(latest))) {
-    transientFailed.add(transientKey(latest));
-
-    return { text: "", calls: [], fail: true, delayMs: script.delayMs, transient: true };
-  }
-
-  if (script.echo) return { text: `lade-fixture echo: ${latest ? userText(latest) : ""}`, calls: [], fail: false, delayMs: script.delayMs };
-
-  if (script.system) {
-    const markers = [...new Set(getCurrentSystemPrompt(context.messages).match(MARKER) ?? [])].sort();
-
-    return { text: `lade-fixture system markers: ${markers.length > 0 ? markers.join(" ") : "none"}`, calls: [], fail: false, delayMs: script.delayMs };
-  }
-
-  if (script.writes.length > 0) {
-    return {
-      text: `lade-fixture: writing ${script.writes.length} file(s) with the write tool.`,
-      calls: script.writes.map((write, n) => ({ type: "toolCall", id: `lade-fixture-${users}-${n + 1}`, name: "write", arguments: { path: write.path, content: write.content } })),
-      fail: false, delayMs: script.delayMs,
-    };
-  }
-
+function writeCalls(writes: Directives["writes"], users: number): Reply {
   return {
-    text: `lade-fixture scripted reply (offline fixture model, not a real model). The context holds ${users} user message(s).`,
-    calls: [], fail: false, delayMs: script.delayMs,
+    text: `lade-fixture: writing ${writes.length} file(s) with the write tool.`,
+    calls: writes.map((write, n) => ({ type: "toolCall", id: `lade-fixture-${users}-${n + 1}`, name: "write", arguments: { path: write.path, content: write.content } })),
+    fail: false,
   };
 }
 
-async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream): Promise<void> {
+function reply(context: TranscriptContext, lastUser: number, script: Directives, transientFailed: Set<string>): Reply {
+  const messages = context.messages;
+  const latest = messages[lastUser];
+  const results = messages.slice(lastUser + 1).flatMap(message => message.role === "toolResult" ? [message] : []);
+  const users = messages.filter(message => message.role === "user").length;
+
+  if (results.length > 0) return toolSummary(results);
+
+  if (script.fail) return { text: "", calls: [], fail: true };
+
+  if (script.transient && firstTransientAttempt(latest, transientFailed)) return { text: "", calls: [], fail: true, transient: true };
+
+  if (script.echo) return textReply(`lade-fixture echo: ${latest ? userText(latest) : ""}`);
+
+  if (script.system) return systemMarkers(context);
+
+  if (script.writes.length > 0) return writeCalls(script.writes, users);
+
+  return textReply(`lade-fixture scripted reply (offline fixture model, not a real model). The context holds ${users} user message(s).`);
+}
+
+function plan(context: TranscriptContext, transientFailed: Set<string>): Script {
+  const lastUser = context.messages.findLastIndex(message => message.role === "user");
+  const latest = context.messages[lastUser];
+  const script = directives(latest ? userText(latest) : "");
+
+  return { ...reply(context, lastUser, script, transientFailed), delayMs: script.delayMs };
+}
+
+async function run(model: Model<Api>, context: TranscriptContext, options: SimpleStreamOptions | undefined, stream: AssistantMessageEventStream, transientFailed: Set<string>): Promise<void> {
   const signal = options?.signal;
-  const script = plan(context);
+  const script = plan(context, transientFailed);
 
   const output: AssistantMessage = {
     role: "assistant",
@@ -165,7 +162,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "start", partial: output });
 
     if (script.fail) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       throw new Error(script.transient ? FIXTURE_TRANSIENT : FIXTURE_FAILURE);
     }
 
@@ -175,7 +172,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
 
     for (const delta of chunks(script.text)) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       block.text += delta;
       stream.push({ type: "text_delta", contentIndex: textIndex, delta, partial: output });
     }
@@ -183,7 +180,7 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
     stream.push({ type: "text_end", contentIndex: textIndex, content: block.text, partial: output });
 
     for (const call of script.calls) {
-      await pause(script.delayMs, signal);
+      await sleep(script.delayMs, undefined, { signal });
       output.content.push(call);
       const index = output.content.length - 1;
       stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
@@ -202,14 +199,17 @@ async function run(model: Model<Api>, context: TranscriptContext, options: Simpl
   stream.end();
 }
 
-function streamFixture(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream {
-  const stream = createAssistantMessageEventStream();
-  void run(model, context, options, stream);
-
-  return stream;
-}
-
+/** The provider registration; each registration keeps its own memory of the transient failures it has scripted. */
 export function fixtureProvider(): ProviderRegistration {
+  const transientFailed = new Set<string>();
+
+  const streamFixture = (model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): AssistantMessageEventStream => {
+    const stream = createAssistantMessageEventStream();
+    void run(model, context, options, stream, transientFailed);
+
+    return stream;
+  };
+
   return {
     name: "LADE fixture provider (offline, scripted; not a real model)",
     baseUrl: "lade-fixture://offline",
@@ -228,9 +228,6 @@ export function fixtureProvider(): ProviderRegistration {
   };
 }
 
-export function registerTestFixture(runtime: ModelRuntime): boolean {
-  if (process.env[FIXTURE_SWITCH] !== "1") return false;
-  runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
-
-  return true;
+export function registerTestFixture(runtime: ModelRuntime): void {
+  if (process.env[FIXTURE_SWITCH] === "1") runtime.registerProvider(FIXTURE_PROVIDER, fixtureProvider());
 }

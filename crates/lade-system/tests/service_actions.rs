@@ -1,6 +1,14 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -12,9 +20,9 @@ use lade_system::supervision::{
 
 use lade_protocol::client::{
     ActionName, Basis, CandidateCommand, ErrorCode, ExecutionState, Intent, Lifecycle,
-    MessageSendCommand, ObjectiveCleanupCommand, ObjectiveDetail, ObjectiveSelector, ReplyData,
-    Request, ReviewApproveCommand, ReviewIntegrateCommand, ReviewVerifyCommand,
-    UpdateIntentCommand,
+    MessageSendCommand, ObjectiveCleanupCommand, ObjectiveDetail, ObjectiveSelector,
+    ObjectiveUpdateIntentCommand, ReplyData, Request, ReviewApproveCommand, ReviewIntegrateCommand,
+    ReviewVerifyCommand,
 };
 use lade_protocol::types::{DeliveryMode, Id, Model};
 use service_support::*;
@@ -173,15 +181,17 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
         .last()
         .map_or_else(new_id, |c| c.candidate_id.clone());
     Some(match action {
-        ActionName::ObjectiveUpdateIntent => Request::ObjectiveUpdateIntent(UpdateIntentCommand {
-            objective_id: objective,
-            expected_intent_revision: d.intent_revision.clone(),
-            intent: Intent {
-                outcome: "changed outcome".into(),
-                constraints: "none".into(),
-                acceptance: "checks pass".into(),
-            },
-        }),
+        ActionName::ObjectiveUpdateIntent => {
+            Request::ObjectiveUpdateIntent(ObjectiveUpdateIntentCommand {
+                objective_id: objective,
+                expected_intent_revision: d.intent_revision.clone(),
+                intent: Intent {
+                    outcome: "changed outcome".into(),
+                    constraints: "none".into(),
+                    acceptance: "checks pass".into(),
+                },
+            })
+        }
         ActionName::ExecutionStart => {
             Request::ExecutionStart(lade_protocol::client::ExecutionStartCommand {
                 objective_id: objective,
@@ -234,7 +244,7 @@ fn request_for(action: ActionName, d: &ObjectiveDetail) -> Option<Request> {
             confirm_data_loss: false,
         }),
         ActionName::ObjectiveDeleteHistory => {
-            Request::ObjectiveDeleteHistory(lade_protocol::client::ObjectiveHistoryDeleteCommand {
+            Request::ObjectiveDeleteHistory(lade_protocol::client::ObjectiveDeleteHistoryCommand {
                 objective_id: objective,
                 confirm_history_loss: true,
             })
@@ -365,6 +375,8 @@ fn start_without_credentials_is_refused_synchronously_naming_the_variable() {
     let mut config = LauncherConfig::new(
         env.root.path().join("state/run"),
         env.root.path().join("run/g"),
+        std::env::var_os("LADE_NODE").map(PathBuf::from),
+        std::env::var_os("LADE_WORKER_DIR").map(PathBuf::from),
     )
     .unwrap();
     config.credentials = CredentialSource::empty();

@@ -1,3 +1,10 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code fails loudly on broken fixtures"
+)]
+
 mod service_support;
 
 use std::fs;
@@ -20,7 +27,7 @@ fn corrupt_store_refuses_to_start_and_is_not_reset() {
     fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
     let garbage = vec![0x5a_u8; 8192];
     fs::write(state.join("lade.db"), &garbage).unwrap();
-    let error = lade_system::service::start(env.config(), FakeLauncher::shared())
+    let error = lade_system::service::start(&env.config(), FakeLauncher::shared())
         .err()
         .expect("refused");
     assert!(
@@ -309,6 +316,76 @@ fn save(
     }))
 }
 
+/// Saves a draft on `a.txt` through its compare-and-swap revisions, refusing a selection that
+/// is not the file's text and stale revisions, and a second draft on `b.txt`. Returns both
+/// drafts.
+fn save_drafts_with_cas(
+    client: &mut Client,
+    objective: &Id,
+    capture: &Id,
+    (a_digest, b_digest): (&Digest, &Digest),
+) -> (Id, Id) {
+    let d1 = new_id();
+    let d2 = new_id();
+    let ref_a = reference(capture, a_digest, "a.txt", 0, "hello");
+    let ref_b = reference(capture, b_digest, "b.txt", 0, "second");
+    let wrong = reference(capture, a_digest, "a.txt", 0, "HELLO");
+    assert_eq!(
+        save(client, objective, &d1, 0, wrong, "x")
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidRequest
+    );
+    let saved = save(client, objective, &d1, 0, ref_a.clone(), "greet properly").unwrap();
+    assert!(matches!(&saved, ReplyData::DraftSave(d) if d.revision.value() == 1));
+    assert_eq!(
+        save(client, objective, &d1, 0, ref_a.clone(), "dup")
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    save(
+        client,
+        objective,
+        &d1,
+        1,
+        ref_a.clone(),
+        "greet properly v2",
+    )
+    .unwrap();
+    assert_eq!(
+        save(client, objective, &d1, 1, ref_a.clone(), "lost update")
+            .unwrap_err()
+            .code,
+        ErrorCode::Conflict
+    );
+    save(client, objective, &d2, 0, ref_b, "rename this").unwrap();
+    (d1, d2)
+}
+
+/// A refused batch leaves no input and both drafts unsubmitted.
+fn assert_nothing_submitted(client: &mut Client, objective: &Id) {
+    match client.call(Request::InputsList(InputsListQuery {
+        objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
+    })) {
+        Ok(ReplyData::InputsList(list)) => assert!(list.inputs.is_empty()),
+        other => panic!("{other:?}"),
+    }
+    match client.call(Request::DraftsList(DraftsListQuery {
+        objective_id: objective.clone(),
+        limit: PageLimit::parse("200").unwrap(),
+        after: None,
+    })) {
+        Ok(ReplyData::DraftsList(list)) => {
+            assert_eq!(list.drafts.len(), 2);
+            assert!(list.drafts.iter().all(|d| d.input_id.is_none()));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
 #[test]
 fn draft_cas_and_stale_batch_blocks_whole_submission() {
     let env = Env::new("svc-drafts");
@@ -328,56 +405,12 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     let b = read_file(&mut client, &objective, Basis::Working, "b.txt");
     assert_eq!(a.text.as_deref(), Some("hello world\n"));
 
-    let d1 = new_id();
-    let d2 = new_id();
-    let ref_a = reference(&capture, &a.artifact_digest, "a.txt", 0, "hello");
-    let ref_b = reference(&capture, &b.artifact_digest, "b.txt", 0, "second");
-    let wrong = reference(&capture, &a.artifact_digest, "a.txt", 0, "HELLO");
-    assert_eq!(
-        save(&mut client, &objective, &d1, 0, wrong, "x")
-            .unwrap_err()
-            .code,
-        ErrorCode::InvalidRequest
-    );
-    let saved = save(
+    let (d1, d2) = save_drafts_with_cas(
         &mut client,
         &objective,
-        &d1,
-        0,
-        ref_a.clone(),
-        "greet properly",
-    )
-    .unwrap();
-    assert!(matches!(&saved, ReplyData::DraftSave(d) if d.revision.value() == 1));
-    assert_eq!(
-        save(&mut client, &objective, &d1, 0, ref_a.clone(), "dup")
-            .unwrap_err()
-            .code,
-        ErrorCode::Conflict
+        &capture,
+        (&a.artifact_digest, &b.artifact_digest),
     );
-    save(
-        &mut client,
-        &objective,
-        &d1,
-        1,
-        ref_a.clone(),
-        "greet properly v2",
-    )
-    .unwrap();
-    assert_eq!(
-        save(
-            &mut client,
-            &objective,
-            &d1,
-            1,
-            ref_a.clone(),
-            "lost update"
-        )
-        .unwrap_err()
-        .code,
-        ErrorCode::Conflict
-    );
-    save(&mut client, &objective, &d2, 0, ref_b, "rename this").unwrap();
 
     fs::write(wt.join("b.txt"), "changed file\n").unwrap();
     let session = idle.session.expect("session");
@@ -403,31 +436,18 @@ fn draft_cas_and_stale_batch_blocks_whole_submission() {
     ];
     let rejected = client.call(submit(both)).unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleReference);
-    assert!(rejected.detail.contains(d2.as_str()), "{}", rejected.detail);
-    assert!(
-        !rejected.detail.contains(d1.as_str()),
+    assert_eq!(
+        rejected.stale_drafts,
+        std::slice::from_ref(&d2),
         "{}",
         rejected.detail
     );
-    match client.call(Request::InputsList(InputsListQuery {
-        objective_id: objective.clone(),
-        limit: PageLimit::parse("200").unwrap(),
-        after: None,
-    })) {
-        Ok(ReplyData::InputsList(list)) => assert!(list.inputs.is_empty()),
-        other => panic!("{other:?}"),
-    }
-    match client.call(Request::DraftsList(DraftsListQuery {
-        objective_id: objective.clone(),
-        limit: PageLimit::parse("200").unwrap(),
-        after: None,
-    })) {
-        Ok(ReplyData::DraftsList(list)) => {
-            assert_eq!(list.drafts.len(), 2);
-            assert!(list.drafts.iter().all(|d| d.input_id.is_none()));
-        }
-        other => panic!("{other:?}"),
-    }
+    assert!(
+        !rejected.detail.contains(d2.as_str()),
+        "ids travel in stale_drafts: {}",
+        rejected.detail
+    );
+    assert_nothing_submitted(&mut client, &objective);
 
     client
         .call(Request::DraftDelete(DraftDeleteCommand {

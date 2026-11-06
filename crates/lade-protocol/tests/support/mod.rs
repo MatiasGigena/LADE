@@ -1,6 +1,9 @@
+mod history;
+
+use history::RequestHistory;
 use lade_protocol::{
-    ClientEnvelope, Decoder, Framing, Message, Reassembler, RequestHistory, WireError,
-    WorkerEnvelope, bounded_json,
+    ClientEnvelope, Decoder, Framing, Message, Reassembler, WireError, WorkerEnvelope,
+    bounded_json,
     client::{ClientBody, ErrorCode, Rejection, ReplyResult, SafeAction, Scope},
     encode,
     types::Counter,
@@ -19,40 +22,32 @@ fn unhex(s: &str) -> Vec<u8> {
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }
+/// The bytes a fixture's source describes: one recipe key naming how to build them.
 pub fn source(s: &Value) -> Vec<u8> {
-    if let Some(v) = s.get("value") {
-        return serde_json::to_vec(v).unwrap();
+    let [(recipe, v)] = s.as_object().unwrap().iter().collect::<Vec<_>>()[..] else {
+        panic!("a fixture source has exactly one recipe")
+    };
+    let size = || usize::try_from(v.as_u64().unwrap()).unwrap();
+    match recipe.as_str() {
+        "value" => serde_json::to_vec(v).unwrap(),
+        "text" => v.as_str().unwrap().as_bytes().to_vec(),
+        "hex" => unhex(v.as_str().unwrap()),
+        "depth" => format!("{}0{}", "[".repeat(size()), "]".repeat(size())).into_bytes(),
+        "array" => serde_json::to_vec(&vec![0; size()]).unwrap(),
+        "string" => serde_json::to_vec(&"a".repeat(size())).unwrap(),
+        "nodes" => serde_json::to_vec(&vec![vec![0; 1024]; 16]).unwrap(),
+        "padding" => {
+            let mut bytes = b"{}".to_vec();
+            bytes.resize(size(), b' ');
+            bytes
+        }
+        _ => panic!("unknown fixture recipe {recipe}"),
     }
-    if let Some(v) = s.get("text") {
-        return v.as_str().unwrap().as_bytes().to_vec();
-    }
-    if let Some(v) = s.get("hex") {
-        return unhex(v.as_str().unwrap());
-    }
-    if let Some(v) = s.get("depth") {
-        let n = v.as_u64().unwrap() as usize;
-        return format!("{}0{}", "[".repeat(n), "]".repeat(n)).into_bytes();
-    }
-    if let Some(v) = s.get("array") {
-        return serde_json::to_vec(&vec![0; v.as_u64().unwrap() as usize]).unwrap();
-    }
-    if let Some(v) = s.get("string") {
-        return serde_json::to_vec(&"a".repeat(v.as_u64().unwrap() as usize)).unwrap();
-    }
-    if s.get("nodes").is_some() {
-        return serde_json::to_vec(&vec![vec![0; 1024]; 16]).unwrap();
-    }
-    if let Some(v) = s.get("padding") {
-        let mut bytes = b"{}".to_vec();
-        bytes.resize(v.as_u64().unwrap() as usize, b' ');
-        return bytes;
-    }
-    panic!("unknown fixture recipe")
 }
 fn framed(bytes: &[u8], framing: Framing) -> Vec<u8> {
     match framing {
         Framing::Client => {
-            let mut v = (bytes.len() as u32).to_be_bytes().to_vec();
+            let mut v = u32::try_from(bytes.len()).unwrap().to_be_bytes().to_vec();
             v.extend(bytes);
             v
         }
@@ -98,9 +93,9 @@ fn stream<M: Message + PartialEq + Debug>(
                     count += 1;
                     Ok(())
                 }),
-                Err(WireError("closed"))
+                Err(WireError::Closed)
             );
-            assert_eq!(decoder.finish(), Err(WireError("closed")));
+            assert_eq!(decoder.finish(), Err(WireError::Closed));
             assert_eq!(
                 count, 0,
                 "a failed connection must not deliver later valid messages"
@@ -155,73 +150,83 @@ fn rejected(code: ErrorCode) -> ReplyResult {
     }
 }
 
-pub fn run(case: &Value) -> Result<(), WireError> {
-    let s = &case["source"];
-    let worker = case["contract"] == "worker";
-    match case["mode"].as_str().unwrap() {
-        "json" => {
-            bounded_json(&source(s))?;
-        }
-        "frame" if worker => frame_case::<WorkerEnvelope>(&source(s))?,
-        "frame" => frame_case::<ClientEnvelope>(&source(s))?,
-        "transport" => {
-            let framing = if case["framing"] == "client" {
-                Framing::Client
-            } else {
-                Framing::Worker
-            };
-            if worker {
-                transport_case::<WorkerEnvelope>(&source(s), framing)?
-            } else {
-                transport_case::<ClientEnvelope>(&source(s), framing)?
+/// Feeds a chunk fixture's steps to one reassembler and checks the reassembled bytes; after a
+/// refusal the reassembler stays closed.
+fn chunks_case(case: &Value) -> Result<(), WireError> {
+    let owner: Scope = serde_json::from_value(case["owner"].clone()).unwrap();
+    let generation: Counter = serde_json::from_value(case["generation"].clone()).unwrap();
+    let mut chunks = Reassembler::new(owner, generation);
+    let mut output = Vec::new();
+    for frame in steps(case) {
+        let body = frame?.body;
+        match chunks.accept(&body) {
+            Ok(Some(bytes)) => output.extend(bytes),
+            Ok(None) => (),
+            Err(error) => {
+                assert_eq!(chunks.accept(&body), Err(WireError::Closed));
+                return Err(error);
             }
         }
-        "chunks" => {
-            let owner: Scope = serde_json::from_value(case["owner"].clone()).unwrap();
-            let generation: Counter = serde_json::from_value(case["generation"].clone()).unwrap();
-            let mut chunks = Reassembler::new(owner, generation);
-            let mut output = Vec::new();
-            for step in s["steps"].as_array().unwrap() {
-                let frame = ClientEnvelope::decode(&serde_json::to_vec(step).unwrap())?;
-                match chunks.accept(&frame.body) {
-                    Ok(Some(bytes)) => output.extend(bytes),
-                    Ok(None) => (),
-                    Err(e) => {
-                        assert_eq!(chunks.accept(&frame.body).unwrap_err().0, "closed");
-                        return Err(e);
-                    }
-                }
-            }
-            assert_eq!(output, unhex(case["output_hex"].as_str().unwrap()));
-            chunks.close();
-        }
-        "history" => {
-            let mut history = RequestHistory::default();
-            for (index, step) in s["steps"].as_array().unwrap().iter().enumerate() {
-                let frame = ClientEnvelope::decode(&serde_json::to_vec(step).unwrap())?;
-                let ClientBody::Request(request) = frame.body else {
-                    panic!("history fixtures carry requests");
-                };
-                let outcome = rejected(if index == 0 {
-                    ErrorCode::Interrupted
-                } else {
-                    ErrorCode::DurabilityFailure
-                });
-                assert_eq!(
-                    history.observe(&request, outcome)?,
-                    rejected(ErrorCode::Interrupted)
-                );
-            }
-        }
-        _ => panic!("unknown fixture mode"),
+    }
+    assert_eq!(output, unhex(case["output_hex"].as_str().unwrap()));
+    chunks.close();
+    Ok(())
+}
+
+/// Replays a history fixture's requests: the first records an interrupted outcome, and every
+/// retry must get that outcome back rather than its own.
+fn history_case(case: &Value) -> Result<(), WireError> {
+    let mut history = RequestHistory::default();
+    for (index, frame) in steps(case).enumerate() {
+        let ClientBody::Request(request) = frame?.body else {
+            panic!("history fixtures carry requests");
+        };
+        let outcome = rejected(if index == 0 {
+            ErrorCode::Interrupted
+        } else {
+            ErrorCode::DurabilityFailure
+        });
+        assert_eq!(
+            history.observe(&request, outcome)?,
+            rejected(ErrorCode::Interrupted)
+        );
     }
     Ok(())
+}
+
+fn steps(case: &Value) -> impl Iterator<Item = Result<ClientEnvelope, WireError>> {
+    case["source"]["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|step| ClientEnvelope::decode(&serde_json::to_vec(step).unwrap()))
+}
+
+pub fn run(case: &Value) -> Result<(), WireError> {
+    let worker = case["contract"] == "worker";
+    let framing = if case["framing"] == "client" {
+        Framing::Client
+    } else {
+        Framing::Worker
+    };
+    match case["mode"].as_str().unwrap() {
+        "json" => bounded_json(&source(&case["source"])).map(drop),
+        "frame" if worker => frame_case::<WorkerEnvelope>(&source(&case["source"])),
+        "frame" => frame_case::<ClientEnvelope>(&source(&case["source"])),
+        "transport" if worker => {
+            transport_case::<WorkerEnvelope>(&source(&case["source"]), framing)
+        }
+        "transport" => transport_case::<ClientEnvelope>(&source(&case["source"]), framing),
+        "chunks" => chunks_case(case),
+        "history" => history_case(case),
+        _ => panic!("unknown fixture mode"),
+    }
 }
 pub fn report() -> Vec<Value> {
     corpus()
         .iter()
         .map(|case| {
-            let actual = run(case).map(|_| "ok").unwrap_or_else(|e| e.0);
+            let actual = run(case).map_or_else(WireError::as_str, |()| "ok");
             assert_eq!(actual, case["expected"].as_str().unwrap(), "{}", case["id"]);
             json!({"id":case["id"], "outcome":actual})
         })
