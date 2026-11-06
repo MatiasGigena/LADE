@@ -1,5 +1,6 @@
-//! The window header: the LADE mark, the main view tabs, search and its results, the profile,
-//! the connection status and the compact menu.
+//! The window header: the LADE mark, search and its results, the profile, the connection status
+//! and the compact menu. It also builds the main view tabs, which the window places in the notch
+//! of the work-area pane.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -70,8 +71,9 @@ pub type OpenerHandler = Rc<dyn Fn(&gtk::Widget)>;
 pub struct Header {
     pub root: gtk::Box,
     pub viewport: gtk::ScrolledWindow,
+    /// The Workbench, Activity and Terminal tabs, placed by the window in the work-area notch.
+    pub nav: gtk::Box,
     row: gtk::Box,
-    brand: gtk::Box,
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
     activity_tab: gtk::ToggleButton,
@@ -88,7 +90,6 @@ pub struct Header {
     results: gtk::ListBox,
     popover_status: gtk::Label,
     shown_results: RefCell<Vec<SearchResult>>,
-    nav: gtk::Box,
     profile_name: gtk::Label,
     shortcuts_button: gtk::Button,
     exit_button: gtk::Button,
@@ -182,7 +183,7 @@ fn brand() -> gtk::Box {
     brand
 }
 
-/// The main view tabs, as the tab strip and its Workbench, Activity and Terminal tabs.
+/// The main view tabs, as the tab strip and its fixed Workbench, Activity and Terminal tabs.
 fn nav_tabs() -> (
     gtk::Box,
     gtk::ToggleButton,
@@ -191,9 +192,8 @@ fn nav_tabs() -> (
 ) {
     let nav = hbox(0);
     nav.add_css_class("nav");
-    nav.add_css_class("segmented");
     nav.set_valign(gtk::Align::Center);
-    nav.set_margin_start(space::PAGE);
+    set_accessible_label(&nav, "Main view");
     let workbench_tab = gtk::ToggleButton::with_label("Workbench");
     let activity_tab = gtk::ToggleButton::with_label("Activity");
     activity_tab.set_group(Some(&workbench_tab));
@@ -301,14 +301,12 @@ impl Header {
         root.add_css_class("lade-header");
         set_accessible_label(&root, "Header");
         let row = hbox(space::SECTION);
-        row.set_height_request(56);
+        row.set_height_request(52);
         root.append(&row);
 
-        let brand = brand();
-        row.append(&brand);
+        row.append(&brand());
 
         let (nav, workbench_tab, activity_tab, terminal_tab) = nav_tabs();
-        row.append(&nav);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
@@ -367,8 +365,8 @@ impl Header {
         let header = Rc::new(Self {
             root,
             viewport,
+            nav,
             row,
-            brand,
             controller: controller.clone(),
             workbench_tab,
             activity_tab,
@@ -385,7 +383,6 @@ impl Header {
             results,
             popover_status,
             shown_results: RefCell::new(Vec::new()),
-            nav,
             profile_name: name,
             shortcuts_button,
             exit_button,
@@ -523,8 +520,6 @@ impl Header {
         }
         self.row
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
-        self.nav
-            .set_margin_start(if compact { space::ITEM } else { space::PAGE });
         let (from, to) = if compact {
             (&self.search_slot, &self.search_holder)
         } else {
@@ -547,19 +542,6 @@ impl Header {
     pub fn set_narrow(&self, narrow: bool) {
         if self.narrow.replace(narrow) == narrow {
             return;
-        }
-        if narrow {
-            self.row.remove(&self.nav);
-            self.root.append(&self.nav);
-            self.nav.set_margin_start(0);
-        } else {
-            self.root.remove(&self.nav);
-            self.row.insert_child_after(&self.nav, Some(&self.brand));
-            self.nav.set_margin_start(if self.compact.get() {
-                space::ITEM
-            } else {
-                2 * space::PAGE
-            });
         }
         self.search_entry
             .set_width_chars(if narrow { 8 } else { 12 });

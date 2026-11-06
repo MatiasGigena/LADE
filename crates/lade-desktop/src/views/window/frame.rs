@@ -198,9 +198,9 @@ impl App {
     fn show_inspector(&self, shown: bool) {
         self.inspector.root.set_visible(shown);
         if shown {
-            self.centre_region.remove_css_class("alone");
+            self.centre_column.remove_css_class("alone");
         } else {
-            self.centre_region.add_css_class("alone");
+            self.centre_column.add_css_class("alone");
         }
     }
 
@@ -227,7 +227,7 @@ impl App {
         let c = layout::composition(class, region, details);
         let focus_region = self.focused_region();
         self.rail.root.set_visible(c.rail);
-        self.centre_region.set_visible(c.centre);
+        self.centre_column.set_visible(c.centre);
         self.show_inspector(c.inspector && self.inspector_has_content());
         self.right.set_visible(c.centre || c.inspector);
         self.region_bar.set_visible(c.region_switches);

@@ -99,16 +99,28 @@ entry > text > selection:focus-within {
 
 /* ---------------------------------------------------------------- panes on the chrome */
 
-.centre-region.sheet, notebook.inspector.sheet {
+.centre-region.sheet, notebook.inspector.sheet, .pane-shoulder {
   background-color: @surface;
   border-radius: 14px;
 }
 notebook.inspector.sheet { margin: 0 8px 8px 8px; }
 .compact notebook.inspector.sheet { margin: 0 6px 6px 6px; }
 
-.centre-region.sheet { margin: 0 0 8px 0; }
-.centre-region.sheet.alone { margin-right: 8px; }
-.compact .centre-region.sheet { margin: 0 6px 6px 6px; }
+/* The work-area pane gives up its top-left corner to a notch on the chrome that holds the view
+   tabs. Its shoulder (the pane's top beside the notch) and its body meet without a seam; the
+   foot is the pane's concave curve where the notch's bottom edge meets the shoulder. */
+.centre-column { margin: 0 0 8px 0; }
+.centre-column.alone { margin-right: 8px; }
+.compact .centre-column { margin: 0 6px 6px 6px; }
+.pane-notch { padding: 3px 0 3px 0; }
+.pane-notch .nav { margin-right: 6px; }
+.notch-foot {
+  min-width: 12px;
+  min-height: 12px;
+  background-image: radial-gradient(circle at left top, transparent 11.5px, @surface 12px);
+}
+.pane-shoulder { border-radius: 14px 14px 0 0; }
+.centre-column .centre-region.sheet { border-radius: 14px 0 14px 14px; }
 
 
 /* ---------------------------------------------------------------- type roles */
@@ -546,8 +558,6 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
   color: @ink_strong;
 }
 .segmented button:focus:focus-visible { outline-offset: -2px; }
-/* The header navigation is a tab strip, not a track. */
-.segmented.nav { padding: 0; border: none; background-color: transparent; }
 
 textview.code-view, textview.code-view > text {
   background-color: @surface;

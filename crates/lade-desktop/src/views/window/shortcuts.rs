@@ -140,7 +140,7 @@ impl App {
         match region {
             Region::Header => self.header.root.clone().upcast(),
             Region::Objectives => self.rail.root.clone().upcast(),
-            Region::Main => self.centre_region.clone().upcast(),
+            Region::Main => self.centre_column.clone().upcast(),
             Region::Inspector => self.inspector.root.clone().upcast(),
         }
     }
@@ -154,7 +154,11 @@ impl App {
     }
 
     pub(in crate::views) fn focus_region(&self, region: Region) {
-        let target = self.region_widget(region);
+        // The work area's view tabs belong to its region, but focus lands on its content.
+        let target = match region {
+            Region::Main => self.centre_region.clone().upcast(),
+            other => self.region_widget(other),
+        };
         if !target.child_focus(gtk::DirectionType::TabForward) {
             target.grab_focus();
         }

@@ -71,6 +71,7 @@ pub struct App {
     body: gtk::Stack,
     centre: gtk::Stack,
     centre_region: gtk::ScrolledWindow,
+    centre_column: gtk::Box,
     region_bar: gtk::Box,
     region_switches: Vec<(Region, gtk::ToggleButton)>,
     paned: gtk::Paned,
@@ -153,9 +154,10 @@ impl App {
             (terminal.root.upcast_ref(), "terminal"),
         ]);
         let centre_region = centre_region(&centre);
+        let centre_column = centre_column(&header.nav, &centre_region);
         let (paned, right) = panes(
             rail.root.upcast_ref(),
-            &centre_region,
+            centre_column.upcast_ref(),
             inspector.root.upcast_ref(),
         );
 
@@ -188,6 +190,7 @@ impl App {
             body,
             centre,
             centre_region,
+            centre_column,
             region_bar,
             region_switches,
             paned,
@@ -588,10 +591,37 @@ fn centre_region(centre: &gtk::Stack) -> gtk::ScrolledWindow {
     centre_region
 }
 
+/// The work-area pane: the main view tabs sit on the window chrome in a notch cut from its
+/// top-left corner, beside the pane's raised shoulder, above the scrolled centre.
+fn centre_column(tabs: &gtk::Box, centre_region: &gtk::ScrolledWindow) -> gtk::Box {
+    let notch = widgets::hbox(0);
+    notch.add_css_class("pane-notch");
+    notch.append(tabs);
+    let foot = widgets::hbox(0);
+    foot.add_css_class("notch-foot");
+    foot.set_valign(gtk::Align::End);
+    foot.set_can_target(false);
+    notch.append(&foot);
+    let shoulder = widgets::hbox(0);
+    shoulder.add_css_class("pane-shoulder");
+    shoulder.set_hexpand(true);
+    shoulder.set_can_target(false);
+    let top = widgets::hbox(0);
+    top.add_css_class("pane-top");
+    top.append(&notch);
+    top.append(&shoulder);
+    let column = widgets::vbox(0);
+    column.add_css_class("centre-column");
+    column.set_hexpand(true);
+    column.append(&top);
+    column.append(centre_region);
+    column
+}
+
 /// The rail beside the centre and inspector, as the outer pane and the inner one on its right.
 fn panes(
     rail: &gtk::Widget,
-    centre_region: &gtk::ScrolledWindow,
+    centre: &gtk::Widget,
     inspector: &gtk::Widget,
 ) -> (gtk::Paned, gtk::Paned) {
     inspector.set_hexpand(false);
@@ -599,7 +629,7 @@ fn panes(
     inspector.set_overflow(gtk::Overflow::Hidden);
     widgets::set_accessible_label(inspector, "Inspector");
     let right = gtk::Paned::new(gtk::Orientation::Horizontal);
-    right.set_start_child(Some(centre_region));
+    right.set_start_child(Some(centre));
     right.set_end_child(Some(inspector));
     right.set_resize_start_child(true);
     right.set_resize_end_child(false);
