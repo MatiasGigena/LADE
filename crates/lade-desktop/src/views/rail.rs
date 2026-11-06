@@ -104,19 +104,17 @@ impl Rail {
         title.set_has_tooltip(false);
         content.append(&title);
         let (sign, state) = format::status_pill(objective.lifecycle, objective.attention);
-        let line = objective::objective_row_line(objective);
-        if line.is_some() {
+        if objective::objective_row_line(objective).is_some() {
             let sign = label(sign, &["objective-sign"]);
             sign.set_wrap(false);
             content.append(&sign);
         }
         row.set_child(Some(&content));
-        let mut tooltip = objective.title.clone();
-        for extra in [line.as_deref().unwrap_or(""), objective.outcome.as_str()] {
-            if !extra.is_empty() {
-                tooltip.push('\n');
-                tooltip.push_str(extra);
-            }
+        let (_, status) = objective::status_line(objective);
+        let mut tooltip = format!("{}\n{status}", objective.title);
+        if !objective.outcome.is_empty() {
+            tooltip.push('\n');
+            tooltip.push_str(&objective.outcome);
         }
         row.set_tooltip_text(Some(&tooltip));
         let badges = if objective.badges.is_empty() {
