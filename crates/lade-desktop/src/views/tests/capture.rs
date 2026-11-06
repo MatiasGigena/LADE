@@ -1,4 +1,5 @@
 use crate::presentation::controller::intents::RecordingSink;
+use crate::presentation::layout::Region;
 use crate::presentation::state::model::ConnectionState;
 use crate::presentation::state::model::{
     ActivityItem, ActivityItemId, ActivityRole, Basis, ChangeList, ChangeStatus, ChangedFile,
@@ -230,11 +231,13 @@ fn capture_fixture_views() {
             populate(&app);
             settle(SETTLE);
             shoot(&window, &dir, &format!("workbench-{suffix}"));
+            app.controller.show_region(Region::Inspector);
             app.controller.set_inspector_tab(InspectorTab::Evidence);
             shoot(&window, &dir, &format!("evidence-{suffix}"));
             app.controller.set_inspector_tab(InspectorTab::Feedback);
             shoot(&window, &dir, &format!("feedback-{suffix}"));
             app.controller.set_inspector_tab(InspectorTab::Overview);
+            app.controller.show_region(Region::Main);
             app.controller.set_view(MainView::Activity);
             shoot(&window, &dir, &format!("activity-{suffix}"));
             app.controller.set_view(MainView::Workbench);
