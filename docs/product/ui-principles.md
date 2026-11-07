@@ -39,7 +39,7 @@ Apply the Scandinavian-style guidance through its operating priority: comprehens
 | Clear hierarchy before decorative reduction | Keep context, controls, comments, evidence and errors near the task they explain. Left-align labels/prose by default; vertically centering the profile name against its avatar does not mean centering all text. Reuse accessible GTK4 primitives; specific higher-level widget libraries remain unselected. |
 | Restrained type and spacing | One sans-serif UI family with monospace for code. The [visual specification](../../design.md#4-typography-spacing-and-shape) prefers Inter and JetBrains Mono when installed and falls back to the platform faces; bundling either needs a license decision. Nothing about type is inferred from the concept image. Operational rows may need more text styles than editorial defaults. Spacing/radius values are implementation tokens, not performance budgets. |
 | Avoid styled uppercase | **LADE** stays uppercase as expressly approved. Preserve code, paths, acronyms and user content rather than case-transforming them. |
-| Gray chrome, one accent and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs. Salmon is the one chrome accent, limited to its listed roles (primary action, focus, checked state, journey progress, the mark, text selection); no tinted panels or decorative accents. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
+| Gray chrome, one accent and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs. Fluorescent lime is the one chrome accent, in its listed roles (primary action, checked and current state, journey progress, the mark, icons, selected titles, the live connection, the caret, text selection); never a border or focus ring, no tinted panels. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
 | Quiet boundaries and repeated records | No lateral Objective accent bar, including pseudo-elements or shadows that recreate one. Keep selected/focus states distinct; retain useful column separators and control boundaries when needed for dense simultaneous inspection. Equivalent controls share geometry; avoid pills/boxes added purely for style. |
 | Spacious chapters, media dominance and mobile examples | Marketing/commerce chapters, large editorial margins and mobile scope do not transfer to LADE. The Change Set/task—not a promotional image—is dominant. Preserve useful desktop density, narrow available logical space and 200% scaling. LADE ships one dark gray appearance; this does not add a light-mode requirement. |
 | Purposeful motion | Do not add animation for polish or animate frequent/keyboard actions. Any later functional motion must be interruptible, honor reduced motion and preserve state feedback; guideline timing examples are not measured LADE responsiveness budgets. |
@@ -47,7 +47,7 @@ Apply the Scandinavian-style guidance through its operating priority: comprehens
 
 Operational rules retained from the approved direction:
 
-- Charcoal window chrome, gray panes, white ink tiers and **one salmon accent**. Grays stay neutral: no beige, blue-tinted or green-tinted chrome; salmon is the only hue outside semantic content.
+- Charcoal window chrome, gray panes, white ink tiers and **one fluorescent lime accent**. Grays stay neutral: no beige, blue-tinted or green-tinted chrome; lime is the only hue outside semantic content.
 - Clear hierarchy, useful information density, consistent spacing and minimal decoration. A single sans-serif UI family; monospace where code/output requires it. Font, metrics and spacing scale are set in the [visual specification](../../design.md) and remain subject to legibility and redistribution checks.
 - Coherent iconography with accessible names; no decorative emojis. Shadows, rims and containers only to communicate grouping, elevation or interaction: raised controls and floating surfaces carry a soft shadow, panes and rows do not.
 - Do not import oversized editorial margins, decorative uppercase conventions or mobile requirements automatically. LADE remains uppercase as a proper name. Linux desktop scope still requires usable 200% scaling and narrow available logical space.
@@ -67,11 +67,11 @@ The colour, type, spacing, radius and elevation tokens live in the [visual speci
 | Primary ink | `#E4E4E7` (strong `#F4F4F5`) |
 | Secondary / metadata ink | `#B9B9C0` / `#A4A4AC` |
 | Hover / selected fill | White at 6% / 10% over the surface |
-| Accent | Salmon `#F2937E`, with `#1B1311` ink on it |
+| Accent | Fluorescent lime `#C4F042`, with `#151A05` ink on it |
 
 Use alpha colors rather than fading a whole container with `opacity`, which also dims content and states. Preserve distinct functional ink levels; do not collapse them merely to fit a smaller palette. Functional metadata such as paths, versions, timestamps, verification or disabled-action explanations must keep at least 4.5:1 on every surface and fill it can sit on; `scripts/check-contrast.py` computes those pairs.
 
-A low-alpha rim is not a focus indicator. Selected and keyboard-focus states need independent discernibility: the selected fill plus strong ink, weight and the accessible selected state, and a full accent focus outline at 3:1 or more on every surface; do not reintroduce a lateral accent bar. Final combinations must pass testing on the rendered client.
+A low-alpha rim is not a focus indicator. Selected and keyboard-focus states need independent discernibility: the selected fill plus accent ink, weight and the accessible selected state, and a full neutral focus outline at 3:1 or more on every surface; do not reintroduce a lateral accent bar. Final combinations must pass testing on the rendered client.
 
 ### Profile correction
 
@@ -107,7 +107,7 @@ Appended record of what the native client implements; it does not change the app
 | Kind | Token | Value | Use |
 | --- | --- | --- | --- |
 | Spacing | tight / item / group / section / page / region | 4 / 8 / 12 / 16 / 24 / 32 px | `views::widgets::space` for gaps between widgets; CSS paddings also use the 2, 6, 10 and 20 half steps for controls and pane insets |
-| Type | title | 22px, 600, strong ink | Objective and page titles (`.objective-heading`, `.empty-title`) |
+| Type | title | 22px, 600, strong ink | Page titles (`.objective-heading`, `.empty-title`); the Objective's title appears only in the Objectives rail |
 | Type | heading | 15px, 600 (17px for `.empty-heading`) | Section headings (`.section-title`, `.empty-heading`, `.popover-heading`) |
 | Type | body | platform size, 400 (600 for emphasis by weight) | Plain labels |
 | Type | control | 13px, 500 | Buttons, tabs, segmented items |

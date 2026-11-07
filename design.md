@@ -1,6 +1,6 @@
 # LADE visual specification
 
-Status: visual implementation specification, based on the approved workbench composition and explicit developer corrections. The **gray workbench** revision (section 1, *Visual language*) replaces the former black monochrome field: a charcoal window chrome carries rounded gray panes, white ink sets the text tiers and one salmon accent marks the primary action, focus and checked state. The semantic diff and status hues keep their meaning, retuned for the gray ground. Numerical dimensions and semantic color pairs below are **implementation tokens**: the colour pairs are computed by `scripts/check-contrast.py`, not yet measured on a rendered GTK surface.
+Status: visual implementation specification, based on the approved workbench composition and explicit developer corrections. The **gray workbench** revision (section 1, *Visual language*) replaces the former black monochrome field: a charcoal window chrome carries rounded gray panes, white ink sets the text tiers and one fluorescent lime accent marks the primary action, checked and current controls, icons and the live connection; focus is a neutral light ring. The semantic diff and status hues keep their meaning, retuned for the gray ground. Numerical dimensions and semantic color pairs below are **implementation tokens**: the colour pairs are computed by `scripts/check-contrast.py`, not yet measured on a rendered GTK surface.
 
 This document covers appearance only. It does not define lifecycle transitions, keyboard commands, permissions, IPC, storage or when actions become available. Those belong to the [workflow](docs/product/first-release-workflow.md), [UI interaction contracts](docs/product/ui-principles.md#interaction-and-accessibility-contracts), [architecture](architecture.md) and [implementation spec](docs/implementation/spec.md).
 
@@ -19,7 +19,7 @@ LADE is a dark, gray, desktop tool. Three ideas carry the whole interface:
 - **Chrome and panes.** The window is one charcoal *chrome*. The header and the Objectives rail sit directly on it. The work area and the inspector are *panes*: rounded gray surfaces inset from the window edges and from each other by the same small gap, so the chrome shows as an even frame around them. Panes are separated by that gap, never by rules.
 - **One tab row, tabs joined to their pane.** A single row of fixed tabs runs across the window on the chrome: Workbench, Activity and Terminal above the work-area pane, Overview, Evidence and Feedback above the inspector pane. The current tab of each pane takes the pane's fill and joins it, with a concave curve on either side where its edges meet the pane's top; the other tabs stay on the chrome. Tabs are never closed, reordered or added.
 - **Surfaces by recipe, not by colour.** Every non-text element is one of five recipes: *chrome*, *pane*, *raised* (buttons, selects, popovers, the composer, drafts), *well* (sunken: text fields, search, segmented tracks, checkboxes) and *ghost* (no fill until hover: quiet buttons, rows, tabs). Raised surfaces have a hairline rim lit slightly brighter at the top and a short, soft shadow; wells have a rim and no shadow; panes have neither: their shape against the chrome is the edge.
-- **One accent.** Salmon is the only hue in the chrome. It marks the available primary action, keyboard focus, checked controls, completed and current journey steps, the LADE mark and text selection. It is never a panel tint, row stripe, tab underline or decoration, and never the only signal of a state.
+- **One accent.** Fluorescent lime is the only hue in the chrome, used generously as detail. It marks the available primary action, checked controls, completed and current journey steps, the LADE mark, the header icons, the new-Objective sign, the search glass, disclosure chevrons, the current pane tab's label, the selected Objective's and file's title, the checked segment, the avatar's initials, the live connection status, the text caret and text selection. It is never a border or focus ring, a panel tint, row stripe or tab underline, and never the only signal of a state.
 
 Selection and hover are fills, not inversions: hover lays the *hover* fill (white at 6%) over the ghost item; the current Objective, file, tab or menu row lays the *selected* fill (white at 10%) and moves its text to the strong ink. Text keeps its ladder: strong, primary, secondary and metadata ink are white at decreasing luminance. No gradients, textures, glows or glass.
 
@@ -88,14 +88,14 @@ Define semantic token names centrally (`crates/lade-desktop/src/assets/style.css
 
 | Token | Value | Use |
 | --- | --- | --- |
-| accent / accent.hover | `#F2937E` / `#F6A694` | Primary action fill, checked checkbox, done and current journey markers, the LADE mark |
-| accent.ink | `#1B1311` | Text and check signs on the accent |
-| focus | `#F2937E` | 2-pixel outline, 2-pixel offset where space permits; inset 2 pixels on tabs and rows that touch a pane edge |
+| accent / accent.hover | `#C4F042` / `#D3F76E` | Primary action fill, checked checkbox, done and current journey markers, the LADE mark and icons (lighter on hover); as text, the current tab, selected rows, the checked segment, the avatar's initials and *Connected*, at least 4.5:1 on every ground it sits on |
+| accent.ink | `#151A05` | Text and check signs on the accent |
+| focus | white at 50% | Neutral, never the accent. 2-pixel outline, 2-pixel offset where space permits; inset 2 pixels on tabs and rows that touch a pane edge |
 | text selection | accent at 16% | Selected text, including over diff fills |
 | control edge | white at 42% | Edge of checkboxes and upcoming journey markers (the only edges that must read as an indicator) |
 | border.disabled | white at 6% | Edge of a disabled control |
 
-Selection, hover and focus must not collapse into the same appearance: hover and selection are fills of different strength, the selected item also takes the strong ink and (for Objectives) semibold weight, and focus is the accent outline. Region dividers are not used; an Objective-side accent is never.
+Selection, hover and focus must not collapse into the same appearance: hover and selection are fills of different strength, the selected item's title also takes the accent ink and (for Objectives) semibold weight, and focus is the neutral focus outline. Region dividers are not used; an Objective-side accent is never.
 
 ### Semantic content
 
@@ -105,7 +105,7 @@ Selection, hover and focus must not collapse into the same appearance: hover and
 | Deletion / error / destructive | `#FF6B81` / `#36161C` / ink at 32% | `−` for diff lines; text/error sign |
 | Warning / stale context | `#F2BE4A` / `#2E2510` / ink at 32% | Explicit label and warning sign |
 
-Deletion is a cool rose red, kept apart from the warmer salmon accent in hue and always paired with a sign or label. These are narrow semantic exceptions, not colored panel chrome. Syntax inks are `#B0B0B8` comments, `#8CC2F0` strings and `#C9A8F2` constants, each at least 4.5:1 on the code surface, both diff fills and the selection overlay. Restrict syntax weight and saturation so it does not compete with feedback selections or diff signs. Never use only color to distinguish added/deleted text, failure, focus or an active control. Passing computed pairs is not full accessibility conformance; rendered contrast must still be checked.
+Deletion is a cool rose red and addition a mint green, kept apart in hue from the yellower lime accent and always paired with a sign or label. These are narrow semantic exceptions, not colored panel chrome. Syntax inks are `#B0B0B8` comments, `#8CC2F0` strings and `#C9A8F2` constants, each at least 4.5:1 on the code surface, both diff fills and the selection overlay. Restrict syntax weight and saturation so it does not compete with feedback selections or diff signs. Never use only color to distinguish added/deleted text, failure, focus or an active control. Passing computed pairs is not full accessibility conformance; rendered contrast must still be checked.
 
 ### Elevation
 
@@ -123,7 +123,7 @@ UI text uses **Inter** when it is installed, falling back to the platform sans-s
 
 | Role | Size / weight | Leading and treatment |
 | --- | --- | --- |
-| Objective title | 22 / 600, −0.2 tracking, strong ink | About 28; leads the work area without becoming a hero headline |
+| Page title | 22 / 600, −0.2 tracking, strong ink | About 28; leads Activity and Terminal without becoming a hero headline. The Objective's title is shown only in the Objectives rail: the work area opens on the journey and Activity's title is just *Activity* |
 | Dialog title | 17 / 600 | About 22; in-content heading of every dialog |
 | Empty-state heading | 17 / 600 | About 22 |
 | Section title | 15 / 600 | About 20 |
@@ -165,8 +165,8 @@ Default control height is 32 (28 inside a segmented track, 30 for fields), expan
 | Component | Visual contract |
 | --- | --- |
 | Objective row | One line: the title, truncated, and a small status sign at the right when the Objective has badges or is archived; the full title, state, badges and outcome in the tooltip and accessible name. Ghost row; unselected titles medium weight; hover fill; selected fill with a semibold title in strong ink; no lateral rule |
-| Header/search | On the chrome; the mark in the accent beside the wordmark; search a well with a rim beside the aligned avatar/name group; no account greeting |
-| Pane tabs (work area and inspector) | Fixed destinations, never closed, reordered or added. No track. Each tab is 30 high with 12 side padding, 13/500 text and 10-radius top corners. Inactive tabs use metadata ink on the chrome and take the hover fill under the pointer; the current tab takes the pane's fill and strong ink and joins the pane through its concave feet. Focus is an inset accent ring |
+| Header/search | On the chrome; the mark in the accent beside the wordmark; search a raised card like the Activity composer (12 radius, lit top rim, soft shadow, the glass in the accent) beside the aligned avatar/name group; no account greeting |
+| Pane tabs (work area and inspector) | Fixed destinations, never closed, reordered or added. No track. Each tab is 30 high with 12 side padding, 13/500 text and 10-radius top corners. Inactive tabs use metadata ink on the chrome and take the hover fill under the pointer; the current tab takes the pane's fill and strong ink and joins the pane through its concave feet. Focus is an inset focus ring |
 | Segmented control (Diff/Full, compact regions) | A well track (10 radius, 2 padding) holding ghost items (7 radius); the current item is raised with its rim and soft shadow and strong ink |
 | File list | Ghost rows; file name first, directory dimmed below with change counts right-aligned beside it; full path in tooltip and accessible name; selected row on the selected fill; symbols distinguish file changes |
 | Code/diff | Stable line-number/sign gutters, monospaced alignment, restrained syntax; semantically colored changed lines; selection remains visible over diff fill |
@@ -174,7 +174,7 @@ Default control height is 32 (28 inside a segmented track, 30 for fields), expan
 | Feedback draft | One raised card per draft (12 radius, rim, no shadow), holding reference, excerpt, comment field, save state and Remove on one text edge |
 | Feedback composer | Well field marked by its placeholder and focus ring, readable draft text and small save-state line; comments remain visible and do not obscure the selected code |
 | Activity transcript | No rule between items; items 12 apart. Your turns are right-aligned raised bubbles sized to their text; tool and system output plain under a role label, its output monospaced; thinking plain; agent text plain, labelled *agent claim*, wrapped at a readable measure |
-| Activity composer | One raised card (17 radius, lit top rim, soft two-layer shadow) containing the borderless input, delivery mode, hint and Send; focus draws the accent ring round the whole card |
+| Activity composer | One raised card (17 radius, lit top rim, soft two-layer shadow) containing the borderless input, delivery mode, hint and Send; focus lights the card's rim with the focus colour |
 | Dialog | A pane-coloured surface with 14 radius, rim and dialog shadow; in-content heading, body, and actions at the bottom right with no rule above them; primary action last |
 | Popover/menu | Popover fill, 12 radius, rim with a brighter top edge, popover shadow; menu rows are ghost rows with 6 radius |
 | Evidence | Aligned name/result rows (candidates and checks share one shape: title, value at the right, metadata beneath), inspectable details and explicit failure/stale/missing labels; coverage displayed as a metric, not a success check |
@@ -186,7 +186,7 @@ Default control height is 32 (28 inside a segmented track, 30 for fields), expan
 
 The above describes how supplied state looks, not which action is allowed. A disabled action keeps its place and a readable explanation; lowering the opacity of an entire panel is not an acceptable substitute. Agent claims and observed evidence must remain visually distinguishable using labels/provenance, not merely icon color.
 
-One coherent symbolic icon family in secondary ink, strong ink on hover; the accent is not an icon colour. Preserve legitimate content imagery and user-authored emoji. Do not invent a replacement for the existing logo or turn an unavailable profile asset into a fabricated face.
+One coherent symbolic icon family in secondary ink, strong ink on hover. The accent colours the header icons, the new-Objective sign, the search glass and disclosure chevrons, lighter on hover; a disabled icon returns to metadata ink. Preserve legitimate content imagery and user-authored emoji. Do not invent a replacement for the existing logo or turn an unavailable profile asset into a fabricated face.
 
 ## 6. Visual states and motion
 
@@ -196,8 +196,8 @@ Capture default, hover, pressed, selected, focused, disabled, loading and error 
 | --- | --- | --- | --- | --- |
 | Hover | Hover fill, ink brightens | raised.hover | accent.hover | Rim brightens (search) |
 | Pressed | Selected fill | raised.pressed, no shadow | accent | — |
-| Selected/checked | Selected fill, strong ink | raised.hover, strong ink | — | Accent fill (checkbox) |
-| Focus | Accent outline | Accent outline | Accent outline outside the fill | Accent border plus inset 1 px ring |
+| Selected/checked | Selected fill, accent ink | raised, accent ink (segment) | — | Accent fill (checkbox) |
+| Focus | Focus outline | Focus outline | Focus outline outside the fill | Focus-colour border plus inset 1 px ring; on the search and composer cards, the rim alone |
 | Disabled | Metadata ink, no fill | raised.pressed, disabled rim, metadata ink | Same as raised | Unchanged fill, metadata ink |
 
 Default to no animation for typing, selection, frequent navigation or status streams. A short opacity/color transition up to about 120 milliseconds is an optional refinement, never a performance requirement. No animated panel entrances for keyboard navigation, no pulsing brand and no perpetual shimmer. Honor reduced motion; state remains visible without movement.

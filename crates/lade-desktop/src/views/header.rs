@@ -598,6 +598,11 @@ impl Header {
             short.as_str()
         };
         self.status.set_text(shown);
+        if state.connection.is_connected() {
+            self.status.add_css_class("connected");
+        } else {
+            self.status.remove_css_class("connected");
+        }
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
     }

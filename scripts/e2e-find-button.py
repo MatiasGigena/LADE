@@ -15,8 +15,8 @@ or its rim composited on its fill, at rest and under the pointer. A disabled but
 is drawn on the `raised_pressed` fill (35,35,39) with the `border_disabled` rim (41,41,44) and
 matches none of them.
 
-- `primary`: a band in which every pixel row is the salmon `accent` fill (242,147,126; under the
-  pointer `accent_hover`, 246,166,148) at both x = X1 and x = X2 for at least 20 rows — an
+- `primary`: a band in which every pixel row is the lime `accent` fill (196,240,66; under the
+  pointer `accent_hover`, 211,247,110) at both x = X1 and x = X2 for at least 20 rows — an
   enabled primary button such as "Freeze for review". X1 and X2 lie inside the fill, clear of
   the centred label.
 - `edge`: `edge INK X1 X2 Y_MIN Y_MAX` — for a full-width raised button that is not primary: its
@@ -32,7 +32,7 @@ matches none of them.
   label is the only text in that ink, such as the `del_ink` (255,107,129) "Delete Git history"
   in More actions once every other destructive action is done or disabled. For `red`, any
   clearly rose pixel counts (red well above green, blue above green), so antialiased glyphs
-  match and the salmon accent (green above blue) does not.
+  match and the lime accent (green above red) does not.
 - `box`: `box X_MIN X_MAX Y_MIN Y_MAX` — the first filled primary button anywhere in that area
   (accent fill over at least 50 px on each of 20 consecutive rows), printed as "X Y" (its
   centre), for a primary button whose horizontal position varies, such as Activity's "Start
@@ -50,7 +50,7 @@ import subprocess
 import sys
 
 # Rendered inks (see above): each at rest and under the pointer, with a tolerance.
-PRIMARY_FILL = (((242, 147, 126), (246, 166, 148)), 6)
+PRIMARY_FILL = (((196, 240, 66), (211, 247, 110)), 6)
 EDGE_INKS = {
     'outline': (((56, 56, 60), (62, 62, 67)), 3),
     'red': (((108, 60, 70), (119, 49, 60)), 6),

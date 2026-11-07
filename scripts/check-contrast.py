@@ -151,6 +151,10 @@ pairs += [
     ('accent', ['surface'], NON_TEXT, 'done and current journey markers'),
     ('accent_ink', ['accent'], NON_TEXT, 'check sign on a checked control or done marker'),
     ('accent', ['chrome'], NON_TEXT, 'the LADE mark'),
+    *[('accent', ground, NON_TEXT, 'accent icons') for ground in (['chrome'], ['chrome', 'hover_fill'], ['raised'])],
+    *[('accent', ground, TEXT, 'accent text: current tab, selected row, segment, connection, avatar')
+      for ground in (['chrome'], ['surface'], ['chrome', 'selected_fill'], ['surface', 'selected_fill'], ['raised'])],
+    *[('accent_hover', ground, NON_TEXT, 'hovered accent icons') for ground in (['chrome', 'hover_fill'], ['raised'])],
     ('ink_secondary', ['chrome'], NON_TEXT, 'icon ink'),
     ('ink_secondary', ['surface'], NON_TEXT, 'icon ink'),
 ]
