@@ -62,14 +62,16 @@ fn the_rail_lists_objectives_and_selecting_one_shows_it_in_the_workbench() {
         let (app, sink) = connected(1440, 900);
         assert!(shows(&app.rail.root, "Make retries safe"));
         assert!(shows(&app.rail.root, "Explain interrupted work"));
-        assert!(shows(&app.workbench.root, "Make retries safe"));
+        // The title stays in the rail; the workbench shows the selected Objective's journey,
+        // where only the main Objective has finished steps.
+        assert!(!shows(&app.workbench.root, "Make retries safe"));
+        assert!(shows(&app.workbench.root, "✓"));
         sink.intents.borrow_mut().clear();
         app.controller
             .select_objective(&ObjectiveId::new(test_fixture::SECOND_OBJECTIVE));
-        settle_until("the workbench shows the second Objective", || {
-            shows(&app.workbench.root, "Explain interrupted work")
+        settle_until("the workbench shows the second Objective's journey", || {
+            !shows(&app.workbench.root, "✓")
         });
-        assert!(shows(&app.workbench.root, "Explain interrupted work"));
         assert!(
             sink.intents
                 .borrow()

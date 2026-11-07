@@ -67,7 +67,7 @@ fn agent_area() -> (gtk::Box, gtk::Box, gtk::Box, gtk::Box, gtk::Box, gtk::Box) 
 }
 
 /// The Activity heading: its title and status beside the execution controls.
-fn heading() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Box) {
+fn heading() -> (gtk::Box, gtk::Label, gtk::Box) {
     let head = hbox(space::SECTION);
     let titles = vbox(space::TIGHT);
     titles.set_hexpand(true);
@@ -82,7 +82,7 @@ fn heading() -> (gtk::Box, gtk::Label, gtk::Label, gtk::Box) {
     controls.set_hexpand(false);
     controls.set_valign(gtk::Align::Start);
     head.append(&controls);
-    (head, title, status, controls)
+    (head, status, controls)
 }
 
 /// The Agent Session transcript and the scroller around it.
@@ -122,7 +122,6 @@ fn fit(container: &gtk::Box) {
 pub struct Activity {
     pub root: gtk::Box,
     controller: Rc<Controller>,
-    title: gtk::Label,
     status: gtk::Label,
     controls: gtk::Box,
     state_message: gtk::Box,
@@ -171,7 +170,7 @@ impl Activity {
     pub fn new(controller: &Rc<Controller>) -> Rc<Self> {
         let root = vbox(space::SECTION);
         root.add_css_class("activity");
-        let (head, title, status, controls) = heading();
+        let (head, status, controls) = heading();
         root.append(&head);
         let state_message = vbox(0);
         root.append(&state_message);
@@ -224,7 +223,6 @@ impl Activity {
         let activity = Rc::new(Self {
             root,
             controller: controller.clone(),
-            title,
             status,
             controls,
             state_message,

@@ -229,14 +229,9 @@ impl Activity {
 
     pub(super) fn render_state(self: &Rc<Self>) {
         let state = self.controller.store.state();
-        let title = state.selected_summary().map_or_else(
-            || "Activity".to_owned(),
-            |s| format!("Activity — {}", s.title),
-        );
         let detail = state.selected_detail().cloned();
         let selected = state.ui.selected.is_some();
         drop(state);
-        self.title.set_text(&title);
         widgets::clear(&self.controls);
         widgets::clear(&self.state_message);
         fit(&self.state_message);

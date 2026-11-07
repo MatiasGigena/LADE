@@ -68,7 +68,6 @@ pub struct Workbench {
     files_scroll: gtk::ScrolledWindow,
     pub viewer: Rc<Viewer>,
     updating: Cell<bool>,
-    pub title_label: RefCell<Option<gtk::Label>>,
     details_toggle: gtk::ToggleButton,
     details_widgets: RefCell<Vec<gtk::Widget>>,
     show_details: Cell<bool>,
@@ -160,7 +159,6 @@ impl Workbench {
             files_scroll,
             viewer,
             updating: Cell::new(false),
-            title_label: RefCell::new(None),
             details_toggle,
             details_widgets: RefCell::new(Vec::new()),
             show_details: Cell::new(true),
@@ -341,14 +339,6 @@ impl Workbench {
             .is_some_and(|i| !i.is_empty());
         drop(state);
 
-        let text = vbox(space::TIGHT);
-        let title = widgets::heading(&summary.title, "objective-heading");
-        set_focus_key(&title, "centre:title");
-        title.set_focusable(true);
-        title.set_selectable(true);
-        text.append(&title);
-        *self.title_label.borrow_mut() = Some(title);
-        self.heading.append(&text);
         let (sign, status_text) = objective::status_line(&summary);
         let status = widgets::sign_text(sign, &status_text);
         status.add_css_class("meta");
@@ -400,7 +390,11 @@ impl Workbench {
             }
             set_accessible_label(
                 &journey,
-                &format!("Collaboration journey: {}", spoken.join(", ")),
+                &format!(
+                    "{}, collaboration journey: {}",
+                    summary.title,
+                    spoken.join(", ")
+                ),
             );
             journey.set_tooltip_text(Some(
                 "Explains where the collaboration stands; it is not an automatic pipeline.",
