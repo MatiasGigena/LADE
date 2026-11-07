@@ -9,7 +9,7 @@
   "native_packages": {
     "libgtk-4-dev:amd64": "4.14.5+ds-0ubuntu0.10",
     "libgtk-4-1:amd64": "4.14.5+ds-0ubuntu0.10",
-    "libglib2.0-dev:amd64": "2.80.0-6ubuntu3.8",
+    "libglib2.0-dev:amd64": "2.80.0-6ubuntu3.10",
     "build-essential": "12.10ubuntu1",
     "pkg-config:amd64": "1.8.1-2build1"
   }
