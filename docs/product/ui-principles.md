@@ -37,7 +37,7 @@ Apply the Scandinavian-style guidance through its operating priority: comprehens
 | Guideline | LADE application / boundary |
 | --- | --- |
 | Clear hierarchy before decorative reduction | Keep context, controls, comments, evidence and errors near the task they explain. Left-align labels/prose by default; vertically centering the profile name against its avatar does not mean centering all text. Reuse accessible GTK4 primitives; specific higher-level widget libraries remain unselected. |
-| Restrained type and spacing | One sans-serif UI family with monospace for code. The [visual specification](../../design.md#4-typography-spacing-and-shape) prefers Inter and JetBrains Mono when installed and falls back to the platform faces; bundling either needs a license decision. Nothing about type is inferred from the concept image. Operational rows may need more text styles than editorial defaults. Spacing/radius values are implementation tokens, not performance budgets. |
+| Restrained type and spacing | One sans-serif UI family with monospace for code. The [visual specification](../../design.md#4-typography-spacing-and-shape) bundles Instrument Sans and Fragment Mono (SIL OFL 1.1) and falls back to the platform faces. Nothing about type is inferred from the concept image. Operational rows may need more text styles than editorial defaults. Spacing/radius values are implementation tokens, not performance budgets. |
 | Avoid styled uppercase | **LADE** stays uppercase as expressly approved. Preserve code, paths, acronyms and user content rather than case-transforming them. |
 | Gray chrome, one accent and preserved meaning | Retain semantic diff/status/warning/error/focus meaning with text/signs. Fluorescent lime is the one chrome accent, in its listed roles (primary action, checked and current state, journey progress, the mark, icons, selected titles, the live connection, the caret, text selection); never a border or focus ring, no tinted panels. Do not neutralize source content, screenshots or user-authored emoji as if they were UI icons. |
 | Quiet boundaries and repeated records | No lateral Objective accent bar, including pseudo-elements or shadows that recreate one. Keep selected/focus states distinct; retain useful column separators and control boundaries when needed for dense simultaneous inspection. Equivalent controls share geometry; avoid pills/boxes added purely for style. |
@@ -112,7 +112,7 @@ Appended record of what the native client implements; it does not change the app
 | Type | body | platform size, 400 (600 for emphasis by weight) | Plain labels |
 | Type | control | 13px, 500 | Buttons, tabs, segmented items |
 | Type | meta | 12px, 500, metadata ink | Secondary text, reasons, identities, group headings |
-| Type | mono | 12.5px JetBrains Mono, else monospace | Code, paths, ids, commands |
+| Type | mono | 12.5px Fragment Mono, else monospace | Code, paths, ids, commands |
 
 Shared components (`crates/lade-desktop/src/views/widgets/mod.rs` and its `input` and `dialog` submodules), used instead of one-off layouts:
 

@@ -119,7 +119,7 @@ Panes, rows, tabs, wells and text carry no shadow.
 
 ## 4. Typography, spacing and shape
 
-UI text uses **Inter** when it is installed, falling back to the platform sans-serif; code, paths and terminal text use **JetBrains Mono** when installed, falling back to the platform monospace. Neither face is bundled: shipping font files needs an explicit dependency/license decision. Keep source code, names and acronyms in their original case; LADE remains uppercase.
+UI text uses **Instrument Sans**; code, paths and terminal text use **Fragment Mono**. Both are SIL Open Font License 1.1 faces from Google Fonts: their files live in `packaging/fonts/`, ship in the bundle under `share/fonts/lade/` and are installed to `PREFIX/share/fonts/lade/`. Every rule falls back to the platform sans-serif or monospace, which is what a run without the installed fonts (such as `cargo run`) shows. Fragment Mono's ligatures are off (`"liga" 0, "calt" 0`) so code renders exactly as written. Another bundled face needs its own dependency/license decision. Keep source code, names and acronyms in their original case; LADE remains uppercase.
 
 | Role | Size / weight | Leading and treatment |
 | --- | --- | --- |
