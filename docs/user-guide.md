@@ -112,8 +112,8 @@ checks the whole set, including duplicates, before using it and saves it to
 a notice and the defaults apply; delete the file to return to them.
 
 **Where things are.** Each piece of information and each action has one place.
-- **Objectives list.** Objectives are grouped by attention. A row adds one line only for what its group heading does not say: the attention reasons (`! check failed · unsent drafts`) or a closed lifecycle.
-- **Workbench.** It shows the title, the collaboration journey and the Change Set. Its version line says only what the version selector does not: `Captured · may change · vs main@…` or `Frozen · vs main@…`.
+- **Objectives list.** Objectives are grouped by attention. Each row is one line: the title (shortened when it does not fit) and, for what its group heading does not say, a sign for the attention reasons or a closed lifecycle. The tooltip gives the full title, state and outcome. This is the only place the Objective's title is shown.
+- **Workbench.** It shows the collaboration journey and the Change Set. Its version line says only what the version selector does not: `Captured · may change · vs main@…` or `Frozen · vs main@…`.
 - **Overview** (right panel):
   - the approval state;
   - the **one next review step** the service currently allows, such as *Freeze for review*, *Approve Candidate N*, *Integrate into main* or, once the Objective is closed, *Clean up branch and worktree*, with the reason in one line when it is blocked;
@@ -124,7 +124,7 @@ a notice and the defaults apply; delete the file to return to them.
   - its state line: one sentence on what the agent is doing (the session and generation are in its tooltip);
   - before the Objective's first start, **Set up the agent** in place of the transcript: provider, model, thinking
     and **Start agent** (the LADE profile resources collapsed below);
-  - once it has an Agent Session, the one agent action that applies now beside the title — **Cancel agent** while
+  - once it has an Agent Session, the one agent action that applies now beside the *Activity* heading — **Cancel agent** while
     it runs, **Resume agent** once it stopped — and **Agent settings** (collapsed): the model and thinking, the
     session tools and the LADE profile resources;
   - **Accepted inputs and delivery**. An uncertain or blocked delivery is stated above it;
@@ -140,7 +140,7 @@ Below about 1100 pixels of window width (for example 800 × 550, or a 1600 × 11
 window shows one region at a time: switch between **Objectives**, **Work area** and **Overview · Evidence ·
 Feedback** with the buttons below the header or F6. In this layout the work area also shows the Objective's status,
 and **Objective details** shows or hides the journey.
-Below 600 pixels the header navigation uses a second row, **Review** opens Overview / Evidence / Feedback,
+Below 600 pixels the search field narrows, **Review** opens Overview / Evidence / Feedback,
 and the file list sits above the inspected file. Dialog content scrolls to keep its action buttons reachable.
 Text you type or paste into drafts, messages and intents is limited to 256 KiB per field (an override reason to
 2,048 characters); a paste that would exceed it is not inserted and your text stays as it was.
