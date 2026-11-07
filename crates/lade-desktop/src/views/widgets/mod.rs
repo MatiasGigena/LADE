@@ -301,6 +301,53 @@ pub fn hbox(spacing: i32) -> gtk::Box {
     gtk::Box::new(gtk::Orientation::Horizontal, spacing)
 }
 
+/// A strip of fixed tabs on the window chrome above a pane. The current tab takes the pane's
+/// fill and joins it, with a concave foot on each side; the others stay on the chrome.
+pub struct PaneTabs {
+    pub root: gtk::Box,
+    pub tabs: Vec<gtk::ToggleButton>,
+}
+
+pub fn pane_tabs(name: &str, labels: &[&str]) -> PaneTabs {
+    let root = hbox(0);
+    root.add_css_class("pane-tabs");
+    set_accessible_label(&root, name);
+    let mut tabs: Vec<gtk::ToggleButton> = Vec::new();
+    for text in labels {
+        let tab = gtk::ToggleButton::with_label(text);
+        tab.add_css_class("pane-tab");
+        if let Some(first) = tabs.first() {
+            tab.set_group(Some(first));
+        }
+        let cell = hbox(0);
+        cell.add_css_class("pane-tab-cell");
+        for side in ["start", "end"] {
+            let foot = hbox(0);
+            foot.add_css_class("tab-foot");
+            foot.add_css_class(side);
+            foot.set_valign(gtk::Align::End);
+            foot.set_can_target(false);
+            if side == "start" {
+                cell.append(&foot);
+                cell.append(&tab);
+            } else {
+                cell.append(&foot);
+            }
+        }
+        let current = cell.clone();
+        tab.connect_active_notify(move |tab| {
+            if tab.is_active() {
+                current.add_css_class("current");
+            } else {
+                current.remove_css_class("current");
+            }
+        });
+        root.append(&cell);
+        tabs.push(tab);
+    }
+    PaneTabs { root, tabs }
+}
+
 pub fn clear(container: &gtk::Box) {
     while let Some(child) = container.first_child() {
         container.remove(&child);
@@ -339,6 +386,7 @@ pub fn heading(text: &str, class: &str) -> gtk::Label {
         .accessible_role(gtk::AccessibleRole::Heading)
         .build();
     title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    no_hyphens(&title);
     title.add_css_class(class);
     title
 }

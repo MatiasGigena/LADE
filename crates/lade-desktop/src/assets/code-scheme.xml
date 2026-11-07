@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <style-scheme id="lade-code" name="LADE code" version="1.0">
-  <description>Restrained syntax colours from the LADE visual tokens.</description>
+  <description>Restrained syntax colours from the LADE visual tokens, tuned for the gray code pane.</description>
 
-  <color name="syntax_comment" value="#BDBDBD"/>
+  <color name="syntax_comment" value="#B0B0B8"/>
   <color name="syntax_string" value="#8CC2F0"/>
   <color name="syntax_constant" value="#C9A8F2"/>
 

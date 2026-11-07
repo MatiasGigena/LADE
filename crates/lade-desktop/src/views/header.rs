@@ -1,5 +1,6 @@
-//! The window header: the LADE mark, the main view tabs, search and its results, the profile,
-//! the connection status and the compact menu.
+//! The window header: the LADE mark, search and its results, the profile, the connection status
+//! and the compact menu. It also builds the main view tabs, which the window places above the
+//! work-area pane.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -70,8 +71,9 @@ pub type OpenerHandler = Rc<dyn Fn(&gtk::Widget)>;
 pub struct Header {
     pub root: gtk::Box,
     pub viewport: gtk::ScrolledWindow,
+    /// The Workbench, Activity and Terminal tabs, placed by the window above the work-area pane.
+    pub nav: gtk::Box,
     row: gtk::Box,
-    brand: gtk::Box,
     controller: Rc<Controller>,
     workbench_tab: gtk::ToggleButton,
     activity_tab: gtk::ToggleButton,
@@ -88,7 +90,6 @@ pub struct Header {
     results: gtk::ListBox,
     popover_status: gtk::Label,
     shown_results: RefCell<Vec<SearchResult>>,
-    nav: gtk::Box,
     profile_name: gtk::Label,
     shortcuts_button: gtk::Button,
     exit_button: gtk::Button,
@@ -108,16 +109,16 @@ fn draw_mark(area: &gtk::DrawingArea) {
         let ink = area.color();
         cr.set_source_rgb(ink.red().into(), ink.green().into(), ink.blue().into());
         cr.set_line_join(gtk::cairo::LineJoin::Miter);
-        cr.set_line_width(2.4);
+        cr.set_line_width(1.9);
         cr.move_to(w / 2.0, 2.0);
         cr.line_to(w - 1.5, h - 1.5);
         cr.line_to(1.5, h - 1.5);
         cr.close_path();
         let _ = cr.stroke();
-        cr.set_line_width(1.8);
+        cr.set_line_width(1.4);
         cr.move_to(w / 2.0, h * 0.45);
-        cr.line_to(w * 0.70, h - 5.5);
-        cr.line_to(w * 0.30, h - 5.5);
+        cr.line_to(w * 0.70, h - 4.5);
+        cr.line_to(w * 0.30, h - 4.5);
         cr.close_path();
         let _ = cr.stroke();
     });
@@ -169,9 +170,10 @@ fn brand() -> gtk::Box {
     let brand = hbox(space::ITEM);
     brand.add_css_class("brand");
     let mark = gtk::DrawingArea::new();
-    mark.set_content_width(26);
-    mark.set_content_height(23);
+    mark.set_content_width(20);
+    mark.set_content_height(18);
     mark.set_valign(gtk::Align::Center);
+    mark.add_css_class("mark");
     draw_mark(&mark);
     set_accessible_label(&mark, "LADE mark");
     brand.append(&mark);
@@ -181,29 +183,18 @@ fn brand() -> gtk::Box {
     brand
 }
 
-/// The main view tabs, as the tab strip and its Workbench, Activity and Terminal tabs.
+/// The main view tabs, as the tab strip and its fixed Workbench, Activity and Terminal tabs.
 fn nav_tabs() -> (
     gtk::Box,
     gtk::ToggleButton,
     gtk::ToggleButton,
     gtk::ToggleButton,
 ) {
-    let nav = hbox(0);
-    nav.add_css_class("nav");
-    nav.add_css_class("segmented");
-    nav.set_valign(gtk::Align::Center);
-    nav.set_margin_start(space::PAGE);
-    let workbench_tab = gtk::ToggleButton::with_label("Workbench");
-    let activity_tab = gtk::ToggleButton::with_label("Activity");
-    activity_tab.set_group(Some(&workbench_tab));
-    let terminal_tab = gtk::ToggleButton::with_label("Terminal");
-    terminal_tab.set_group(Some(&workbench_tab));
-    for tab in [&workbench_tab, &activity_tab, &terminal_tab] {
-        tab.add_css_class("nav-tab");
-        nav.append(tab);
-    }
+    let strip = widgets::pane_tabs("Main view", &["Workbench", "Activity", "Terminal"]);
+    strip.root.add_css_class("nav");
+    let [workbench_tab, activity_tab, terminal_tab] = [0, 1, 2].map(|i| strip.tabs[i].clone());
     workbench_tab.set_active(true);
-    (nav, workbench_tab, activity_tab, terminal_tab)
+    (strip.root, workbench_tab, activity_tab, terminal_tab)
 }
 
 /// The search results popover under `search`, as the popover, its heading, its status line and
@@ -300,14 +291,12 @@ impl Header {
         root.add_css_class("lade-header");
         set_accessible_label(&root, "Header");
         let row = hbox(space::SECTION);
-        row.set_height_request(56);
+        row.set_height_request(52);
         root.append(&row);
 
-        let brand = brand();
-        row.append(&brand);
+        row.append(&brand());
 
         let (nav, workbench_tab, activity_tab, terminal_tab) = nav_tabs();
-        row.append(&nav);
 
         let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         spacer.set_hexpand(true);
@@ -366,8 +355,8 @@ impl Header {
         let header = Rc::new(Self {
             root,
             viewport,
+            nav,
             row,
-            brand,
             controller: controller.clone(),
             workbench_tab,
             activity_tab,
@@ -384,7 +373,6 @@ impl Header {
             results,
             popover_status,
             shown_results: RefCell::new(Vec::new()),
-            nav,
             profile_name: name,
             shortcuts_button,
             exit_button,
@@ -522,8 +510,6 @@ impl Header {
         }
         self.row
             .set_spacing(if compact { space::ITEM } else { space::SECTION });
-        self.nav
-            .set_margin_start(if compact { space::ITEM } else { space::PAGE });
         let (from, to) = if compact {
             (&self.search_slot, &self.search_holder)
         } else {
@@ -546,19 +532,6 @@ impl Header {
     pub fn set_narrow(&self, narrow: bool) {
         if self.narrow.replace(narrow) == narrow {
             return;
-        }
-        if narrow {
-            self.row.remove(&self.nav);
-            self.root.append(&self.nav);
-            self.nav.set_margin_start(0);
-        } else {
-            self.root.remove(&self.nav);
-            self.row.insert_child_after(&self.nav, Some(&self.brand));
-            self.nav.set_margin_start(if self.compact.get() {
-                space::ITEM
-            } else {
-                2 * space::PAGE
-            });
         }
         self.search_entry
             .set_width_chars(if narrow { 8 } else { 12 });
@@ -625,6 +598,11 @@ impl Header {
             short.as_str()
         };
         self.status.set_text(shown);
+        if state.connection.is_connected() {
+            self.status.add_css_class("connected");
+        } else {
+            self.status.remove_css_class("connected");
+        }
         self.status.set_tooltip_text(Some(&full));
         set_accessible_label(&self.status, &format!("Connection status: {full}"));
     }

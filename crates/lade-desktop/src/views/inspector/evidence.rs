@@ -259,7 +259,7 @@ fn verification_row(detail: &ObjectiveDetail, v: &VerificationSummary) -> gtk::B
     if !v.output_tail.is_empty() {
         let output = label(&v.output_tail, &["mono", "output"]);
         output.set_selectable(true);
-        output.set_wrap_mode(gtk::pango::WrapMode::Char);
+        output.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         row.append(&widgets::disclosure(
             if v.truncated {
                 "Output (last lines; earlier output truncated)"

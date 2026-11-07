@@ -49,7 +49,7 @@ pub fn load_css() {
     if let Some(settings) = gtk::Settings::default() {
         settings.set_gtk_theme_name(Some("Adwaita"));
         settings.set_gtk_icon_theme_name(Some("Adwaita"));
-        settings.set_gtk_application_prefer_dark_theme(false);
+        settings.set_gtk_application_prefer_dark_theme(true);
         settings.set_gtk_label_select_on_focus(false);
     }
 }
@@ -71,6 +71,7 @@ pub struct App {
     body: gtk::Stack,
     centre: gtk::Stack,
     centre_region: gtk::ScrolledWindow,
+    centre_column: gtk::Box,
     region_bar: gtk::Box,
     region_switches: Vec<(Region, gtk::ToggleButton)>,
     paned: gtk::Paned,
@@ -153,9 +154,10 @@ impl App {
             (terminal.root.upcast_ref(), "terminal"),
         ]);
         let centre_region = centre_region(&centre);
+        let centre_column = centre_column(&header.nav, &centre_region);
         let (paned, right) = panes(
             rail.root.upcast_ref(),
-            &centre_region,
+            centre_column.upcast_ref(),
             inspector.root.upcast_ref(),
         );
 
@@ -188,6 +190,7 @@ impl App {
             body,
             centre,
             centre_region,
+            centre_column,
             region_bar,
             region_switches,
             paned,
@@ -289,7 +292,7 @@ impl App {
                 && p.max_position() > 0
             {
                 let width = p.max_position() - p.position();
-                let clamped = width.clamp(280, 360);
+                let clamped = width.clamp(312, 360);
                 if clamped != width {
                     p.set_position(p.max_position() - clamped);
                 }
@@ -588,18 +591,26 @@ fn centre_region(centre: &gtk::Stack) -> gtk::ScrolledWindow {
     centre_region
 }
 
+/// The work-area column: the main view tabs on the window chrome, above the pane they switch.
+fn centre_column(tabs: &gtk::Box, centre_region: &gtk::ScrolledWindow) -> gtk::Box {
+    let column = widgets::vbox(0);
+    column.add_css_class("centre-column");
+    column.set_hexpand(true);
+    column.append(tabs);
+    column.append(centre_region);
+    column
+}
+
 /// The rail beside the centre and inspector, as the outer pane and the inner one on its right.
 fn panes(
     rail: &gtk::Widget,
-    centre_region: &gtk::ScrolledWindow,
+    centre: &gtk::Widget,
     inspector: &gtk::Widget,
 ) -> (gtk::Paned, gtk::Paned) {
     inspector.set_hexpand(false);
-    inspector.add_css_class("sheet");
-    inspector.set_overflow(gtk::Overflow::Hidden);
     widgets::set_accessible_label(inspector, "Inspector");
     let right = gtk::Paned::new(gtk::Orientation::Horizontal);
-    right.set_start_child(Some(centre_region));
+    right.set_start_child(Some(centre));
     right.set_end_child(Some(inspector));
     right.set_resize_start_child(true);
     right.set_resize_end_child(false);

@@ -23,7 +23,7 @@ impl Inspector {
     pub(super) fn render_overview(self: &Rc<Self>) {
         widgets::clear(&self.overview);
         let selected = self.controller.store.state().ui.selected.is_some();
-        self.root.set_show_tabs(selected);
+        self.tabs.root.set_visible(selected);
         let Some(detail) = self.detail() else {
             if selected {
                 self.overview

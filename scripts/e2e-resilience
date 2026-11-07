@@ -53,11 +53,11 @@ scroll_inspector() {
 inspector_top() { scroll_inspector -20; }
 find_button() {
   case $1 in
-    black) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" black 1160 1395 100 900 ;;
+    primary) import -window root -depth 8 ppm:- | python3 -I "$ROOT/scripts/e2e-find-button.py" primary 1148 1383 100 900 ;;
     history) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" text red 1136 1423 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" text red 1124 1411 100 900 ;;
     *) import -window root -depth 8 ppm:- |
-      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1136 1423 100 900 ;;
+      python3 -I "$ROOT/scripts/e2e-find-button.py" edge "$1" 1124 1411 100 900 ;;
   esac
 }
 click_inspector() {
@@ -70,7 +70,7 @@ click_inspector() {
   done
   click 1280 "$y" 1
 }
-click_primary() { click_inspector "$1" black; }
+click_primary() { click_inspector "$1" primary; }
 click_start() {
   key ctrl+2
   tries=0
@@ -218,7 +218,7 @@ draft_is "$DRAFT" 2 "Please greet more warmly. Thanks" || fail "the close did no
 grep "draft " "$T/trace.log" | tail -1 | grep -q "Saved r2" || fail "closed before the acknowledgement"
 start_desktop
 click 120 163 2
-click 1323 80 1
+click 1363 73 1
 shot "$OUT5" r-04-reopened-saved
 
 step "service gone: typing is visibly not saved and closing asks keep-open or discard"
@@ -254,7 +254,7 @@ wait_for 10 "the window closed after the discard" desktop_gone
 start_laded
 start_desktop
 click 120 163 2
-click 1323 80 1
+click 1363 73 1
 draft_is "$DRAFT" 3 "Please greet more warmly. Thanks Bye" || fail "discarded text reached the service"
 shot "$OUT5" r-07-after-discard
 
@@ -297,7 +297,7 @@ shot "$OUT10" e-04-continued
 
 step "a draft save fails during the loop; Retry; submit"
 key ctrl+1
-click 1323 80 1
+click 1363 73 1
 click 1196 519 1
 key Tab
 key Return
@@ -332,7 +332,7 @@ wait_for 60 "the agent applied the feedback" wt_file_is "hello there"
 sleep 3
 
 step "freeze, then approve with an override reason (no check was run)"
-click 1170 80 1
+click 1166 73 1
 click_primary "Freeze for review"
 wait_for 60 "candidate commit on the Objective branch" sh -c "git -C '$REPO' for-each-ref --format='%(subject)' refs/heads/lade/ | grep -q 'LADE candidate'"
 sleep 3

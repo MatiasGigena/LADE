@@ -94,23 +94,29 @@ impl Rail {
             &row,
             &format!("objective:{}", objective.objective_id.as_str()),
         );
-        let content = vbox(space::TIGHT);
-        let title = label(&objective.title, &["objective-title"]);
-        title.set_lines(2);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let content = hbox(space::ITEM);
+        let title = widgets::line_label(
+            &objective.title,
+            &["objective-title"],
+            gtk::pango::EllipsizeMode::End,
+        );
+        title.set_hexpand(true);
+        title.set_has_tooltip(false);
         content.append(&title);
-        if let Some(line) = objective::objective_row_line(objective) {
-            content.append(&widgets::line_label(
-                &line,
-                &["meta", "objective-status"],
-                gtk::pango::EllipsizeMode::End,
-            ));
+        let (sign, state) = format::status_pill(objective.lifecycle, objective.attention);
+        if objective::objective_row_line(objective).is_some() {
+            let sign = label(sign, &["objective-sign"]);
+            sign.set_wrap(false);
+            content.append(&sign);
         }
         row.set_child(Some(&content));
+        let (_, status) = objective::status_line(objective);
+        let mut tooltip = format!("{}\n{status}", objective.title);
         if !objective.outcome.is_empty() {
-            row.set_tooltip_text(Some(&format!("{}\n{}", objective.title, objective.outcome)));
+            tooltip.push('\n');
+            tooltip.push_str(&objective.outcome);
         }
-        let (_, state) = format::status_pill(objective.lifecycle, objective.attention);
+        row.set_tooltip_text(Some(&tooltip));
         let badges = if objective.badges.is_empty() {
             String::new()
         } else {
