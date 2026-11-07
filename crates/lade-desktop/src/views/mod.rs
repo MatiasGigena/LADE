@@ -292,7 +292,7 @@ impl App {
                 && p.max_position() > 0
             {
                 let width = p.max_position() - p.position();
-                let clamped = width.clamp(280, 360);
+                let clamped = width.clamp(312, 360);
                 if clamped != width {
                     p.set_position(p.max_position() - clamped);
                 }

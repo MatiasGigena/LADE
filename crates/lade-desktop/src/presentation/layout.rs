@@ -81,7 +81,7 @@ pub fn wide_sizes(width: i32) -> WideSizes {
     if width > 0 && width < ROOMY_WIDTH {
         WideSizes {
             rail: 224,
-            inspector: 280,
+            inspector: 312,
             file_list: 160,
         }
     } else {
@@ -164,11 +164,11 @@ mod tests {
         let tight = wide_sizes(1100);
         assert_eq!(
             (tight.rail, tight.inspector, tight.file_list),
-            (224, 280, 160)
+            (224, 312, 160)
         );
         assert_eq!(wide_sizes(1280), roomy);
         for size in [roomy, tight] {
-            assert!((224..=280).contains(&size.rail) && (280..=360).contains(&size.inspector));
+            assert!((224..=280).contains(&size.rail) && (312..=360).contains(&size.inspector));
         }
     }
 
