@@ -68,7 +68,7 @@ if [ -n "$real" ]; then
 else
     b1="$work/b1"
     mkdir -p "$b1/bin" "$b1/lib/lade/pi-worker/src" "$b1/share/applications" \
-        "$b1/share/icons/hicolor/scalable/apps" "$b1/share/systemd/user" "$b1/share/doc/lade"
+        "$b1/share/icons/hicolor/scalable/apps" "$b1/share/systemd/user" "$b1/share/doc/lade" "$b1/share/fonts/lade"
     stub_laded 1 "$b1/bin/laded"
     printf '#!/bin/sh\necho "LADE %s protocol %s"\n' "$bv" "$pv" >"$b1/bin/lade-desktop"
     chmod 755 "$b1/bin/laded" "$b1/bin/lade-desktop"
@@ -77,6 +77,7 @@ else
     cp packaging/desktop/dev.lade.Lade.desktop "$b1/share/applications/"
     cp packaging/icons/dev.lade.Lade.svg "$b1/share/icons/hicolor/scalable/apps/"
     cp packaging/systemd/lade.service "$b1/share/systemd/user/lade.service.in"
+    cp packaging/fonts/*.ttf "$b1/share/fonts/lade/"
     printf 'stub\n' >"$b1/share/doc/lade/user-guide.md"
     printf 'id=%s+test1\nbundle=%s\nprotocol=%s\nnode=22.23.1\nschema=1\nsigned=no\n' "$bv" "$bv" "$pv" >"$b1/VERSION"
     manifest "$b1"
@@ -205,6 +206,8 @@ grep -qx "Environment=LADE_WORKER_DIR=$libdir/current/lib/lade/pi-worker" "$unit
 grep -qx 'KillMode=control-group' "$unit" || die "KillMode"
 grep -qx "Exec=$prefix/bin/lade-desktop" "$prefix/share/applications/dev.lade.Lade.desktop" || die "desktop Exec"
 [ -f "$prefix/share/icons/hicolor/scalable/apps/dev.lade.Lade.svg" ] || die "icon"
+[ -f "$prefix/share/fonts/lade/InstrumentSans-Variable.ttf" ] && [ -f "$prefix/share/fonts/lade/FragmentMono-Regular.ttf" ] \
+    || die "fonts"
 grep -q 'next: systemctl --user' "$work/out" || die "next steps not printed"
 grep -Eq 'this bundle is NOT signed|signature was NOT verified' "$work/out" || die "missing trust not warned"
 ok "install $id1: launchers, unit, desktop entry and icon"
@@ -295,7 +298,8 @@ mkdir -p "$HOME/.local/state/lade"
 printf 'precious\n' >"$HOME/.local/state/lade/lade.db"
 "$libdir/current/uninstall" --prefix "$prefix" >"$work/out" 2>&1 || { cat "$work/out" >&2; die "uninstall"; }
 [ ! -e "$libdir" ] && [ ! -e "$prefix/bin/laded" ] && [ ! -e "$prefix/bin/lade-desktop" ] && [ ! -e "$unit" ] \
-    && [ ! -e "$prefix/share/applications/dev.lade.Lade.desktop" ] || die "uninstall left files"
+    && [ ! -e "$prefix/share/applications/dev.lade.Lade.desktop" ] && [ ! -e "$prefix/share/fonts/lade" ] \
+    || die "uninstall left files"
 [ -f "$HOME/.local/state/lade/lade.db" ] || die "uninstall deleted user data"
 if setsid -w "$root/scripts/uninstall" --prefix "$prefix" --purge-data </dev/null >"$work/out" 2>&1; then
     die "purge without a terminal succeeded"

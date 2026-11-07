@@ -12,6 +12,9 @@
 #   PREFIX/bin/{laded,lade-desktop}  launchers exec'ing PREFIX/lib/lade/current/bin/… with the
 #                                    bundled worker (LADE_WORKER_DIR) and Node on PATH
 #   PREFIX/share/applications/dev.lade.Lade.desktop, PREFIX/share/icons/…/dev.lade.Lade.svg
+#   PREFIX/share/fonts/lade/         the UI fonts (Instrument Sans, Fragment Mono; SIL OFL 1.1).
+#                                    fontconfig only finds them under its font dirs, which
+#                                    include ~/.local/share/fonts by default
 #   ${XDG_CONFIG_HOME:-~/.config}/systemd/user/lade.service
 # Services are started only with --enable. User data (~/.local/state/lade) is never touched.
 #
@@ -393,12 +396,16 @@ done
 
 apps="$prefix/share/applications"
 icons="$prefix/share/icons/hicolor/scalable/apps"
-mkdir -p "$apps" "$icons" "$unit_dir"
+fonts="$prefix/share/fonts/lade"
+mkdir -p "$apps" "$icons" "$fonts" "$unit_dir"
 sed -e "s|^Exec=lade-desktop\$|Exec=$prefix/bin/lade-desktop|" \
     -e "s|^TryExec=lade-desktop\$|TryExec=$prefix/bin/lade-desktop|" \
     "$current/share/applications/dev.lade.Lade.desktop" >"$apps/dev.lade.Lade.desktop.new.$$"
 mv -f "$apps/dev.lade.Lade.desktop.new.$$" "$apps/dev.lade.Lade.desktop"
 cp "$current/share/icons/hicolor/scalable/apps/dev.lade.Lade.svg" "$icons/dev.lade.Lade.svg"
+rm -f "$fonts"/*.ttf
+cp "$current/share/fonts/lade/"*.ttf "$fonts/"
+command -v fc-cache >/dev/null 2>&1 && fc-cache -f "$fonts" >/dev/null 2>&1 || true
 
 {
     printf '# Installed by LADE scripts/install (bundle %s). Re-run the installer to change it.\n' "$id"

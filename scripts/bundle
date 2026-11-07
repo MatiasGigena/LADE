@@ -4,7 +4,7 @@
 #   scripts/bundle [--skip-build] [--out DIR] [--with-node DIR] [--sign KEY]
 #
 # Layout: install, uninstall, bin/{laded,lade-desktop}, lib/lade/pi-worker/ (production node_modules only),
-# [lib/lade/node/ (bin/node, LICENSE, VERSION)], share/{applications,icons,systemd,doc} with the
+# [lib/lade/node/ (bin/node, LICENSE, VERSION)], share/{applications,icons,systemd,fonts,doc} with the
 # shipped-dependency license inventory (share/doc/lade/THIRD_PARTY.{json,md}, LICENSES/), VERSION
 # and MANIFEST.sha256 (every other file) [+ MANIFEST.sha256.sig].
 #
@@ -81,7 +81,7 @@ umask 022
 rm -rf "$out"
 mkdir -p "$out/bin" "$out/lib/lade/pi-worker" \
     "$out/share/applications" "$out/share/icons/hicolor/scalable/apps" \
-    "$out/share/systemd/user" "$out/share/doc/lade"
+    "$out/share/systemd/user" "$out/share/doc/lade" "$out/share/fonts/lade"
 
 install -m 0755 target/release/laded target/release/lade-desktop "$out/bin/"
 install -m 0755 scripts/install scripts/uninstall "$out/"
@@ -96,6 +96,9 @@ install -m 0644 packaging/icons/dev.lade.Lade.svg "$out/share/icons/hicolor/scal
 install -m 0644 packaging/systemd/lade.service "$out/share/systemd/user/lade.service.in"
 install -m 0644 docs/user-guide.md docs/implementation/limitations.md "$out/share/doc/lade/"
 install -m 0644 vendor/pi-coding-agent/upstream/LICENSE "$out/share/doc/lade/pi-coding-agent.LICENSE"
+install -m 0644 packaging/fonts/*.ttf "$out/share/fonts/lade/"
+install -m 0644 packaging/fonts/InstrumentSans-OFL.txt "$out/share/doc/lade/InstrumentSans.LICENSE"
+install -m 0644 packaging/fonts/FragmentMono-OFL.txt "$out/share/doc/lade/FragmentMono.LICENSE"
 
 node=node
 node_bundled=no

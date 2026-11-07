@@ -4,7 +4,8 @@
 #   uninstall [--prefix DIR] [--purge-data]
 #
 # Stops and disables lade.service (when a user manager is reachable), removes the unit, the
-# PREFIX/bin launchers, the desktop entry, the icon and PREFIX/lib/lade (all installed versions).
+# PREFIX/bin launchers, the desktop entry, the icon, the UI fonts (PREFIX/share/fonts/lade) and
+# PREFIX/lib/lade (all installed versions).
 # User data is preserved: the state directory (${XDG_STATE_HOME:-~/.local/state}/lade: database,
 # worktrees, sessions, artifacts), ~/.config/lade/credentials.env and everything LADE created in
 # your repositories (lade/* branches, refs/lade/*). --purge-data additionally deletes the state
@@ -64,6 +65,7 @@ for exe in laded lade-desktop; do
 done
 rm -f "$prefix/share/applications/dev.lade.Lade.desktop" \
     "$prefix/share/icons/hicolor/scalable/apps/dev.lade.Lade.svg"
+rm -rf "$prefix/share/fonts/lade"
 command -v update-desktop-database >/dev/null 2>&1 \
     && update-desktop-database -q "$prefix/share/applications" 2>/dev/null || true
 if [ -d "$libdir" ]; then
