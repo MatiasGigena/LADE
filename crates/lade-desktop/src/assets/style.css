@@ -61,12 +61,15 @@
 window, window.background, dialog {
   background-color: @chrome;
   color: @ink_primary;
-  font-family: "Inter Variable", "Inter", sans-serif;
+  font-family: "Instrument Sans", sans-serif;
 }
 stack, notebook > stack, scrolledwindow, viewport, list, listview, textview, textview > text {
   background-color: transparent;
   color: @ink_primary;
 }
+
+tooltip { font-family: "Instrument Sans", sans-serif; }
+.monospace { font-family: "Fragment Mono", monospace; font-feature-settings: "liga" 0, "calt" 0; }
 
 label { color: inherit; }
 text, textview > text { caret-color: @accent; }
@@ -160,7 +163,7 @@ button.pane-tab:focus:focus-visible { outline-offset: -3px; }
 .secondary { color: @ink_secondary; }
 .activity-text, .inspector-page label.prose, .empty-block label.secondary { line-height: 1.38; }
 .strong { font-weight: 600; color: @ink_strong; }
-.mono { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+.mono { font-family: "Fragment Mono", monospace; font-feature-settings: "liga" 0, "calt" 0; font-size: 12.5px; }
 .numeric { font-feature-settings: "tnum"; font-size: 12px; font-weight: 500; }
 .added { color: @add_ink; }
 .removed { color: @del_ink; }
@@ -578,15 +581,16 @@ list.objective-list, list.file-list, list.plain-list, list.transcript {
 textview.code-view, textview.code-view > text {
   background-color: @surface;
   color: @ink_primary;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Fragment Mono", monospace;
+  font-feature-settings: "liga" 0, "calt" 0;
   font-size: 12.5px;
 }
 textview.code-view border.left, textview.code-view gutter {
   background-color: @surface;
   color: @ink_metadata;
 }
-.gutter-number { color: @ink_metadata; font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
-.gutter-sign { font-family: "JetBrains Mono", monospace; font-size: 12.5px; }
+.gutter-number { color: @ink_metadata; font-family: "Fragment Mono", monospace; font-size: 12.5px; }
+.gutter-sign { font-family: "Fragment Mono", monospace; font-size: 12.5px; }
 
 
 /* ---------------------------------------------------------------- inspector */
@@ -694,6 +698,7 @@ window.lade-dialog {
 textview.terminal-view, textview.terminal-view > text {
   background-color: @surface;
   color: @ink_primary;
-  font-family: "JetBrains Mono", monospace;
+  font-family: "Fragment Mono", monospace;
+  font-feature-settings: "liga" 0, "calt" 0;
   font-size: 12.5px;
 }
