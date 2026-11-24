@@ -70,6 +70,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 | Automatic compaction | Supported | pi's default; `compaction_start`/`compaction_end` become activity items | W [integrated] |
 | Manual compaction | Supported | `session.compact {instructions?}` on an idle session; "Nothing to compact" from pi is an explicit `conflict` | W; S [integrated] |
 | Retry controls (toggle, delays) | Unresolved | pi defaults only; no setting surface | — |
+| Idle prompt-cache warming | Restricted | `cacheWarming: "streaming"`: pi refreshes eligible prompt caches only during an active run, never for up to 30 minutes between runs (pi's default `"idle"` since 1.5.1), so an idle session sends no provider request the developer did not ask for | — |
 
 ### Resources, skills, templates
 

@@ -149,7 +149,8 @@ automatically.
   profile snapshot's `models.json` when it exists, otherwise `null`), `modelRuntime.registerProvider(id, config)`,
   `modelRuntime.getModel(provider, id)`.
 - `SettingsManager.inMemory({...})` (no global or project `settings.json`; `defaultProjectTrust:
-  "never"`, telemetry/analytics off, one-at-a-time queues).
+  "never"`, telemetry/analytics off, one-at-a-time queues, `cacheWarming: "streaming"` so no cache refresh runs
+  between runs).
 - `new DefaultResourceLoader({cwd, agentDir, settingsManager, noExtensions, noSkills,
   noPromptTemplates, noThemes, noContextFiles, additionalExtensionPaths, extensionFactories,
   additionalSkillPaths, additionalPromptTemplatePaths, agentsFilesOverride, systemPromptOverride: () => undefined,
