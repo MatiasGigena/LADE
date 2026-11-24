@@ -12,7 +12,7 @@ fn the_picker_uses_the_service_catalogue_and_loads_models_on_demand() {
     let (controller, sink, _) = main_selected();
     controller.store.apply_all(vec![StoreUpdate::AgentSession(
         AgentSessionUpdate::Catalog(Catalog {
-            sdk_version: "1.5.0".into(),
+            sdk_version: "1.6.0".into(),
             providers: vec![ProviderInfo {
                 id: "local-llm".into(),
                 name: "Fixture".into(),
@@ -60,7 +60,7 @@ fn the_picker_uses_the_service_catalogue_and_loads_models_on_demand() {
 
 fn catalog(providers: Vec<ProviderInfo>, error: Option<&str>) -> StoreUpdate {
     StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
-        sdk_version: "1.5.0".into(),
+        sdk_version: "1.6.0".into(),
         providers,
         error: error.map(str::to_owned),
     }))

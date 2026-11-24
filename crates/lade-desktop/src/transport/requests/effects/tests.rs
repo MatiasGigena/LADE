@@ -105,7 +105,7 @@ fn settings_offer_known_models_with_the_default_selected() {
 /// A catalogue with one restricted provider and the fixture provider's scripted model.
 fn fixture_catalog() -> ReplyData {
     ReplyData::ModelsList(wire::ModelCatalog {
-        sdk_version: "1.5.0".into(),
+        sdk_version: "1.6.0".into(),
         providers: vec![wire::ProviderInfo {
             provider: "openai-codex".into(),
             name: "OpenAI Codex".into(),

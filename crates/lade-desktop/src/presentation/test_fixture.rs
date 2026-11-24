@@ -620,7 +620,7 @@ fn agent_session_fixture() -> Vec<StoreUpdate> {
         };
     vec![
         StoreUpdate::AgentSession(AgentSessionUpdate::Catalog(Catalog {
-            sdk_version: "1.5.0".into(),
+            sdk_version: "1.6.0".into(),
             providers: vec![
                 provider(
                     "test-provider",

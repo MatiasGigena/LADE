@@ -112,7 +112,7 @@ fn fallback_catalog(test_fixture_provider: bool, error: String) -> CatalogData {
         }],
     );
     CatalogData {
-        sdk_version: "1.5.0".into(),
+        sdk_version: "1.6.0".into(),
         providers: if test_fixture_provider {
             vec![fixture]
         } else {
@@ -305,14 +305,14 @@ mod tests {
 
     #[test]
     fn catalogue_parses_the_worker_shape_and_skips_incomplete_entries() {
-        let bytes = br#"{"sdk_version":"1.5.0","error":null,"providers":[
+        let bytes = br#"{"sdk_version":"1.6.0","error":null,"providers":[
             {"id":"anthropic","name":"Anthropic","api_key":true,"oauth":null,"subscription":false,
              "base_url":null,"models":[
                 {"id":"opus","name":"","reasoning":true,"thinking":["off","high","sideways"]},
                 {"id":"","name":"nameless","reasoning":false,"thinking":[]}]},
             {"id":"","name":"no id","models":[]}]}"#;
         let data = parse_catalog(bytes).unwrap();
-        assert_eq!(data.sdk_version, "1.5.0");
+        assert_eq!(data.sdk_version, "1.6.0");
         assert_eq!(data.error, None);
         let [(facts, models)] = data.providers.as_slice() else {
             panic!("{:?}", data.providers);

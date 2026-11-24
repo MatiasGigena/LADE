@@ -28,7 +28,7 @@ vendor=root/'vendor/pi-coding-agent'
 manifest=json.loads((vendor/'manifest.json').read_text())
 for path, expected in manifest['files'].items():
     assert hashlib.sha256((vendor/path).read_bytes()).hexdigest() == expected, f'pi input changed: {path}'
-assert json.loads((vendor/'upstream/package.json').read_text())['version'] == manifest['version'] == '1.5.0'
+assert json.loads((vendor/'upstream/package.json').read_text())['version'] == manifest['version'] == '1.6.0'
 lock=json.loads((vendor/'upstream/install-lock/package-lock.json').read_text())
 assert lock['packages']['']['version'] == manifest['version']
 for name, pkg in lock['packages'].items():
