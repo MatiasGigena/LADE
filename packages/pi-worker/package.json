@@ -21,7 +21,7 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.0",
-    "undici": "8.12.3"
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "undici": "8.12.4"
   }
 }

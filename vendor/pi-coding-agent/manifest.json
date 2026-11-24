@@ -1,35 +1,35 @@
 {
   "upstream": "https://github.com/earendil-works/pi",
-  "commit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
-  "commit_evidence": "tag v1.5.0 points at the commit, and the npm SLSA provenance of the 1.5.0 tarball (built from refs/tags/v1.5.0) names it",
-  "version": "1.5.0",
-  "source_archive": "https://api.github.com/repos/earendil-works/pi/tarball/f9a26365568127461c47a07a37dcb42c140a3ac5",
-  "source_archive_sha256": "b07cb292c38a4b590ec6557c08ab3cbff7a8f08c83e870117c1f2ec8d11901ca",
+  "commit": "faac585884ae2c013a6b1400f3e9e77f10b34bac",
+  "commit_evidence": "tag v1.6.0 points at the commit, and the npm SLSA provenance of the 1.6.0 tarball (built from refs/tags/v1.6.0) names it",
+  "version": "1.6.0",
+  "source_archive": "https://api.github.com/repos/earendil-works/pi/tarball/faac585884ae2c013a6b1400f3e9e77f10b34bac",
+  "source_archive_sha256": "15da06bddd151f9e086cc0aa453020e295587b8e9f275a3d168cd32ca8c575cd",
   "node": "22.23.1",
   "scope": "coding-agent product fork only; lower agent/provider layers unchanged",
   "patches": [],
   "files": {
     "upstream/LICENSE": "0457f5bcec3b3b211605dfb5d1a49042fd638f3686a410fe099c24a25af13c48",
-    "upstream/package.json": "990aac3caff17b717294fa792b4e3f60b991d274d9f4ab6977d6aa42aa43c95e",
-    "upstream/install-lock/package.json": "2c0524e9556a475c087ea43c5b4ef6af232b180dfac5724a33dfe3e309349472",
-    "upstream/install-lock/package-lock.json": "d3d2abb9ed4e078b7978ecd0f6316cc4357cb8d7777d344020acfa23190e24b4"
+    "upstream/package.json": "ea92c5541390fa391ed7157f153a44e931b4aef52f811ebf25cfb0bbafcdb9bb",
+    "upstream/install-lock/package.json": "4b61ca991909e436adf8238af90e865314dd32354d58f2e20ebfa8cc419e1baf",
+    "upstream/install-lock/package-lock.json": "11fa077f9cde7b5b2b6c1341dd31dbf1bc88ce5e432c1ad7cd5f84618259d2dd"
   },
   "npm_distribution": {
     "consumer": "packages/pi-worker (WP-D worker)",
     "lockfile": "packages/pi-worker/package-lock.json",
-    "relation": "The worker installs the npm registry tarball of the same 1.5.0 release built from the pinned commit. Its package.json is byte-identical to upstream/package.json (hash in files). From 1.0 pi publishes no npm-shrinkwrap.json: the tarball pins its direct dependencies exactly, and upstream pins the transitive tree only in packages/coding-agent/install-lock/ (the lockfile its installer uses), retained here as upstream/install-lock/. The worker's lockfile resolves the SDK's dependency closure to exactly that install lock (names, versions, resolved URLs and integrity; the lockstep pi packages, which upstream records without integrity, carry their registry integrity), and npm hoists it, so pi-ai is installed once at node_modules/@earendil-works/pi-ai (packages/pi-worker/test/worker-deps.test.ts). With the empty patch inventory this registry tarball is the narrow fork's runnable distribution. Unpatched; only root exports are imported, plus pi-ai's root entry from the one installed copy (src/worker/pi-ai.ts).",
+    "relation": "The worker installs the npm registry tarball of the same 1.6.0 release built from the pinned commit. Its package.json is byte-identical to upstream/package.json (hash in files). From 1.0 pi publishes no npm-shrinkwrap.json: the tarball pins its direct dependencies exactly, and upstream pins the transitive tree only in packages/coding-agent/install-lock/ (the lockfile its installer uses), retained here as upstream/install-lock/. The worker's lockfile resolves the SDK's dependency closure to exactly that install lock (names, versions, resolved URLs and integrity; the lockstep pi packages, which upstream records without integrity, carry their registry integrity), and npm hoists it, so pi-ai is installed once at node_modules/@earendil-works/pi-ai (packages/pi-worker/test/worker-deps.test.ts). With the empty patch inventory this registry tarball is the narrow fork's runnable distribution. Unpatched; only root exports are imported, plus pi-ai's root entry from the one installed copy (src/worker/pi-ai.ts).",
     "install": "npm --prefix packages/pi-worker ci --ignore-scripts --no-audit --no-fund (the skipped install scripts are protobufjs's version-scheme warning and @google/genai's no-op preinstall, none needed by the worker; see docs/implementation/build.md)",
     "packages": {
       "@earendil-works/pi-coding-agent": {
-        "version": "1.5.0",
-        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.5.0.tgz",
-        "integrity": "sha512-xNDZ5kqowO6Z03FS2gwAkPEGk1ssxVcYKQ6qZId84mFEvwACvvyc2l0vAMOS+c5zvxLRMLBE9r4y44IGYkMJaQ==",
+        "version": "1.6.0",
+        "resolved": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.6.0.tgz",
+        "integrity": "sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ==",
         "use": "SDK root exports: createAgentSession, ModelRuntime, SessionManager, SettingsManager, DefaultResourceLoader; the pi-ai root entry it resolves (createAssistantMessageEventStream, getCurrentSystemPrompt, getSupportedThinkingLevels, stream types) for the lade-fixture provider and the catalogue, and normalizeContext for the dependency test"
       },
       "undici": {
-        "version": "8.12.3",
-        "resolved": "https://registry.npmjs.org/undici/-/undici-8.12.3.tgz",
-        "integrity": "sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==",
+        "version": "8.12.4",
+        "resolved": "https://registry.npmjs.org/undici/-/undici-8.12.4.tgz",
+        "integrity": "sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==",
         "use": "global dispatcher tunnelling through the LADE gateway socket; the same version the SDK pins"
       }
     }

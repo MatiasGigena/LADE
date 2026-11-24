@@ -1,8 +1,8 @@
 # Pinned narrow pi product-fork record
 
 Initial compatibility baseline from the pi compatibility decision: pi **0.85.1**. Current pin, a manually
-approved upgrade: pi **1.5.0**, commit `f9a26365568127461c47a07a37dcb42c140a3ac5` (tag
-`v1.5.0`), Node **22.23.1**. `manifest.json` records the source archive and byte hashes of
+approved upgrade: pi **1.6.0**, commit `faac585884ae2c013a6b1400f3e9e77f10b34bac` (tag
+`v1.6.0`), Node **22.23.1**. `manifest.json` records the source archive and byte hashes of
 the unmodified upstream files retained here: the coding-agent package manifest, the release
 install lock (`upstream/install-lock/`, upstream's `packages/coding-agent/install-lock/`) and
 the MIT notice. No historical prototype is imported. **Patch inventory: empty.** No
@@ -28,7 +28,7 @@ to IMP-014; this MIT notice is not blanket licensing clearance for that bundle.
 
 ## npm distribution used by the worker (WP-D)
 
-`packages/pi-worker` installs `@earendil-works/pi-coding-agent@1.5.0` from the npm
+`packages/pi-worker` installs `@earendil-works/pi-coding-agent@1.6.0` from the npm
 registry (integrity recorded in `manifest.json` → `npm_distribution`, and in
 `packages/pi-worker/package-lock.json`). Its `package.json` is byte-identical to
 `upstream/package.json`, and the lockfile resolves the SDK's whole dependency closure to
@@ -37,7 +37,7 @@ integrity); `packages/pi-worker/test/worker-deps.test.ts` checks both, and
 `scripts/check-pins.py` checks the hashes and lockstep versions. With the empty patch
 inventory this tarball is the fork's runnable form; a reproducible build from the source
 archive is still open and needed before the first patch. The worker imports root exports only
-and applies **no patches**. Its only other direct dependency is `undici@8.12.3` (gateway
+and applies **no patches**. Its only other direct dependency is `undici@8.12.4` (gateway
 dispatcher, the version the SDK pins): the `lade-fixture` provider's stream factory and the
 thinking-level helper come from the single hoisted pi-ai copy the SDK resolves
 (`packages/pi-worker/src/worker/pi-ai.ts`), so exactly one pi-ai is installed and loaded. See

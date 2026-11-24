@@ -132,6 +132,9 @@ export class SessionHost {
       defaultProjectTrust: "never",
       steeringMode: "one-at-a-time",
       followUpMode: "one-at-a-time",
+      // pi's default "idle" refreshes prompt caches for up to 30 minutes between runs: provider
+      // requests (and spend) the developer did not ask for. Warm only while a run is active.
+      cacheWarming: "streaming",
     });
 
     const createRuntime: CreateAgentSessionRuntimeFactory = options => this.createSession(modelRuntime, settingsManager, options);

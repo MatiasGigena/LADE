@@ -2,7 +2,7 @@
   "manifest": 1,
   "sdk": {
     "package": "@earendil-works/pi-coding-agent",
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "generated_from": "node packages/pi-worker/src/catalog.ts (provider ids and auth facts of the pinned SDK catalogue) and the reviewed tables in crates/lade-system/src/supervision/{credentials,gateway,providers}.rs",
   "providers": [
@@ -266,7 +266,7 @@
     },
     {
       "id": "openai-codex",
-      "name": "OpenAI Codex (legacy)",
+      "name": "OpenAI Codex",
       "auth": [
         "oauth_login"
       ],
@@ -308,21 +308,21 @@
     },
     {
       "id": "qwen-token-plan",
-      "name": "Qwen Token Plan",
+      "name": "Qwen Token Plan Team",
       "auth": [
         "api_key"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"
     },
     {
       "id": "qwen-token-plan-cn",
-      "name": "Qwen Token Plan CN",
+      "name": "Qwen Token Plan Team CN",
       "auth": [
         "api_key"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"
     },
     {
       "id": "qwen-token-plan-individual",
@@ -331,7 +331,16 @@
         "api_key"
       ],
       "status": "restricted",
-      "reason": "no reviewed egress policy in this LADE build for https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.maas.qwencloudapi.com/compatible-mode/v1"
+    },
+    {
+      "id": "qwen-token-plan-individual-cn",
+      "name": "Qwen Token Plan Individual CN",
+      "auth": [
+        "api_key"
+      ],
+      "status": "restricted",
+      "reason": "no reviewed egress policy in this LADE build for https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"
     },
     {
       "id": "radius",

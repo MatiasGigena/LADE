@@ -1,6 +1,6 @@
 # pi compatibility inventory (IMP-011)
 
-What of the pinned pi workflow (`@earendil-works/pi-coding-agent@1.5.0`) is usable through LADE, mapped from the
+What of the pinned pi workflow (`@earendil-works/pi-coding-agent@1.6.0`) is usable through LADE, mapped from the
 pi compatibility decision and the
 IMP-011 scope ([spec §5](spec.md#imp-011)). Every promise is in exactly one class:
 
@@ -56,7 +56,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 
 | Promise | Class | How / reason | Evidence |
 | --- | --- | --- | --- |
-| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (40 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D |
+| Model list from the SDK registry | Supported | `models.list` is answered from the pinned SDK's `ModelRuntime` catalogue (43 providers; the offline `lade-fixture` test provider is added only when `laded` runs with the test-only `LADE_TEST_FIXTURE_PROVIDER=1` switch, see [service.md](service.md#test-only-fixture-provider)), produced by `src/catalog.ts` in a network-less sandbox and cached by the service; it replaces the client's static table. Each provider carries its access status and reason | S `models_come_from_the_sdk_catalogue_…` [integrated]; D |
 | Model and thinking selection | Supported | Picker with the model's supported thinking levels (pi-ai `getSupportedThinkingLevels`). `execution.start` takes an optional `thinking`; `session.configure` changes model and thinking of an idle live session (pi `setModel`, `setThinkingLevel`, clamped by pi) or, when stopped, persists them for the next start/resume. Persisted per Objective (model on the Objective, thinking in `session_preferences`) | W "manual compaction, model/thinking configuration …"; S `model_and_thinking_selection_is_persisted_per_objective` [integrated] |
 | Changing the **provider** of a live session | Restricted | A launch releases one provider's credentials and egress policy; changing provider needs stop → configure → resume (explicit error otherwise) | S [integrated] |
 | Model cycling shortcuts | Restricted | Replaced by the explicit picker (no TUI cycling keys) | — |
@@ -70,6 +70,7 @@ custom-provider rules below. Imported extensions still need approval. [S `profil
 | Automatic compaction | Supported | pi's default; `compaction_start`/`compaction_end` become activity items | W [integrated] |
 | Manual compaction | Supported | `session.compact {instructions?}` on an idle session; "Nothing to compact" from pi is an explicit `conflict` | W; S [integrated] |
 | Retry controls (toggle, delays) | Unresolved | pi defaults only; no setting surface | — |
+| Idle prompt-cache warming | Restricted | `cacheWarming: "streaming"`: pi refreshes eligible prompt caches only during an active run, never for up to 30 minutes between runs (pi's default `"idle"` since 1.5.1), so an idle session sends no provider request the developer did not ask for | — |
 
 ### Resources, skills, templates
 
@@ -113,7 +114,7 @@ fires (`closed: timeout`, which pi treats as a refusal), or the session is repla
 
 ### Providers and authentication
 
-Classification per provider is in [`pi-compatibility.json`](pi-compatibility.json): **17 supported** and **23
+Classification per provider is in [`pi-compatibility.json`](pi-compatibility.json): **17 supported** and **26
 restricted**, each with its reason, shown in the picker. Supported
 providers work with their API key, and where pi accepts a plain variable for subscription access, with that token
 (`ANTHROPIC_OAUTH_TOKEN` for Claude Pro/Max, `KIMI_API_KEY` for Kimi Code). Credentials come from `laded`'s
@@ -125,8 +126,8 @@ provider's reviewed host.
 | --- | --- | --- | --- |
 | API-key providers | Supported (17) | anthropic, openai, google, openrouter, mistral, groq, xai, deepseek, cerebras, together, fireworks, moonshotai, huggingface, nvidia, zai, vercel-ai-gateway, kimi-coding | `supervision/provider_access.rs` tests, S [integrated]; **no live provider run** |
 | Subscription access as a token variable | Supported | `ANTHROPIC_OAUTH_TOKEN`, `KIMI_API_KEY` | `supervision/provider_access.rs` tests [fixture]; **no live run** |
-| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT subscription login for `openai` and the legacy `openai-codex`, GitHub Copilot, xAI, OpenRouter OAuth, Kimi Code, Meta (Muse), Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `supervision/provider_access.rs` tests |
-| WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 1.5.0, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
+| Interactive OAuth login / refresh (Claude Pro/Max login, ChatGPT subscription login for `openai` and `openai-codex`, GitHub Copilot, xAI, OpenRouter OAuth, Kimi Code, Meta (Muse), Radius) | Restricted | Refresh-token custody (trusted login helper, who refreshes, where the rotated token is kept) is an open product decision; tokens in the sandbox's auth store would be readable by every tool, and refreshes go to identity hosts outside the reviewed policy. Copilot also resolves per-account hosts | manifest; `supervision/provider_access.rs` tests |
+| WebSocket transport | Supported through the gateway (not needed by any supported provider) | Only `openai-codex` (restricted above) uses one in pi-ai 1.6.0, via the global `WebSocket`, which LADE's undici dispatcher tunnels like `fetch`; the `ws` package (Google Live, OpenAI Realtime) is not used by pi and has no network in the sandbox | `supervision_gateway.rs` wss test, `worker-gateway.test.ts` [integrated] |
 | Cloud credentials (Bedrock, Vertex) | Restricted | AWS profiles/keys and ADC files are not released; the Bedrock SDK's `node:http` transport bypasses the gateway | manifest |
 | Account-specific endpoints (Azure, Cloudflare AI Gateway / Workers AI, OpenCode Zen/Go, Radius) | Restricted | No reviewed per-account egress policy; a custom provider with the exact endpoint is the supported route | manifest |
 | Other catalogue providers without a reviewed policy (ant-ling, baseten, meta, minimax, minimax-cn, moonshotai-cn, qwen token plans, typesafe (classifier models only), xiaomi and token plans, zai-coding-cn) | Restricted | No reviewed egress policy in this build (adding one is a reviewed table change in `gateway/policy.rs`/`credentials.rs`) | manifest |
