@@ -1,7 +1,7 @@
 # pi worker (WP-D)
 
 `packages/pi-worker/src/worker.ts` is the per-Objective Agent Session process. It drives a real pi `AgentSession`
-through the pinned `@earendil-works/pi-coding-agent@1.5.0` SDK (root exports only, no patches) and speaks the
+through the pinned `@earendil-works/pi-coding-agent@1.6.0` SDK (root exports only, no patches) and speaks the
 [worker protocol](protocol-v1.md#service--worker-worker-schemajson-jsonl) as LF-delimited JSON on stdin/stdout.
 
 ## Launch
@@ -143,7 +143,7 @@ generation closes open dialogs as `replaced`. `notify` becomes a system item. Di
 surfaces are no-ops; `custom()` and editor control throw `UnsupportedUiError`, so nothing is answered
 automatically.
 
-## SDK APIs used (1.5.0 root exports)
+## SDK APIs used (1.6.0 root exports)
 
 - `ModelRuntime.create({authPath, modelsPath, modelsStorePath, allowModelNetwork: false})` (`modelsPath` is the
   profile snapshot's `models.json` when it exists, otherwise `null`), `modelRuntime.registerProvider(id, config)`,
@@ -173,12 +173,12 @@ automatically.
   `src/worker/session.ts`, passed as the only `extensionFactories` entry), which answers `handled`
   for that `rpc` input.
 - Types: `AgentSession`, `AgentSessionEvent`, `AgentToolResult`, `ModelRuntime`.
-- From the SDK's own `@earendil-works/pi-ai@1.5.0` (the single installed copy, re-exported by
+- From the SDK's own `@earendil-works/pi-ai@1.6.0` (the single installed copy, re-exported by
   `src/worker/pi-ai.ts`; see [Dependencies](#dependencies)): `createAssistantMessageEventStream`,
   `getCurrentSystemPrompt` (provider streams receive a normalized `TranscriptContext` whose system
   prompt is in `messages`), `getSupportedThinkingLevels`, message/stream types, and
   `normalizeContext` (dependency test only).
-- From `undici@8.12.3`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
+- From `undici@8.12.4`: `Agent`, `buildConnector`, `setGlobalDispatcher`, `install`.
 
 ## `lade-fixture` provider (test-only)
 
@@ -258,7 +258,7 @@ makes global `fetch` use the same undici. The gateway sees only the authority.
 
 ## Dependencies
 
-Direct production dependencies: `@earendil-works/pi-coding-agent@1.5.0` and `undici@8.12.3` (gateway
+Direct production dependencies: `@earendil-works/pi-coding-agent@1.6.0` and `undici@8.12.4` (gateway
 dispatcher; the same version the SDK pins). From 1.0 pi publishes no `npm-shrinkwrap.json`: the SDK
 tarball pins its direct dependencies exactly, and upstream pins the transitive tree in
 `packages/coding-agent/install-lock/` (the lockfile root its installer and updater use), retained
